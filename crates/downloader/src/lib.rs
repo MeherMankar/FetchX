@@ -5,6 +5,7 @@ mod aria2;
 mod dispatcher;
 mod engine;
 mod error;
+mod ffmpeg;
 mod http;
 mod segments;
 mod supervisor;
@@ -18,6 +19,12 @@ pub use aria2::{
 pub use dispatcher::EngineDispatcher;
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
+pub use ffmpeg::{
+    FfmpegConfig, FfmpegError, FfmpegFuture, FfmpegProcessExit, FfmpegProcessRunner,
+    FfmpegProcessSpec, FfmpegProcessor, FrameRate, MediaContainer, MediaExecutable, MediaInfo,
+    MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaProgress, MediaStream,
+    MediaStreamKind, TranscodePreset,
+};
 pub use http::{DirectHttpEngine, HttpEngineConfig};
 pub use supervisor::{
     Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,

@@ -11,11 +11,18 @@ domain models, SQLite persistence, a deterministic download lifecycle state mach
 and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive segmented
 transfers. It also includes a persistent download queue with priority/FIFO scheduling,
 pause/resume/cancel controls, startup recovery, and a global connection budget (defaults:
-three active downloads and 16 connections, bounded to 32 and 64). No UI or FFmpeg
-integration is implemented yet. The optional yt-dlp engine is configured as an external
-process adapter and uses fake runners in tests; no installed yt-dlp is required for CI.
-The optional aria2 engine can use the
-JSON-RPC client through the engine dispatcher and a private `aria2c` process owned by
+three active downloads and 16 connections, bounded to 32 and 64). No UI is implemented
+yet. The downloader crate includes an optional FFmpeg/ffprobe media post-processing
+service for metadata inspection, remuxing, and a small set of transcoding presets. It
+requires externally installed executables configured by path or discovered on `PATH`;
+it never installs binaries. The processor bounds concurrent child processes, supports
+cancellation but not active pause/resume, streams selected input files over stdin with
+only the `pipe` input protocol enabled, caps output at 100 GiB by default (configurable
+up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal
+tests independent of FFmpeg. The optional yt-dlp
+engine is configured as an external process adapter and uses fake runners in tests; no
+installed yt-dlp is required for CI. The optional aria2 engine can use the JSON-RPC
+client through the engine dispatcher and a private `aria2c` process owned by
 the Rust supervisor. Process supervision requires an explicitly configured executable
 path; no shell or PATH-based executable discovery is used. One-shot scheduled start
 times are persisted in SQLite and coordinated by an event-driven Scheduler above the
@@ -92,7 +99,8 @@ is implemented.
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume/adaptive segmentation,
-  optional aria2 and yt-dlp engine adapters and engine dispatcher
+  optional aria2 and yt-dlp engine adapters, FFmpeg/ffprobe media processing, and engine
+  dispatcher
 - `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
 - `crates/scheduler` — persistent one-shot start times and event-driven eligibility handoff
 - `migrations` — embedded, ordered SQLite schema migrations

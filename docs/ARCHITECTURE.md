@@ -229,4 +229,37 @@ cleanup follows publication. stdout and stderr are drained concurrently, and sto
 children are killed and reaped. Runner tests are injected and do not require yt-dlp on
 the test host.
 
-Application services, UI, and FFmpeg integration are not implemented yet.
+`FfmpegProcessor` is a bounded media post-processing service in the downloader crate,
+not a `DownloadEngine`: it does not select sources, alter `DownloadItem` lifecycle state,
+schedule retries, or enqueue work. Application/core orchestration should invoke it only
+as part of already-admitted work; Queue Manager and Scheduler remain the sole owners of
+download eligibility and queue scheduling. Each processor instance limits simultaneous
+ffmpeg/ffprobe processes (one by default, at most two), while the service does not map
+CPU work onto the queue's HTTP connection budget. The application should own and reuse a
+single configured processor rather than create processors per job.
+
+FFmpeg/ffprobe executables may be explicitly configured or resolved from absolute
+directories in `PATH`; no binaries are downloaded or installed. Candidates are
+canonicalized, required to be regular native executables, and version-checked before
+use. Invocations use structured arguments without a shell. Only closed remux container
+choices and fixed video/audio transcoding presets are accepted; arbitrary arguments are
+not exposed. Inputs are canonical regular files opened by Rust and streamed to FFmpeg
+and ffprobe over stdin. Their input protocol whitelist permits only `pipe`, so input
+demuxers cannot open additional local files or network resources. Output size defaults
+to a 100 GiB cap, configurable up to 1 TiB, and is monitored while FFmpeg runs. Outputs
+are created in a uniquely named sibling workspace and published with a no-overwrite hard
+link. Output size is checked every 25 ms and again before publication, so a brief write
+burst may exceed the configured cap before termination. Failed, cancelled, or over-limit
+operations preserve the input and remove temporary output.
+
+ffprobe emits bounded JSON parsed into a small typed metadata model. FFmpeg progress is
+read from bounded `-progress pipe:1` lines and exposes output time only; no percentage
+is fabricated without a reliable total duration. Processes have a configurable,
+bounded lifetime, streamed input on stdin, concurrently drained stdout/stderr,
+cancellation, and kill/reap cleanup. Executable validation uses null stdin. Active
+pause/resume is unsupported; callers must not report an in-progress media operation as
+paused. Workspace permissions are owner-only on Unix; on Windows the workspace inherits
+the destination parent's ACL. Tests inject fake runners and do not require real FFmpeg
+binaries or network access.
+
+Application services and UI are not implemented yet.
