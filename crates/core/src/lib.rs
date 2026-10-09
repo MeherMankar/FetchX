@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds() {}
-}
+mod state_machine;
+
+pub use state_machine::{DownloadStateMachine, StateMachineError, validate_transition};

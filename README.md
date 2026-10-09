@@ -6,10 +6,10 @@ download queues, resumability, external engines, and other download-manager feat
 
 ## Development status
 
-This repository currently contains the Rust workspace foundation and foundational
-engine-independent domain models. It does **not** download files. No UI, database
-operations, download engine, or integrations with aria2, yt-dlp, or FFmpeg are
-implemented yet.
+This repository currently contains the Rust workspace foundation, engine-independent
+domain models, SQLite persistence, and a deterministic download lifecycle state
+machine. It does **not** download files. No UI, download engine, or integrations with
+aria2, yt-dlp, or FFmpeg are implemented yet.
 
 ## Technology stack
 
@@ -26,7 +26,7 @@ is implemented.
 ## Workspace
 
 - `crates/models` — shared domain and data structures
-- `crates/core` — application and business logic
+- `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — downloader abstraction and engine implementations
 - `migrations` — embedded, ordered SQLite schema migrations

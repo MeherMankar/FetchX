@@ -21,7 +21,15 @@ state and forward user actions through Tauri commands; it will not implement dow
 behavior. The downloader layer will define a common abstraction, with dedicated
 adapters for individual engines.
 
-The `models` crate provides engine-independent domain types. The `storage` crate
+The `models` crate provides engine-independent domain types. The `core` crate owns
+the deterministic download lifecycle state machine and coordinates validated
+transitions with storage. Legal edges are `Queued → Preparing|Cancelled`,
+`Preparing → Downloading|Failed|Cancelled`, `Downloading → Paused|Completed|Failed|Cancelled`,
+and `Paused → Downloading|Cancelled`; terminal states have no outgoing transitions.
+Status-conditional repository updates prevent competing transitions from the same
+previous status from both succeeding. Callers should route lifecycle changes through
+the state machine; the repository's general-purpose full-item update remains
+unconditional and is intended for non-transition persistence updates. The `storage` crate
 exposes a download repository abstraction backed by SQLx and SQLite. Storage maps
 domain fields to queryable columns and validates values when reading rows; SQLx
 types and database details do not enter the models crate. Schema changes are tracked

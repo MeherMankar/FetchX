@@ -163,6 +163,31 @@ impl DownloadRepository for SqliteDownloadRepository {
         Ok(())
     }
 
+    async fn update_status_if_current(
+        &self,
+        id: DownloadId,
+        expected_status: DownloadStatus,
+        new_status: DownloadStatus,
+        updated_at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let result = sqlx::query(
+            "UPDATE downloads
+             SET status = ?, updated_at = ?
+             WHERE id = ? AND status = ?",
+        )
+        .bind(status_to_str(new_status))
+        .bind(to_sqlite_integer(
+            "updated_at",
+            updated_at.as_unix_millis(),
+        )?)
+        .bind(id.to_string())
+        .bind(status_to_str(expected_status))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn delete(&self, id: DownloadId) -> Result<bool, StorageError> {
         let result = sqlx::query("DELETE FROM downloads WHERE id = ?")
             .bind(id.to_string())

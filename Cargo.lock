@@ -642,6 +642,12 @@ dependencies = [
 [[package]]
 name = "mydownloader-core"
 version = "0.1.0"
+dependencies = [
+ "mydownloader-models",
+ "mydownloader-storage",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "mydownloader-downloader"

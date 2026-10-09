@@ -1,4 +1,4 @@
-use mydownloader_models::{DownloadId, DownloadItem};
+use mydownloader_models::{DownloadId, DownloadItem, DownloadStatus, Timestamp};
 
 use crate::StorageError;
 
@@ -16,6 +16,17 @@ pub trait DownloadRepository: Send + Sync {
 
     /// Replaces the stored item with the same identifier, or returns `NotFound`.
     async fn update(&self, item: &DownloadItem) -> Result<(), StorageError>;
+
+    /// Atomically changes only status and updated timestamp if the current status matches.
+    ///
+    /// Returns `false` if the row is missing or another state transition won the race.
+    async fn update_status_if_current(
+        &self,
+        id: DownloadId,
+        expected_status: DownloadStatus,
+        new_status: DownloadStatus,
+        updated_at: Timestamp,
+    ) -> Result<bool, StorageError>;
 
     /// Deletes an item and returns whether a row was removed.
     async fn delete(&self, id: DownloadId) -> Result<bool, StorageError>;

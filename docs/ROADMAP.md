@@ -3,8 +3,8 @@
 1. Phase 1 — Project foundation (completed)
 2. Phase 2 — Domain models (completed)
 3. Phase 3 — SQLite persistence (completed)
-4. Phase 4 — Download state machine (next)
-5. Phase 5 — Direct HTTP downloader
+4. Phase 4 — Download state machine (completed)
+5. Phase 5 — Direct HTTP downloader (next)
 6. Phase 6 — Resume and Range support
 7. Phase 7 — Segment manager
 8. Phase 8 — Adaptive acceleration

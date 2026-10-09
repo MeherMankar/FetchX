@@ -218,12 +218,31 @@ impl DownloadItem {
     pub const fn error(&self) -> Option<&DownloadError> {
         self.error.as_ref()
     }
+
+    /// Updates only the lifecycle state and modification timestamp.
+    ///
+    /// Transition legality is enforced by the application state machine.
+    pub fn set_status_at(
+        &mut self,
+        status: DownloadStatus,
+        updated_at: Timestamp,
+    ) -> Result<(), DownloadItemError> {
+        if updated_at < self.updated_at {
+            return Err(DownloadItemError::UpdatedBeforePreviousUpdate);
+        }
+
+        self.status = status;
+        self.updated_at = updated_at;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum DownloadItemError {
     #[error("download updated timestamp must not precede its creation timestamp")]
     UpdatedBeforeCreated,
+    #[error("download updated timestamp must not move backwards")]
+    UpdatedBeforePreviousUpdate,
 }
 
 #[derive(Deserialize)]
