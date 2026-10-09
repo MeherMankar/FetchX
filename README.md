@@ -12,18 +12,22 @@ and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive seg
 transfers. It also includes a persistent download queue with priority/FIFO scheduling,
 pause/resume/cancel controls, startup recovery, and a global connection budget (defaults:
 three active downloads and 16 connections, bounded to 32 and 64). No UI or integrations
-with yt-dlp or FFmpeg are implemented yet. An optional aria2 JSON-RPC client and engine
-adapter are available through an engine dispatcher; Phase 11A requires an independently
-running aria2 RPC endpoint and does not launch or supervise aria2. One-shot scheduled
-start times are persisted in SQLite and coordinated by an event-driven Scheduler above
-the Queue Manager.
+with yt-dlp or FFmpeg are implemented yet. The optional aria2 engine can use the
+JSON-RPC client through the engine dispatcher and a private `aria2c` process owned by
+the Rust supervisor. Process supervision requires an explicitly configured executable
+path; no shell or PATH-based executable discovery is used. One-shot scheduled start
+times are persisted in SQLite and coordinated by an event-driven Scheduler above the
+Queue Manager.
 
-The aria2 endpoint is restricted to an HTTP loopback address. Its optional RPC secret is
-provided at runtime and is not logged or persisted by the adapter. aria2 GIDs exist only
-in process memory. Crash/restart reconciliation and aria2 process supervision are not
-implemented; those are deferred to Phase 11B. The current adapter limits each aria2 job
-to one connection and does not dynamically translate the Queue Manager's changing
-connection allocation into aria2 runtime options.
+The supervised aria2 RPC listener is restricted to loopback and requires a
+runtime-generated authentication secret. The secret is supplied through a short-lived
+private runtime config file, not process arguments, logs, or persistent application
+storage. Child output is drained without logging. GIDs remain memory-only and are scoped
+to a process generation; after a crash, active jobs are resubmitted from MyDownloader's
+persisted state, while completed and cancelled records are never resurrected. Shutdown
+is graceful first, then bounded and forced if required. Each aria2 job uses one
+connection; Queue Manager remains authoritative for queueing and global resources.
+Supervision tests use injected fake processes and do not require aria2 on the test host.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`

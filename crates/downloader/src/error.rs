@@ -6,6 +6,7 @@ use mydownloader_storage::StorageError;
 use thiserror::Error;
 
 use crate::aria2::Aria2ClientError;
+use crate::supervisor::Aria2SupervisorError;
 
 /// Failures reported by the direct HTTP/HTTPS engine.
 #[derive(Debug, Error)]
@@ -95,6 +96,8 @@ pub enum DownloadEngineError {
     Aria2UnexpectedStatus,
     #[error("aria2 output file is missing or has an unexpected size")]
     Aria2InvalidOutput,
+    #[error("aria2 process supervisor failed: {0}")]
+    Aria2Supervisor(#[from] Aria2SupervisorError),
 }
 
 impl DownloadEngineError {
@@ -161,7 +164,8 @@ impl DownloadEngineError {
             Self::Aria2Client(_)
             | Self::Aria2TransferFailed
             | Self::Aria2UnexpectedStatus
-            | Self::Aria2InvalidOutput => (
+            | Self::Aria2InvalidOutput
+            | Self::Aria2Supervisor(_) => (
                 DownloadErrorCode::Engine,
                 "The aria2 download could not be completed safely.".to_owned(),
             ),

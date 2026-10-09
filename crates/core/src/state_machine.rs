@@ -108,7 +108,7 @@ where
         let from = item.status();
         validate_transition(from, to)?;
 
-        let updated_at = Timestamp::now()?;
+        let updated_at = Timestamp::now()?.max(item.updated_at());
         item.set_status_at(to, updated_at)?;
         if let Some(error) = error {
             item.set_error_at(Some(error), updated_at)?;
@@ -282,6 +282,39 @@ mod tests {
         assert!(completed.updated_at() > queued.updated_at());
         assert!(downloading.updated_at() >= preparing.updated_at());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn transition_timestamp_does_not_precede_a_future_progress_checkpoint()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let state_machine = DownloadStateMachine::new(repository.clone());
+        let mut queued = item(DownloadStatus::Queued)?;
+        let future_timestamp = Timestamp::from_unix_millis(
+            Timestamp::now()?
+                .as_unix_millis()
+                .checked_add(60_000)
+                .ok_or("timestamp overflow")?,
+        );
+        queued.set_progress_at(queued.progress().clone(), future_timestamp)?;
+        let id = queued.id();
+        repository.create(&queued).await?;
+
+        let preparing = state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+
+        assert_eq!(preparing.updated_at(), future_timestamp);
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .ok_or("download not found")?
+                .updated_at(),
+            future_timestamp
+        );
         Ok(())
     }
 

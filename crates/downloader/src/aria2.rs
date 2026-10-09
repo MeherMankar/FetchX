@@ -16,12 +16,15 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::{
-    DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
-    ResourceDemand,
+    Aria2Supervisor, Aria2SupervisorError, DownloadEngine, DownloadEngineError,
+    ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand,
 };
 
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD: usize = 1;
+const MAX_PROCESS_RESTARTS_PER_DOWNLOAD: usize = 3;
+const MAX_RPC_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_SOURCE_URI_BYTES: usize = 16 * 1024;
 pub(crate) const AMBIGUOUS_ADD_URI_DIAGNOSTIC: &str =
     "aria2 submission outcome is ambiguous; automatic retry is disabled pending reconciliation.";
 pub(crate) const RECONCILIATION_DIAGNOSTIC: &str =
@@ -77,6 +80,8 @@ pub enum Aria2ClientError {
     HttpStatus(StatusCode),
     #[error("aria2 RPC response was not valid JSON")]
     InvalidJson,
+    #[error("aria2 RPC response exceeded its size limit")]
+    ResponseTooLarge,
     #[error("aria2 RPC response was malformed or did not match the request")]
     InvalidResponse,
     #[error("aria2 RPC returned error code {code}")]
@@ -152,9 +157,15 @@ impl Aria2Client {
         uri: &str,
         destination: &Path,
     ) -> Result<Aria2Gid, Aria2ClientError> {
-        if uri.trim().is_empty()
-            || Url::parse(uri)
-                .is_ok_and(|url| !url.username().is_empty() || url.password().is_some())
+        if uri.len() > MAX_SOURCE_URI_BYTES {
+            return Err(Aria2ClientError::InvalidUri);
+        }
+        let parsed_uri = Url::parse(uri).map_err(|_| Aria2ClientError::InvalidUri)?;
+        if !matches!(parsed_uri.scheme(), "http" | "https")
+            || parsed_uri.host_str().is_none()
+            || !parsed_uri.username().is_empty()
+            || parsed_uri.password().is_some()
+            || parsed_uri.fragment().is_some()
         {
             return Err(Aria2ClientError::InvalidUri);
         }
@@ -234,6 +245,11 @@ impl Aria2Client {
         self.call("aria2.getVersion", Vec::new()).await
     }
 
+    pub async fn shutdown(&self) -> Result<(), Aria2ClientError> {
+        let _: String = self.call("aria2.shutdown", Vec::new()).await?;
+        Ok(())
+    }
+
     async fn call<T>(&self, method: &str, mut params: Vec<Value>) -> Result<T, Aria2ClientError>
     where
         T: DeserializeOwned,
@@ -277,7 +293,20 @@ impl Aria2Client {
         if !status.is_success() {
             return Err(Aria2ClientError::HttpStatus(status));
         }
-        let body = timeout(self.request_timeout, response.bytes())
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RPC_RESPONSE_BYTES as u64)
+        {
+            return Err(Aria2ClientError::ResponseTooLarge);
+        }
+        let deadline = Instant::now() + self.request_timeout;
+        let mut response = response;
+        let mut body = Vec::new();
+        loop {
+            let chunk = timeout(
+                deadline.saturating_duration_since(Instant::now()),
+                response.chunk(),
+            )
             .await
             .map_err(|_| Aria2ClientError::Timeout)?
             .map_err(|error| {
@@ -287,6 +316,14 @@ impl Aria2Client {
                     Aria2ClientError::Transport
                 }
             })?;
+            let Some(chunk) = chunk else {
+                break;
+            };
+            if body.len().saturating_add(chunk.len()) > MAX_RPC_RESPONSE_BYTES {
+                return Err(Aria2ClientError::ResponseTooLarge);
+            }
+            body.extend_from_slice(&chunk);
+        }
         let response: RpcResponse =
             serde_json::from_slice(&body).map_err(|_| Aria2ClientError::InvalidJson)?;
         if response.jsonrpc != "2.0"
@@ -470,9 +507,16 @@ impl Aria2Version {
 pub struct Aria2Engine<R> {
     repository: R,
     state_machine: DownloadStateMachine<R>,
-    client: Aria2Client,
+    client: Option<Aria2Client>,
+    supervisor: Option<Arc<Aria2Supervisor>>,
     poll_interval: Duration,
-    gids: Mutex<std::collections::HashMap<DownloadId, Aria2Gid>>,
+    gids: Mutex<std::collections::HashMap<DownloadId, RuntimeGid>>,
+}
+
+#[derive(Clone)]
+struct RuntimeGid {
+    generation: u64,
+    gid: Aria2Gid,
 }
 
 impl<R> Aria2Engine<R>
@@ -487,9 +531,42 @@ where
         Self {
             state_machine: DownloadStateMachine::new(repository.clone()),
             repository,
-            client,
+            client: Some(client),
+            supervisor: None,
             poll_interval: poll_interval.max(Duration::from_millis(10)),
             gids: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Creates an engine whose RPC client and process generation are owned by a supervisor.
+    pub fn with_supervisor(repository: R, supervisor: Arc<Aria2Supervisor>) -> Self {
+        Self {
+            state_machine: DownloadStateMachine::new(repository.clone()),
+            repository,
+            client: None,
+            supervisor: Some(supervisor),
+            poll_interval: DEFAULT_POLL_INTERVAL,
+            gids: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    async fn current_client(&self) -> Result<(Aria2Client, u64), DownloadEngineError> {
+        match (&self.supervisor, &self.client) {
+            (Some(supervisor), _) => Ok(supervisor.client_runtime().await?),
+            (None, Some(client)) => Ok((client.clone(), 0)),
+            (None, None) => Err(DownloadEngineError::InvalidConfiguration),
+        }
+    }
+
+    async fn gid_for_generation(&self, id: DownloadId, generation: u64) -> Option<Aria2Gid> {
+        let mut gids = self.gids.lock().await;
+        match gids.get(&id) {
+            Some(entry) if entry.generation == generation => Some(entry.gid.clone()),
+            Some(_) => {
+                gids.remove(&id);
+                None
+            }
+            None => None,
         }
     }
 
@@ -573,11 +650,11 @@ where
         if *control.pause.borrow_and_update() {
             return Err(DownloadEngineError::Paused);
         }
-        let gid = self.gids.lock().await.get(&id).cloned();
-        let gid = match gid {
+        let (mut client, mut generation) = self.current_client().await?;
+        let mut gid = match self.gid_for_generation(id, generation).await {
             Some(gid) => {
                 if resuming_paused || item.status() == DownloadStatus::Preparing {
-                    self.client.unpause(&gid).await.map_err(|error| {
+                    client.unpause(&gid).await.map_err(|error| {
                         if matches!(&error, Aria2ClientError::InvalidGid) {
                             DownloadEngineError::Aria2ReconciliationRequired
                         } else {
@@ -585,25 +662,15 @@ where
                         }
                     })?;
                 }
-                gid
+                Some(gid)
             }
-            None if item.progress().downloaded_bytes() == 0 => {
-                let gid = match self
-                    .client
-                    .add_uri(item.source().url(), item.destination())
-                    .await
-                {
-                    Ok(gid) => gid,
-                    Err(error @ Aria2ClientError::AmbiguousAddUri) => {
-                        return Err(error.into());
-                    }
-                    Err(error) => return Err(error.into()),
-                };
-                self.gids.lock().await.insert(id, gid.clone());
-                gid
-            }
+            None if item.progress().downloaded_bytes() == 0 || self.supervisor.is_some() => None,
             None => return Err(DownloadEngineError::Aria2ReconciliationRequired),
         };
+        if gid.is_none() {
+            gid = Some(self.submit_job(id, item, &client, generation).await?);
+        }
+        let mut gid = gid.ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
         if item.status() == DownloadStatus::Preparing {
             *item = self
                 .state_machine
@@ -613,14 +680,36 @@ where
         report_aria2_demand(control, id, MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD, 0).await?;
         let mut expected_updated_at = item.updated_at();
         let mut pause_sent = false;
+        let mut restart_attempts = 0;
 
         loop {
+            if let Some(supervisor) = &self.supervisor {
+                let (updated_client, updated_generation) = supervisor.client_runtime().await?;
+                if updated_generation != generation {
+                    if *control.cancellation.borrow_and_update() {
+                        return Err(DownloadEngineError::Cancelled);
+                    }
+                    if *control.pause.borrow_and_update() {
+                        return Err(DownloadEngineError::Paused);
+                    }
+                    if restart_attempts >= MAX_PROCESS_RESTARTS_PER_DOWNLOAD {
+                        return Err(DownloadEngineError::Aria2Supervisor(
+                            Aria2SupervisorError::RestartFailed,
+                        ));
+                    }
+                    restart_attempts += 1;
+                    client = updated_client;
+                    generation = updated_generation;
+                    gid = self.submit_job(id, item, &client, generation).await?;
+                    pause_sent = false;
+                }
+            }
             if *control.cancellation.borrow_and_update() {
-                self.client.remove(&gid).await?;
+                client.remove(&gid).await?;
                 return Err(DownloadEngineError::Cancelled);
             }
             if *control.pause.borrow_and_update() && !pause_sent {
-                self.client.pause(&gid).await?;
+                client.pause(&gid).await?;
                 pause_sent = true;
             }
 
@@ -629,18 +718,43 @@ where
                 biased;
                 changed = control.cancellation.changed() => {
                     if changed.is_err() || *control.cancellation.borrow_and_update() {
-                        self.client.remove(&gid).await?;
+                        client.remove(&gid).await?;
                         return Err(DownloadEngineError::Cancelled);
                     }
                 }
                 changed = control.pause.changed(), if !pause_sent => {
                     if changed.is_err() || *control.pause.borrow_and_update() {
-                        self.client.pause(&gid).await?;
+                        client.pause(&gid).await?;
                         pause_sent = true;
                     }
                 }
                 _ = sleep_until(poll_at) => {
-                    let status = self.client.tell_status(&gid).await?;
+                    let status = match client.tell_status(&gid).await {
+                        Ok(status) => status,
+                        Err(error) if self.supervisor.is_some() && Self::is_process_transport_error(&error) => {
+                            if restart_attempts >= MAX_PROCESS_RESTARTS_PER_DOWNLOAD {
+                                return Err(error.into());
+                            }
+                            restart_attempts += 1;
+                            let supervisor = self.supervisor.as_ref().ok_or(
+                                DownloadEngineError::Aria2Supervisor(Aria2SupervisorError::RestartFailed)
+                            )?;
+                            supervisor.restart_after_failure(generation).await?;
+                            let (updated_client, updated_generation) = supervisor.client_runtime().await?;
+                            if *control.cancellation.borrow_and_update() {
+                                return Err(DownloadEngineError::Cancelled);
+                            }
+                            if *control.pause.borrow_and_update() {
+                                return Err(DownloadEngineError::Paused);
+                            }
+                            client = updated_client;
+                            generation = updated_generation;
+                            gid = self.submit_job(id, item, &client, generation).await?;
+                            pause_sent = false;
+                            continue;
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                     report_aria2_demand(
                         control,
                         id,
@@ -667,10 +781,12 @@ where
                         }
                         Aria2DownloadStatus::Error => {
                             self.persist_progress(item, &mut expected_updated_at, &status).await?;
+                            self.gids.lock().await.remove(&id);
                             return Err(DownloadEngineError::Aria2TransferFailed);
                         }
                         Aria2DownloadStatus::Removed => {
                             self.persist_progress(item, &mut expected_updated_at, &status).await?;
+                            self.gids.lock().await.remove(&id);
                             return Err(DownloadEngineError::Aria2InvalidGid);
                         }
                     }
@@ -679,12 +795,47 @@ where
         }
     }
 
+    async fn submit_job(
+        &self,
+        id: DownloadId,
+        item: &DownloadItem,
+        client: &Aria2Client,
+        generation: u64,
+    ) -> Result<Aria2Gid, DownloadEngineError> {
+        if self.supervisor.is_some() && item.progress().downloaded_bytes() > 0 {
+            let mut control_file = item.destination().as_os_str().to_owned();
+            control_file.push(".aria2");
+            match tokio::fs::symlink_metadata(control_file).await {
+                Ok(metadata) if metadata.file_type().is_file() => {}
+                Ok(_) => return Err(DownloadEngineError::Aria2ReconciliationRequired),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(DownloadEngineError::Aria2ReconciliationRequired);
+                }
+                Err(error) => return Err(DownloadEngineError::Io(error)),
+            }
+        }
+        let gid = client
+            .add_uri(item.source().url(), item.destination())
+            .await?;
+        self.gids.lock().await.insert(
+            id,
+            RuntimeGid {
+                generation,
+                gid: gid.clone(),
+            },
+        );
+        Ok(gid)
+    }
+
     async fn persist_progress(
         &self,
         item: &mut DownloadItem,
         expected_updated_at: &mut Timestamp,
         status: &Aria2Status,
     ) -> Result<(), DownloadEngineError> {
+        if status.completed_bytes < item.progress().downloaded_bytes() {
+            return Err(DownloadEngineError::Aria2ReconciliationRequired);
+        }
         let eta = status
             .total_bytes
             .zip((status.download_speed > 0).then_some(status.download_speed))
@@ -717,6 +868,17 @@ where
         }
         *expected_updated_at = item.updated_at();
         Ok(())
+    }
+
+    fn is_process_transport_error(error: &Aria2ClientError) -> bool {
+        matches!(
+            error,
+            Aria2ClientError::Transport
+                | Aria2ClientError::Timeout
+                | Aria2ClientError::HttpStatus(_)
+                | Aria2ClientError::InvalidJson
+                | Aria2ClientError::InvalidResponse
+        )
     }
 
     async fn validate_completed_file(
@@ -884,15 +1046,17 @@ where
             if item.status() != DownloadStatus::Paused {
                 return Ok(());
             }
-            let gid = self
-                .gids
-                .lock()
-                .await
-                .get(&id)
-                .cloned()
-                .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
-            self.client.remove(&gid).await?;
-            self.gids.lock().await.remove(&id);
+            let Some(entry) = self.gids.lock().await.remove(&id) else {
+                return if self.supervisor.is_some() {
+                    Ok(())
+                } else {
+                    Err(DownloadEngineError::Aria2ReconciliationRequired)
+                };
+            };
+            let (client, generation) = self.current_client().await?;
+            if entry.generation == generation {
+                client.remove(&entry.gid).await?;
+            }
             Ok(())
         }
     }
@@ -1283,6 +1447,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_uri_rejects_non_http_schemes_and_embedded_credentials()
+    -> Result<(), Box<dyn Error>> {
+        let client = make_client(
+            "http://127.0.0.1:6800/jsonrpc".to_owned(),
+            Duration::from_secs(1),
+        )?;
+        for uri in [
+            "file:///etc/passwd",
+            "ftp://example.test/file",
+            "data:text/plain,content",
+            "https://user:password@example.test/file",
+            "https://example.test/file#fragment",
+        ] {
+            assert!(matches!(
+                client.add_uri(uri, std::path::Path::new("file.bin")).await,
+                Err(Aria2ClientError::InvalidUri)
+            ));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn cancellation_removes_active_gid_before_application_state_is_cancelled()
     -> Result<(), Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;
@@ -1530,6 +1716,58 @@ mod tests {
         );
         database.downloads().create(&item).await?;
         Ok(id)
+    }
+
+    #[tokio::test]
+    async fn process_generation_replaces_stale_runtime_gid() -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let directory = TestDirectory::new(DownloadId::new())?;
+        let id = create_item(&database, &directory, EngineKind::Aria2).await?;
+        let client = Aria2Client::new(Aria2ClientConfig::new(
+            "http://127.0.0.1:6800/jsonrpc",
+            Some(TEST_TOKEN.to_owned()),
+            Duration::from_secs(1),
+        ))?;
+        let engine = Aria2Engine::new(database.downloads(), client);
+        engine.gids.lock().await.insert(
+            id,
+            super::RuntimeGid {
+                generation: 1,
+                gid: super::Aria2Gid::new("aaaaaaaaaaaaaaaa".to_owned())?,
+            },
+        );
+        assert!(engine.gid_for_generation(id, 2).await.is_none());
+        assert!(!engine.gids.lock().await.contains_key(&id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resubmission_replaces_runtime_gid_mapping() -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let directory = TestDirectory::new(DownloadId::new())?;
+        let id = create_item(&database, &directory, EngineKind::Aria2).await?;
+        let item = database
+            .downloads()
+            .get(id)
+            .await?
+            .ok_or("missing download")?;
+        let (endpoint, _requests, server) = start_server([
+            MockReply::Result(json!("aaaaaaaaaaaaaaaa")),
+            MockReply::Result(json!("bbbbbbbbbbbbbbbb")),
+        ])
+        .await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let engine = Aria2Engine::new(database.downloads(), client.clone());
+        engine.submit_job(id, &item, &client, 4).await?;
+        engine.submit_job(id, &item, &client, 5).await?;
+        let current = engine
+            .gid_for_generation(id, 5)
+            .await
+            .ok_or("missing current runtime GID")?;
+        assert_eq!(current.as_str(), "bbbbbbbbbbbbbbbb");
+        assert!(engine.gid_for_generation(id, 4).await.is_none());
+        server.await?;
+        Ok(())
     }
 
     fn status_json(status: &str, completed: &str, total: &str) -> Value {

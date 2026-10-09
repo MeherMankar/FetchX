@@ -1215,6 +1215,7 @@ where
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
+        error::Error,
         path::PathBuf,
         sync::Arc,
         time::Duration,
@@ -1222,7 +1223,8 @@ mod tests {
 
     use mydownloader_core::DownloadStateMachine;
     use mydownloader_downloader::{
-        DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
+        Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
+        DownloadEngineError, EngineDispatcher, ManagedDownloadControl, ManagedDownloadEngine,
         ResourceDemand,
     };
     use mydownloader_models::{
@@ -1230,7 +1232,12 @@ mod tests {
         FileName, Timestamp,
     };
     use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
-    use tokio::sync::watch;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::{mpsc, watch},
+        task::JoinHandle,
+    };
 
     use super::{
         ActiveWorker, Entry, QueueConfig, QueueError, QueueManager, allocate_resources,
@@ -1398,6 +1405,68 @@ mod tests {
         .await?
     }
 
+    async fn start_aria2_mock()
+    -> Result<(String, mpsc::UnboundedReceiver<String>, JoinHandle<()>), Box<dyn Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/jsonrpc", listener.local_addr()?);
+        let (sender, requests) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let responses = [
+                r#"{"jsonrpc":"2.0","id":"1","result":"0123456789abcdef"}"#,
+                r#"{"jsonrpc":"2.0","id":"2","result":{"gid":"0123456789abcdef","status":"error","totalLength":"0","completedLength":"0","downloadSpeed":"0","connections":"0","errorCode":"1"}}"#,
+            ];
+            for body in responses {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut bytes = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                let body_start = loop {
+                    let Ok(read) = stream.read(&mut chunk).await else {
+                        return;
+                    };
+                    if read == 0 {
+                        return;
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&bytes[..body_start]);
+                let Some(content_length) = headers.lines().find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                }) else {
+                    return;
+                };
+                while bytes.len() < body_start + content_length {
+                    let Ok(read) = stream.read(&mut chunk).await else {
+                        return;
+                    };
+                    if read == 0 {
+                        return;
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                }
+                let request =
+                    String::from_utf8_lossy(&bytes[body_start..body_start + content_length])
+                        .into_owned();
+                let _ = sender.send(request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                if stream.write_all(response.as_bytes()).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok((endpoint, requests, task))
+    }
+
     #[tokio::test]
     async fn limits_active_downloads_and_allocates_only_within_global_budget()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1458,6 +1527,79 @@ mod tests {
         );
         completion??;
         manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queue_dispatches_mixed_direct_http_and_aria2_items()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let (endpoint, mut requests, server) = start_aria2_mock().await?;
+        let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
+        let aria2 = Arc::new(Aria2Engine::with_poll_interval(
+            repository.clone(),
+            Aria2Client::new(Aria2ClientConfig::new(
+                endpoint,
+                Some("queue-test-token".to_owned()),
+                Duration::from_secs(1),
+            ))?,
+            Duration::from_millis(10),
+        ));
+        let dispatcher = Arc::new(EngineDispatcher::new(
+            repository.clone(),
+            direct_http,
+            aria2,
+        ));
+        let manager =
+            QueueManager::new(repository.clone(), dispatcher, QueueConfig::default()).await?;
+
+        let direct = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("not-a-url", EngineKind::DirectHttp)?,
+            FileName::new("direct.bin")?,
+            PathBuf::from("direct.bin"),
+            Timestamp::now()?,
+        );
+        let aria_item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/aria.bin", EngineKind::Aria2)?,
+            FileName::new("aria.bin")?,
+            PathBuf::from("aria.bin"),
+            Timestamp::now()?,
+        );
+        let direct_id = direct.id();
+        let aria_id = aria_item.id();
+        manager.enqueue(direct).await?;
+        manager.enqueue(aria_item).await?;
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let direct_status = repository.get(direct_id).await?.map(|item| item.status());
+                let aria_status = repository.get(aria_id).await?.map(|item| item.status());
+                if direct_status == Some(DownloadStatus::Failed)
+                    && aria_status == Some(DownloadStatus::Failed)
+                {
+                    return Ok::<_, mydownloader_storage::StorageError>(());
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+
+        let add = requests
+            .recv()
+            .await
+            .ok_or("aria2 addUri was not dispatched")?;
+        let status = requests
+            .recv()
+            .await
+            .ok_or("aria2 tellStatus was not dispatched")?;
+        assert!(add.contains("\"method\":\"aria2.addUri\""));
+        assert!(add.contains("\"token:queue-test-token\""));
+        assert!(status.contains("\"method\":\"aria2.tellStatus\""));
+        manager.shutdown().await?;
+        server.await?;
         Ok(())
     }
 

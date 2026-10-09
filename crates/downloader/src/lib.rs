@@ -7,6 +7,7 @@ mod engine;
 mod error;
 mod http;
 mod segments;
+mod supervisor;
 
 pub use adaptive::AdaptiveConfig;
 pub use aria2::{
@@ -17,6 +18,10 @@ pub use dispatcher::EngineDispatcher;
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use http::{DirectHttpEngine, HttpEngineConfig};
+pub use supervisor::{
+    Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,
+    Aria2SupervisorState, ProcessExit, SupervisedProcess,
+};
 
 #[cfg(test)]
 mod tests;

@@ -159,23 +159,54 @@ single-source, with no dynamic segment sizing. Filesystem publication and databa
 completion are separate operations, so a crash between them can leave a published file
 whose persisted state is not yet `Completed`.
 
-The optional `Aria2Engine` uses an HTTP JSON-RPC client against a caller-configured
-loopback endpoint. It does not launch aria2. RPC request IDs and response shapes are
-validated, the optional secret token is supplied at runtime and redacted from debug
-output, and calls have a configurable timeout. An ambiguous `aria2.addUri` result is
-never retried; the item is marked as requiring reconciliation to prevent an automatic
-duplicate submission. The engine persists progress through status-and-timestamp-
-conditional repository updates and verifies the reported completion length against the
-destination file before completing the application state transition.
+The `Aria2Engine` can use either a caller-managed loopback RPC client or a private
+`Aria2Supervisor`. The supervised setup validates an explicitly configured executable,
+starts one owned `aria2c` child with structured arguments, and waits for authenticated
+JSON-RPC readiness before the engine is given a client. RPC is configured for loopback
+only. A fresh authentication secret is generated for each process generation; it is
+written to an exclusive runtime config file with owner-only permissions on Unix and
+deleted after readiness. On Windows the runtime directory is beneath the current user's
+`LOCALAPPDATA` and relies on that directory's inherited user ACL. The secret is not put
+in command-line arguments or logs. Child stdout and stderr are drained and discarded so
+they cannot block the process or expose URLs in application logs.
 
-aria2 GIDs are runtime-only and are not stored in SQLite. Paused jobs can be resumed or
-cancelled while their GID remains in the current process. If that GID is unavailable or
-invalid, the adapter requires reconciliation rather than silently submitting a new job.
-Application/aria2 crash recovery is incomplete until Phase 11B adds process supervision
-and durable reconciliation. The Phase 11A adapter configures one connection per aria2
-job; it does not yet dynamically translate Queue Manager allocation changes into aria2
-options. `forceRemove` is available in the RPC client, while normal cancellation uses
-`aria2.remove`.
+The owner of the supervisor should start it before constructing/starting the
+Queue Manager or Scheduler, then shut the Scheduler/Queue Manager down before shutting
+down the supervisor. Queue Manager retains responsibility for selection, priority,
+fairness, pause/resume/cancel, and the global resource budget; aria2 is capped at 32
+concurrent jobs with one connection per job. The Scheduler remains responsible only for
+scheduled eligibility.
+
+The supervisor observes child exit, reports its state and generation, and restarts a
+failed process when managed work next needs RPC. Shutdown sends `aria2.shutdown`, waits
+for a bounded interval, then kills and reaps the child if necessary. Startup cancellation
+drops the locally owned child handle, which is configured to kill on drop. Runtime config
+files and directories are removed on startup failure, process exit, and shutdown.
+
+aria2 GIDs remain memory-only and are tagged with the process generation. A GID from an
+older generation is discarded without RPC use. An active item whose process exits is
+resubmitted to the replacement daemon from its persisted MyDownloader item; aria2's
+`continue` option uses aria2's regular local `.aria2` control file when persisted
+progress is nonzero; if that resume metadata is absent or reports fewer bytes than
+MyDownloader has committed, recovery fails closed and preserves the stored progress.
+Queue startup already
+recovers only `Preparing`/`Downloading` records to `Queued`, while paused, completed,
+failed, and cancelled records are not automatically resurrected. SQLite lifecycle and
+progress remain authoritative; aria2 status never overwrites a terminal application
+state. If a previous aria2 control file is absent or an `addUri` result is ambiguous,
+the engine fails safely rather than resetting persisted progress or blindly submitting
+duplicates. Recovery is in-process and does not persist aria2 GIDs.
+
+The RPC client validates JSON-RPC IDs and response shapes, uses bounded timeouts and
+response sizes, and accepts only HTTP/HTTPS source URIs without embedded credentials.
+Progress uses status-and-timestamp-conditional repository updates and completion is
+accepted only after the destination file length matches aria2's reported length.
+Normal cancellation uses `aria2.remove`; `forceRemove` remains available to the RPC
+client. One connection per aria2 job is used; changing Queue Manager allocations are not
+dynamically translated into aria2 runtime options.
+
+Process supervision is tested through an injectable launcher and fake child/RPC server;
+normal CI does not require a system aria2 installation.
 
 Application services and UI are not implemented yet; yt-dlp and FFmpeg adapters remain
 planned.
