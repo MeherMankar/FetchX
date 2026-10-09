@@ -4,8 +4,8 @@
 2. Phase 2 — Domain models (completed)
 3. Phase 3 — SQLite persistence (completed)
 4. Phase 4 — Download state machine (completed)
-5. Phase 5 — Direct HTTP downloader (next)
-6. Phase 6 — Resume and Range support
+5. Phase 5 — Direct HTTP downloader (completed)
+6. Phase 6 — Resume and Range support (next)
 7. Phase 7 — Segment manager
 8. Phase 8 — Adaptive acceleration
 9. Phase 9 — Queue manager

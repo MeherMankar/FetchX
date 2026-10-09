@@ -163,24 +163,58 @@ impl DownloadRepository for SqliteDownloadRepository {
         Ok(())
     }
 
-    async fn update_status_if_current(
+    async fn update_if_status_current(
         &self,
-        id: DownloadId,
+        item: &DownloadItem,
         expected_status: DownloadStatus,
-        new_status: DownloadStatus,
-        updated_at: Timestamp,
     ) -> Result<bool, StorageError> {
+        let destination = item
+            .destination()
+            .to_str()
+            .ok_or(StorageError::NonUtf8Destination)?;
+        let progress = item.progress();
+        let error = item.error();
         let result = sqlx::query(
-            "UPDATE downloads
-             SET status = ?, updated_at = ?
+            "UPDATE downloads SET
+                source_url = ?, engine_kind = ?, filename = ?, destination = ?, status = ?,
+                priority = ?, downloaded_bytes = ?, total_bytes = ?,
+                speed_bytes_per_second = ?, estimated_remaining_seconds = ?,
+                created_at = ?, updated_at = ?, error_code = ?, error_message = ?
              WHERE id = ? AND status = ?",
         )
-        .bind(status_to_str(new_status))
+        .bind(item.source().url())
+        .bind(engine_to_str(item.source().engine()))
+        .bind(item.filename().as_str())
+        .bind(destination)
+        .bind(status_to_str(item.status()))
+        .bind(priority_to_str(item.priority()))
+        .bind(to_sqlite_integer(
+            "downloaded_bytes",
+            progress.downloaded_bytes(),
+        )?)
+        .bind(option_to_sqlite_integer(
+            "total_bytes",
+            progress.total_bytes(),
+        )?)
+        .bind(option_to_sqlite_integer(
+            "speed_bytes_per_second",
+            progress.speed_bytes_per_second(),
+        )?)
+        .bind(option_to_sqlite_integer(
+            "estimated_remaining_seconds",
+            progress.estimated_remaining_seconds(),
+        )?)
+        .bind(to_sqlite_integer(
+            "created_at",
+            item.created_at().as_unix_millis(),
+        )?)
         .bind(to_sqlite_integer(
             "updated_at",
-            updated_at.as_unix_millis(),
+            item.updated_at().as_unix_millis(),
         )?)
-        .bind(id.to_string())
+        .bind(error.map(|value| error_code_to_str(value.code())))
+        .bind(error.map(DownloadError::message))
+        .bind(item.id().to_string())
         .bind(status_to_str(expected_status))
         .execute(&self.pool)
         .await?;

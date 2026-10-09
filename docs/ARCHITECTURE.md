@@ -39,5 +39,20 @@ timeout are configured for connections. File-backed databases use a five-connect
 pool; in-memory databases use one connection so pooled operations share the same
 database. The caller's journal mode is left unchanged rather than forcing WAL.
 
-Download workers, application services, UI, and engine adapters are not implemented
-yet.
+The `downloader` crate currently provides a single-stream `DirectHttpEngine` using
+Reqwest and Tokio file I/O. It accepts only HTTP/HTTPS URLs without embedded
+credentials, follows at most ten HTTP(S) redirects without HTTPS downgrade, and uses
+connect/read timeouts. Response chunks stream into a sibling `.part` file; progress
+checkpoints are persisted by byte/time thresholds through status-conditional
+repository updates. After content-length verification and file sync, a same-directory
+hard link publishes the file without replacing an existing destination. Parent
+directories are not created automatically. Cancellation uses a Tokio watch receiver,
+cleans up the partial file, and transitions through the state machine.
+
+This first engine does not support Range requests, resume, retries, segmented
+downloads, speed calculations, or multi-connection transfers. Atomic file publication
+and database state changes are separate operations; a process crash between them can
+leave a published file whose persisted state is not yet `Completed`.
+
+Queue workers, application services, UI, and non-HTTP engine adapters are not
+implemented yet.

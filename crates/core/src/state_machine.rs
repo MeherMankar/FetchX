@@ -54,6 +54,25 @@ where
         id: DownloadId,
         to: DownloadStatus,
     ) -> Result<DownloadItem, StateMachineError> {
+        self.transition_inner(id, to, None).await
+    }
+
+    /// Transitions a download and atomically records its failure diagnostic.
+    pub async fn transition_with_error(
+        &self,
+        id: DownloadId,
+        to: DownloadStatus,
+        error: mydownloader_models::DownloadError,
+    ) -> Result<DownloadItem, StateMachineError> {
+        self.transition_inner(id, to, Some(error)).await
+    }
+
+    async fn transition_inner(
+        &self,
+        id: DownloadId,
+        to: DownloadStatus,
+        error: Option<mydownloader_models::DownloadError>,
+    ) -> Result<DownloadItem, StateMachineError> {
         let mut item = self
             .repository
             .get(id)
@@ -64,10 +83,13 @@ where
 
         let updated_at = Timestamp::now()?;
         item.set_status_at(to, updated_at)?;
+        if let Some(error) = error {
+            item.set_error_at(Some(error), updated_at)?;
+        }
 
         if self
             .repository
-            .update_status_if_current(id, from, to, updated_at)
+            .update_if_status_current(&item, from)
             .await?
         {
             return Ok(item);
@@ -105,6 +127,8 @@ pub enum StateMachineError {
     Timestamp(#[from] TimestampError),
     #[error("download state could not be updated: {0}")]
     Domain(#[from] DownloadItemError),
+    #[error("download failure diagnostic is invalid: {0}")]
+    DomainError(#[from] mydownloader_models::DownloadErrorMessageError),
     #[error("download state persistence failed: {0}")]
     Storage(#[from] StorageError),
 }

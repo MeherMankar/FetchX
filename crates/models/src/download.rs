@@ -227,12 +227,41 @@ impl DownloadItem {
         status: DownloadStatus,
         updated_at: Timestamp,
     ) -> Result<(), DownloadItemError> {
+        self.validate_update_time(updated_at)?;
+        self.status = status;
+        self.updated_at = updated_at;
+        Ok(())
+    }
+
+    /// Replaces progress without changing lifecycle state.
+    pub fn set_progress_at(
+        &mut self,
+        progress: DownloadProgress,
+        updated_at: Timestamp,
+    ) -> Result<(), DownloadItemError> {
+        self.validate_update_time(updated_at)?;
+        self.progress = progress;
+        self.updated_at = updated_at;
+        Ok(())
+    }
+
+    /// Replaces the optional diagnostic associated with the item.
+    pub fn set_error_at(
+        &mut self,
+        error: Option<DownloadError>,
+        updated_at: Timestamp,
+    ) -> Result<(), DownloadItemError> {
+        self.validate_update_time(updated_at)?;
+        self.error = error;
+        self.updated_at = updated_at;
+        Ok(())
+    }
+
+    fn validate_update_time(&self, updated_at: Timestamp) -> Result<(), DownloadItemError> {
         if updated_at < self.updated_at {
             return Err(DownloadItemError::UpdatedBeforePreviousUpdate);
         }
 
-        self.status = status;
-        self.updated_at = updated_at;
         Ok(())
     }
 }

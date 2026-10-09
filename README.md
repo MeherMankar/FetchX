@@ -7,16 +7,17 @@ download queues, resumability, external engines, and other download-manager feat
 ## Development status
 
 This repository currently contains the Rust workspace foundation, engine-independent
-domain models, SQLite persistence, and a deterministic download lifecycle state
-machine. It does **not** download files. No UI, download engine, or integrations with
-aria2, yt-dlp, or FFmpeg are implemented yet.
+domain models, SQLite persistence, a deterministic download lifecycle state machine,
+and a single-stream HTTP/HTTPS downloader. No UI, resume/Range support, segmented
+downloading, or integrations with aria2, yt-dlp, or FFmpeg are implemented yet.
 
 ## Technology stack
 
 - Rust (stable toolchain, edition 2024)
 - Tokio for asynchronous operations
+- Reqwest for streaming HTTP/HTTPS requests
 - Serde and Serde JSON for serialization
-- SQLx with SQLite support for the planned storage layer
+- SQLx with SQLite for download persistence
 - Tauri 2 and React + TypeScript are planned for the desktop application
 
 The dependency versions and shared configuration are centralized in the root
@@ -28,7 +29,7 @@ is implemented.
 - `crates/models` — shared domain and data structures
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
-- `crates/downloader` — downloader abstraction and engine implementations
+- `crates/downloader` — streaming direct HTTP/HTTPS engine
 - `migrations` — embedded, ordered SQLite schema migrations
 - `tests` — workspace-level integration tests
 - `docs` — architecture, roadmap, and AI contribution rules

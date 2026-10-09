@@ -4,5 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+mydownloader-core = { path = "../core" }
+mydownloader-models = { path = "../models" }
+mydownloader-storage = { path = "../storage" }
+reqwest.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
 [lints]
 workspace = true
