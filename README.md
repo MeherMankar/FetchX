@@ -10,9 +10,12 @@ This repository currently contains the Rust workspace foundation, engine-indepen
 domain models, SQLite persistence, a deterministic download lifecycle state machine,
 and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive segmented
 transfers. It also includes a persistent download queue with priority/FIFO scheduling,
-pause/resume/cancel controls, startup recovery, and a global connection budget (defaults:
-three active downloads and 16 connections, bounded to 32 and 64). No UI is implemented
-yet. The downloader crate includes an optional FFmpeg/ffprobe media post-processing
+pause/resume/cancel/removal controls, startup recovery, and a global connection budget
+(defaults: three active downloads and 16 connections, bounded to 32 and 64). The first
+Tauri 2 desktop foundation is in place with a minimal React + TypeScript shell. It
+currently exposes direct HTTP/HTTPS downloads, queue controls, and explicit refresh;
+live progress notifications and engine selection are not yet wired to the desktop.
+The downloader crate includes an optional FFmpeg/ffprobe media post-processing
 service for metadata inspection, remuxing, and a small set of transcoding presets. It
 requires externally installed executables configured by path or discovered on `PATH`;
 it never installs binaries. The processor bounds concurrent child processes, supports
@@ -87,7 +90,7 @@ responses carrying that header are not retried automatically.
 - Reqwest for streaming HTTP/HTTPS requests
 - Serde and Serde JSON for serialization
 - SQLx with SQLite for download persistence
-- Tauri 2 and React + TypeScript are planned for the desktop application
+- Tauri 2 for the desktop adapter and React + TypeScript for presentation
 
 The dependency versions and shared configuration are centralized in the root
 `Cargo.toml`. Crate manifests opt into dependencies as the corresponding functionality
@@ -103,6 +106,8 @@ is implemented.
   dispatcher
 - `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
 - `crates/scheduler` — persistent one-shot start times and event-driven eligibility handoff
+- `apps/desktop/src-tauri` — Tauri commands, shared application services, and lifecycle
+- `apps/desktop/ui` — minimal React desktop shell and typed IPC client
 - `migrations` — embedded, ordered SQLite schema migrations
 - `tests` — workspace-level integration tests
 - `docs` — architecture, roadmap, and AI contribution rules
@@ -127,7 +132,20 @@ The storage crate accepts a caller-provided SQLite URL and applies embedded
 migrations during connection, for example `sqlite://mydownloader.db`. In-memory
 SQLite databases are also supported for tests. The repository API is documented
 through the `DownloadRepository` trait; database setup is provided by
-`Database::connect`.
+`Database::connect` for SQLite URLs and `Database::connect_path` for filesystem
+paths.
+
+Build the initial desktop frontend from the repository root with:
+
+```sh
+npm --prefix apps/desktop/ui run build
+```
+
+The Tauri application uses the system Downloads directory for files and its
+application-data directory for SQLite. Its webview has no filesystem, shell,
+process, or unrestricted network permissions. The initial capability permits only
+the event-listener APIs needed by the UI; download and process operations remain
+behind Rust commands.
 
 Before submitting changes, also run:
 

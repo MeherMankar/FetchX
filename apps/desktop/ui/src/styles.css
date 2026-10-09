@@ -1,0 +1,373 @@
+:root {
+  color: #17212b;
+  background: #f4f6f8;
+  font-family: Inter, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  font-weight: 400;
+  font-size: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 720px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.app-shell {
+  width: min(1040px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 28px 36px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.app-header,
+.section-heading,
+.download-title,
+.download-meta,
+.download-actions,
+.add-form {
+  display: flex;
+  align-items: center;
+}
+
+.app-header {
+  gap: 13px;
+}
+
+.brand-mark,
+.empty-icon {
+  display: grid;
+  place-items: center;
+  color: white;
+  background: #2463eb;
+  border-radius: 12px;
+}
+
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  font-size: 27px;
+  font-weight: 700;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+
+.app-header p,
+.section-heading p {
+  margin-top: 3px;
+  color: #6a7682;
+  font-size: 12px;
+}
+
+.refresh-button {
+  margin-left: auto;
+}
+
+.add-panel,
+.download-card,
+.empty-state {
+  border: 1px solid #e0e5eb;
+  border-radius: 12px;
+  background: white;
+}
+
+.add-panel {
+  padding: 18px;
+}
+
+h2 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.add-form {
+  gap: 10px;
+  margin-top: 13px;
+}
+
+.add-form input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid #d7dee6;
+  border-radius: 7px;
+  outline: none;
+  color: #17212b;
+  background: #fff;
+}
+
+.add-form input:focus {
+  border-color: #2463eb;
+  box-shadow: 0 0 0 3px rgb(36 99 235 / 12%);
+}
+
+.button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.button-primary {
+  height: 40px;
+  padding: 0 15px;
+  color: white;
+  background: #2463eb;
+}
+
+.button-primary:hover {
+  background: #1c54ce;
+}
+
+.button-secondary {
+  color: #354453;
+  border-color: #dce2e8;
+  background: #fff;
+}
+
+.button-secondary:hover {
+  background: #f4f6f8;
+}
+
+.button-danger {
+  color: #b42318;
+  border-color: #f1d3d0;
+  background: #fff;
+}
+
+.button-danger:hover {
+  background: #fff5f4;
+}
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  color: #982018;
+  border: 1px solid #f1d3d0;
+  border-radius: 8px;
+  background: #fff5f4;
+}
+
+.icon-button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 20px;
+}
+
+.downloads-section {
+  flex: 1;
+}
+
+.section-heading {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.empty-state {
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #74808b;
+}
+
+.empty-state strong {
+  color: #354453;
+}
+
+.empty-icon {
+  width: 38px;
+  height: 38px;
+  margin-bottom: 3px;
+  border-radius: 50%;
+  font-size: 22px;
+}
+
+.download-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.download-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 16px;
+}
+
+.download-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.download-title {
+  gap: 10px;
+}
+
+.download-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  flex: none;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #52606d;
+  background: #edf0f3;
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.status-downloading {
+  color: #174ea6;
+  background: #e9f1ff;
+}
+
+.status-completed {
+  color: #18794e;
+  background: #e8f5ee;
+}
+
+.status-failed {
+  color: #b42318;
+  background: #fff0ee;
+}
+
+.status-paused,
+.status-cancelled {
+  color: #72520c;
+  background: #fff6dc;
+}
+
+.download-url {
+  overflow: hidden;
+  margin-top: 5px;
+  color: #71808e;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-track {
+  display: block;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  margin-top: 12px;
+  appearance: none;
+  border-radius: 5px;
+  border: 0;
+  background: #e8edf2;
+}
+
+.progress-track::-webkit-progress-bar {
+  border-radius: 5px;
+  background: #e8edf2;
+}
+
+.progress-track::-webkit-progress-value {
+  border-radius: 5px;
+  background: #3475f6;
+  transition: width 180ms ease;
+}
+
+.progress-track::-moz-progress-bar {
+  border-radius: 5px;
+  background: #3475f6;
+}
+
+.download-meta {
+  justify-content: space-between;
+  margin-top: 6px;
+  color: #74808b;
+  font-size: 10px;
+}
+
+.download-error {
+  margin-top: 8px;
+  color: #b42318;
+  font-size: 11px;
+}
+
+.download-actions {
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.app-footer {
+  padding-top: 10px;
+  color: #78838d;
+  border-top: 1px solid #e0e5eb;
+  font-size: 11px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (max-width: 820px) {
+  .app-shell {
+    padding: 22px 20px 16px;
+  }
+
+  .download-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .download-actions {
+    justify-content: flex-start;
+  }
+}

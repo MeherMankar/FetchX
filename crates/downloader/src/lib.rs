@@ -25,7 +25,7 @@ pub use ffmpeg::{
     MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaProgress, MediaStream,
     MediaStreamKind, TranscodePreset,
 };
-pub use http::{DirectHttpEngine, HttpEngineConfig};
+pub use http::{DirectHttpEngine, HttpEngineConfig, validate_http_source_url};
 pub use supervisor::{
     Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,
     Aria2SupervisorState, ProcessExit, SupervisedProcess,

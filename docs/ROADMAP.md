@@ -14,8 +14,8 @@
 12. Phase 11B — aria2 process supervision and restart recovery (completed)
 13. Phase 12 — yt-dlp integration (completed)
 14. Phase 13 — FFmpeg integration (completed)
-15. Phase 14 — Tauri desktop application
-16. Phase 15 — React UI
+15. Phase 14A — Tauri 2 desktop foundation with minimal React shell (current)
+16. Phase 15 — Full React desktop UI
 17. Phase 16 — Browser extension
 18. Phase 17 — CLI
 19. Phase 18 — Plugin architecture

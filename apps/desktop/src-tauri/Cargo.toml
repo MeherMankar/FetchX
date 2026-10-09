@@ -1,0 +1,29 @@
+[package]
+name = "mydownloader-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+mydownloader-core = { path = "../../../crates/core" }
+mydownloader-downloader = { path = "../../../crates/downloader" }
+mydownloader-models = { path = "../../../crates/models" }
+mydownloader-queue = { path = "../../../crates/queue" }
+mydownloader-scheduler = { path = "../../../crates/scheduler" }
+mydownloader-storage = { path = "../../../crates/storage" }
+reqwest.workspace = true
+serde.workspace = true
+tauri = { version = "2", features = [] }
+tracing.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

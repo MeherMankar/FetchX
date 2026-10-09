@@ -265,4 +265,27 @@ paused. Workspace permissions are owner-only on Unix; on Windows the workspace i
 the destination parent's ACL. Tests inject fake runners and do not require real FFmpeg
 binaries or network access.
 
-Application services and UI are not implemented yet.
+The initial desktop application lives in `apps/desktop`. Tauri owns one long-lived
+`Database`, shared SQLite download repository, `Scheduler`, and its single
+`QueueManager`; the queue is obtained from the scheduler rather than initialized a
+second time. Startup creates the application-data/download directories, connects and
+migrates SQLite, then starts `Scheduler`, which loads enabled schedules and defers
+them before queue dispatch. On exit, the scheduler shuts down the queue and waits for
+workers to stop through the existing queue lifecycle.
+
+Tauri commands are a narrow IPC adapter over the repository and queue. They expose
+explicit Serde DTOs with snake_case fields and map backend failures to a stable,
+frontend-safe error shape. The initial add command accepts HTTP/HTTPS URLs without
+embedded credentials and creates direct-HTTP downloads in the system Downloads
+directory. Pause, resume, cancel, and delete use `QueueManager`; delete preserves
+download files and partials. The initial UI can explicitly refresh persisted progress.
+
+The React UI contains no download business logic. Its typed API module centralizes
+Tauri `invoke` and listens for typed `download_updated` and `download_removed` events.
+Events currently describe command-driven changes; Queue Manager does not yet publish
+worker progress events, so periodic/polling-based progress updates are intentionally
+not introduced in this foundation phase.
+
+The main webview capability grants only the event listener permissions required by
+the shell. It has no filesystem, shell, process, or unrestricted-network plugin
+permissions. Engine process management and filesystem publication remain Rust-owned.

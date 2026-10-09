@@ -6,6 +6,7 @@ members = [
     "crates/downloader",
     "crates/queue",
     "crates/scheduler",
+    "apps/desktop/src-tauri",
 ]
 resolver = "3"
 

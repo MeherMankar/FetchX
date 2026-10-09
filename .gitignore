@@ -1,1 +1,5 @@
 /target/
+/apps/desktop/src-tauri/gen/
+/apps/desktop/src-tauri/target/
+/apps/desktop/ui/node_modules/
+/apps/desktop/ui/dist/

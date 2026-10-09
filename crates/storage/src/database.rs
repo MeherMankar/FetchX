@@ -59,6 +59,26 @@ impl Database {
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(5));
 
+        Self::connect_with_options(options, is_in_memory).await
+    }
+
+    /// Connects to a file-backed database without interpreting the path as a URL.
+    ///
+    /// This preserves legal path characters such as percent signs and question marks.
+    pub async fn connect_path(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5));
+
+        Self::connect_with_options(options, false).await
+    }
+
+    async fn connect_with_options(
+        options: SqliteConnectOptions,
+        is_in_memory: bool,
+    ) -> Result<Self, StorageError> {
         let pool = SqlitePoolOptions::new()
             .max_connections(if is_in_memory { 1 } else { 5 })
             .connect_with(options)

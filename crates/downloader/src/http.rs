@@ -1283,6 +1283,11 @@ fn parse_http_url(source: &str) -> Result<Url, DownloadEngineError> {
     Ok(url)
 }
 
+/// Validates and canonicalizes a direct HTTP/HTTPS source URL for application adapters.
+pub fn validate_http_source_url(source: &str) -> Result<String, DownloadEngineError> {
+    parse_http_url(source).map(|url| url.to_string())
+}
+
 fn same_http_target(response: &Url, requested: &Url) -> bool {
     let mut response = response.clone();
     let mut requested = requested.clone();

@@ -54,6 +54,23 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
 }
 
 #[tokio::test]
+async fn connect_path_preserves_special_path_characters() -> Result<(), Box<dyn Error>> {
+    let special_characters = if cfg!(windows) { "# %20" } else { "? # %20" };
+    let path = std::env::temp_dir().join(format!(
+        "mydownloader-path-{}-{}.db",
+        std::process::id(),
+        special_characters
+    ));
+    {
+        let database = Database::connect_path(&path).await?;
+        assert!(database.downloads().list().await?.is_empty());
+        database.pool().close().await;
+    }
+    std::fs::remove_file(path)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn repository_round_trips_and_performs_crud() -> Result<(), Box<dyn Error>> {
     let database = Database::connect("sqlite::memory:").await?;
     let repository = database.downloads();
