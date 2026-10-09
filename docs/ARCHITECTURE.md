@@ -208,5 +208,25 @@ dynamically translated into aria2 runtime options.
 Process supervision is tested through an injectable launcher and fake child/RPC server;
 normal CI does not require a system aria2 installation.
 
-Application services and UI are not implemented yet; yt-dlp and FFmpeg adapters remain
-planned.
+The `YtDlpEngine` is an optional per-download process adapter selected by
+`EngineDispatcher`. Initialization resolves and validates an explicitly configured
+executable or searches absolute entries in `PATH`, then checks its version through an
+injectable runner. The adapter builds structured arguments and disables user config,
+plugins, playlists, colors, cache use, and overwrites. It does not pass browser cookies,
+arbitrary user options, or secrets. URLs must be HTTP/HTTPS and cannot contain embedded
+credentials. The engine requests one best-format output and caps yt-dlp fragment
+concurrency at one; it reports a fixed one-connection demand to Queue Manager rather than
+claiming control over yt-dlp's internal networking.
+
+Active yt-dlp work cannot be paused safely: Queue Manager rejects active pause requests.
+Queue shutdown cancels its process, waits for termination, and returns interrupted work
+to `Queued` rather than marking it `Paused`. yt-dlp writes to a per-download workspace
+beside the destination, where cancellation and failures preserve partial data for
+`--continue` on retry. Progress is read from bounded machine-readable output and stored
+with status- and timestamp-conditional repository updates. Completion requires exactly
+one regular output file, published with a no-overwrite hard link; successful workspace
+cleanup follows publication. stdout and stderr are drained concurrently, and stopped
+children are killed and reaped. Runner tests are injected and do not require yt-dlp on
+the test host.
+
+Application services, UI, and FFmpeg integration are not implemented yet.

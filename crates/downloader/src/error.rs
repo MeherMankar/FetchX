@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::aria2::Aria2ClientError;
 use crate::supervisor::Aria2SupervisorError;
+use crate::ytdlp::YtDlpError;
 
 /// Failures reported by the direct HTTP/HTTPS engine.
 #[derive(Debug, Error)]
@@ -98,6 +99,8 @@ pub enum DownloadEngineError {
     Aria2InvalidOutput,
     #[error("aria2 process supervisor failed: {0}")]
     Aria2Supervisor(#[from] Aria2SupervisorError),
+    #[error("yt-dlp operation failed: {0}")]
+    YtDlp(#[from] YtDlpError),
 }
 
 impl DownloadEngineError {
@@ -168,6 +171,18 @@ impl DownloadEngineError {
             | Self::Aria2Supervisor(_) => (
                 DownloadErrorCode::Engine,
                 "The aria2 download could not be completed safely.".to_owned(),
+            ),
+            Self::YtDlp(YtDlpError::InvalidUrl) => (
+                DownloadErrorCode::Source,
+                "The yt-dlp source URL is invalid or unsupported.".to_owned(),
+            ),
+            Self::YtDlp(YtDlpError::DestinationExists | YtDlpError::OutputUnavailable) => (
+                DownloadErrorCode::Destination,
+                "The yt-dlp output could not be written safely.".to_owned(),
+            ),
+            Self::YtDlp(_) => (
+                DownloadErrorCode::Engine,
+                "The yt-dlp download could not be completed safely.".to_owned(),
             ),
             Self::Cancelled => (
                 DownloadErrorCode::Internal,

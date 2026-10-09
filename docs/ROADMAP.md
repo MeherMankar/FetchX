@@ -12,7 +12,7 @@
 10. Phase 10 — Persistent one-shot scheduler (completed)
 11. Phase 11A — aria2 JSON-RPC client and engine adapter (completed)
 12. Phase 11B — aria2 process supervision and restart recovery (completed)
-13. Phase 12 — yt-dlp integration
+13. Phase 12 — yt-dlp integration (completed)
 14. Phase 13 — FFmpeg integration
 15. Phase 14 — Tauri desktop application
 16. Phase 15 — React UI

@@ -9,6 +9,7 @@ use mydownloader_downloader::{
 };
 use mydownloader_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadStatus,
+    EngineKind,
 };
 use mydownloader_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
@@ -82,6 +83,11 @@ pub enum QueueError {
     },
     #[error("pause request was superseded by resume")]
     PauseSuperseded,
+    #[error("active {engine:?} downloads do not support {operation}")]
+    UnsupportedEngineOperation {
+        engine: EngineKind,
+        operation: &'static str,
+    },
     #[error("global connection limit is below currently allocated or active connections")]
     ResourceLimitInUse,
     #[error("queue resource invariant was violated")]
@@ -302,6 +308,7 @@ struct ActiveWorker {
     sequence: u64,
     pausing: bool,
     cancelling: bool,
+    shutdown_requeue: bool,
     pause_waiters: Vec<oneshot::Sender<Result<(), QueueError>>>,
     cancel_waiters: Vec<oneshot::Sender<Result<(), QueueError>>>,
 }
@@ -414,12 +421,7 @@ where
             command = commands.recv() => {
                 let Some(command) = command else {
                     stopping = true;
-                    for worker in active.values_mut() {
-                        if !worker.cancelling {
-                            worker.pausing = true;
-                            let _ = worker.pause.send(true);
-                        }
-                    }
+                    stop_workers_for_shutdown(engine.as_ref(), &entries, &mut active);
                     continue;
                 };
                 handle_command(
@@ -566,6 +568,7 @@ where
                 sequence,
                 pausing: false,
                 cancelling: false,
+                shutdown_requeue: false,
                 pause_waiters: Vec::new(),
                 cancel_waiters: Vec::new(),
             },
@@ -774,17 +777,30 @@ where
             let _ = reply.send(Ok(()));
         }
         Command::Pause { id, reply } => {
-            if let Some(worker) = active.get_mut(&id) {
-                if worker.cancelling {
-                    let _ = reply.send(Err(QueueError::InvalidStatus {
-                        id,
-                        action: "pause",
-                        status: DownloadStatus::Downloading,
+            if active.contains_key(&id) {
+                let engine_kind = entries
+                    .get(&id)
+                    .map(|entry| entry.item.source().engine())
+                    .unwrap_or(EngineKind::DirectHttp);
+                if !engine.supports_active_pause(engine_kind) {
+                    let _ = reply.send(Err(QueueError::UnsupportedEngineOperation {
+                        engine: engine_kind,
+                        operation: "active pause",
                     }));
-                } else {
-                    worker.pausing = true;
-                    let _ = worker.pause.send(true);
-                    worker.pause_waiters.push(reply);
+                    return Ok(());
+                }
+                if let Some(worker) = active.get_mut(&id) {
+                    if worker.cancelling {
+                        let _ = reply.send(Err(QueueError::InvalidStatus {
+                            id,
+                            action: "pause",
+                            status: DownloadStatus::Downloading,
+                        }));
+                    } else {
+                        worker.pausing = true;
+                        let _ = worker.pause.send(true);
+                        worker.pause_waiters.push(reply);
+                    }
                 }
                 return Ok(());
             } else {
@@ -869,6 +885,7 @@ where
         }
         Command::Cancel { id, reply } => {
             if let Some(worker) = active.get_mut(&id) {
+                worker.shutdown_requeue = false;
                 worker.cancelling = true;
                 let _ = worker.cancellation.send(true);
                 worker.cancel_waiters.push(reply);
@@ -987,16 +1004,37 @@ where
         }
         Command::Shutdown { reply } => {
             *stopping = true;
-            for worker in active.values_mut() {
-                if !worker.cancelling {
-                    worker.pausing = true;
-                    let _ = worker.pause.send(true);
-                }
-            }
+            stop_workers_for_shutdown(engine, entries, active);
             shutdown_waiters.push(reply);
         }
     }
     Ok(())
+}
+
+fn stop_workers_for_shutdown<E>(
+    engine: &E,
+    entries: &HashMap<DownloadId, Entry>,
+    active: &mut HashMap<DownloadId, ActiveWorker>,
+) where
+    E: ManagedDownloadEngine,
+{
+    for (id, worker) in active {
+        if worker.cancelling {
+            continue;
+        }
+        let engine_kind = entries
+            .get(id)
+            .map(|entry| entry.item.source().engine())
+            .unwrap_or(EngineKind::DirectHttp);
+        if engine.supports_active_pause(engine_kind) {
+            worker.pausing = true;
+            let _ = worker.pause.send(true);
+        } else {
+            worker.cancelling = true;
+            worker.shutdown_requeue = true;
+            let _ = worker.cancellation.send(true);
+        }
+    }
 }
 
 async fn finish_worker<R>(
@@ -1020,6 +1058,23 @@ where
         .ok_or(StateMachineError::NotFound(id))?;
     if let Err(error) = &result {
         warn!(download_id = %id, error = %error, "queued download worker returned an error");
+    }
+
+    if worker.shutdown_requeue && matches!(&result, Err(DownloadEngineError::Cancelled)) {
+        if matches!(
+            current.status(),
+            DownloadStatus::Preparing | DownloadStatus::Downloading
+        ) {
+            current = state_machine
+                .transition(id, DownloadStatus::Cancelled)
+                .await?;
+        }
+        if current.status() == DownloadStatus::Cancelled {
+            state_machine
+                .transition(id, DownloadStatus::Preparing)
+                .await?;
+            current = state_machine.transition(id, DownloadStatus::Queued).await?;
+        }
     }
 
     if matches!(
@@ -1048,7 +1103,10 @@ where
                 current = state_machine.transition(id, target).await?;
             }
         }
-    } else if current.status() == DownloadStatus::Queued && result.is_err() {
+    } else if current.status() == DownloadStatus::Queued
+        && result.is_err()
+        && !worker.shutdown_requeue
+    {
         if worker.cancelling || matches!(&result, Err(DownloadEngineError::Cancelled)) {
             current = state_machine
                 .transition(id, DownloadStatus::Cancelled)
@@ -1181,6 +1239,12 @@ where
                 .await?;
         }
     }
+    if worker.shutdown_requeue && item.status() == DownloadStatus::Cancelled {
+        state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        item = state_machine.transition(id, DownloadStatus::Queued).await?;
+    }
     if let Some(entry) = entries.get_mut(&id) {
         entry.item = item.clone();
     }
@@ -1216,7 +1280,8 @@ mod tests {
     use std::{
         collections::{HashMap, HashSet},
         error::Error,
-        path::PathBuf,
+        ffi::OsString,
+        path::{Path, PathBuf},
         sync::Arc,
         time::Duration,
     };
@@ -1225,7 +1290,8 @@ mod tests {
     use mydownloader_downloader::{
         Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
         DownloadEngineError, EngineDispatcher, ManagedDownloadControl, ManagedDownloadEngine,
-        ResourceDemand,
+        ResourceDemand, YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner,
+        YtDlpRunnerEvent, YtDlpRunnerFuture,
     };
     use mydownloader_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus, EngineKind,
@@ -1247,6 +1313,7 @@ mod tests {
     struct WaitingEngine {
         repository: SqliteDownloadRepository,
         release: watch::Receiver<bool>,
+        supports_yt_dlp_pause: bool,
     }
 
     impl DownloadEngine for WaitingEngine {
@@ -1329,9 +1396,56 @@ mod tests {
                 }
             }
         }
+
+        fn supports_active_pause(&self, engine: EngineKind) -> bool {
+            engine != EngineKind::YtDlp || self.supports_yt_dlp_pause
+        }
     }
 
     struct RejectInactiveCancelEngine;
+
+    struct QueueYtDlpRunner;
+
+    impl YtDlpProcessRunner for QueueYtDlpRunner {
+        fn validate_version<'a>(
+            &'a self,
+            _executable: &'a Path,
+            _timeout: Duration,
+        ) -> YtDlpRunnerFuture<'a, Result<String, YtDlpError>> {
+            Box::pin(async { Ok("test-version".to_owned()) })
+        }
+
+        fn run<'a>(
+            &'a self,
+            _executable: &'a Path,
+            arguments: &'a [OsString],
+            _stop: watch::Receiver<bool>,
+            events: mpsc::Sender<YtDlpRunnerEvent>,
+        ) -> YtDlpRunnerFuture<'a, Result<YtDlpProcessExit, YtDlpError>> {
+            Box::pin(async move {
+                let workspace = arguments
+                    .iter()
+                    .position(|argument| argument == "--paths")
+                    .and_then(|index| arguments.get(index + 1))
+                    .and_then(|argument| argument.to_str())
+                    .and_then(|value| value.strip_prefix("home:"))
+                    .ok_or(YtDlpError::ProcessRunner)?;
+                tokio::fs::write(Path::new(workspace).join("output.webm"), b"video")
+                    .await
+                    .map_err(|_| YtDlpError::ProcessRunner)?;
+                events
+                    .send(YtDlpRunnerEvent::ProgressLine(
+                        "MYDOWNLOADER_PROGRESS|100%|5|5|NA|1|0".to_owned(),
+                    ))
+                    .await
+                    .map_err(|_| YtDlpError::ProcessRunner)?;
+                Ok(YtDlpProcessExit {
+                    success: true,
+                    code: Some(0),
+                })
+            })
+        }
+    }
 
     impl DownloadEngine for RejectInactiveCancelEngine {
         async fn download(
@@ -1385,6 +1499,7 @@ mod tests {
         let engine = Arc::new(WaitingEngine {
             repository: repository.clone(),
             release,
+            supports_yt_dlp_pause: true,
         });
         Ok((repository, engine, release_sender))
     }
@@ -1531,11 +1646,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_dispatches_mixed_direct_http_and_aria2_items()
+    async fn queue_dispatches_mixed_direct_http_aria2_and_ytdlp_items()
     -> Result<(), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let (endpoint, mut requests, server) = start_aria2_mock().await?;
+        let yt_dlp_base = std::env::temp_dir().join(format!(
+            "mydownloader-queue-ytdlp-test-{}",
+            DownloadId::new()
+        ));
+        tokio::fs::create_dir_all(&yt_dlp_base).await?;
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
         let aria2 = Arc::new(Aria2Engine::with_poll_interval(
             repository.clone(),
@@ -1546,11 +1666,17 @@ mod tests {
             ))?,
             Duration::from_millis(10),
         ));
-        let dispatcher = Arc::new(EngineDispatcher::new(
-            repository.clone(),
-            direct_http,
-            aria2,
-        ));
+        let yt_dlp = Arc::new(
+            YtDlpEngine::initialize_with_runner(
+                repository.clone(),
+                YtDlpConfig::new().with_executable(std::env::current_exe()?),
+                Arc::new(QueueYtDlpRunner),
+            )
+            .await?,
+        );
+        let dispatcher = Arc::new(
+            EngineDispatcher::new(repository.clone(), direct_http, aria2).with_yt_dlp(yt_dlp),
+        );
         let manager =
             QueueManager::new(repository.clone(), dispatcher, QueueConfig::default()).await?;
 
@@ -1568,17 +1694,28 @@ mod tests {
             PathBuf::from("aria.bin"),
             Timestamp::now()?,
         );
+        let yt_dlp_item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
+            FileName::new("video.webm")?,
+            yt_dlp_base.join("video.webm"),
+            Timestamp::now()?,
+        );
         let direct_id = direct.id();
         let aria_id = aria_item.id();
+        let yt_dlp_id = yt_dlp_item.id();
         manager.enqueue(direct).await?;
         manager.enqueue(aria_item).await?;
+        manager.enqueue(yt_dlp_item).await?;
 
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let direct_status = repository.get(direct_id).await?.map(|item| item.status());
                 let aria_status = repository.get(aria_id).await?.map(|item| item.status());
+                let yt_dlp_status = repository.get(yt_dlp_id).await?.map(|item| item.status());
                 if direct_status == Some(DownloadStatus::Failed)
                     && aria_status == Some(DownloadStatus::Failed)
+                    && yt_dlp_status == Some(DownloadStatus::Completed)
                 {
                     return Ok::<_, mydownloader_storage::StorageError>(());
                 }
@@ -1600,6 +1737,11 @@ mod tests {
         assert!(status.contains("\"method\":\"aria2.tellStatus\""));
         manager.shutdown().await?;
         server.await?;
+        assert_eq!(
+            tokio::fs::read(yt_dlp_base.join("video.webm")).await?,
+            b"video"
+        );
+        tokio::fs::remove_dir_all(yt_dlp_base).await?;
         Ok(())
     }
 
@@ -1780,6 +1922,70 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn active_ytdlp_pause_is_rejected_and_shutdown_requeues_work()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let (release_sender, release) = watch::channel(false);
+        let engine = Arc::new(WaitingEngine {
+            repository: repository.clone(),
+            release,
+            supports_yt_dlp_pause: false,
+        });
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        let download = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
+            FileName::new("video.webm")?,
+            PathBuf::from("downloads/video.webm"),
+            Timestamp::now()?,
+        );
+        manager.enqueue(download.clone()).await?;
+        wait_for_active(&manager, 1).await?;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if repository
+                    .get(download.id())
+                    .await?
+                    .is_some_and(|item| item.status() == DownloadStatus::Downloading)
+                {
+                    return Ok::<(), Box<dyn std::error::Error>>(());
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+
+        assert!(matches!(
+            manager.pause(download.id()).await,
+            Err(QueueError::UnsupportedEngineOperation {
+                engine: EngineKind::YtDlp,
+                operation: "active pause",
+            })
+        ));
+        assert_eq!(
+            repository
+                .get(download.id())
+                .await?
+                .ok_or("missing queued item")?
+                .status(),
+            DownloadStatus::Downloading
+        );
+
+        manager.shutdown().await?;
+        assert_eq!(
+            repository
+                .get(download.id())
+                .await?
+                .ok_or("missing queued item after shutdown")?
+                .status(),
+            DownloadStatus::Queued
+        );
+        drop(release_sender);
+        Ok(())
+    }
+
     #[test]
     fn priority_fifo_and_fairness_are_deterministic() -> Result<(), Box<dyn std::error::Error>> {
         let mut high = item()?;
@@ -1849,6 +2055,7 @@ mod tests {
                     sequence: 0,
                     pausing: false,
                     cancelling: false,
+                    shutdown_requeue: false,
                     pause_waiters: Vec::new(),
                     cancel_waiters: Vec::new(),
                 },
@@ -1865,6 +2072,7 @@ mod tests {
                     sequence: 1,
                     pausing: false,
                     cancelling: false,
+                    shutdown_requeue: false,
                     pause_waiters: Vec::new(),
                     cancel_waiters: Vec::new(),
                 },

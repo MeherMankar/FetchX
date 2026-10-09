@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use mydownloader_models::{DownloadId, DownloadItem};
+use mydownloader_models::{DownloadId, DownloadItem, EngineKind};
 use tokio::sync::{mpsc, watch};
 
 use crate::DownloadEngineError;
@@ -38,6 +38,12 @@ pub trait ManagedDownloadEngine: DownloadEngine {
         id: DownloadId,
         control: ManagedDownloadControl,
     ) -> impl Future<Output = Result<DownloadItem, DownloadEngineError>> + Send;
+
+    /// Reports whether active work of this engine kind can be paused without
+    /// terminating the underlying transfer.
+    fn supports_active_pause(&self, _engine: EngineKind) -> bool {
+        true
+    }
 
     /// Stops backend work for an item that has no active queue worker, if any exists.
     ///

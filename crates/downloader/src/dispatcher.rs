@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::{
     Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
-    ManagedDownloadEngine,
+    ManagedDownloadEngine, YtDlpEngine,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -14,6 +14,7 @@ pub struct EngineDispatcher<R> {
     repository: R,
     direct_http: Arc<DirectHttpEngine<R>>,
     aria2: Arc<Aria2Engine<R>>,
+    yt_dlp: Option<Arc<YtDlpEngine<R>>>,
 }
 
 impl<R> EngineDispatcher<R>
@@ -29,7 +30,13 @@ where
             repository,
             direct_http,
             aria2,
+            yt_dlp: None,
         }
+    }
+
+    pub fn with_yt_dlp(mut self, engine: Arc<YtDlpEngine<R>>) -> Self {
+        self.yt_dlp = Some(engine);
+        self
     }
 
     async fn engine_for(&self, id: DownloadId) -> Result<EngineKind, DownloadEngineError> {
@@ -53,7 +60,10 @@ where
         match self.engine_for(id).await? {
             EngineKind::DirectHttp => self.direct_http.download(id, cancellation).await,
             EngineKind::Aria2 => self.aria2.download(id, cancellation).await,
-            EngineKind::YtDlp => Err(DownloadEngineError::EngineNotAvailable),
+            EngineKind::YtDlp => match &self.yt_dlp {
+                Some(engine) => engine.download(id, cancellation).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 }
@@ -70,7 +80,20 @@ where
         match self.engine_for(id).await? {
             EngineKind::DirectHttp => self.direct_http.download_managed(id, control).await,
             EngineKind::Aria2 => self.aria2.download_managed(id, control).await,
-            EngineKind::YtDlp => Err(DownloadEngineError::EngineNotAvailable),
+            EngineKind::YtDlp => match &self.yt_dlp {
+                Some(engine) => engine.download_managed(id, control).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+        }
+    }
+
+    fn supports_active_pause(&self, engine: EngineKind) -> bool {
+        match engine {
+            EngineKind::YtDlp => self
+                .yt_dlp
+                .as_ref()
+                .is_some_and(|engine| engine.supports_active_pause(EngineKind::YtDlp)),
+            EngineKind::DirectHttp | EngineKind::Aria2 => true,
         }
     }
 
@@ -90,19 +113,58 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
+    use std::{
+        error::Error,
+        ffi::OsString,
+        path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use mydownloader_models::{
         DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
     };
     use mydownloader_storage::{Database, DownloadRepository};
-    use tokio::sync::watch;
+    use tokio::sync::{mpsc, watch};
 
     use super::EngineDispatcher;
     use crate::{
         Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
-        DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
+        DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, YtDlpConfig,
+        YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
+        YtDlpRunnerFuture,
     };
+
+    struct CountingRunner(Arc<AtomicUsize>);
+
+    impl YtDlpProcessRunner for CountingRunner {
+        fn validate_version<'a>(
+            &'a self,
+            _executable: &'a Path,
+            _timeout: Duration,
+        ) -> YtDlpRunnerFuture<'a, Result<String, YtDlpError>> {
+            Box::pin(async { Ok("test-version".to_owned()) })
+        }
+
+        fn run<'a>(
+            &'a self,
+            _executable: &'a Path,
+            _arguments: &'a [OsString],
+            _stop: watch::Receiver<bool>,
+            _events: mpsc::Sender<YtDlpRunnerEvent>,
+        ) -> YtDlpRunnerFuture<'a, Result<YtDlpProcessExit, YtDlpError>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async {
+                Ok(YtDlpProcessExit {
+                    success: true,
+                    code: Some(0),
+                })
+            })
+        }
+    }
 
     fn item(engine: EngineKind, url: &str) -> Result<DownloadItem, Box<dyn Error>> {
         Ok(DownloadItem::new(
@@ -170,6 +232,64 @@ mod tests {
             dispatcher.download(unsupported_id, cancellation).await,
             Err(DownloadEngineError::EngineNotAvailable)
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatcher_invokes_configured_ytdlp_runner_without_system_install()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let base = std::env::temp_dir().join(format!(
+            "mydownloader-dispatcher-test-{}",
+            DownloadId::new()
+        ));
+        tokio::fs::create_dir_all(&base).await?;
+        let video = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
+            FileName::new("video.webm")?,
+            base.join("video.webm"),
+            Timestamp::now()?,
+        );
+        let id = video.id();
+        repository.create(&video).await?;
+        let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
+        let aria2 = Arc::new(Aria2Engine::new(
+            repository.clone(),
+            Aria2Client::new(Aria2ClientConfig::new(
+                "http://127.0.0.1:6800/jsonrpc",
+                None,
+                Duration::from_millis(50),
+            ))?,
+        ));
+        let run_count = Arc::new(AtomicUsize::new(0));
+        let yt_dlp = Arc::new(
+            YtDlpEngine::initialize_with_runner(
+                repository.clone(),
+                YtDlpConfig::new().with_executable(std::env::current_exe()?),
+                Arc::new(CountingRunner(Arc::clone(&run_count))),
+            )
+            .await?,
+        );
+        let dispatcher =
+            EngineDispatcher::new(repository.clone(), direct, aria2).with_yt_dlp(yt_dlp);
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        assert!(matches!(
+            dispatcher.download(id, cancellation).await,
+            Err(DownloadEngineError::YtDlp(YtDlpError::OutputUnavailable))
+        ));
+        assert_eq!(run_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .ok_or("missing dispatched item")?
+                .status(),
+            DownloadStatus::Failed
+        );
+        tokio::fs::remove_dir_all(base).await?;
         Ok(())
     }
 }
