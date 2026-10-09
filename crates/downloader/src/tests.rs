@@ -21,7 +21,7 @@ use tokio::{
     time::sleep,
 };
 
-use crate::{DirectHttpEngine, DownloadEngineError, HttpEngineConfig};
+use crate::{AdaptiveConfig, DirectHttpEngine, DownloadEngineError, HttpEngineConfig};
 
 struct TestDirectory(PathBuf);
 
@@ -66,6 +66,8 @@ enum SegmentServerMode {
     ShortBody,
     IgnoreRange,
     Fail,
+    FailAboveConcurrency(usize),
+    RateLimit,
 }
 
 struct SegmentServerReport {
@@ -382,6 +384,10 @@ async fn serve_segment_connection(
         match mode {
             SegmentServerMode::IgnoreRange => (200, 0, 0, 0, body.clone(), body.len()),
             SegmentServerMode::Fail => (500, start, end, body.len(), Vec::new(), 0),
+            SegmentServerMode::FailAboveConcurrency(limit) if current > limit => {
+                (503, start, end, body.len(), Vec::new(), 0)
+            }
+            SegmentServerMode::RateLimit => (429, start, end, body.len(), Vec::new(), 0),
             SegmentServerMode::WrongStart => (
                 206,
                 start.saturating_add(1),
@@ -414,7 +420,7 @@ async fn serve_segment_connection(
                 body.get(start..end).unwrap_or_default().to_vec(),
                 end.saturating_sub(start).saturating_add(1),
             ),
-            SegmentServerMode::Valid => (
+            SegmentServerMode::FailAboveConcurrency(_) | SegmentServerMode::Valid => (
                 206,
                 start,
                 end,
@@ -432,6 +438,9 @@ async fn serve_segment_connection(
         headers.push_str(&format!(
             "Content-Range: bytes {response_start}-{response_end}/{response_total}\r\n"
         ));
+    }
+    if matches!(mode, SegmentServerMode::RateLimit) {
+        headers.push_str("Retry-After: 60\r\n");
     }
     headers.push_str("\r\n");
     if stream.write_all(headers.as_bytes()).await.is_ok() {
@@ -473,6 +482,34 @@ fn segmented_config(minimum_size: u64) -> HttpEngineConfig {
         minimum_segmented_file_size: minimum_size,
         progress_bytes_interval: 16 * 1024,
         progress_time_interval: Duration::from_millis(50),
+        adaptive: AdaptiveConfig {
+            enabled: false,
+            initial_concurrency: 4,
+            max_concurrency: 4,
+            ..AdaptiveConfig::default()
+        },
+        ..HttpEngineConfig::default()
+    }
+}
+
+fn adaptive_segmented_config(minimum_size: u64) -> HttpEngineConfig {
+    HttpEngineConfig {
+        segment_count: 8,
+        minimum_segmented_file_size: minimum_size,
+        progress_bytes_interval: 16 * 1024,
+        progress_time_interval: Duration::from_millis(50),
+        adaptive: AdaptiveConfig {
+            min_concurrency: 1,
+            initial_concurrency: 2,
+            max_concurrency: 4,
+            measurement_window: Duration::from_millis(20),
+            improvement_threshold_percent: 10,
+            regression_threshold_percent: 20,
+            observations_to_increase: 2,
+            cooldown_windows: 1,
+            failures_to_decrease: 2,
+            ..AdaptiveConfig::default()
+        },
         ..HttpEngineConfig::default()
     }
 }
@@ -645,6 +682,184 @@ async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
             .exists()
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn adaptive_scheduler_completes_within_worker_bounds_and_assembles_all_ranges()
+-> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 512 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 251) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 8, SegmentServerMode::Valid, 20, true).await?;
+    let (database, engine, directory) = setup_engine(adaptive_segmented_config(1024)).await?;
+    let destination = directory.destination("adaptive-segments.bin");
+
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let report = server.await?;
+    let ranges = report
+        .requests
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+
+    assert_eq!(ranges.len(), 8);
+    assert!(report.max_active_segments >= 2);
+    assert!(report.max_active_segments <= 4);
+    assert_ne!(report.completion_order.first(), Some(&0));
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(completed.progress().downloaded_bytes(), TOTAL as u64);
+    Ok(())
+}
+
+#[tokio::test]
+async fn adaptive_scheduler_backs_off_when_server_rejects_excess_concurrency()
+-> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 512 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 239) as u8).collect();
+    let (url, server) = start_segment_server(
+        body.clone(),
+        8,
+        SegmentServerMode::FailAboveConcurrency(1),
+        32,
+        true,
+    )
+    .await?;
+    let mut config = adaptive_segmented_config(1024);
+    config.adaptive.initial_concurrency = 2;
+    config.adaptive.max_concurrency = 2;
+    let (database, engine, directory) = setup_engine(config).await?;
+    let destination = directory.destination("adaptive-backoff.bin");
+
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let report = server.await?;
+    let ranges = report
+        .requests
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+
+    assert!(report.max_active_segments <= 3);
+    assert!(ranges.len() > 8);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limited_segments_are_not_retried_while_ignoring_retry_after()
+-> Result<(), Box<dyn Error>> {
+    let body = vec![31_u8; 256 * 1024];
+    let (url, server) =
+        start_segment_server(body, 4, SegmentServerMode::RateLimit, 5, false).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("rate-limited.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::HttpStatus(429))
+    ));
+    let report = server.await?;
+    let range_requests = report
+        .requests
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+    let unique_ranges = range_requests
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let persisted = database
+        .downloads()
+        .get(id)
+        .await?
+        .ok_or("rate-limited download missing")?;
+
+    assert!(!range_requests.is_empty());
+    assert!(range_requests.len() <= 4);
+    assert_eq!(range_requests.len(), unique_ranges.len());
+    assert!(!destination.exists());
+    assert_eq!(persisted.status(), DownloadStatus::Failed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_during_adaptive_transfer_preserves_partial_segments()
+-> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 8 * 1024 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 223) as u8).collect();
+    let (url, server) = start_segment_server(body, 8, SegmentServerMode::Valid, 20, true).await?;
+    let (database, engine, directory) = setup_engine(adaptive_segmented_config(1024)).await?;
+    let destination = directory.destination("adaptive-cancel.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (sender, receiver) = watch::channel(false);
+    let engine_task = tokio::spawn(async move { engine.download(id, receiver).await });
+
+    let mut observed_progress = false;
+    for _ in 0..300 {
+        let current = database.downloads().get(id).await?;
+        if current.is_some_and(|item| item.progress().downloaded_bytes() > 0) {
+            observed_progress = true;
+            break;
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    assert!(observed_progress);
+    sleep(Duration::from_millis(150)).await;
+    sender.send(true)?;
+    assert!(matches!(
+        engine_task.await?,
+        Err(DownloadEngineError::Cancelled)
+    ));
+    let report = server.await?;
+    let current = database
+        .downloads()
+        .get(id)
+        .await?
+        .ok_or("cancelled adaptive download missing")?;
+    let mut partial_bytes = 0_u64;
+    for index in 0..8 {
+        let path = PathBuf::from(format!(
+            "{}.part.segments-8-{TOTAL}-{index}",
+            destination.display()
+        ));
+        match tokio::fs::metadata(path).await {
+            Ok(metadata) => partial_bytes += metadata.len(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    assert_eq!(current.status(), DownloadStatus::Cancelled);
+    assert!(report.max_active_segments >= 2);
+    assert!(report.max_active_segments <= 4);
+    assert!(partial_bytes > 0 && partial_bytes < TOTAL as u64);
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_adaptive_configuration_is_rejected_by_engine() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let config = HttpEngineConfig {
+        adaptive: AdaptiveConfig {
+            max_concurrency: 9,
+            ..AdaptiveConfig::default()
+        },
+        ..HttpEngineConfig::default()
+    };
+
+    assert!(matches!(
+        DirectHttpEngine::with_config(database.downloads(), config),
+        Err(DownloadEngineError::InvalidConfiguration)
+    ));
     Ok(())
 }
 

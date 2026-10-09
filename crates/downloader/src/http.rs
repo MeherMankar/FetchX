@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     ffi::OsString,
     path::{Path, PathBuf},
     sync::{
@@ -27,10 +28,12 @@ use tokio::{
 };
 use tracing::{info, warn};
 
+use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{DownloadEngine, DownloadEngineError};
 
 const DEFAULT_USER_AGENT: &str = concat!("MyDownloader/", env!("CARGO_PKG_VERSION"));
+const MAX_SEGMENT_ATTEMPTS: u8 = 3;
 
 /// Timeouts, request identity, and progress checkpoint policy for HTTP downloads.
 ///
@@ -43,10 +46,12 @@ pub struct HttpEngineConfig {
     pub progress_bytes_interval: u64,
     pub progress_time_interval: Duration,
     pub user_agent: String,
-    /// Fixed number of simultaneous byte ranges; values outside 2..=16 disable segmentation.
+    /// Maximum number of planned ranges; values outside 2..=16 disable segmentation.
     pub segment_count: usize,
     /// Files smaller than this threshold use the single-stream path.
     pub minimum_segmented_file_size: u64,
+    /// Bounded throughput-driven concurrency control for segmented transfers.
+    pub adaptive: AdaptiveConfig,
 }
 
 struct BodyContext {
@@ -65,6 +70,7 @@ struct SegmentedContext {
     status: DownloadStatus,
     url: Url,
     total_size: u64,
+    segment_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -98,8 +104,9 @@ impl Default for HttpEngineConfig {
             progress_bytes_interval: 1024 * 1024,
             progress_time_interval: Duration::from_secs(1),
             user_agent: DEFAULT_USER_AGENT.to_owned(),
-            segment_count: 4,
+            segment_count: 8,
             minimum_segmented_file_size: 4 * 1024 * 1024,
+            adaptive: AdaptiveConfig::default(),
         }
     }
 }
@@ -121,7 +128,7 @@ where
         Self::with_config(repository, HttpEngineConfig::default())
     }
 
-    /// Creates an engine with caller-selected timeouts and progress checkpoint policy.
+    /// Creates an engine with caller-selected timeouts, checkpoint, and adaptive policies.
     pub fn with_config(
         repository: R,
         config: HttpEngineConfig,
@@ -131,6 +138,7 @@ where
             || config.progress_bytes_interval == 0
             || config.progress_time_interval.is_zero()
             || config.user_agent.trim().is_empty()
+            || !config.adaptive.is_valid()
         {
             return Err(DownloadEngineError::InvalidConfiguration);
         }
@@ -289,6 +297,8 @@ where
         {
             let total_size = parse_content_length(&response)?
                 .ok_or(DownloadEngineError::InvalidContentLength)?;
+            let segment_count =
+                segmented_layout(&temporary_path, self.config.segment_count, total_size).await?;
             drop(response);
             match self
                 .download_segmented(
@@ -299,6 +309,7 @@ where
                         status: current_status,
                         url: url.clone(),
                         total_size,
+                        segment_count,
                     },
                     cancellation,
                 )
@@ -306,8 +317,7 @@ where
             {
                 SegmentedOutcome::Completed(completed) => return Ok(*completed),
                 SegmentedOutcome::Fallback => {
-                    cleanup_segment_files(&temporary_path, self.config.segment_count, total_size)
-                        .await?;
+                    cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
                     item = self
                         .repository
                         .get(id)
@@ -454,19 +464,14 @@ where
             mut status,
             url,
             total_size,
+            segment_count,
         } = context;
         let temporary_path = temporary_path(item.destination());
-        let mut segments =
-            segments::plan_segments(total_size, self.config.segment_count, |index| {
-                segment_file_path(
-                    &temporary_path,
-                    self.config.segment_count,
-                    total_size,
-                    index,
-                )
-            })
-            .map_err(|_| DownloadEngineError::InvalidConfiguration)?
-            .ok_or(DownloadEngineError::InvalidConfiguration)?;
+        let mut segments = segments::plan_segments(total_size, segment_count, |index| {
+            segment_file_path(&temporary_path, segment_count, total_size, index)
+        })
+        .map_err(|_| DownloadEngineError::InvalidConfiguration)?
+        .ok_or(DownloadEngineError::InvalidConfiguration)?;
 
         let mut already_downloaded = 0_u64;
         for segment in &mut segments {
@@ -499,43 +504,48 @@ where
 
         let downloaded = Arc::new(AtomicU64::new(already_downloaded));
         let (stop_sender, stop_receiver) = watch::channel(false);
-        let mut tasks = JoinSet::new();
-        for mut segment in segments {
-            if segment.state == SegmentState::Complete {
-                continue;
-            }
-            let client = self.client.clone();
-            let url = url.clone();
-            let mut cancellation = cancellation.clone();
-            let mut stop = stop_receiver.clone();
-            let downloaded = Arc::clone(&downloaded);
-            tasks.spawn(async move {
-                let index = segment.index;
-                let result = segments::download_segment(
-                    &mut segment,
-                    total_size,
-                    &url,
-                    &client,
-                    &mut cancellation,
-                    &mut stop,
-                    &downloaded,
-                )
-                .await;
-                result.map(|result| (index, result))
-            });
-        }
-
-        let mut remaining = tasks.len();
+        let mut tasks: JoinSet<(usize, Segment, Result<SegmentResult, DownloadEngineError>)> =
+            JoinSet::new();
+        let mut pending = segments
+            .iter()
+            .filter(|segment| segment.state != SegmentState::Complete)
+            .map(|segment| segment.index)
+            .collect::<VecDeque<_>>();
+        let mut controller = AdaptiveController::new(self.config.adaptive.clone());
+        let initial_target = controller.desired_concurrency(pending.len());
+        spawn_segment_workers(
+            &mut tasks,
+            &mut pending,
+            &segments,
+            initial_target,
+            total_size,
+            &url,
+            &self.client,
+            cancellation,
+            &stop_receiver,
+            &downloaded,
+        );
         let mut stop_reason = None;
+        let mut failures_since_sample = 0_u8;
+        let mut wait_for_error_sample = false;
+        let mut completed_since_sample = 0_usize;
+
         let poll_interval = self
             .config
             .progress_time_interval
             .min(Duration::from_millis(50));
         let mut progress_timer = interval(poll_interval);
         let _ = progress_timer.tick().await;
+        let mut adaptive_timer = tokio::time::interval_at(
+            tokio::time::Instant::now() + self.config.adaptive.measurement_window,
+            self.config.adaptive.measurement_window,
+        );
+        let mut last_sampled_bytes = already_downloaded;
+        let mut last_sampled_at = Instant::now();
         let mut last_persisted_bytes = already_downloaded;
         let mut last_persisted_at = Instant::now();
-        while remaining > 0 {
+
+        while !tasks.is_empty() || (stop_reason.is_none() && !pending.is_empty()) {
             tokio::select! {
                 changed = cancellation.changed(), if stop_reason.is_none() => {
                     if changed.is_err() || *cancellation.borrow_and_update() {
@@ -564,18 +574,104 @@ where
                         }
                     }
                 }
-                joined = tasks.join_next() => {
-                    remaining = remaining.saturating_sub(1);
+                _ = adaptive_timer.tick(), if stop_reason.is_none() => {
+                    let now = Instant::now();
+                    let current_bytes = downloaded.load(Ordering::Acquire);
+                    let remaining_segments = segments
+                        .iter()
+                        .filter(|segment| segment.state != SegmentState::Complete)
+                        .count();
+                    let (decision, decrease_reason) = controller.observe(AdaptiveSample {
+                        bytes: current_bytes.saturating_sub(last_sampled_bytes),
+                        elapsed: now.duration_since(last_sampled_at),
+                        active_concurrency: tasks.len(),
+                        remaining_segments,
+                        completed_segments: completed_since_sample,
+                        request_failures: failures_since_sample,
+                        cancelled: *cancellation.borrow(),
+                    });
+                    last_sampled_bytes = current_bytes;
+                    last_sampled_at = now;
+                    failures_since_sample = 0;
+                    completed_since_sample = 0;
+                    wait_for_error_sample = false;
+                    match decision {
+                        AdaptiveDecision::Increase { from, to } => {
+                            info!(download_id = %id, from, to, "increasing HTTP segment concurrency");
+                        }
+                        AdaptiveDecision::Decrease { from, to } => {
+                            warn!(
+                                download_id = %id,
+                                from,
+                                to,
+                                reason = ?decrease_reason,
+                                "decreasing HTTP segment concurrency"
+                            );
+                        }
+                        AdaptiveDecision::Maintain => {}
+                    }
+                    let target = controller.desired_concurrency(remaining_segments);
+                    spawn_segment_workers(
+                        &mut tasks,
+                        &mut pending,
+                        &segments,
+                        target,
+                        total_size,
+                        &url,
+                        &self.client,
+                        cancellation,
+                        &stop_receiver,
+                        &downloaded,
+                    );
+                }
+                joined = tasks.join_next(), if !tasks.is_empty() => {
                     match joined {
-                        Some(Ok(Ok((_, SegmentResult::Complete)))) => {}
-                        Some(Ok(Ok((_, SegmentResult::Fallback)))) if stop_reason.is_none() => {
+                        Some(Ok((index, segment, Ok(SegmentResult::Complete)))) => {
+                            segments[index] = segment;
+                            completed_since_sample = completed_since_sample.saturating_add(1);
+                        }
+                        Some(Ok((_, _, Ok(SegmentResult::Fallback)))) if stop_reason.is_none() => {
                             stop_reason = Some(SegmentedStop::Fallback);
                             let _ = stop_sender.send(true);
                         }
-                        Some(Ok(Ok((_, SegmentResult::Cancelled)))) => {}
-                        Some(Ok(Err(error))) if stop_reason.is_none() => {
-                            stop_reason = Some(SegmentedStop::Failure(error));
-                            let _ = stop_sender.send(true);
+                        Some(Ok((index, segment, Ok(SegmentResult::Cancelled)))) => {
+                            segments[index] = segment;
+                        }
+                        Some(Ok((index, segment, Err(error)))) if stop_reason.is_none() => {
+                            segments[index] = segment;
+                            failures_since_sample = failures_since_sample.saturating_add(1);
+                            wait_for_error_sample = true;
+                            if segments[index].attempts < MAX_SEGMENT_ATTEMPTS
+                                && matches!(error, DownloadEngineError::SegmentFailed { .. })
+                            {
+                                match segments::prepare_segment(&mut segments[index]).await {
+                                    Ok(true) if segments[index].state != SegmentState::Complete => {
+                                        pending.push_front(index);
+                                    }
+                                    Ok(true) => {
+                                        stop_reason = Some(SegmentedStop::Failure(error));
+                                        let _ = stop_sender.send(true);
+                                    }
+                                    Ok(false) => {
+                                        stop_reason = Some(SegmentedStop::Failure(
+                                            DownloadEngineError::SegmentFailed {
+                                                index,
+                                                start: segments[index].start,
+                                                end: segments[index].end,
+                                            },
+                                        ));
+                                        let _ = stop_sender.send(true);
+                                    }
+                                    Err(reconcile_error) => {
+                                        stop_reason =
+                                            Some(SegmentedStop::Failure(reconcile_error));
+                                        let _ = stop_sender.send(true);
+                                    }
+                                }
+                            } else {
+                                stop_reason = Some(SegmentedStop::Failure(error));
+                                let _ = stop_sender.send(true);
+                            }
                         }
                         Some(Err(_)) if stop_reason.is_none() => {
                             stop_reason = Some(SegmentedStop::Failure(
@@ -584,14 +680,34 @@ where
                             let _ = stop_sender.send(true);
                         }
                         Some(_) => {}
-                        None => remaining = 0,
+                        None => {}
+                    }
+
+                    if stop_reason.is_none() && !wait_for_error_sample {
+                        let remaining_segments = segments
+                            .iter()
+                            .filter(|segment| segment.state != SegmentState::Complete)
+                            .count();
+                        let target = controller.desired_concurrency(remaining_segments);
+                        spawn_segment_workers(
+                            &mut tasks,
+                            &mut pending,
+                            &segments,
+                            target,
+                            total_size,
+                            &url,
+                            &self.client,
+                            cancellation,
+                            &stop_receiver,
+                            &downloaded,
+                        );
                     }
                 }
             }
         }
 
         let actual_segment_bytes =
-            segment_files_size(&temporary_path, self.config.segment_count, total_size).await?;
+            segment_files_size(&temporary_path, segment_count, total_size).await?;
         downloaded.store(actual_segment_bytes, Ordering::Release);
         if let Some(reason) = stop_reason {
             self.persist_segment_progress(
@@ -625,13 +741,8 @@ where
         }
 
         assemble_segments(
-            &segments::plan_segments(total_size, self.config.segment_count, |index| {
-                segment_file_path(
-                    &temporary_path,
-                    self.config.segment_count,
-                    total_size,
-                    index,
-                )
+            &segments::plan_segments(total_size, segment_count, |index| {
+                segment_file_path(&temporary_path, segment_count, total_size, index)
             })
             .map_err(|_| DownloadEngineError::InvalidConfiguration)?
             .ok_or(DownloadEngineError::InvalidConfiguration)?,
@@ -640,7 +751,7 @@ where
             cancellation,
         )
         .await?;
-        cleanup_segment_files(&temporary_path, self.config.segment_count, total_size).await?;
+        cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
         publish_without_replacement(&temporary_path, item.destination()).await?;
 
         let completed = self
@@ -931,6 +1042,45 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_segment_workers(
+    tasks: &mut JoinSet<(usize, Segment, Result<SegmentResult, DownloadEngineError>)>,
+    pending: &mut VecDeque<usize>,
+    segments: &[Segment],
+    target_concurrency: usize,
+    total_size: u64,
+    url: &Url,
+    client: &Client,
+    cancellation: &watch::Receiver<bool>,
+    stop: &watch::Receiver<bool>,
+    downloaded: &Arc<AtomicU64>,
+) {
+    while tasks.len() < target_concurrency {
+        let Some(index) = pending.pop_front() else {
+            break;
+        };
+        let mut segment = segments[index].clone();
+        let client = client.clone();
+        let url = url.clone();
+        let mut cancellation = cancellation.clone();
+        let mut stop = stop.clone();
+        let downloaded = Arc::clone(downloaded);
+        tasks.spawn(async move {
+            let result = segments::download_segment(
+                &mut segment,
+                total_size,
+                &url,
+                &client,
+                &mut cancellation,
+                &mut stop,
+                &downloaded,
+            )
+            .await;
+            (index, segment, result)
+        });
+    }
+}
+
 impl<R> DownloadEngine for DirectHttpEngine<R>
 where
     R: DownloadRepository + Clone,
@@ -1130,6 +1280,29 @@ fn segment_file_path(
     let mut name: OsString = temporary.as_os_str().to_os_string();
     name.push(format!(".segments-{segment_count}-{total_size}-{index}"));
     PathBuf::from(name)
+}
+
+async fn segmented_layout(
+    temporary: &Path,
+    configured_segment_count: usize,
+    total_size: u64,
+) -> Result<usize, DownloadEngineError> {
+    if configured_segment_count != 4 {
+        for candidate in std::iter::once(4).chain(2..=16) {
+            if candidate == configured_segment_count {
+                continue;
+            }
+            for index in 0..candidate {
+                let path = segment_file_path(temporary, candidate, total_size, index);
+                match fs::symlink_metadata(path).await {
+                    Ok(_) => return Ok(candidate),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(DownloadEngineError::Io(error)),
+                }
+            }
+        }
+    }
+    Ok(configured_segment_count)
 }
 
 async fn segment_files_size(

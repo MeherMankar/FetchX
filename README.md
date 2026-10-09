@@ -8,8 +8,8 @@ download queues, resumability, external engines, and other download-manager feat
 
 This repository currently contains the Rust workspace foundation, engine-independent
 domain models, SQLite persistence, a deterministic download lifecycle state machine,
-and a direct HTTP/HTTPS downloader with safe Range-based resume and fixed-concurrency
-segmentation. No UI or integrations with aria2, yt-dlp, or FFmpeg are implemented yet.
+and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive segmented
+transfers. No UI or integrations with aria2, yt-dlp, or FFmpeg are implemented yet.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
@@ -17,11 +17,33 @@ response restarts from zero; cancellation and transfer failures preserve partial
 ETag/Last-Modified validators and startup recovery are not implemented, so a partial
 may belong to an older remote representation.
 
-For responses that advertise byte ranges and provide a known size of at least 4 MiB,
-the engine uses four fixed segments. Smaller, unknown-size, or non-range responses use
-the existing single-stream path. Segments are validated and assembled in order;
-cancelled/failed segment files can be resumed on a later invocation. Segment metadata
-is not persisted in SQLite.
+For fresh responses that advertise byte ranges and provide a known size of at least
+4 MiB, the engine plans up to eight ranges and starts with four workers. A bounded
+adaptive controller may probe up to eight concurrent requests when measured throughput
+supports doing so; it backs off for sustained regression or repeated worker errors.
+Smaller, unknown-size, or non-range responses use the existing single-stream path.
+If range requests are ignored or return unusable metadata, segment artifacts are
+discarded and the download restarts through the single-stream path. Segments are
+validated and assembled in order; cancelled/failed segment files can be resumed on a
+later invocation, including the prior four-range Phase 7 layout. Segment metadata and
+adaptive telemetry are not persisted in SQLite.
+
+By default, adaptive throughput is calculated from actual bytes received over 500 ms
+measurement windows and smoothed with a 50/50 exponential moving average. The controller
+requires at least a 10% improvement in two observations to accept each one-worker probe, uses a
+20% sustained-regression threshold, and waits through two cooldown windows after a
+decision. Rejected probes are not repeated until measured throughput at the restored
+target improves by at least the configured threshold. Repeated failures trigger a
+one-worker reduction; failed segments receive at
+most three attempts in total. Zero-byte windows are ignored so response latency alone
+does not trigger a throughput backoff. The minimum, initial, and maximum concurrency default to
+1, 4, and 8 and can be changed through `HttpEngineConfig::adaptive`, with eight as the
+hard maximum.
+
+Adaptive concurrency cannot overcome server-side or network bandwidth limits. The
+engine respects range responses and does not attempt to bypass server throttling or
+access controls. It does not parse or wait for `Retry-After`; 429 responses and 503
+responses carrying that header are not retried automatically.
 
 ## Technology stack
 
@@ -41,7 +63,7 @@ is implemented.
 - `crates/models` — shared domain and data structures
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
-- `crates/downloader` — direct HTTP/HTTPS engine with single-stream resume and fixed segmentation
+- `crates/downloader` — direct HTTP/HTTPS engine with resume and adaptive segmentation
 - `migrations` — embedded, ordered SQLite schema migrations
 - `tests` — workspace-level integration tests
 - `docs` — architecture, roadmap, and AI contribution rules

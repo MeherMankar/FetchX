@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 
+mod adaptive;
 mod engine;
 mod error;
 mod http;
 mod segments;
 
+pub use adaptive::AdaptiveConfig;
 pub use engine::DownloadEngine;
 pub use error::DownloadEngineError;
 pub use http::{DirectHttpEngine, HttpEngineConfig};

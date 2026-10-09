@@ -7,7 +7,7 @@
 5. Phase 5 — Direct HTTP downloader (completed)
 6. Phase 6 — Resume and Range support (completed)
 7. Phase 7 — Segment manager (completed)
-8. Phase 8 — Adaptive acceleration
+8. Phase 8 — Adaptive acceleration (completed)
 9. Phase 9 — Queue manager
 10. Phase 10 — Scheduler
 11. Phase 11 — aria2 integration

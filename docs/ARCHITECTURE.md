@@ -40,8 +40,9 @@ timeout are configured for connections. File-backed databases use a five-connect
 pool; in-memory databases use one connection so pooled operations share the same
 database. The caller's journal mode is left unchanged rather than forcing WAL.
 
-The `downloader` crate provides a single-stream `DirectHttpEngine` using Reqwest and
-Tokio file I/O. It accepts only HTTP/HTTPS URLs without embedded credentials, follows
+The `downloader` crate provides a `DirectHttpEngine` using Reqwest and Tokio file I/O
+for single-stream and adaptive segmented transfers. It accepts only HTTP/HTTPS URLs
+without embedded credentials, follows
 at most ten HTTP(S) redirects without HTTPS downgrade, and uses connect/read timeouts.
 For single-stream transfers, response chunks stream into a sibling `.part` file.
 Progress checkpoints are persisted by byte/time thresholds through status- and
@@ -71,32 +72,57 @@ rather than appended because no persisted redirect target is available for compa
 Parent directories are not created automatically.
 
 For a fresh download, if the initial response advertises `Accept-Ranges: bytes`, has a
-known size of at least 4 MiB, and is not redirected, the engine attempts four fixed
-inclusive byte ranges concurrently. Segment count is configurable within a bounded
-range (2–16); the default remains four. Each response's status, final URL, Content-Range,
+known size of at least 4 MiB, and is not redirected, the engine plans up to eight
+inclusive byte ranges and initially starts four workers. `HttpEngineConfig::segment_count`
+sets the number of planned ranges (bounded to 2–16); the adaptive controller independently
+limits active requests to at most eight. Each response's status, final URL, Content-Range,
 total size, body length, and local segment size are validated before bytes are accepted.
 If a segment endpoint ignores Range or returns unusable range metadata, the engine
 discards segment artifacts and falls back to a fresh single-stream request. Unknown-size,
 small, redirected, or non-range responses use single-stream downloading immediately.
 
+The scheduler keeps pending ranges separate from active workers. It launches work only
+up to the controller's current target, so a decrease stops assigning new ranges without
+terminating healthy requests already in flight. Cancellation prevents further scheduling,
+signals existing workers through the Phase 7 mechanism, joins them, and preserves useful
+segment files. Workers receive at most three attempts total; repeated failures feed the
+controller, while exhausted failures remain visible as download errors.
+
 Segments write to separate sibling temporary files identified by segment count, total
-size, and index. Segment workers are bounded by the fixed segment count. Global progress
-is the sum of actual local segment-file lengths and is periodically persisted; per-segment
-state is not stored in SQLite. Cancellation and transfer failures keep segment files so
-a later invocation can reconcile them from disk and request only each segment's missing
-suffix. After all ranges complete, every segment's exact length and the contiguous
-assembly size are checked. Segments are copied in index order into `.part`, flushed and
-synced, then published with the same no-overwrite hard-link operation. Completed segment
-temporary files are removed before publication.
+size, and index. Existing four-range Phase 7 segment files are detected and resumed using
+their original byte ranges. Global progress is the sum of actual local segment-file
+lengths and is periodically persisted; per-segment state and adaptive telemetry are not
+stored in SQLite. After all ranges complete, every segment's exact length and the
+contiguous assembly size are checked. Segments are copied in index order into `.part`,
+flushed and synced, then published with the same no-overwrite hard-link operation.
+Completed segment temporary files are removed before publication.
+
+`AdaptiveConfig` defaults to minimum/initial/maximum concurrency of 1/4/8 and validates
+that all bounds, thresholds, and sampling intervals are usable. The hard maximum is
+eight. By default, every 500 ms the controller calculates throughput from newly
+received bytes over actual elapsed time and applies a 50/50 exponential moving average.
+Zero-byte windows are ignored so response latency alone does not look like a throughput
+regression. After two healthy
+observations with work remaining, it cautiously probes one additional worker. That probe
+is accepted only after two smoothed measurements at least 10% above its prior-concurrency
+baseline; otherwise it returns to the previous target. A sustained throughput regression
+of at least 20% or two request/worker failures decreases the target by one. Two measurement
+windows of cooldown after a change provide hysteresis. Request failures are retried with
+a maximum of three total attempts per segment; retries remain bounded and do not bypass
+HTTP range semantics. After an unproductive probe or throughput regression, another
+upward probe is held until measured throughput improves by the configured threshold.
+The measurement window must be at least 10 ms; zero-byte windows are ignored.
 
 The engine does not persist ETag or Last-Modified validators. Segment temp files are
 keyed by destination, count, size, and index—not by remote representation—so a stale
 segment can theoretically be reused if a resource changes without changing its length.
-Startup reconciliation is not implemented. Phase 8 may add adaptive concurrency; no
-dynamic segment sizing or throughput-driven tuning exists yet. Downloads remain
-single-source, without retries or speed calculations. Filesystem publication and
-database completion are separate operations, so a crash between them can leave a
-published file whose persisted state is not yet `Completed`.
+Startup reconciliation is not implemented. Adaptive concurrency cannot overcome
+server-side or network bandwidth limits; the engine does not attempt to bypass server
+throttling or access controls. It does not parse or wait for `Retry-After`; 429 responses
+and 503 responses carrying that header are not retried automatically. Downloads remain
+single-source, with no dynamic segment sizing. Filesystem publication and database
+completion are separate operations, so a crash between them can leave a published file
+whose persisted state is not yet `Completed`.
 
 Queue workers, application services, UI, and non-HTTP engine adapters are not
 implemented yet.

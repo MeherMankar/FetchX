@@ -5,7 +5,7 @@ use std::{
 
 use reqwest::{
     Client, StatusCode, Url,
-    header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE},
+    header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE, RETRY_AFTER},
 };
 use thiserror::Error;
 use tokio::{
@@ -215,6 +215,12 @@ pub(super) async fn download_segment(
 
         if response.status() == StatusCode::OK {
             return Ok(SegmentResult::Fallback);
+        }
+        if response.status() == StatusCode::TOO_MANY_REQUESTS
+            || (response.status() == StatusCode::SERVICE_UNAVAILABLE
+                && response.headers().contains_key(RETRY_AFTER))
+        {
+            return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
         }
         if response.status() != StatusCode::PARTIAL_CONTENT {
             if matches!(
