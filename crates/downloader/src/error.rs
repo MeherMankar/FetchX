@@ -54,6 +54,10 @@ pub enum DownloadEngineError {
     TemporaryFileExists,
     #[error("download cancelled")]
     Cancelled,
+    #[error("download paused")]
+    Paused,
+    #[error("queue resource manager is unavailable")]
+    ResourceManagerUnavailable,
     #[error("download byte count overflowed")]
     ByteCountOverflow,
     #[error("download progress could not be represented: {0}")]
@@ -120,8 +124,13 @@ impl DownloadEngineError {
                 DownloadErrorCode::Internal,
                 "The download was cancelled.".to_owned(),
             ),
+            Self::Paused => (
+                DownloadErrorCode::Internal,
+                "The download was paused.".to_owned(),
+            ),
             Self::ClientConfiguration(_)
             | Self::InvalidConfiguration
+            | Self::ResourceManagerUnavailable
             | Self::Progress(_)
             | Self::DomainError(_)
             | Self::Domain(_)
@@ -143,6 +152,10 @@ impl DownloadEngineError {
 
     pub(crate) fn is_cancelled(&self) -> bool {
         matches!(self, Self::Cancelled)
+    }
+
+    pub(crate) fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused)
     }
 }
 

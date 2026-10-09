@@ -33,8 +33,10 @@ impl DownloadRepository for SqliteDownloadRepository {
             "INSERT INTO downloads (
                 id, source_url, engine_kind, filename, destination, status, priority,
                 downloaded_bytes, total_bytes, speed_bytes_per_second,
-                estimated_remaining_seconds, created_at, updated_at, error_code, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
+                queue_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM downloads))",
         )
         .bind(item.id().to_string())
         .bind(item.source().url())
@@ -96,12 +98,40 @@ impl DownloadRepository for SqliteDownloadRepository {
                     downloaded_bytes, total_bytes, speed_bytes_per_second,
                     estimated_remaining_seconds, created_at, updated_at, error_code, error_message
              FROM downloads
-             ORDER BY created_at, id",
+             ORDER BY queue_order, id",
         )
         .fetch_all(&self.pool)
         .await?;
 
         rows.into_iter().map(row_to_item).collect()
+    }
+
+    async fn move_to_queue_tail(&self, id: DownloadId) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            "UPDATE downloads
+             SET queue_order = (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM downloads)
+             WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NotFound(id));
+        }
+        Ok(())
+    }
+
+    async fn set_priority(
+        &self,
+        id: DownloadId,
+        priority: DownloadPriority,
+    ) -> Result<bool, StorageError> {
+        let result = sqlx::query("UPDATE downloads SET priority = ? WHERE id = ?")
+            .bind(priority_to_str(priority))
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() == 1)
     }
 
     async fn update(&self, item: &DownloadItem) -> Result<(), StorageError> {

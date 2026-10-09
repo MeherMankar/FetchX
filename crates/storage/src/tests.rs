@@ -45,7 +45,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(database.pool())
             .await?;
-    assert_eq!(migration_count, 1);
+    assert_eq!(migration_count, 2);
 
     Ok(())
 }
@@ -105,6 +105,49 @@ async fn repository_round_trips_and_performs_crud() -> Result<(), Box<dyn Error>
     assert!(!repository.delete(second.id()).await?);
     assert_eq!(repository.get(second.id()).await?, None);
     assert_eq!(repository.list().await?.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn queue_order_and_priority_updates_preserve_download_progress() -> Result<(), Box<dyn Error>>
+{
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let first = item(DownloadId::new(), false)?;
+    let second = item(DownloadId::new(), false)?;
+    repository.create(&first).await?;
+    repository.create(&second).await?;
+
+    let ordered = repository.list().await?;
+    assert_eq!(
+        ordered.iter().map(DownloadItem::id).collect::<Vec<_>>(),
+        [first.id(), second.id()]
+    );
+    repository.move_to_queue_tail(first.id()).await?;
+
+    let reordered = repository.list().await?;
+    assert_eq!(
+        reordered.iter().map(DownloadItem::id).collect::<Vec<_>>(),
+        [second.id(), first.id()]
+    );
+
+    let original = repository
+        .get(first.id())
+        .await?
+        .ok_or("download was not found")?;
+    assert!(
+        repository
+            .set_priority(first.id(), DownloadPriority::Low)
+            .await?
+    );
+    let updated = repository
+        .get(first.id())
+        .await?
+        .ok_or("download was not found")?;
+    assert_eq!(updated.priority(), DownloadPriority::Low);
+    assert_eq!(updated.progress(), original.progress());
+    assert_eq!(updated.updated_at(), original.updated_at());
 
     Ok(())
 }

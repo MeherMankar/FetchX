@@ -9,6 +9,8 @@ Tauri
 ↓
 Application/Core
 ↓
+Queue Manager
+↓
 Download abstraction
 ↓
 Engine implementations
@@ -23,10 +25,12 @@ adapters for individual engines.
 
 The `models` crate provides engine-independent domain types. The `core` crate owns
 the deterministic download lifecycle state machine and coordinates validated
-transitions with storage. Legal edges are `Queued → Preparing|Cancelled`,
-`Preparing → Downloading|Failed|Cancelled`, `Downloading → Paused|Completed|Failed|Cancelled`,
-and `Paused → Downloading|Cancelled`; `Failed|Cancelled → Preparing` is allowed
-for an explicit retry. Completed items remain terminal.
+transitions with storage. Legal edges include `Queued → Preparing|Paused|Cancelled`,
+`Preparing → Downloading|Paused|Queued|Failed|Cancelled`,
+`Downloading → Paused|Queued|Completed|Failed|Cancelled`,
+`Paused → Downloading|Queued|Cancelled`, and `Failed|Cancelled → Preparing`.
+The transitions to `Queued` are used for queue recovery or an explicit pause/resume
+cycle. Completed items remain terminal.
 Status-conditional repository updates prevent competing transitions from the same
 previous status from both succeeding. Callers should route lifecycle changes through
 the state machine; the repository's general-purpose full-item update remains
@@ -39,6 +43,16 @@ when the database connects. SQLite foreign-key enforcement and a five-second bus
 timeout are configured for connections. File-backed databases use a five-connection
 pool; in-memory databases use one connection so pooled operations share the same
 database. The caller's journal mode is left unchanged rather than forcing WAL.
+
+The `queue` crate coordinates persisted download records with the downloader
+abstraction. It recovers interrupted `Preparing`/`Downloading` records to `Queued`,
+starts work according to priority and FIFO order, and applies a bounded active-download
+limit. A shared connection budget is divided fairly among active managed engines;
+engines report desired and currently active concurrency so existing requests are not
+counted as freed until they actually stop. Pause, resume, cancel, priority changes, and
+graceful shutdown are serialized through the queue actor. Queue order is persisted in
+SQLite and resumed downloads are moved to its tail. Queue pause state is retained across
+shutdown; work interrupted while running is requeued at startup.
 
 The `downloader` crate provides a `DirectHttpEngine` using Reqwest and Tokio file I/O
 for single-stream and adaptive segmented transfers. It accepts only HTTP/HTTPS URLs
@@ -124,5 +138,4 @@ single-source, with no dynamic segment sizing. Filesystem publication and databa
 completion are separate operations, so a crash between them can leave a published file
 whose persisted state is not yet `Completed`.
 
-Queue workers, application services, UI, and non-HTTP engine adapters are not
-implemented yet.
+Application services, UI, and non-HTTP engine adapters are not implemented yet.

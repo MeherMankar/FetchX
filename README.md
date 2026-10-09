@@ -9,13 +9,17 @@ download queues, resumability, external engines, and other download-manager feat
 This repository currently contains the Rust workspace foundation, engine-independent
 domain models, SQLite persistence, a deterministic download lifecycle state machine,
 and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive segmented
-transfers. No UI or integrations with aria2, yt-dlp, or FFmpeg are implemented yet.
+transfers. It also includes a persistent download queue with priority/FIFO scheduling,
+pause/resume/cancel controls, startup recovery, and a global connection budget (defaults:
+three active downloads and 16 connections, bounded to 32 and 64). No UI or integrations
+with aria2, yt-dlp, or FFmpeg are implemented yet.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
 response restarts from zero; cancellation and transfer failures preserve partial data.
-ETag/Last-Modified validators and startup recovery are not implemented, so a partial
-may belong to an older remote representation.
+Queue startup recovery requeues interrupted downloads, but ETag/Last-Modified validators
+and validation of partial files against a remote representation are not implemented,
+so a partial may belong to an older resource version.
 
 For fresh responses that advertise byte ranges and provide a known size of at least
 4 MiB, the engine plans up to eight ranges and starts with four workers. A bounded
@@ -64,6 +68,7 @@ is implemented.
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume and adaptive segmentation
+- `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
 - `migrations` — embedded, ordered SQLite schema migrations
 - `tests` — workspace-level integration tests
 - `docs` — architecture, roadmap, and AI contribution rules

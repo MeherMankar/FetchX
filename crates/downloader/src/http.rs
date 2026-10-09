@@ -29,6 +29,7 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
+use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{DownloadEngine, DownloadEngineError};
 
@@ -93,6 +94,7 @@ enum SegmentedOutcome {
 enum SegmentedStop {
     Fallback,
     Cancelled,
+    Paused,
     Failure(DownloadEngineError),
 }
 
@@ -182,48 +184,81 @@ where
     pub async fn download(
         &self,
         id: DownloadId,
-        mut cancellation: watch::Receiver<bool>,
+        cancellation: watch::Receiver<bool>,
+    ) -> Result<DownloadItem, DownloadEngineError> {
+        let (pause_sender, pause) = watch::channel(false);
+        let (limit_sender, connection_limit) = watch::channel(self.config.adaptive.max_concurrency);
+        let result = self
+            .download_controlled(
+                id,
+                ManagedDownloadControl {
+                    cancellation,
+                    pause,
+                    connection_limit,
+                    resource_demand: None,
+                },
+                false,
+            )
+            .await;
+        drop((pause_sender, limit_sender));
+        result
+    }
+
+    async fn download_controlled(
+        &self,
+        id: DownloadId,
+        mut control: ManagedDownloadControl,
+        already_downloading: bool,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let current = self
             .repository
             .get(id)
             .await?
             .ok_or(DownloadEngineError::NotFound(id))?;
-        let already_downloading = match current.status() {
-            DownloadStatus::Paused => {
-                self.state_machine
-                    .transition(id, DownloadStatus::Downloading)
-                    .await?;
-                true
-            }
-            DownloadStatus::Queued | DownloadStatus::Failed | DownloadStatus::Cancelled => {
-                self.state_machine
-                    .transition(id, DownloadStatus::Preparing)
-                    .await?;
-                false
-            }
-            status => {
-                self.state_machine
-                    .transition(id, DownloadStatus::Preparing)
-                    .await?;
-                return Err(DownloadEngineError::StateMachine(
-                    StateMachineError::InvalidTransition {
-                        from: status,
-                        to: DownloadStatus::Preparing,
-                    },
-                ));
+        let already_downloading = if already_downloading {
+            true
+        } else {
+            match current.status() {
+                DownloadStatus::Paused => {
+                    self.state_machine
+                        .transition(id, DownloadStatus::Downloading)
+                        .await?;
+                    true
+                }
+                DownloadStatus::Queued | DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                    self.state_machine
+                        .transition(id, DownloadStatus::Preparing)
+                        .await?;
+                    false
+                }
+                status => {
+                    self.state_machine
+                        .transition(id, DownloadStatus::Preparing)
+                        .await?;
+                    return Err(DownloadEngineError::StateMachine(
+                        StateMachineError::InvalidTransition {
+                            from: status,
+                            to: DownloadStatus::Preparing,
+                        },
+                    ));
+                }
             }
         };
 
         let result = self
-            .download_prepared(id, already_downloading, &mut cancellation)
+            .download_prepared(id, already_downloading, &mut control)
             .await;
         match result {
             Ok(item) => Ok(item),
-            Err(error) if error.is_cancelled() => {
+            Err(error) if error.is_paused() => {
+                self.transition_to_paused(id).await?;
+                info!(download_id = %id, "download paused");
+                Err(error)
+            }
+            Err(error) if error.is_cancelled() || *control.cancellation.borrow() => {
                 self.transition_to_cancelled(id).await?;
                 info!(download_id = %id, "download cancelled");
-                Err(error)
+                Err(DownloadEngineError::Cancelled)
             }
             Err(error) => {
                 if let Err(state) = self.persist_failure(id, &error).await {
@@ -242,7 +277,7 @@ where
         &self,
         id: DownloadId,
         already_downloading: bool,
-        cancellation: &mut watch::Receiver<bool>,
+        control: &mut ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let mut item = self
             .repository
@@ -279,9 +314,7 @@ where
         expected_updated_at = item.updated_at();
 
         info!(download_id = %id, "starting HTTP download");
-        let mut response = self
-            .send_request(url.clone(), range_start, cancellation)
-            .await?;
+        let mut response = self.send_request(url.clone(), range_start, control).await?;
         let segmentation_enabled = (2..=16).contains(&self.config.segment_count)
             && self.config.minimum_segmented_file_size > 0;
         if !partial_exists
@@ -311,7 +344,7 @@ where
                         total_size,
                         segment_count,
                     },
-                    cancellation,
+                    control,
                 )
                 .await?
             {
@@ -325,7 +358,7 @@ where
                         .ok_or(DownloadEngineError::NotFound(id))?;
                     current_status = item.status();
                     expected_updated_at = item.updated_at();
-                    response = self.send_request(url.clone(), None, cancellation).await?;
+                    response = self.send_request(url.clone(), None, control).await?;
                 }
             }
         }
@@ -344,7 +377,7 @@ where
             // A matching length does not prove that a stale partial belongs to the
             // current representation, so restart instead of publishing it.
             drop(response);
-            response = self.send_request(url.clone(), None, cancellation).await?;
+            response = self.send_request(url.clone(), None, control).await?;
             reset_before_download = true;
         } else if range_start.is_some() && response.status() == StatusCode::OK {
             reset_before_download = true;
@@ -415,7 +448,7 @@ where
                 expected_response_bytes,
                 temporary_path,
             },
-            cancellation,
+            control,
         )
         .await
     }
@@ -424,17 +457,25 @@ where
         &self,
         url: Url,
         range_start: Option<u64>,
-        cancellation: &mut watch::Receiver<bool>,
+        control: &mut ManagedDownloadControl,
     ) -> Result<Response, DownloadEngineError> {
         loop {
-            if *cancellation.borrow_and_update() {
+            if *control.cancellation.borrow_and_update() {
                 return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow() {
+                return Err(DownloadEngineError::Paused);
             }
 
             tokio::select! {
-                changed = cancellation.changed() => {
-                    if changed.is_err() || *cancellation.borrow_and_update() {
+                changed = control.cancellation.changed() => {
+                    if changed.is_err() || *control.cancellation.borrow_and_update() {
                         return Err(DownloadEngineError::Cancelled);
+                    }
+                }
+                changed = control.pause.changed() => {
+                    if changed.is_err() || *control.pause.borrow() {
+                        return Err(DownloadEngineError::Paused);
                     }
                 }
                 response = async {
@@ -455,7 +496,7 @@ where
     async fn download_segmented(
         &self,
         context: SegmentedContext,
-        cancellation: &mut watch::Receiver<bool>,
+        control: &mut ManagedDownloadControl,
     ) -> Result<SegmentedOutcome, DownloadEngineError> {
         let SegmentedContext {
             id,
@@ -512,7 +553,10 @@ where
             .map(|segment| segment.index)
             .collect::<VecDeque<_>>();
         let mut controller = AdaptiveController::new(self.config.adaptive.clone());
-        let initial_target = controller.desired_concurrency(pending.len());
+        let mut connection_limit = *control.connection_limit.borrow_and_update();
+        let initial_target = controller
+            .desired_concurrency(pending.len())
+            .min(connection_limit);
         spawn_segment_workers(
             &mut tasks,
             &mut pending,
@@ -521,10 +565,21 @@ where
             total_size,
             &url,
             &self.client,
-            cancellation,
+            &control.cancellation,
             &stop_receiver,
             &downloaded,
         );
+        let remaining_segments = segments
+            .iter()
+            .filter(|segment| segment.state != SegmentState::Complete)
+            .count();
+        report_resource_demand(
+            control,
+            id,
+            controller.desired_concurrency(remaining_segments),
+            tasks.len(),
+        )
+        .await?;
         let mut stop_reason = None;
         let mut failures_since_sample = 0_u8;
         let mut wait_for_error_sample = false;
@@ -547,10 +602,44 @@ where
 
         while !tasks.is_empty() || (stop_reason.is_none() && !pending.is_empty()) {
             tokio::select! {
-                changed = cancellation.changed(), if stop_reason.is_none() => {
-                    if changed.is_err() || *cancellation.borrow_and_update() {
+                changed = control.cancellation.changed(), if stop_reason.is_none() => {
+                    if changed.is_err() || *control.cancellation.borrow_and_update() {
                         stop_reason = Some(SegmentedStop::Cancelled);
                         let _ = stop_sender.send(true);
+                    }
+                }
+                changed = control.pause.changed(), if stop_reason.is_none() => {
+                    if changed.is_err() || *control.pause.borrow() {
+                        stop_reason = Some(SegmentedStop::Paused);
+                        let _ = stop_sender.send(true);
+                    }
+                }
+                changed = control.connection_limit.changed(), if stop_reason.is_none() => {
+                    if changed.is_err() {
+                        stop_reason = Some(SegmentedStop::Failure(
+                            DownloadEngineError::SegmentWorkerFailed
+                        ));
+                        let _ = stop_sender.send(true);
+                    } else {
+                        connection_limit = *control.connection_limit.borrow_and_update();
+                        let remaining_segments = segments
+                            .iter()
+                            .filter(|segment| segment.state != SegmentState::Complete)
+                            .count();
+                        spawn_segment_workers(
+                            &mut tasks,
+                            &mut pending,
+                            &segments,
+                            controller
+                                .desired_concurrency(remaining_segments)
+                                .min(connection_limit),
+                            total_size,
+                            &url,
+                            &self.client,
+                            &control.cancellation,
+                            &stop_receiver,
+                            &downloaded,
+                        );
                     }
                 }
                 _ = progress_timer.tick(), if stop_reason.is_none() => {
@@ -588,7 +677,7 @@ where
                         remaining_segments,
                         completed_segments: completed_since_sample,
                         request_failures: failures_since_sample,
-                        cancelled: *cancellation.borrow(),
+                        cancelled: *control.cancellation.borrow() || *control.pause.borrow(),
                     });
                     last_sampled_bytes = current_bytes;
                     last_sampled_at = now;
@@ -610,7 +699,9 @@ where
                         }
                         AdaptiveDecision::Maintain => {}
                     }
-                    let target = controller.desired_concurrency(remaining_segments);
+                    let target = controller
+                        .desired_concurrency(remaining_segments)
+                        .min(connection_limit);
                     spawn_segment_workers(
                         &mut tasks,
                         &mut pending,
@@ -619,10 +710,17 @@ where
                         total_size,
                         &url,
                         &self.client,
-                        cancellation,
+                        &control.cancellation,
                         &stop_receiver,
                         &downloaded,
                     );
+                    report_resource_demand(
+                        control,
+                        id,
+                        controller.desired_concurrency(remaining_segments),
+                        tasks.len(),
+                    )
+                    .await?;
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {
                     match joined {
@@ -688,7 +786,9 @@ where
                             .iter()
                             .filter(|segment| segment.state != SegmentState::Complete)
                             .count();
-                        let target = controller.desired_concurrency(remaining_segments);
+                        let target = controller
+                            .desired_concurrency(remaining_segments)
+                            .min(connection_limit);
                         spawn_segment_workers(
                             &mut tasks,
                             &mut pending,
@@ -697,10 +797,17 @@ where
                             total_size,
                             &url,
                             &self.client,
-                            cancellation,
+                            &control.cancellation,
                             &stop_receiver,
                             &downloaded,
                         );
+                        report_resource_demand(
+                            control,
+                            id,
+                            controller.desired_concurrency(remaining_segments),
+                            tasks.len(),
+                        )
+                        .await?;
                     }
                 }
             }
@@ -721,6 +828,7 @@ where
             return match reason {
                 SegmentedStop::Fallback => Ok(SegmentedOutcome::Fallback),
                 SegmentedStop::Cancelled => Err(DownloadEngineError::Cancelled),
+                SegmentedStop::Paused => Err(DownloadEngineError::Paused),
                 SegmentedStop::Failure(error) => Err(error),
             };
         }
@@ -748,7 +856,8 @@ where
             .ok_or(DownloadEngineError::InvalidConfiguration)?,
             &temporary_path,
             total_size,
-            cancellation,
+            &mut control.cancellation,
+            &mut control.pause,
         )
         .await?;
         cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
@@ -786,7 +895,7 @@ where
         mut response: Response,
         mut file: File,
         context: BodyContext,
-        cancellation: &mut watch::Receiver<bool>,
+        control: &mut ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let BodyContext {
             id,
@@ -822,7 +931,7 @@ where
 
             loop {
                 let next_chunk = loop {
-                    if *cancellation.borrow_and_update() {
+                    if *control.cancellation.borrow_and_update() {
                         self.persist_if_status(
                             &item,
                             DownloadStatus::Downloading,
@@ -834,8 +943,8 @@ where
                     }
 
                     tokio::select! {
-                        changed = cancellation.changed() => {
-                            if changed.is_err() || *cancellation.borrow_and_update() {
+                        changed = control.cancellation.changed() => {
+                            if changed.is_err() || *control.cancellation.borrow_and_update() {
                                 self.persist_if_status(
                                     &item,
                                     DownloadStatus::Downloading,
@@ -844,6 +953,17 @@ where
                                     .await?;
                                 persisted_updated_at = item.updated_at();
                                 return Err(DownloadEngineError::Cancelled);
+                            }
+                        }
+                        changed = control.pause.changed() => {
+                            if changed.is_err() || *control.pause.borrow() {
+                                self.persist_if_status(
+                                    &item,
+                                    DownloadStatus::Downloading,
+                                    persisted_updated_at,
+                                ).await?;
+                                persisted_updated_at = item.updated_at();
+                                return Err(DownloadEngineError::Paused);
                             }
                         }
                         chunk = response.chunk() => {
@@ -911,11 +1031,17 @@ where
                 });
             }
 
-            if *cancellation.borrow_and_update() {
+            if *control.cancellation.borrow_and_update() {
                 self.persist_if_status(&item, DownloadStatus::Downloading, persisted_updated_at)
                     .await?;
                 persisted_updated_at = item.updated_at();
                 return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow() {
+                self.persist_if_status(&item, DownloadStatus::Downloading, persisted_updated_at)
+                    .await?;
+                persisted_updated_at = item.updated_at();
+                return Err(DownloadEngineError::Paused);
             }
             file.flush().await.map_err(DownloadEngineError::Io)?;
             file.sync_all().await.map_err(DownloadEngineError::Io)?;
@@ -939,7 +1065,7 @@ where
         drop(file);
         match result {
             Ok(()) => {
-                if *cancellation.borrow_and_update() {
+                if *control.cancellation.borrow_and_update() {
                     return Err(DownloadEngineError::Cancelled);
                 }
                 publish_without_replacement(&temporary_path, item.destination()).await?;
@@ -1014,6 +1140,21 @@ where
         }
     }
 
+    async fn transition_to_paused(&self, id: DownloadId) -> Result<(), DownloadEngineError> {
+        let current = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        if current.status() == DownloadStatus::Paused {
+            return Ok(());
+        }
+        self.state_machine
+            .transition(id, DownloadStatus::Paused)
+            .await?;
+        Ok(())
+    }
+
     async fn persist_failure(
         &self,
         id: DownloadId,
@@ -1081,6 +1222,25 @@ fn spawn_segment_workers(
     }
 }
 
+async fn report_resource_demand(
+    control: &ManagedDownloadControl,
+    download_id: DownloadId,
+    desired_concurrency: usize,
+    active_concurrency: usize,
+) -> Result<(), DownloadEngineError> {
+    let Some(resource_demand) = &control.resource_demand else {
+        return Ok(());
+    };
+    resource_demand
+        .send(ResourceDemand {
+            download_id,
+            desired_concurrency,
+            active_concurrency,
+        })
+        .await
+        .map_err(|_| DownloadEngineError::ResourceManagerUnavailable)
+}
+
 impl<R> DownloadEngine for DirectHttpEngine<R>
 where
     R: DownloadRepository + Clone,
@@ -1091,6 +1251,19 @@ where
         cancellation: watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
         DirectHttpEngine::download(self, id, cancellation).await
+    }
+}
+
+impl<R> ManagedDownloadEngine for DirectHttpEngine<R>
+where
+    R: DownloadRepository + Clone,
+{
+    async fn download_managed(
+        &self,
+        id: DownloadId,
+        control: ManagedDownloadControl,
+    ) -> Result<DownloadItem, DownloadEngineError> {
+        self.download_controlled(id, control, false).await
     }
 }
 
@@ -1342,6 +1515,7 @@ async fn assemble_segments(
     temporary: &Path,
     total_size: u64,
     cancellation: &mut watch::Receiver<bool>,
+    pause: &mut watch::Receiver<bool>,
 ) -> Result<(), DownloadEngineError> {
     let mut output = OpenOptions::new()
         .write(true)
@@ -1377,6 +1551,9 @@ async fn assemble_segments(
         loop {
             if *cancellation.borrow_and_update() {
                 return Err(DownloadEngineError::Cancelled);
+            }
+            if *pause.borrow() {
+                return Err(DownloadEngineError::Paused);
             }
             let read = input
                 .read(&mut buffer)

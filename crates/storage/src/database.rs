@@ -9,15 +9,24 @@ use sqlx::{
 use crate::{SqliteDownloadRepository, StorageError};
 
 static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
-    migrations: Cow::Owned(vec![Migration::new(
-        1,
-        Cow::Borrowed("create_downloads"),
-        MigrationType::Simple,
-        Cow::Borrowed(include_str!(
-            "../../../migrations/0001_create_downloads.sql"
-        )),
-        false,
-    )]),
+    migrations: Cow::Owned(vec![
+        Migration::new(
+            1,
+            Cow::Borrowed("create_downloads"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0001_create_downloads.sql"
+            )),
+            false,
+        ),
+        Migration::new(
+            2,
+            Cow::Borrowed("add_queue_order"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!("../../../migrations/0002_add_queue_order.sql")),
+            false,
+        ),
+    ]),
     ..Migrator::DEFAULT
 });
 

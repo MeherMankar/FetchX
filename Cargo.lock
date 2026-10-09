@@ -826,6 +826,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mydownloader-queue"
+version = "0.1.0"
+dependencies = [
+ "mydownloader-core",
+ "mydownloader-downloader",
+ "mydownloader-models",
+ "mydownloader-storage",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mydownloader-storage"
 version = "0.1.0"
 dependencies = [

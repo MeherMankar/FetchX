@@ -8,7 +8,7 @@
 6. Phase 6 — Resume and Range support (completed)
 7. Phase 7 — Segment manager (completed)
 8. Phase 8 — Adaptive acceleration (completed)
-9. Phase 9 — Queue manager
+9. Phase 9 — Queue manager (completed)
 10. Phase 10 — Scheduler
 11. Phase 11 — aria2 integration
 12. Phase 12 — yt-dlp integration

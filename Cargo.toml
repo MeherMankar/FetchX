@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/storage",
     "crates/downloader",
+    "crates/queue",
 ]
 resolver = "3"
 

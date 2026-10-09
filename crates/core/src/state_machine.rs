@@ -12,15 +12,20 @@ pub fn validate_transition(
     let allowed = matches!(
         (from, to),
         (DownloadStatus::Queued, DownloadStatus::Preparing)
+            | (DownloadStatus::Queued, DownloadStatus::Paused)
+            | (DownloadStatus::Preparing, DownloadStatus::Queued)
+            | (DownloadStatus::Downloading, DownloadStatus::Queued)
             | (DownloadStatus::Queued, DownloadStatus::Cancelled)
             | (DownloadStatus::Preparing, DownloadStatus::Downloading)
             | (DownloadStatus::Preparing, DownloadStatus::Failed)
             | (DownloadStatus::Preparing, DownloadStatus::Cancelled)
+            | (DownloadStatus::Preparing, DownloadStatus::Paused)
             | (DownloadStatus::Downloading, DownloadStatus::Paused)
             | (DownloadStatus::Downloading, DownloadStatus::Completed)
             | (DownloadStatus::Downloading, DownloadStatus::Failed)
             | (DownloadStatus::Downloading, DownloadStatus::Cancelled)
             | (DownloadStatus::Paused, DownloadStatus::Downloading)
+            | (DownloadStatus::Paused, DownloadStatus::Queued)
             | (DownloadStatus::Paused, DownloadStatus::Cancelled)
             | (DownloadStatus::Failed, DownloadStatus::Preparing)
             | (DownloadStatus::Cancelled, DownloadStatus::Preparing)
@@ -67,6 +72,26 @@ where
         error: mydownloader_models::DownloadError,
     ) -> Result<DownloadItem, StateMachineError> {
         self.transition_inner(id, to, Some(error)).await
+    }
+
+    /// Recovers a process-interrupted download whose former worker no longer exists.
+    ///
+    /// Only `Preparing` and `Downloading` items are requeued. Their filesystem
+    /// partials are left untouched for the downloader's existing resume logic.
+    pub async fn recover_interrupted(
+        &self,
+        id: DownloadId,
+    ) -> Result<Option<DownloadItem>, StateMachineError> {
+        let Some(item) = self.repository.get(id).await? else {
+            return Err(StateMachineError::NotFound(id));
+        };
+        if !matches!(
+            item.status(),
+            DownloadStatus::Preparing | DownloadStatus::Downloading
+        ) {
+            return Ok(None);
+        }
+        self.transition(id, DownloadStatus::Queued).await.map(Some)
     }
 
     async fn transition_inner(
@@ -157,11 +182,16 @@ mod tests {
         DownloadStatus::Cancelled,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 13] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 18] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
+        (DownloadStatus::Queued, DownloadStatus::Paused),
+        (DownloadStatus::Preparing, DownloadStatus::Paused),
+        (DownloadStatus::Preparing, DownloadStatus::Queued),
+        (DownloadStatus::Downloading, DownloadStatus::Queued),
         (DownloadStatus::Preparing, DownloadStatus::Downloading),
         (DownloadStatus::Downloading, DownloadStatus::Paused),
         (DownloadStatus::Paused, DownloadStatus::Downloading),
+        (DownloadStatus::Paused, DownloadStatus::Queued),
         (DownloadStatus::Downloading, DownloadStatus::Completed),
         (DownloadStatus::Downloading, DownloadStatus::Failed),
         (DownloadStatus::Downloading, DownloadStatus::Cancelled),

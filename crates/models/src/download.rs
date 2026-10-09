@@ -257,6 +257,18 @@ impl DownloadItem {
         Ok(())
     }
 
+    /// Changes queue priority without changing the lifecycle state.
+    pub fn set_priority_at(
+        &mut self,
+        priority: crate::DownloadPriority,
+        updated_at: Timestamp,
+    ) -> Result<(), DownloadItemError> {
+        self.validate_update_time(updated_at)?;
+        self.priority = priority;
+        self.updated_at = updated_at;
+        Ok(())
+    }
+
     fn validate_update_time(&self, updated_at: Timestamp) -> Result<(), DownloadItemError> {
         if updated_at < self.updated_at {
             return Err(DownloadItemError::UpdatedBeforePreviousUpdate);
