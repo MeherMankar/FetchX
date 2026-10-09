@@ -7,12 +7,16 @@ use std::{
 use mydownloader_core::{DownloadStateMachine, StateMachineError};
 use mydownloader_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
+    TimestampError,
 };
 use mydownloader_storage::DownloadRepository;
-use reqwest::{Client, Response, Url, header::CONTENT_LENGTH};
+use reqwest::{
+    Client, Response, StatusCode, Url,
+    header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE},
+};
 use tokio::{
     fs::{self, File, OpenOptions},
-    io::AsyncWriteExt,
+    io::{AsyncSeekExt, AsyncWriteExt, SeekFrom},
     sync::watch,
 };
 use tracing::{info, warn};
@@ -37,8 +41,22 @@ pub struct HttpEngineConfig {
 struct BodyContext {
     id: DownloadId,
     item: DownloadItem,
+    expected_updated_at: Timestamp,
     total_bytes: Option<u64>,
+    expected_response_bytes: Option<u64>,
     temporary_path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ContentRange {
+    start: u64,
+    end: u64,
+    total: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnsatisfiedRange {
+    total: u64,
 }
 
 impl Default for HttpEngineConfig {
@@ -53,7 +71,7 @@ impl Default for HttpEngineConfig {
     }
 }
 
-/// Single-stream, resumeless HTTP/HTTPS downloader.
+/// Single-stream HTTP/HTTPS downloader with validated Range-based resume.
 pub struct DirectHttpEngine<R> {
     repository: R,
     state_machine: DownloadStateMachine<R>,
@@ -115,7 +133,8 @@ where
         })
     }
 
-    /// Downloads a queued item. Set the watch value to `true` to cancel cooperatively.
+    /// Runs a queued, paused, failed, or cancelled item, resuming its partial file if possible.
+    /// Set the watch value to `true` to cancel cooperatively.
     ///
     /// The final destination is never overwritten. Response bytes are streamed into
     /// a sibling `.part` file and published without replacement after validation.
@@ -124,15 +143,40 @@ where
         id: DownloadId,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
-        if self.repository.get(id).await?.is_none() {
-            return Err(DownloadEngineError::NotFound(id));
-        }
+        let current = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let already_downloading = match current.status() {
+            DownloadStatus::Paused => {
+                self.state_machine
+                    .transition(id, DownloadStatus::Downloading)
+                    .await?;
+                true
+            }
+            DownloadStatus::Queued | DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                self.state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+                false
+            }
+            status => {
+                self.state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+                return Err(DownloadEngineError::StateMachine(
+                    StateMachineError::InvalidTransition {
+                        from: status,
+                        to: DownloadStatus::Preparing,
+                    },
+                ));
+            }
+        };
 
-        self.state_machine
-            .transition(id, DownloadStatus::Preparing)
-            .await?;
-
-        let result = self.download_prepared(id, &mut cancellation).await;
+        let result = self
+            .download_prepared(id, already_downloading, &mut cancellation)
+            .await;
         match result {
             Ok(item) => Ok(item),
             Err(error) if error.is_cancelled() => {
@@ -156,6 +200,7 @@ where
     async fn download_prepared(
         &self,
         id: DownloadId,
+        already_downloading: bool,
         cancellation: &mut watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let mut item = self
@@ -176,31 +221,99 @@ where
         }
         let temporary_path = temporary_path(&destination);
 
-        let initial_progress = DownloadProgress::default();
+        let partial_size = inspect_partial_file(&temporary_path).await?;
+        let partial_exists = partial_size.is_some();
+        let existing_size = partial_size.unwrap_or(0);
+        let range_start = (existing_size > 0).then_some(existing_size);
+        let mut expected_updated_at = item.updated_at();
+        let initial_progress = DownloadProgress::new(existing_size, None, None, None)?;
         item.set_progress_at(initial_progress, next_timestamp(item.updated_at())?)?;
-        self.persist_if_status(&item, DownloadStatus::Preparing)
+        let current_status = if already_downloading {
+            DownloadStatus::Downloading
+        } else {
+            DownloadStatus::Preparing
+        };
+        self.persist_if_status(&item, current_status, expected_updated_at)
             .await?;
+        expected_updated_at = item.updated_at();
 
         info!(download_id = %id, "starting HTTP download");
-        let response = self.send_request(url, cancellation).await?;
-        let status = response.status();
-        if !status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT {
-            return Err(DownloadEngineError::HttpStatus(status.as_u16()));
-        }
-        let total_bytes = parse_content_length(&response)?;
+        let mut response = self
+            .send_request(url.clone(), range_start, cancellation)
+            .await?;
+        let mut append = false;
+        let mut reset_before_download = false;
+        let mut expected_response_bytes = None;
+        let mut partial_content_range = None;
 
-        let file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-            .await
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(DownloadEngineError::TemporaryFileExists);
+        if range_start.is_some() && response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
+            let unsatisfied = parse_unsatisfied_range(&response)?;
+            if existing_size < unsatisfied.total {
+                return Err(DownloadEngineError::RangeNotSatisfiable);
             }
-            Err(error) => return Err(DownloadEngineError::Io(error)),
+
+            // A matching length does not prove that a stale partial belongs to the
+            // current representation, so restart instead of publishing it.
+            drop(response);
+            response = self.send_request(url.clone(), None, cancellation).await?;
+            reset_before_download = true;
+        } else if range_start.is_some() && response.status() == StatusCode::OK {
+            reset_before_download = true;
+        } else if range_start.is_some() && response.status() == StatusCode::PARTIAL_CONTENT {
+            let range = parse_content_range(&response)?;
+            if Some(range.start) != range_start
+                || range.end < range.start
+                || range.total.is_some_and(|total| range.end >= total)
+            {
+                return Err(DownloadEngineError::RangeMismatch);
+            }
+            let range_bytes = range
+                .end
+                .checked_sub(range.start)
+                .and_then(|bytes| bytes.checked_add(1))
+                .ok_or(DownloadEngineError::ByteCountOverflow)?;
+            expected_response_bytes = Some(range_bytes);
+            if parse_content_length(&response)?
+                .is_some_and(|length| Some(length) != expected_response_bytes)
+            {
+                return Err(DownloadEngineError::InvalidContentLength);
+            }
+            partial_content_range = Some(range);
+            append = true;
+        } else if response.status() == StatusCode::PARTIAL_CONTENT {
+            return Err(DownloadEngineError::UnexpectedPartialResponse);
+        }
+
+        if append && !same_http_target(response.url(), &url) {
+            return Err(DownloadEngineError::RangeMismatch);
+        }
+
+        if response.status() == StatusCode::PARTIAL_CONTENT && !append {
+            return Err(DownloadEngineError::UnexpectedPartialResponse);
+        }
+        if !response.status().is_success() {
+            return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
+        }
+
+        if reset_before_download {
+            reset_partial_file(&temporary_path, partial_exists).await?;
+        }
+
+        let total_bytes = if append {
+            partial_content_range.and_then(|range| range.total)
+        } else {
+            parse_content_length(&response)?
         };
+        let file =
+            open_partial_file(&temporary_path, existing_size, append, partial_exists).await?;
+        let progress_offset = if append { existing_size } else { 0 };
+        item.set_progress_at(
+            DownloadProgress::new(progress_offset, total_bytes, None, None)?,
+            next_timestamp(item.updated_at())?,
+        )?;
+        self.persist_if_status(&item, current_status, expected_updated_at)
+            .await?;
+        expected_updated_at = item.updated_at();
 
         self.receive_body(
             response,
@@ -208,7 +321,9 @@ where
             BodyContext {
                 id,
                 item,
+                expected_updated_at,
                 total_bytes,
+                expected_response_bytes,
                 temporary_path,
             },
             cancellation,
@@ -219,6 +334,7 @@ where
     async fn send_request(
         &self,
         url: Url,
+        range_start: Option<u64>,
         cancellation: &mut watch::Receiver<bool>,
     ) -> Result<Response, DownloadEngineError> {
         loop {
@@ -232,7 +348,15 @@ where
                         return Err(DownloadEngineError::Cancelled);
                     }
                 }
-                response = self.client.get(url.clone()).send() => {
+                response = async {
+                    let request = self.client.get(url.clone());
+                    let request = if let Some(start) = range_start {
+                        request.header(RANGE, format!("bytes={start}-"))
+                    } else {
+                        request
+                    };
+                    request.send().await
+                } => {
                     return response.map_err(DownloadEngineError::Request);
                 }
             }
@@ -249,40 +373,58 @@ where
         let BodyContext {
             id,
             mut item,
+            expected_updated_at: mut persisted_updated_at,
             total_bytes,
+            expected_response_bytes,
             temporary_path,
         } = context;
-        let mut downloading_started = false;
+        let mut downloading_started = item.status() == DownloadStatus::Downloading;
         let result = async {
-            item = self
-                .state_machine
-                .transition(id, DownloadStatus::Downloading)
-                .await?;
-            downloading_started = true;
+            if item.status() == DownloadStatus::Preparing {
+                item = self
+                    .state_machine
+                    .transition(id, DownloadStatus::Downloading)
+                    .await?;
+                downloading_started = true;
+                persisted_updated_at = item.updated_at();
+            }
+            let progress_offset = item.progress().downloaded_bytes();
             item.set_progress_at(
-                DownloadProgress::new(0, total_bytes, None, None)?,
+                DownloadProgress::new(progress_offset, total_bytes, None, None)?,
                 next_timestamp(item.updated_at())?,
             )?;
-            self.persist_if_status(&item, DownloadStatus::Downloading)
+            self.persist_if_status(&item, DownloadStatus::Downloading, persisted_updated_at)
                 .await?;
+            persisted_updated_at = item.updated_at();
 
-            let mut downloaded_bytes = 0_u64;
-            let mut last_persisted_bytes = 0_u64;
+            let mut downloaded_bytes = progress_offset;
+            let mut response_bytes = 0_u64;
+            let mut last_persisted_bytes = downloaded_bytes;
             let mut last_persisted_at = Instant::now();
 
             loop {
                 let next_chunk = loop {
                     if *cancellation.borrow_and_update() {
-                        self.persist_if_status(&item, DownloadStatus::Downloading)
-                            .await?;
+                        self.persist_if_status(
+                            &item,
+                            DownloadStatus::Downloading,
+                            persisted_updated_at,
+                        )
+                        .await?;
+                        persisted_updated_at = item.updated_at();
                         return Err(DownloadEngineError::Cancelled);
                     }
 
                     tokio::select! {
                         changed = cancellation.changed() => {
                             if changed.is_err() || *cancellation.borrow_and_update() {
-                                self.persist_if_status(&item, DownloadStatus::Downloading)
+                                self.persist_if_status(
+                                    &item,
+                                    DownloadStatus::Downloading,
+                                    persisted_updated_at,
+                                )
                                     .await?;
+                                persisted_updated_at = item.updated_at();
                                 return Err(DownloadEngineError::Cancelled);
                             }
                         }
@@ -300,6 +442,9 @@ where
                 let next_downloaded = downloaded_bytes
                     .checked_add(chunk_size)
                     .ok_or(DownloadEngineError::ByteCountOverflow)?;
+                let next_response_bytes = response_bytes
+                    .checked_add(chunk_size)
+                    .ok_or(DownloadEngineError::ByteCountOverflow)?;
                 if let Some(expected) = total_bytes.filter(|total| next_downloaded > *total) {
                     return Err(DownloadEngineError::ContentLengthExceeded { expected });
                 }
@@ -308,6 +453,7 @@ where
                     .await
                     .map_err(DownloadEngineError::Io)?;
                 downloaded_bytes = next_downloaded;
+                response_bytes = next_response_bytes;
                 item.set_progress_at(
                     DownloadProgress::new(downloaded_bytes, total_bytes, None, None)?,
                     next_timestamp(item.updated_at())?,
@@ -318,8 +464,13 @@ where
                     >= self.config.progress_bytes_interval
                     || now.duration_since(last_persisted_at) >= self.config.progress_time_interval
                 {
-                    self.persist_if_status(&item, DownloadStatus::Downloading)
-                        .await?;
+                    self.persist_if_status(
+                        &item,
+                        DownloadStatus::Downloading,
+                        persisted_updated_at,
+                    )
+                    .await?;
+                    persisted_updated_at = item.updated_at();
                     last_persisted_bytes = downloaded_bytes;
                     last_persisted_at = now;
                 }
@@ -333,16 +484,36 @@ where
                     });
                 }
             }
+            if let Some(expected) = expected_response_bytes
+                && response_bytes != expected
+            {
+                return Err(DownloadEngineError::IncompleteResponse {
+                    expected,
+                    actual: response_bytes,
+                });
+            }
 
             if *cancellation.borrow_and_update() {
-                self.persist_if_status(&item, DownloadStatus::Downloading)
+                self.persist_if_status(&item, DownloadStatus::Downloading, persisted_updated_at)
                     .await?;
+                persisted_updated_at = item.updated_at();
                 return Err(DownloadEngineError::Cancelled);
             }
             file.flush().await.map_err(DownloadEngineError::Io)?;
             file.sync_all().await.map_err(DownloadEngineError::Io)?;
-            self.persist_if_status(&item, DownloadStatus::Downloading)
+            let actual_size = fs::metadata(&temporary_path)
+                .await
+                .map_err(DownloadEngineError::Io)?
+                .len();
+            if actual_size != downloaded_bytes {
+                return Err(DownloadEngineError::IncompleteResponse {
+                    expected: downloaded_bytes,
+                    actual: actual_size,
+                });
+            }
+            self.persist_if_status(&item, DownloadStatus::Downloading, persisted_updated_at)
                 .await?;
+            persisted_updated_at = item.updated_at();
             Ok(())
         }
         .await;
@@ -351,17 +522,9 @@ where
         match result {
             Ok(()) => {
                 if *cancellation.borrow_and_update() {
-                    return Err(cleanup_temporary_file(
-                        &temporary_path,
-                        DownloadEngineError::Cancelled,
-                    )
-                    .await);
+                    return Err(DownloadEngineError::Cancelled);
                 }
-                if let Err(error) =
-                    publish_without_replacement(&temporary_path, item.destination()).await
-                {
-                    return Err(cleanup_temporary_file(&temporary_path, error).await);
-                }
+                publish_without_replacement(&temporary_path, item.destination()).await?;
 
                 let completed = self
                     .state_machine
@@ -372,14 +535,14 @@ where
             }
             Err(error) => {
                 let operation = if downloading_started {
-                    self.persist_if_status(&item, DownloadStatus::Downloading)
+                    self.persist_if_status(&item, DownloadStatus::Downloading, persisted_updated_at)
                         .await
                         .err()
                         .unwrap_or(error)
                 } else {
                     error
                 };
-                Err(cleanup_temporary_file(&temporary_path, operation).await)
+                Err(operation)
             }
         }
     }
@@ -388,10 +551,11 @@ where
         &self,
         item: &DownloadItem,
         expected_status: DownloadStatus,
+        expected_updated_at: Timestamp,
     ) -> Result<(), DownloadEngineError> {
         if self
             .repository
-            .update_if_status_current(item, expected_status)
+            .update_if_status_and_timestamp_current(item, expected_status, expected_updated_at)
             .await?
         {
             return Ok(());
@@ -489,6 +653,14 @@ fn parse_http_url(source: &str) -> Result<Url, DownloadEngineError> {
     Ok(url)
 }
 
+fn same_http_target(response: &Url, requested: &Url) -> bool {
+    let mut response = response.clone();
+    let mut requested = requested.clone();
+    response.set_fragment(None);
+    requested.set_fragment(None);
+    response == requested
+}
+
 fn parse_content_length(response: &Response) -> Result<Option<u64>, DownloadEngineError> {
     response
         .headers()
@@ -503,8 +675,137 @@ fn parse_content_length(response: &Response) -> Result<Option<u64>, DownloadEngi
         .transpose()
 }
 
+fn parse_content_range(response: &Response) -> Result<ContentRange, DownloadEngineError> {
+    let value = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(DownloadEngineError::InvalidContentRange)?;
+    let value = value
+        .strip_prefix("bytes ")
+        .ok_or(DownloadEngineError::InvalidContentRange)?;
+    let (range, total) = value
+        .split_once('/')
+        .ok_or(DownloadEngineError::InvalidContentRange)?;
+    let (start, end) = range
+        .split_once('-')
+        .ok_or(DownloadEngineError::InvalidContentRange)?;
+    let start = start
+        .parse::<u64>()
+        .map_err(|_| DownloadEngineError::InvalidContentRange)?;
+    let end = end
+        .parse::<u64>()
+        .map_err(|_| DownloadEngineError::InvalidContentRange)?;
+    let total = if total == "*" {
+        None
+    } else {
+        Some(
+            total
+                .parse::<u64>()
+                .map_err(|_| DownloadEngineError::InvalidContentRange)?,
+        )
+    };
+
+    if end < start || total.is_some_and(|total| total <= end) {
+        return Err(DownloadEngineError::InvalidContentRange);
+    }
+
+    Ok(ContentRange { start, end, total })
+}
+
+fn parse_unsatisfied_range(response: &Response) -> Result<UnsatisfiedRange, DownloadEngineError> {
+    let value = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(DownloadEngineError::InvalidContentRange)?;
+    let total = value
+        .strip_prefix("bytes */")
+        .ok_or(DownloadEngineError::InvalidContentRange)?
+        .parse::<u64>()
+        .map_err(|_| DownloadEngineError::InvalidContentRange)?;
+
+    Ok(UnsatisfiedRange { total })
+}
+
+async fn inspect_partial_file(path: &Path) -> Result<Option<u64>, DownloadEngineError> {
+    match fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(Some(metadata.len())),
+        Ok(_) => Err(DownloadEngineError::InvalidPartialFile),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(DownloadEngineError::Io(error)),
+    }
+}
+
+async fn open_partial_file(
+    path: &Path,
+    expected_size: u64,
+    append: bool,
+    exists: bool,
+) -> Result<File, DownloadEngineError> {
+    if exists {
+        let path_metadata = fs::symlink_metadata(path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        if !path_metadata.file_type().is_file() {
+            return Err(DownloadEngineError::InvalidPartialFile);
+        }
+        if append && path_metadata.len() != expected_size {
+            return Err(DownloadEngineError::PartialFileChanged);
+        }
+
+        let mut file = OpenOptions::new()
+            .read(append)
+            .write(true)
+            .truncate(!append)
+            .open(path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        if append {
+            if file
+                .metadata()
+                .await
+                .map_err(DownloadEngineError::Io)?
+                .len()
+                != expected_size
+            {
+                return Err(DownloadEngineError::PartialFileChanged);
+            }
+            file.seek(SeekFrom::End(0))
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
+        return Ok(file);
+    }
+
+    if append {
+        return Err(DownloadEngineError::PartialFileChanged);
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                DownloadEngineError::TemporaryFileExists
+            } else {
+                DownloadEngineError::Io(error)
+            }
+        })
+}
+
+async fn reset_partial_file(path: &Path, exists: bool) -> Result<(), DownloadEngineError> {
+    drop(open_partial_file(path, 0, false, exists).await?);
+    Ok(())
+}
+
 fn next_timestamp(previous: Timestamp) -> Result<Timestamp, DownloadEngineError> {
-    Ok(Timestamp::now()?.max(previous))
+    let next_millisecond = previous
+        .as_unix_millis()
+        .checked_add(1)
+        .ok_or(TimestampError::OutOfRange)?;
+    Ok(Timestamp::now()?.max(Timestamp::from_unix_millis(next_millisecond)))
 }
 
 fn temporary_path(destination: &Path) -> PathBuf {
@@ -528,19 +829,5 @@ async fn publish_without_replacement(
             Err(DownloadEngineError::DestinationExists)
         }
         Err(error) => Err(DownloadEngineError::Io(error)),
-    }
-}
-
-async fn cleanup_temporary_file(
-    temporary: &Path,
-    operation: DownloadEngineError,
-) -> DownloadEngineError {
-    match fs::remove_file(temporary).await {
-        Ok(()) => operation,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => operation,
-        Err(cleanup) => DownloadEngineError::Cleanup {
-            operation: Box::new(operation),
-            cleanup,
-        },
     }
 }

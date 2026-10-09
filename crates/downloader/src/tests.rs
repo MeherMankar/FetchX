@@ -5,7 +5,8 @@ use std::{
 };
 
 use mydownloader_models::{
-    DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+    DownloadId, DownloadItem, DownloadProgress, DownloadSource, DownloadStatus, EngineKind,
+    FileName, Timestamp,
 };
 use mydownloader_storage::{Database, DownloadRepository};
 use tokio::{
@@ -46,6 +47,12 @@ struct ServerResponse {
     signal_after_first_chunk: Option<oneshot::Sender<()>>,
 }
 
+struct ScriptedResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
 impl ServerResponse {
     fn ok(body: Vec<u8>) -> Self {
         Self {
@@ -75,6 +82,175 @@ async fn start_server(
     });
 
     Ok((format!("http://{address}/file"), task))
+}
+
+async fn start_scripted_server(
+    responses: Vec<ScriptedResponse>,
+) -> Result<(String, JoinHandle<Vec<String>>), std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for response in responses {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while let Ok(read) = stream.read(&mut buffer).await {
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            requests.push(String::from_utf8_lossy(&request).into_owned());
+
+            let mut headers = format!(
+                "HTTP/1.1 {} Test Response\r\nConnection: close\r\n",
+                response.status
+            );
+            for (name, value) in response.headers {
+                headers.push_str(&format!("{name}: {value}\r\n"));
+            }
+            if !headers.to_ascii_lowercase().contains("content-length:") {
+                headers.push_str(&format!("Content-Length: {}\r\n", response.body.len()));
+            }
+            headers.push_str("\r\n");
+            if stream.write_all(headers.as_bytes()).await.is_err()
+                || stream.write_all(&response.body).await.is_err()
+            {
+                break;
+            }
+            let _ = stream.flush().await;
+        }
+        requests
+    });
+
+    Ok((format!("http://{address}/file"), task))
+}
+
+async fn start_cancel_resume_server(
+    body: Vec<u8>,
+) -> Result<
+    (
+        String,
+        oneshot::Receiver<()>,
+        oneshot::Sender<()>,
+        JoinHandle<Vec<String>>,
+    ),
+    std::io::Error,
+> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (first_chunk_sent, first_chunk_received) = oneshot::channel();
+    let (continue_server, wait_for_continue) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let Ok((mut first_stream, _)) = listener.accept().await else {
+            return requests;
+        };
+        let Some(first_request) = read_request(&mut first_stream).await else {
+            return requests;
+        };
+        requests.push(first_request);
+        let first_chunk_size = 64 * 1024;
+        let first_headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        if first_stream
+            .write_all(first_headers.as_bytes())
+            .await
+            .is_err()
+            || first_stream
+                .write_all(&body[..first_chunk_size.min(body.len())])
+                .await
+                .is_err()
+            || first_stream.flush().await.is_err()
+        {
+            return requests;
+        }
+        let _ = first_chunk_sent.send(());
+        let _ = wait_for_continue.await;
+        drop(first_stream);
+
+        let Ok((mut resume_stream, _)) = listener.accept().await else {
+            return requests;
+        };
+        let Some(resume_request) = read_request(&mut resume_stream).await else {
+            return requests;
+        };
+        let Some(range_header) = range_header(&resume_request) else {
+            return requests;
+        };
+        let Some(start) = range_header
+            .strip_prefix("bytes=")
+            .and_then(|value| value.strip_suffix('-'))
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            return requests;
+        };
+        requests.push(resume_request);
+        if start >= body.len() {
+            return requests;
+        }
+
+        let remaining = &body[start..];
+        let response_headers = format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+            remaining.len(),
+            start,
+            body.len() - 1,
+            body.len()
+        );
+        let _ = resume_stream.write_all(response_headers.as_bytes()).await;
+        let _ = resume_stream.write_all(remaining).await;
+        let _ = resume_stream.flush().await;
+        requests
+    });
+
+    Ok((
+        format!("http://{address}/file"),
+        first_chunk_received,
+        continue_server,
+        task,
+    ))
+}
+
+async fn read_request(stream: &mut TcpStream) -> Option<String> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    while let Ok(read) = stream.read(&mut buffer).await {
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            return Some(String::from_utf8_lossy(&request).into_owned());
+        }
+    }
+    None
+}
+
+fn scripted_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> ScriptedResponse {
+    ScriptedResponse {
+        status,
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        body: body.to_vec(),
+    }
+}
+
+fn range_header(request: &str) -> Option<&str> {
+    request.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("range").then(|| value.trim())
+    })
 }
 
 async fn serve_connection(mut stream: TcpStream, response: &mut ServerResponse) -> bool {
@@ -197,6 +373,249 @@ async fn run_download(
 }
 
 #[tokio::test]
+async fn resumes_using_actual_partial_size_and_validates_final_content()
+-> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 10 * 1024 * 1024;
+    const PARTIAL: usize = 4 * 1024 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 251) as u8).collect();
+    let remaining = &body[PARTIAL..];
+    let response = scripted_response(
+        206,
+        &[(
+            "Content-Range",
+            &format!("bytes {PARTIAL}-{}/{}", TOTAL - 1, TOTAL),
+        )],
+        remaining,
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("resumed.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, &body[..PARTIAL]).await?;
+
+    let mut item = make_item(&url, &destination)?;
+    item.set_progress_at(
+        DownloadProgress::new(1024, None, None, None)?,
+        Timestamp::from_unix_millis(2),
+    )?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+    let completed = engine.download(id, receiver).await?;
+    let requests = server.await?;
+
+    assert_eq!(range_header(&requests[0]), Some("bytes=4194304-"));
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(completed.progress().downloaded_bytes(), TOTAL as u64);
+    assert_eq!(completed.progress().total_bytes(), Some(TOTAL as u64));
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_partial_responses_never_append_or_publish() -> Result<(), Box<dyn Error>> {
+    let config = HttpEngineConfig {
+        progress_bytes_interval: 1,
+        progress_time_interval: Duration::from_secs(60),
+        ..HttpEngineConfig::default()
+    };
+    let (database, engine, directory) = setup_engine(config).await?;
+    for (name, headers, expected_error) in [
+        (
+            "wrong-start.bin",
+            vec![("Content-Range", "bytes 0-4/10")],
+            "range",
+        ),
+        ("missing-range.bin", vec![], "content-range"),
+        (
+            "malformed-range.bin",
+            vec![("Content-Range", "not a range")],
+            "content-range",
+        ),
+        (
+            "invalid-total.bin",
+            vec![("Content-Range", "bytes 5-9/8")],
+            "content-range",
+        ),
+        (
+            "length-mismatch.bin",
+            vec![("Content-Range", "bytes 5-9/10"), ("Content-Length", "4")],
+            "length",
+        ),
+    ] {
+        let original = b"known";
+        let (url, server) =
+            start_scripted_server(vec![scripted_response(206, &headers, b"extra")]).await?;
+        let destination = directory.destination(name);
+        let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+        tokio::fs::write(&partial_path, original).await?;
+        let item = make_item(&url, &destination)?;
+        let id = item.id();
+        database.downloads().create(&item).await?;
+        let (_sender, receiver) = watch::channel(false);
+
+        let result = engine.download(id, receiver).await;
+        match (result, expected_error) {
+            (Err(DownloadEngineError::RangeMismatch), "range")
+            | (Err(DownloadEngineError::InvalidContentRange), "content-range") => {}
+            (Err(DownloadEngineError::InvalidContentLength), "length") => {}
+            (unexpected, _) => {
+                return Err(format!("unexpected resume result: {unexpected:?}").into());
+            }
+        }
+        assert!(range_header(&server.await?[0]).is_some());
+        assert_eq!(tokio::fs::read(partial_path).await?, original);
+        assert!(!destination.exists());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn resumed_partial_response_after_redirect_is_not_appended() -> Result<(), Box<dyn Error>> {
+    let (target_url, target_server) = start_scripted_server(vec![scripted_response(
+        206,
+        &[("Content-Range", "bytes 5-9/10")],
+        b"world",
+    )])
+    .await?;
+    let (url, redirect_server) = start_scripted_server(vec![scripted_response(
+        302,
+        &[("Location", &target_url)],
+        b"",
+    )])
+    .await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("redirected-resume.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, b"hello").await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::RangeMismatch)
+    ));
+    assert!(range_header(&redirect_server.await?[0]).is_some());
+    assert!(range_header(&target_server.await?[0]).is_some());
+    assert_eq!(tokio::fs::read(partial_path).await?, b"hello");
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignored_range_restarts_from_zero_without_duplicate_bytes() -> Result<(), Box<dyn Error>> {
+    let body: Vec<u8> = (0..128 * 1024).map(|index| (index % 239) as u8).collect();
+    let (url, server) = start_scripted_server(vec![scripted_response(200, &[], &body)]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("ignored-range.bin");
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part", destination.display())),
+        &body[..4096],
+    )
+    .await?;
+    let item = make_item(&url, &destination)?;
+
+    let completed = run_download(&engine, &database, item).await?;
+    let requests = server.await?;
+
+    assert_eq!(range_header(&requests[0]), Some("bytes=4096-"));
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.progress().downloaded_bytes(), 128 * 1024);
+    Ok(())
+}
+
+#[tokio::test]
+async fn handles_416_by_restarting_only_when_local_size_is_not_short() -> Result<(), Box<dyn Error>>
+{
+    for (name, partial_size, remote_size, should_restart) in [
+        ("short.bin", 4, 10, false),
+        ("equal.bin", 10, 10, true),
+        ("oversized.bin", 12, 10, true),
+    ] {
+        let body = b"0123456789";
+        let responses = if should_restart {
+            vec![
+                scripted_response(
+                    416,
+                    &[("Content-Range", &format!("bytes */{remote_size}"))],
+                    b"",
+                ),
+                scripted_response(200, &[], body),
+            ]
+        } else {
+            vec![scripted_response(
+                416,
+                &[("Content-Range", &format!("bytes */{remote_size}"))],
+                b"",
+            )]
+        };
+        let (url, server) = start_scripted_server(responses).await?;
+        let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+        let destination = directory.destination(name);
+        let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+        let mut partial_content = body[..partial_size.min(body.len())].to_vec();
+        partial_content.resize(partial_size, b'x');
+        tokio::fs::write(&partial_path, &partial_content).await?;
+        let item = make_item(&url, &destination)?;
+        let id = item.id();
+        database.downloads().create(&item).await?;
+        let (_sender, receiver) = watch::channel(false);
+
+        let result = engine.download(id, receiver).await;
+        let requests = server.await?;
+        assert_eq!(
+            range_header(&requests[0]),
+            Some(format!("bytes={partial_size}-").as_str())
+        );
+        if should_restart {
+            assert_eq!(requests.len(), 2);
+            assert_eq!(range_header(&requests[1]), None);
+            assert_eq!(result?.status(), DownloadStatus::Completed);
+            assert_eq!(tokio::fs::read(destination).await?, body);
+        } else {
+            assert!(matches!(
+                result,
+                Err(DownloadEngineError::RangeNotSatisfiable)
+            ));
+            assert_eq!(tokio::fs::read(partial_path).await?, partial_content);
+            assert!(!destination.exists());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn resumes_unknown_total_from_valid_content_range() -> Result<(), Box<dyn Error>> {
+    let body = b"unknown-total-body";
+    let partial_size = 7;
+    let response = scripted_response(
+        206,
+        &[(
+            "Content-Range",
+            &format!("bytes {partial_size}-{}/*", body.len() - 1),
+        )],
+        &body[partial_size..],
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("unknown-total.bin");
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part", destination.display())),
+        &body[..partial_size],
+    )
+    .await?;
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+
+    server.await?;
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.progress().downloaded_bytes(), body.len() as u64);
+    assert_eq!(completed.progress().total_bytes(), None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn downloads_small_empty_unknown_length_and_large_files() -> Result<(), Box<dyn Error>> {
     let config = HttpEngineConfig {
         progress_bytes_interval: 32 * 1024,
@@ -284,7 +703,7 @@ async fn http_failures_persist_failed_state_and_safe_error() -> Result<(), Box<d
 }
 
 #[tokio::test]
-async fn truncated_response_fails_and_cleans_up_the_partial_file() -> Result<(), Box<dyn Error>> {
+async fn truncated_response_fails_and_preserves_the_partial_file() -> Result<(), Box<dyn Error>> {
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
     let mut response = ServerResponse::ok(b"partial".to_vec());
     response.content_length = Some(64);
@@ -305,7 +724,7 @@ async fn truncated_response_fails_and_cleans_up_the_partial_file() -> Result<(),
     assert_eq!(persisted.status(), DownloadStatus::Failed);
     assert!(persisted.progress().downloaded_bytes() <= 7);
     assert!(!destination.exists());
-    assert!(!PathBuf::from(format!("{}.part", destination.display())).exists());
+    assert!(PathBuf::from(format!("{}.part", destination.display())).exists());
     Ok(())
 }
 
@@ -407,16 +826,10 @@ async fn rejects_downloads_assigned_to_another_engine() -> Result<(), Box<dyn Er
 }
 
 #[tokio::test]
-async fn cancellation_removes_partial_file_and_persists_cancelled_state()
--> Result<(), Box<dyn Error>> {
+async fn cancellation_preserves_partial_file_for_a_later_resume() -> Result<(), Box<dyn Error>> {
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
     let body = vec![8_u8; 1024 * 1024];
-    let (signal, notified) = oneshot::channel();
-    let mut response = ServerResponse::ok(body.clone());
-    response.body_chunks = body.chunks(1024).map(<[u8]>::to_vec).collect();
-    response.delay_between_chunks = Duration::from_millis(2);
-    response.signal_after_first_chunk = Some(signal);
-    let (url, server) = start_server(response).await?;
+    let (url, notified, continue_server, server) = start_cancel_resume_server(body.clone()).await?;
     let destination = directory.destination("cancelled.bin");
     let item = make_item(&url, &destination)?;
     let id = item.id();
@@ -425,12 +838,20 @@ async fn cancellation_removes_partial_file_and_persists_cancelled_state()
     let engine_task = tokio::spawn(async move { engine.download(id, receiver).await });
 
     notified.await?;
+    for _ in 0..100 {
+        let current = database.downloads().get(id).await?;
+        if current.is_some_and(|item| item.progress().downloaded_bytes() > 0) {
+            break;
+        }
+        sleep(Duration::from_millis(2)).await;
+    }
     sender.send(true)?;
-    assert!(matches!(
-        engine_task.await?,
-        Err(DownloadEngineError::Cancelled)
-    ));
-    server.await?;
+    let engine_result = engine_task.await?;
+    assert!(
+        matches!(engine_result, Err(DownloadEngineError::Cancelled)),
+        "{engine_result:?}"
+    );
+    let _ = continue_server.send(());
 
     let cancelled = database
         .downloads()
@@ -439,7 +860,23 @@ async fn cancellation_removes_partial_file_and_persists_cancelled_state()
         .ok_or("cancelled download not found")?;
     assert_eq!(cancelled.status(), DownloadStatus::Cancelled);
     assert!(!destination.exists());
-    assert!(!PathBuf::from(format!("{}.part", destination.display())).exists());
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    let partial_size = tokio::fs::metadata(&partial_path).await?.len() as usize;
+    assert!(partial_size > 0 && partial_size < body.len());
+    assert_eq!(cancelled.progress().downloaded_bytes(), partial_size as u64);
+
+    let resume_engine = DirectHttpEngine::new(database.downloads())?;
+    let (_sender, receiver) = watch::channel(false);
+    let completed = resume_engine.download(id, receiver).await?;
+
+    let requests = server.await?;
+    assert_eq!(range_header(&requests[0]), None);
+    assert_eq!(
+        range_header(&requests[1]),
+        Some(format!("bytes={partial_size}-").as_str())
+    );
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
     Ok(())
 }
 

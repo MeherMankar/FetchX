@@ -22,6 +22,8 @@ pub fn validate_transition(
             | (DownloadStatus::Downloading, DownloadStatus::Cancelled)
             | (DownloadStatus::Paused, DownloadStatus::Downloading)
             | (DownloadStatus::Paused, DownloadStatus::Cancelled)
+            | (DownloadStatus::Failed, DownloadStatus::Preparing)
+            | (DownloadStatus::Cancelled, DownloadStatus::Preparing)
     );
 
     if allowed {
@@ -155,7 +157,7 @@ mod tests {
         DownloadStatus::Cancelled,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 11] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 13] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
         (DownloadStatus::Preparing, DownloadStatus::Downloading),
         (DownloadStatus::Downloading, DownloadStatus::Paused),
@@ -167,6 +169,8 @@ mod tests {
         (DownloadStatus::Preparing, DownloadStatus::Cancelled),
         (DownloadStatus::Queued, DownloadStatus::Cancelled),
         (DownloadStatus::Paused, DownloadStatus::Cancelled),
+        (DownloadStatus::Failed, DownloadStatus::Preparing),
+        (DownloadStatus::Cancelled, DownloadStatus::Preparing),
     ];
 
     fn item(status: DownloadStatus) -> Result<DownloadItem, Box<dyn Error>> {

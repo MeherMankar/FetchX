@@ -28,6 +28,18 @@ pub enum DownloadEngineError {
     HttpStatus(u16),
     #[error("HTTP response has an invalid Content-Length")]
     InvalidContentLength,
+    #[error("HTTP response has an invalid Content-Range")]
+    InvalidContentRange,
+    #[error("HTTP response does not match the requested byte range")]
+    RangeMismatch,
+    #[error("server rejected a range request while the local partial file is incomplete")]
+    RangeNotSatisfiable,
+    #[error("server returned a partial response without a range request")]
+    UnexpectedPartialResponse,
+    #[error("partial download path is not a regular file")]
+    InvalidPartialFile,
+    #[error("partial download file changed while it was being opened")]
+    PartialFileChanged,
     #[error("response exceeded Content-Length ({expected} bytes)")]
     ContentLengthExceeded { expected: u64 },
     #[error("response ended after {actual} bytes; expected {expected}")]
@@ -54,11 +66,6 @@ pub enum DownloadEngineError {
     Storage(#[from] StorageError),
     #[error("file operation failed: {0}")]
     Io(#[source] io::Error),
-    #[error("failed to remove incomplete download file: {cleanup}; original failure: {operation}")]
-    Cleanup {
-        operation: Box<Self>,
-        cleanup: io::Error,
-    },
     #[error("download failed ({operation}) and failure state could not be persisted ({state})")]
     FailurePersistence {
         operation: Box<Self>,
@@ -78,10 +85,7 @@ impl DownloadEngineError {
                 DownloadErrorCode::Source,
                 "The download source is invalid or unsupported.".to_owned(),
             ),
-            Self::DestinationExists
-            | Self::TemporaryFileExists
-            | Self::Io(_)
-            | Self::Cleanup { .. } => (
+            Self::DestinationExists | Self::TemporaryFileExists | Self::Io(_) => (
                 DownloadErrorCode::Destination,
                 "The destination could not be written safely.".to_owned(),
             ),
@@ -94,6 +98,12 @@ impl DownloadEngineError {
                 format!("The HTTP server returned status {status}."),
             ),
             Self::InvalidContentLength
+            | Self::InvalidContentRange
+            | Self::RangeMismatch
+            | Self::RangeNotSatisfiable
+            | Self::UnexpectedPartialResponse
+            | Self::InvalidPartialFile
+            | Self::PartialFileChanged
             | Self::ContentLengthExceeded { .. }
             | Self::IncompleteResponse { .. }
             | Self::ByteCountOverflow => (

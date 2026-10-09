@@ -123,6 +123,47 @@ async fn update_reports_missing_items() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn timestamp_conditional_update_rejects_stale_snapshots() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let original = item(DownloadId::new(), false)?;
+    repository.create(&original).await?;
+
+    let newest_timestamp = Timestamp::from_unix_millis(original.updated_at().as_unix_millis() + 1);
+    let mut newest = original.clone();
+    newest.set_progress_at(
+        DownloadProgress::new(2048, Some(4096), None, None)?,
+        newest_timestamp,
+    )?;
+    assert!(
+        repository
+            .update_if_status_and_timestamp_current(
+                &newest,
+                original.status(),
+                original.updated_at(),
+            )
+            .await?
+    );
+
+    let mut stale = original.clone();
+    stale.set_progress_at(
+        DownloadProgress::new(1600, Some(4096), None, None)?,
+        Timestamp::from_unix_millis(newest_timestamp.as_unix_millis() + 1),
+    )?;
+    assert!(
+        !repository
+            .update_if_status_and_timestamp_current(
+                &stale,
+                original.status(),
+                original.updated_at(),
+            )
+            .await?
+    );
+    assert_eq!(repository.get(original.id()).await?, Some(newest));
+    Ok(())
+}
+
+#[tokio::test]
 async fn schema_rejects_invalid_enum_values() -> Result<(), Box<dyn Error>> {
     let database = Database::connect("sqlite::memory:").await?;
     let repository = database.downloads();
