@@ -56,6 +56,11 @@ graceful shutdown are serialized through the queue actor. Queue order is persist
 SQLite and resumed downloads are moved to its tail. Queue pause state is retained across
 shutdown; work interrupted while running is requeued at startup.
 
+`EngineDispatcher` can be supplied to the queue as its managed engine. It reads each
+persisted item's `EngineKind` and forwards the existing control channels to the selected
+backend. The queue and Scheduler remain unaware of backend-specific RPC methods.
+Direct HTTP remains usable directly as the queue's engine, without a dispatcher.
+
 The `scheduler` crate sits above the queue and stores one-shot start times in the
 `download_schedules` SQLite table. On startup it loads enabled schedules and passes
 them to the queue as deferred IDs before queue dispatch begins. Future schedules stay
@@ -154,4 +159,23 @@ single-source, with no dynamic segment sizing. Filesystem publication and databa
 completion are separate operations, so a crash between them can leave a published file
 whose persisted state is not yet `Completed`.
 
-Application services, UI, and non-HTTP engine adapters are not implemented yet.
+The optional `Aria2Engine` uses an HTTP JSON-RPC client against a caller-configured
+loopback endpoint. It does not launch aria2. RPC request IDs and response shapes are
+validated, the optional secret token is supplied at runtime and redacted from debug
+output, and calls have a configurable timeout. An ambiguous `aria2.addUri` result is
+never retried; the item is marked as requiring reconciliation to prevent an automatic
+duplicate submission. The engine persists progress through status-and-timestamp-
+conditional repository updates and verifies the reported completion length against the
+destination file before completing the application state transition.
+
+aria2 GIDs are runtime-only and are not stored in SQLite. Paused jobs can be resumed or
+cancelled while their GID remains in the current process. If that GID is unavailable or
+invalid, the adapter requires reconciliation rather than silently submitting a new job.
+Application/aria2 crash recovery is incomplete until Phase 11B adds process supervision
+and durable reconciliation. The Phase 11A adapter configures one connection per aria2
+job; it does not yet dynamically translate Queue Manager allocation changes into aria2
+options. `forceRemove` is available in the RPC client, while normal cancellation uses
+`aria2.remove`.
+
+Application services and UI are not implemented yet; yt-dlp and FFmpeg adapters remain
+planned.

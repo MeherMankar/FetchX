@@ -425,6 +425,7 @@ where
                 handle_command(
                     command,
                     &repository,
+                    engine.as_ref(),
                     &state_machine,
                     &mut config,
                     &mut entries,
@@ -667,9 +668,10 @@ fn allocate_resources(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn handle_command<R>(
+async fn handle_command<R, E>(
     command: Command,
     repository: &R,
+    engine: &E,
     state_machine: &DownloadStateMachine<R>,
     config: &mut QueueConfig,
     entries: &mut HashMap<DownloadId, Entry>,
@@ -681,6 +683,7 @@ async fn handle_command<R>(
 ) -> Result<(), QueueError>
 where
     R: DownloadRepository + Clone,
+    E: ManagedDownloadEngine,
 {
     match command {
         Command::Enqueue { item, reply } => {
@@ -879,6 +882,9 @@ where
                     match item.status() {
                         DownloadStatus::Cancelled => Ok(()),
                         DownloadStatus::Queued | DownloadStatus::Paused => {
+                            if item.status() == DownloadStatus::Paused {
+                                engine.cancel_inactive(id).await?;
+                            }
                             let cancelled = state_machine
                                 .transition(id, DownloadStatus::Cancelled)
                                 .await?;
@@ -1042,6 +1048,26 @@ where
                 current = state_machine.transition(id, target).await?;
             }
         }
+    } else if current.status() == DownloadStatus::Queued && result.is_err() {
+        if worker.cancelling || matches!(&result, Err(DownloadEngineError::Cancelled)) {
+            current = state_machine
+                .transition(id, DownloadStatus::Cancelled)
+                .await?;
+        } else if worker.pausing || matches!(&result, Err(DownloadEngineError::Paused)) {
+            current = state_machine.transition(id, DownloadStatus::Paused).await?;
+        } else {
+            state_machine
+                .transition(id, DownloadStatus::Preparing)
+                .await?;
+            let diagnostic = DownloadError::new(
+                DownloadErrorCode::Engine,
+                "The selected download engine could not start the work.",
+            )
+            .map_err(|error| QueueError::StateMachine(StateMachineError::DomainError(error)))?;
+            current = state_machine
+                .transition_with_error(id, DownloadStatus::Failed, diagnostic)
+                .await?;
+        }
     }
     if result.is_ok() && current.status() != DownloadStatus::Completed {
         return Err(QueueError::InvalidStatus {
@@ -1128,6 +1154,26 @@ where
             let diagnostic = DownloadError::new(
                 DownloadErrorCode::Internal,
                 "The download worker terminated unexpectedly.",
+            )
+            .map_err(|error| QueueError::StateMachine(StateMachineError::DomainError(error)))?;
+            item = state_machine
+                .transition_with_error(id, DownloadStatus::Failed, diagnostic)
+                .await?;
+        }
+    } else if item.status() == DownloadStatus::Queued {
+        if worker.cancelling {
+            item = state_machine
+                .transition(id, DownloadStatus::Cancelled)
+                .await?;
+        } else if worker.pausing {
+            item = state_machine.transition(id, DownloadStatus::Paused).await?;
+        } else {
+            state_machine
+                .transition(id, DownloadStatus::Preparing)
+                .await?;
+            let diagnostic = DownloadError::new(
+                DownloadErrorCode::Internal,
+                "The download worker terminated before it could start.",
             )
             .map_err(|error| QueueError::StateMachine(StateMachineError::DomainError(error)))?;
             item = state_machine
@@ -1278,6 +1324,36 @@ mod tests {
         }
     }
 
+    struct RejectInactiveCancelEngine;
+
+    impl DownloadEngine for RejectInactiveCancelEngine {
+        async fn download(
+            &self,
+            _id: DownloadId,
+            _cancellation: watch::Receiver<bool>,
+        ) -> Result<DownloadItem, DownloadEngineError> {
+            Err(DownloadEngineError::InvalidConfiguration)
+        }
+    }
+
+    impl ManagedDownloadEngine for RejectInactiveCancelEngine {
+        async fn download_managed(
+            &self,
+            _id: DownloadId,
+            _control: ManagedDownloadControl,
+        ) -> Result<DownloadItem, DownloadEngineError> {
+            Err(DownloadEngineError::EngineNotAvailable)
+        }
+
+        #[allow(clippy::manual_async_fn)]
+        fn cancel_inactive(
+            &self,
+            _id: DownloadId,
+        ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
+            async { Err(DownloadEngineError::Aria2ReconciliationRequired) }
+        }
+    }
+
     fn item() -> Result<DownloadItem, Box<dyn std::error::Error>> {
         Ok(DownloadItem::new(
             DownloadId::new(),
@@ -1423,6 +1499,69 @@ mod tests {
                 .status(),
             DownloadStatus::Cancelled
         );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_engine_cancellation_must_succeed_before_paused_state_changes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let item = item()?;
+        let id = item.id();
+        repository.create(&item).await?;
+        DownloadStateMachine::new(repository.clone())
+            .transition(id, DownloadStatus::Paused)
+            .await?;
+        let manager = QueueManager::new(
+            repository.clone(),
+            Arc::new(RejectInactiveCancelEngine),
+            QueueConfig::default(),
+        )
+        .await?;
+
+        assert!(matches!(
+            manager.cancel(id).await,
+            Err(QueueError::Engine(
+                DownloadEngineError::Aria2ReconciliationRequired
+            ))
+        ));
+        assert_eq!(
+            repository.get(id).await?.ok_or("missing item")?.status(),
+            DownloadStatus::Paused
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn engine_rejection_before_preparing_fails_queue_item_without_retry_loop()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let manager = QueueManager::new(
+            repository.clone(),
+            Arc::new(RejectInactiveCancelEngine),
+            QueueConfig::default(),
+        )
+        .await?;
+        let item = item()?;
+        let id = item.id();
+        manager.enqueue(item).await?;
+
+        let failed = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(item) = repository.get(id).await?
+                    && item.status() == DownloadStatus::Failed
+                {
+                    return Ok::<_, mydownloader_storage::StorageError>(item);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert_eq!(failed.status(), DownloadStatus::Failed);
         manager.shutdown().await?;
         Ok(())
     }

@@ -10,14 +10,15 @@
 8. Phase 8 — Adaptive acceleration (completed)
 9. Phase 9 — Queue manager (completed)
 10. Phase 10 — Persistent one-shot scheduler (completed)
-11. Phase 11 — aria2 integration
-12. Phase 12 — yt-dlp integration
-13. Phase 13 — FFmpeg integration
-14. Phase 14 — Tauri desktop application
-15. Phase 15 — React UI
-16. Phase 16 — Browser extension
-17. Phase 17 — CLI
-18. Phase 18 — Plugin architecture
-19. Phase 19 — Android
-20. Phase 20 — Remote/headless mode
-21. Phase 21 — Production packaging and releases
+11. Phase 11A — aria2 JSON-RPC client and engine adapter (completed)
+12. Phase 11B — aria2 process supervision and restart recovery
+13. Phase 12 — yt-dlp integration
+14. Phase 13 — FFmpeg integration
+15. Phase 14 — Tauri desktop application
+16. Phase 15 — React UI
+17. Phase 16 — Browser extension
+18. Phase 17 — CLI
+19. Phase 18 — Plugin architecture
+20. Phase 19 — Android
+21. Phase 20 — Remote/headless mode
+22. Phase 21 — Production packaging and releases

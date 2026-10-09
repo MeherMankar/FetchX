@@ -810,6 +810,8 @@ dependencies = [
  "mydownloader-models",
  "mydownloader-storage",
  "reqwest",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

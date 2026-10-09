@@ -38,4 +38,14 @@ pub trait ManagedDownloadEngine: DownloadEngine {
         id: DownloadId,
         control: ManagedDownloadControl,
     ) -> impl Future<Output = Result<DownloadItem, DownloadEngineError>> + Send;
+
+    /// Stops backend work for an item that has no active queue worker, if any exists.
+    ///
+    /// Engines without independently persistent jobs may keep the default no-op.
+    fn cancel_inactive(
+        &self,
+        _id: DownloadId,
+    ) -> impl Future<Output = Result<(), DownloadEngineError>> + Send {
+        async { Ok(()) }
+    }
 }

@@ -298,10 +298,19 @@ where
         {
             release.push(schedule.download_id());
         } else {
-            queue.defer_download(schedule.download_id()).await?;
-            next = Some(next.map_or(schedule.scheduled_at(), |current: Timestamp| {
-                current.min(schedule.scheduled_at())
-            }));
+            match queue.defer_download(schedule.download_id()).await {
+                Ok(()) => {
+                    next = Some(next.map_or(schedule.scheduled_at(), |current: Timestamp| {
+                        current.min(schedule.scheduled_at())
+                    }));
+                }
+                Err(QueueError::InvalidStatus {
+                    action: "defer", ..
+                }) => {
+                    release.push(schedule.download_id());
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
     }
     queue.release_downloads(release).await?;

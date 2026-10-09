@@ -12,8 +12,18 @@ and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive seg
 transfers. It also includes a persistent download queue with priority/FIFO scheduling,
 pause/resume/cancel controls, startup recovery, and a global connection budget (defaults:
 three active downloads and 16 connections, bounded to 32 and 64). No UI or integrations
-with aria2, yt-dlp, or FFmpeg are implemented yet. One-shot scheduled start times are
-persisted in SQLite and coordinated by an event-driven Scheduler above the Queue Manager.
+with yt-dlp or FFmpeg are implemented yet. An optional aria2 JSON-RPC client and engine
+adapter are available through an engine dispatcher; Phase 11A requires an independently
+running aria2 RPC endpoint and does not launch or supervise aria2. One-shot scheduled
+start times are persisted in SQLite and coordinated by an event-driven Scheduler above
+the Queue Manager.
+
+The aria2 endpoint is restricted to an HTTP loopback address. Its optional RPC secret is
+provided at runtime and is not logged or persisted by the adapter. aria2 GIDs exist only
+in process memory. Crash/restart reconciliation and aria2 process supervision are not
+implemented; those are deferred to Phase 11B. The current adapter limits each aria2 job
+to one connection and does not dynamically translate the Queue Manager's changing
+connection allocation into aria2 runtime options.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
@@ -75,7 +85,8 @@ is implemented.
 - `crates/models` — shared domain and data structures
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
-- `crates/downloader` — direct HTTP/HTTPS engine with resume and adaptive segmentation
+- `crates/downloader` — direct HTTP/HTTPS engine with resume/adaptive segmentation,
+  optional aria2 JSON-RPC client and engine dispatcher
 - `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
 - `crates/scheduler` — persistent one-shot start times and event-driven eligibility handoff
 - `migrations` — embedded, ordered SQLite schema migrations
