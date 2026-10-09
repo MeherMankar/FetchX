@@ -12,7 +12,8 @@ and a direct HTTP/HTTPS downloader with safe Range-based resume and adaptive seg
 transfers. It also includes a persistent download queue with priority/FIFO scheduling,
 pause/resume/cancel controls, startup recovery, and a global connection budget (defaults:
 three active downloads and 16 connections, bounded to 32 and 64). No UI or integrations
-with aria2, yt-dlp, or FFmpeg are implemented yet.
+with aria2, yt-dlp, or FFmpeg are implemented yet. One-shot scheduled start times are
+persisted in SQLite and coordinated by an event-driven Scheduler above the Queue Manager.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
@@ -20,6 +21,13 @@ response restarts from zero; cancellation and transfer failures preserve partial
 Queue startup recovery requeues interrupted downloads, but ETag/Last-Modified validators
 and validation of partial files against a remote representation are not implemented,
 so a partial may belong to an older resource version.
+
+The Scheduler supports immediate, future, and overdue one-shot starts, with persistent
+enable/disable state. It wakes on schedule changes or the next due time and defers
+future downloads without using queue slots or connection budget. Once eligible, the
+Queue Manager applies priority, FIFO, fairness, and resource limits. Recurring schedules,
+calendar rules, and cron syntax are not implemented. Wall-clock changes are rechecked
+at least once per minute while a distant schedule is pending.
 
 For fresh responses that advertise byte ranges and provide a known size of at least
 4 MiB, the engine plans up to eight ranges and starts with four workers. A bounded
@@ -69,6 +77,7 @@ is implemented.
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume and adaptive segmentation
 - `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
+- `crates/scheduler` — persistent one-shot start times and event-driven eligibility handoff
 - `migrations` — embedded, ordered SQLite schema migrations
 - `tests` — workspace-level integration tests
 - `docs` — architecture, roadmap, and AI contribution rules

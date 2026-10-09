@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use mydownloader_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
-    DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+    DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
 use sqlx::{Row, SqlitePool, sqlite::SqliteRow};
 
@@ -128,6 +128,66 @@ impl DownloadRepository for SqliteDownloadRepository {
     ) -> Result<bool, StorageError> {
         let result = sqlx::query("UPDATE downloads SET priority = ? WHERE id = ?")
             .bind(priority_to_str(priority))
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn save_schedule(&self, schedule: &DownloadSchedule) -> Result<(), StorageError> {
+        sqlx::query(
+            "INSERT INTO download_schedules (
+                download_id, scheduled_at_ms, enabled, created_at_ms, updated_at_ms
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(download_id) DO UPDATE SET
+                scheduled_at_ms = excluded.scheduled_at_ms,
+                enabled = excluded.enabled,
+                updated_at_ms = excluded.updated_at_ms",
+        )
+        .bind(schedule.download_id().to_string())
+        .bind(to_sqlite_integer(
+            "scheduled_at_ms",
+            schedule.scheduled_at().as_unix_millis(),
+        )?)
+        .bind(i64::from(schedule.enabled()))
+        .bind(to_sqlite_integer(
+            "created_at_ms",
+            schedule.created_at().as_unix_millis(),
+        )?)
+        .bind(to_sqlite_integer(
+            "updated_at_ms",
+            schedule.updated_at().as_unix_millis(),
+        )?)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_schedule(&self, id: DownloadId) -> Result<Option<DownloadSchedule>, StorageError> {
+        let row = sqlx::query(
+            "SELECT download_id, scheduled_at_ms, enabled, created_at_ms, updated_at_ms
+             FROM download_schedules
+             WHERE download_id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(row_to_schedule).transpose()
+    }
+
+    async fn list_schedules(&self) -> Result<Vec<DownloadSchedule>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT download_id, scheduled_at_ms, enabled, created_at_ms, updated_at_ms
+             FROM download_schedules
+             ORDER BY scheduled_at_ms, download_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_schedule).collect()
+    }
+
+    async fn delete_schedule(&self, id: DownloadId) -> Result<bool, StorageError> {
+        let result = sqlx::query("DELETE FROM download_schedules WHERE download_id = ?")
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;
@@ -372,6 +432,43 @@ fn row_to_item(row: SqliteRow) -> Result<DownloadItem, StorageError> {
         error,
     )
     .map_err(|error| StorageError::invalid_data("updated_at", error.to_string()))
+}
+
+fn row_to_schedule(row: SqliteRow) -> Result<DownloadSchedule, StorageError> {
+    let id_text: String = row.try_get("download_id")?;
+    let id = DownloadId::parse(&id_text)
+        .map_err(|error| StorageError::invalid_data("download_id", error.to_string()))?;
+    if id.to_string() != id_text {
+        return Err(StorageError::invalid_data(
+            "download_id",
+            "download ID is not in canonical string form",
+        ));
+    }
+    let enabled: i64 = row.try_get("enabled")?;
+    let enabled = match enabled {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(StorageError::invalid_data(
+                "enabled",
+                "schedule enabled flag must be zero or one",
+            ));
+        }
+    };
+    let scheduled_at = Timestamp::from_unix_millis(from_sqlite_integer(
+        "scheduled_at_ms",
+        row.try_get("scheduled_at_ms")?,
+    )?);
+    let created_at = Timestamp::from_unix_millis(from_sqlite_integer(
+        "created_at_ms",
+        row.try_get("created_at_ms")?,
+    )?);
+    let updated_at = Timestamp::from_unix_millis(from_sqlite_integer(
+        "updated_at_ms",
+        row.try_get("updated_at_ms")?,
+    )?);
+    DownloadSchedule::from_parts(id, scheduled_at, enabled, created_at, updated_at)
+        .map_err(|error| StorageError::invalid_data("updated_at_ms", error.to_string()))
 }
 
 fn engine_to_str(value: EngineKind) -> &'static str {

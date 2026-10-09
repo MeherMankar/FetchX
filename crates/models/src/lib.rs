@@ -6,6 +6,7 @@ mod error;
 mod ids;
 mod priority;
 mod progress;
+mod schedule;
 mod timestamp;
 
 pub use download::{
@@ -17,4 +18,5 @@ pub use error::{DownloadError, DownloadErrorCode, DownloadErrorMessageError};
 pub use ids::{DownloadId, DownloadIdParseError};
 pub use priority::DownloadPriority;
 pub use progress::{DownloadProgress, DownloadProgressError};
+pub use schedule::{DownloadSchedule, DownloadScheduleError};
 pub use timestamp::{Timestamp, TimestampError};

@@ -1,0 +1,20 @@
+[package]
+name = "mydownloader-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mydownloader-downloader = { path = "../downloader" }
+mydownloader-models = { path = "../models" }
+mydownloader-queue = { path = "../queue" }
+mydownloader-storage = { path = "../storage" }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+mydownloader-core = { path = "../core" }
+
+[lints]
+workspace = true

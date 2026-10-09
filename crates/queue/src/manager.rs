@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use mydownloader_core::{DownloadStateMachine, StateMachineError};
 use mydownloader_downloader::{
@@ -115,6 +118,21 @@ impl QueueManager {
         R: DownloadRepository + Clone + 'static,
         E: ManagedDownloadEngine + 'static,
     {
+        Self::new_with_deferred(repository, engine, config, HashSet::new()).await
+    }
+
+    /// Starts the queue while keeping the specified persisted downloads out of
+    /// worker scheduling until [`Self::release_download`] is called.
+    pub async fn new_with_deferred<R, E>(
+        repository: R,
+        engine: Arc<E>,
+        config: QueueConfig,
+        deferred: HashSet<DownloadId>,
+    ) -> Result<Self, QueueError>
+    where
+        R: DownloadRepository + Clone + 'static,
+        E: ManagedDownloadEngine + 'static,
+    {
         config.validate()?;
         let state_machine = DownloadStateMachine::new(repository.clone());
         let mut items = repository.list().await?;
@@ -147,6 +165,7 @@ impl QueueManager {
             config,
             entries,
             next_sequence,
+            deferred,
             command_receiver,
         ));
 
@@ -158,6 +177,31 @@ impl QueueManager {
 
     pub async fn enqueue(&self, item: DownloadItem) -> Result<(), QueueError> {
         self.request(|reply| Command::Enqueue { item, reply }).await
+    }
+
+    /// Persists a new item and defers it in one actor operation.
+    pub async fn enqueue_deferred(&self, item: DownloadItem) -> Result<(), QueueError> {
+        self.request(|reply| Command::EnqueueDeferred { item, reply })
+            .await
+    }
+
+    /// Defers a queued/paused download without changing its lifecycle state.
+    /// Repeating the operation is safe. Active work cannot be deferred.
+    pub async fn defer_download(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::Defer { id, reply }).await
+    }
+
+    /// Makes a deferred download eligible for ordinary queue scheduling.
+    /// Repeating the operation is safe and never changes a paused/terminal status.
+    pub async fn release_download(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::Release { id, reply }).await
+    }
+
+    /// Releases multiple deferred downloads atomically with respect to queue
+    /// dispatch, allowing priority ordering to apply across the entire batch.
+    pub async fn release_downloads(&self, ids: Vec<DownloadId>) -> Result<(), QueueError> {
+        self.request(|reply| Command::ReleaseMany { ids, reply })
+            .await
     }
 
     pub async fn pause(&self, id: DownloadId) -> Result<(), QueueError> {
@@ -196,13 +240,18 @@ impl QueueManager {
 
     pub async fn shutdown(&self) -> Result<(), QueueError> {
         let (reply, result) = oneshot::channel();
-        self.commands
+        if self
+            .commands
             .send(Command::Shutdown { reply })
             .await
-            .map_err(|_| QueueError::Stopped)?;
-        result
-            .await
-            .map_err(|_| QueueError::ShutdownChannelClosed)??;
+            .is_err()
+        {
+            return Err(self.actor_failure().await);
+        }
+        match result.await {
+            Ok(result) => result?,
+            Err(_) => return Err(self.actor_failure().await),
+        }
 
         if let Some(actor) = self.actor.lock().await.take() {
             actor.await.map_err(QueueError::Actor)??;
@@ -215,11 +264,26 @@ impl QueueManager {
         command: impl FnOnce(oneshot::Sender<Result<T, QueueError>>) -> Command,
     ) -> Result<T, QueueError> {
         let (reply, result) = oneshot::channel();
-        self.commands
-            .send(command(reply))
-            .await
-            .map_err(|_| QueueError::Stopped)?;
-        result.await.map_err(|_| QueueError::Stopped)?
+        if self.commands.send(command(reply)).await.is_err() {
+            return Err(self.actor_failure().await);
+        }
+        match result.await {
+            Ok(result) => result,
+            Err(_) => Err(self.actor_failure().await),
+        }
+    }
+
+    async fn actor_failure(&self) -> QueueError {
+        let actor = self.actor.lock().await.take();
+        if let Some(actor) = actor {
+            match actor.await {
+                Ok(Err(error)) => error,
+                Err(error) => QueueError::Actor(error),
+                Ok(Ok(())) => QueueError::Stopped,
+            }
+        } else {
+            QueueError::Stopped
+        }
     }
 }
 
@@ -245,6 +309,22 @@ struct ActiveWorker {
 enum Command {
     Enqueue {
         item: DownloadItem,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    EnqueueDeferred {
+        item: DownloadItem,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    Defer {
+        id: DownloadId,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    Release {
+        id: DownloadId,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    ReleaseMany {
+        ids: Vec<DownloadId>,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
     Pause {
@@ -282,6 +362,7 @@ async fn run_actor<R, E>(
     mut config: QueueConfig,
     mut entries: HashMap<DownloadId, Entry>,
     mut next_sequence: u64,
+    mut deferred: HashSet<DownloadId>,
     mut commands: mpsc::Receiver<Command>,
 ) -> Result<(), QueueError>
 where
@@ -304,6 +385,7 @@ where
                 Arc::clone(&engine),
                 &config,
                 &mut entries,
+                &deferred,
                 &mut active,
                 &mut workers,
                 &mut task_downloads,
@@ -317,6 +399,7 @@ where
             &mut active,
             config.global_connection_limit,
             &entries,
+            &deferred,
             config.max_active_downloads,
         );
 
@@ -345,6 +428,7 @@ where
                     &state_machine,
                     &mut config,
                     &mut entries,
+                    &mut deferred,
                     &mut active,
                     &mut stopping,
                     &mut shutdown_waiters,
@@ -354,6 +438,7 @@ where
                     &mut active,
                     config.global_connection_limit,
                     &entries,
+                    &deferred,
                     config.max_active_downloads,
                 );
             }
@@ -397,6 +482,7 @@ where
                         &mut active,
                         config.global_connection_limit,
                         &entries,
+                        &deferred,
                         config.max_active_downloads,
                     );
                 }
@@ -410,6 +496,7 @@ async fn start_eligible<E>(
     engine: Arc<E>,
     config: &QueueConfig,
     entries: &mut HashMap<DownloadId, Entry>,
+    deferred: &HashSet<DownloadId>,
     active: &mut HashMap<DownloadId, ActiveWorker>,
     workers: &mut JoinSet<(DownloadId, Result<DownloadItem, DownloadEngineError>)>,
     task_downloads: &mut HashMap<TaskId, DownloadId>,
@@ -423,8 +510,13 @@ where
     while active.len() < config.max_active_downloads
         && used_connections(active) < config.global_connection_limit
     {
-        let Some(id) = choose_next(entries, active, last_priority, *consecutive_priority_starts)
-        else {
+        let Some(id) = choose_next(
+            entries,
+            deferred,
+            active,
+            last_priority,
+            *consecutive_priority_starts,
+        ) else {
             break;
         };
         let entry = entries.get(&id).ok_or(QueueError::ResourceInvariant)?;
@@ -483,6 +575,7 @@ where
 
 fn choose_next(
     entries: &HashMap<DownloadId, Entry>,
+    deferred: &HashSet<DownloadId>,
     active: &HashMap<DownloadId, ActiveWorker>,
     last_priority: &Option<DownloadPriority>,
     consecutive_priority_starts: u8,
@@ -490,7 +583,9 @@ fn choose_next(
     let mut queued = entries
         .iter()
         .filter(|(id, entry)| {
-            entry.item.status() == DownloadStatus::Queued && !active.contains_key(id)
+            entry.item.status() == DownloadStatus::Queued
+                && !active.contains_key(id)
+                && !deferred.contains(id)
         })
         .map(|(id, entry)| (*id, entry.item.priority(), entry.sequence))
         .collect::<Vec<_>>();
@@ -523,13 +618,16 @@ fn allocate_resources(
     active: &mut HashMap<DownloadId, ActiveWorker>,
     limit: usize,
     entries: &HashMap<DownloadId, Entry>,
+    deferred: &HashSet<DownloadId>,
     max_active_downloads: usize,
 ) {
     let active_count = active.len();
     let queued_count = entries
         .iter()
         .filter(|(id, entry)| {
-            entry.item.status() == DownloadStatus::Queued && !active.contains_key(id)
+            entry.item.status() == DownloadStatus::Queued
+                && !active.contains_key(id)
+                && !deferred.contains(id)
         })
         .count();
     let reserved_for_queued = queued_count.min(max_active_downloads.saturating_sub(active_count));
@@ -575,6 +673,7 @@ async fn handle_command<R>(
     state_machine: &DownloadStateMachine<R>,
     config: &mut QueueConfig,
     entries: &mut HashMap<DownloadId, Entry>,
+    deferred: &mut HashSet<DownloadId>,
     active: &mut HashMap<DownloadId, ActiveWorker>,
     stopping: &mut bool,
     shutdown_waiters: &mut Vec<oneshot::Sender<Result<(), QueueError>>>,
@@ -603,6 +702,73 @@ where
             }
             .await;
             let _ = reply.send(result);
+        }
+        Command::EnqueueDeferred { item, reply } => {
+            let result = async {
+                if item.status() != DownloadStatus::Queued {
+                    return Err(QueueError::InvalidStatus {
+                        id: item.id(),
+                        action: "enqueue",
+                        status: item.status(),
+                    });
+                }
+                repository.create(&item).await?;
+                deferred.insert(item.id());
+                let sequence = *next_sequence;
+                *next_sequence = next_sequence
+                    .checked_add(1)
+                    .ok_or(QueueError::ResourceInvariant)?;
+                entries.insert(item.id(), Entry { item, sequence });
+                Ok(())
+            }
+            .await;
+            let _ = reply.send(result);
+        }
+        Command::Defer { id, reply } => {
+            let result = async {
+                if active.contains_key(&id) {
+                    let item = repository
+                        .get(id)
+                        .await?
+                        .ok_or(StateMachineError::NotFound(id))?;
+                    return Err(QueueError::InvalidStatus {
+                        id,
+                        action: "defer",
+                        status: item.status(),
+                    });
+                }
+                let item = repository
+                    .get(id)
+                    .await?
+                    .ok_or(StateMachineError::NotFound(id))?;
+                if !matches!(
+                    item.status(),
+                    DownloadStatus::Queued | DownloadStatus::Paused
+                ) {
+                    return Err(QueueError::InvalidStatus {
+                        id,
+                        action: "defer",
+                        status: item.status(),
+                    });
+                }
+                deferred.insert(id);
+                if let Some(entry) = entries.get_mut(&id) {
+                    entry.item = item;
+                }
+                Ok(())
+            }
+            .await;
+            let _ = reply.send(result);
+        }
+        Command::Release { id, reply } => {
+            deferred.remove(&id);
+            let _ = reply.send(Ok(()));
+        }
+        Command::ReleaseMany { ids, reply } => {
+            for id in ids {
+                deferred.remove(&id);
+            }
+            let _ = reply.send(Ok(()));
         }
         Command::Pause { id, reply } => {
             if let Some(worker) = active.get_mut(&id) {
@@ -775,7 +941,9 @@ where
                 let queued = items
                     .iter()
                     .filter(|item| {
-                        item.status() == DownloadStatus::Queued && !active.contains_key(&item.id())
+                        item.status() == DownloadStatus::Queued
+                            && !active.contains_key(&item.id())
+                            && !deferred.contains(&item.id())
                     })
                     .map(DownloadItem::id)
                     .collect();
@@ -999,7 +1167,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+    use std::{
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+        sync::Arc,
+        time::Duration,
+    };
 
     use mydownloader_core::DownloadStateMachine;
     use mydownloader_downloader::{
@@ -1355,9 +1528,18 @@ mod tests {
         })
         .collect::<HashMap<_, _>>();
         let active = HashMap::new();
-        assert_eq!(choose_next(&entries, &active, &None, 0), Some(high_id));
         assert_eq!(
-            choose_next(&entries, &active, &Some(DownloadPriority::High), 3),
+            choose_next(&entries, &HashSet::new(), &active, &None, 0),
+            Some(high_id)
+        );
+        assert_eq!(
+            choose_next(
+                &entries,
+                &HashSet::new(),
+                &active,
+                &Some(DownloadPriority::High),
+                3
+            ),
             Some(low_first_id)
         );
         Ok(())
@@ -1407,7 +1589,7 @@ mod tests {
                 },
             ),
         ]);
-        allocate_resources(&mut workers, 3, &HashMap::new(), 2);
+        allocate_resources(&mut workers, 3, &HashMap::new(), &HashSet::new(), 2);
         assert_eq!(*limit_rx1.borrow(), 2);
         assert_eq!(*limit_rx2.borrow(), 1);
         assert_eq!(used_connections(&workers), 3);

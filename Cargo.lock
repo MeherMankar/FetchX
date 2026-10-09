@@ -839,6 +839,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mydownloader-scheduler"
+version = "0.1.0"
+dependencies = [
+ "mydownloader-core",
+ "mydownloader-downloader",
+ "mydownloader-models",
+ "mydownloader-queue",
+ "mydownloader-storage",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mydownloader-storage"
 version = "0.1.0"
 dependencies = [

@@ -26,6 +26,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             Cow::Borrowed(include_str!("../../../migrations/0002_add_queue_order.sql")),
             false,
         ),
+        Migration::new(
+            3,
+            Cow::Borrowed("create_download_schedules"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0003_create_download_schedules.sql"
+            )),
+            false,
+        ),
     ]),
     ..Migrator::DEFAULT
 });

@@ -1,11 +1,14 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{error::Error, path::PathBuf};
 
 use mydownloader_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
-    DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+    DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
 
 use crate::{Database, DownloadRepository, StorageError};
+
+static TEMP_DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn item(id: DownloadId, with_error: bool) -> Result<DownloadItem, Box<dyn Error>> {
     let source = DownloadSource::new("https://example.test/archive.zip", EngineKind::DirectHttp)?;
@@ -45,7 +48,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(database.pool())
             .await?;
-    assert_eq!(migration_count, 2);
+    assert_eq!(migration_count, 3);
 
     Ok(())
 }
@@ -149,6 +152,94 @@ async fn queue_order_and_priority_updates_preserve_download_progress() -> Result
     assert_eq!(updated.progress(), original.progress());
     assert_eq!(updated.updated_at(), original.updated_at());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn schedules_round_trip_update_and_delete() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let download = item(DownloadId::new(), false)?;
+    repository.create(&download).await?;
+    let schedule = DownloadSchedule::new(
+        download.id(),
+        Timestamp::from_unix_millis(1_800_000_000_000),
+        true,
+        Timestamp::from_unix_millis(1_700_000_000_000),
+    );
+    repository.save_schedule(&schedule).await?;
+    assert_eq!(
+        repository.get_schedule(download.id()).await?,
+        Some(schedule)
+    );
+    assert_eq!(repository.list_schedules().await?, [schedule]);
+
+    let mut disabled = schedule;
+    disabled.set_enabled(false, Timestamp::from_unix_millis(1_700_000_000_001))?;
+    repository.save_schedule(&disabled).await?;
+    assert_eq!(
+        repository.get_schedule(download.id()).await?,
+        Some(disabled)
+    );
+    assert!(repository.delete_schedule(download.id()).await?);
+    assert!(!repository.delete_schedule(download.id()).await?);
+    assert!(repository.list_schedules().await?.is_empty());
+    assert_eq!(repository.get(download.id()).await?, Some(download));
+    Ok(())
+}
+
+#[tokio::test]
+async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
+-> Result<(), Box<dyn Error>> {
+    let path = std::env::temp_dir().join(format!(
+        "mydownloader-schedules-{}-{}.db",
+        std::process::id(),
+        TEMP_DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let url = format!("sqlite://{}", path.to_string_lossy().replace('\\', "/"));
+    let scheduled_item;
+    let unscheduled_item;
+    let expected_schedule;
+    {
+        let database = Database::connect(&url).await?;
+        let repository = database.downloads();
+        scheduled_item = item(DownloadId::new(), false)?;
+        unscheduled_item = item(DownloadId::new(), false)?;
+        repository.create(&scheduled_item).await?;
+        repository.create(&unscheduled_item).await?;
+        expected_schedule = DownloadSchedule::new(
+            scheduled_item.id(),
+            Timestamp::from_unix_millis(1_800_000_000_000),
+            false,
+            Timestamp::from_unix_millis(1_700_000_000_000),
+        );
+        repository.save_schedule(&expected_schedule).await?;
+    }
+    {
+        let database = Database::connect(&url).await?;
+        let repository = database.downloads();
+        assert_eq!(
+            repository.get_schedule(scheduled_item.id()).await?,
+            Some(expected_schedule)
+        );
+        assert_eq!(repository.get_schedule(unscheduled_item.id()).await?, None);
+        assert!(repository.delete_schedule(scheduled_item.id()).await?);
+    }
+    {
+        let database = Database::connect(&url).await?;
+        let repository = database.downloads();
+        assert_eq!(repository.get_schedule(scheduled_item.id()).await?, None);
+        assert_eq!(
+            repository.get(scheduled_item.id()).await?,
+            Some(scheduled_item)
+        );
+        assert_eq!(
+            repository.get(unscheduled_item.id()).await?,
+            Some(unscheduled_item)
+        );
+        database.pool().close().await;
+    }
+    std::fs::remove_file(path)?;
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 use std::future::Future;
 
-use mydownloader_models::{DownloadId, DownloadItem, DownloadPriority, DownloadStatus, Timestamp};
+use mydownloader_models::{
+    DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, Timestamp,
+};
 
 use crate::StorageError;
 
@@ -29,6 +31,29 @@ pub trait DownloadRepository: Send + Sync {
         &self,
         id: DownloadId,
         priority: DownloadPriority,
+    ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+
+    /// Inserts or replaces one-shot scheduling metadata for an existing download.
+    fn save_schedule(
+        &self,
+        schedule: &DownloadSchedule,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// Retrieves one schedule by download identifier.
+    fn get_schedule(
+        &self,
+        id: DownloadId,
+    ) -> impl Future<Output = Result<Option<DownloadSchedule>, StorageError>> + Send;
+
+    /// Lists persisted schedules in scheduled-time and identifier order.
+    fn list_schedules(
+        &self,
+    ) -> impl Future<Output = Result<Vec<DownloadSchedule>, StorageError>> + Send;
+
+    /// Removes a schedule and reports whether one existed.
+    fn delete_schedule(
+        &self,
+        id: DownloadId,
     ) -> impl Future<Output = Result<bool, StorageError>> + Send;
 
     /// Replaces the stored item with the same identifier, or returns `NotFound`.

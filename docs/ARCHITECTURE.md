@@ -9,6 +9,8 @@ Tauri
 ↓
 Application/Core
 ↓
+Scheduler
+↓
 Queue Manager
 ↓
 Download abstraction
@@ -53,6 +55,20 @@ counted as freed until they actually stop. Pause, resume, cancel, priority chang
 graceful shutdown are serialized through the queue actor. Queue order is persisted in
 SQLite and resumed downloads are moved to its tail. Queue pause state is retained across
 shutdown; work interrupted while running is requeued at startup.
+
+The `scheduler` crate sits above the queue and stores one-shot start times in the
+`download_schedules` SQLite table. On startup it loads enabled schedules and passes
+them to the queue as deferred IDs before queue dispatch begins. Future schedules stay
+deferred; due or overdue schedules are released together through the Queue Manager,
+which remains solely responsible for selecting work and allocating resources. Downloads
+without a schedule, and downloads whose schedule is disabled or removed, are eligible
+immediately. The scheduler waits with Tokio timers rather than polling and recalculates
+after schedule changes. Pending timers are capped at one minute so wall-clock changes
+are noticed without short-interval polling. Paused and terminal items are never resumed
+by the scheduler; schedule metadata does not add lifecycle states.
+
+Phase 10 schedules are one-shot only. Recurrence, cron syntax, calendar rules, and
+bandwidth windows are not implemented.
 
 The `downloader` crate provides a `DirectHttpEngine` using Reqwest and Tokio file I/O
 for single-stream and adaptive segmented transfers. It accepts only HTTP/HTTPS URLs
