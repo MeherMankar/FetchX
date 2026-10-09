@@ -81,6 +81,8 @@ pub enum QueueError {
         action: &'static str,
         status: DownloadStatus,
     },
+    #[error("download {0} was not found")]
+    DownloadNotFound(DownloadId),
     #[error("pause request was superseded by resume")]
     PauseSuperseded,
     #[error("active {engine:?} downloads do not support {operation}")]
@@ -222,6 +224,13 @@ impl QueueManager {
         self.request(|reply| Command::Cancel { id, reply }).await
     }
 
+    /// Removes a download record after any active worker has stopped.
+    ///
+    /// Download files and partial data are preserved.
+    pub async fn remove_download(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::Remove { id, reply }).await
+    }
+
     pub async fn set_priority(
         &self,
         id: DownloadId,
@@ -311,6 +320,8 @@ struct ActiveWorker {
     shutdown_requeue: bool,
     pause_waiters: Vec<oneshot::Sender<Result<(), QueueError>>>,
     cancel_waiters: Vec<oneshot::Sender<Result<(), QueueError>>>,
+    removing: bool,
+    remove_waiters: Vec<oneshot::Sender<Result<(), QueueError>>>,
 }
 
 enum Command {
@@ -343,6 +354,10 @@ enum Command {
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
     Cancel {
+        id: DownloadId,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    Remove {
         id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
@@ -455,6 +470,7 @@ where
                             &repository,
                             &state_machine,
                             &mut entries,
+                            &mut deferred,
                             &mut active,
                             &mut next_sequence,
                         ).await?;
@@ -466,6 +482,7 @@ where
                                 &repository,
                                 &state_machine,
                                 &mut entries,
+                                &mut deferred,
                                 &mut active,
                             ).await?;
                         }
@@ -571,6 +588,8 @@ where
                 shutdown_requeue: false,
                 pause_waiters: Vec::new(),
                 cancel_waiters: Vec::new(),
+                removing: false,
+                remove_waiters: Vec::new(),
             },
         );
     }
@@ -921,6 +940,51 @@ where
                 let _ = reply.send(result);
             }
         }
+        Command::Remove { id, reply } => {
+            if let Some(worker) = active.get_mut(&id) {
+                worker.shutdown_requeue = false;
+                worker.cancelling = true;
+                worker.removing = true;
+                let _ = worker.cancellation.send(true);
+                worker.remove_waiters.push(reply);
+                return Ok(());
+            }
+
+            let result = async {
+                let Some(item) = repository.get(id).await? else {
+                    entries.remove(&id);
+                    deferred.remove(&id);
+                    return Err(QueueError::DownloadNotFound(id));
+                };
+
+                if item.status() == DownloadStatus::Paused {
+                    engine.cancel_inactive(id).await?;
+                }
+
+                if matches!(
+                    item.status(),
+                    DownloadStatus::Queued
+                        | DownloadStatus::Preparing
+                        | DownloadStatus::Downloading
+                        | DownloadStatus::Paused
+                ) {
+                    state_machine
+                        .transition(id, DownloadStatus::Cancelled)
+                        .await?;
+                }
+
+                if !repository.delete(id).await? {
+                    entries.remove(&id);
+                    deferred.remove(&id);
+                    return Err(QueueError::DownloadNotFound(id));
+                }
+                entries.remove(&id);
+                deferred.remove(&id);
+                Ok(())
+            }
+            .await;
+            let _ = reply.send(result);
+        }
         Command::SetPriority {
             id,
             priority,
@@ -1037,12 +1101,14 @@ fn stop_workers_for_shutdown<E>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finish_worker<R>(
     id: DownloadId,
     result: Result<DownloadItem, DownloadEngineError>,
     repository: &R,
     state_machine: &DownloadStateMachine<R>,
     entries: &mut HashMap<DownloadId, Entry>,
+    deferred: &mut HashSet<DownloadId>,
     active: &mut HashMap<DownloadId, ActiveWorker>,
     next_sequence: &mut u64,
 ) -> Result<(), QueueError>
@@ -1052,10 +1118,17 @@ where
     let Some(worker) = active.remove(&id) else {
         return Ok(());
     };
-    let mut current = repository
-        .get(id)
-        .await?
-        .ok_or(StateMachineError::NotFound(id))?;
+    let Some(mut current) = repository.get(id).await? else {
+        if worker.removing {
+            entries.remove(&id);
+            deferred.remove(&id);
+            for waiter in worker.remove_waiters {
+                let _ = waiter.send(Err(QueueError::DownloadNotFound(id)));
+            }
+            return Ok(());
+        }
+        return Err(QueueError::StateMachine(StateMachineError::NotFound(id)));
+    };
     if let Err(error) = &result {
         warn!(download_id = %id, error = %error, "queued download worker returned an error");
     }
@@ -1177,6 +1250,23 @@ where
         };
         let _ = waiter.send(response);
     }
+    if worker.removing {
+        let deleted = repository.delete(id).await?;
+        entries.remove(&id);
+        deferred.remove(&id);
+        let result = if deleted {
+            Ok(())
+        } else {
+            Err(QueueError::DownloadNotFound(id))
+        };
+        for waiter in worker.remove_waiters {
+            let _ = waiter.send(match &result {
+                Ok(()) => Ok(()),
+                Err(_) => Err(QueueError::DownloadNotFound(id)),
+            });
+        }
+        return Ok(());
+    }
     info!(download_id = %id, status = ?current.status(), "queued download worker released");
     Ok(())
 }
@@ -1186,6 +1276,7 @@ async fn fail_panicked_worker<R>(
     repository: &R,
     state_machine: &DownloadStateMachine<R>,
     entries: &mut HashMap<DownloadId, Entry>,
+    deferred: &mut HashSet<DownloadId>,
     active: &mut HashMap<DownloadId, ActiveWorker>,
 ) -> Result<(), QueueError>
 where
@@ -1194,10 +1285,17 @@ where
     let Some(worker) = active.remove(&id) else {
         return Ok(());
     };
-    let mut item = repository
-        .get(id)
-        .await?
-        .ok_or(StateMachineError::NotFound(id))?;
+    let Some(mut item) = repository.get(id).await? else {
+        if worker.removing {
+            entries.remove(&id);
+            deferred.remove(&id);
+            for waiter in worker.remove_waiters {
+                let _ = waiter.send(Err(QueueError::DownloadNotFound(id)));
+            }
+            return Ok(());
+        }
+        return Err(QueueError::StateMachine(StateMachineError::NotFound(id)));
+    };
     if matches!(
         item.status(),
         DownloadStatus::Preparing | DownloadStatus::Downloading
@@ -1271,6 +1369,23 @@ where
             })
         };
         let _ = waiter.send(result);
+    }
+    if worker.removing {
+        let deleted = repository.delete(id).await?;
+        entries.remove(&id);
+        deferred.remove(&id);
+        let result = if deleted {
+            Ok(())
+        } else {
+            Err(QueueError::DownloadNotFound(id))
+        };
+        for waiter in worker.remove_waiters {
+            let _ = waiter.send(match &result {
+                Ok(()) => Ok(()),
+                Err(_) => Err(QueueError::DownloadNotFound(id)),
+            });
+        }
+        return Ok(());
     }
     Ok(())
 }
@@ -1480,7 +1595,9 @@ mod tests {
             DownloadId::new(),
             DownloadSource::new("https://example.test/file", EngineKind::DirectHttp)?,
             FileName::new("file.bin")?,
-            PathBuf::from("downloads/file.bin"),
+            std::env::temp_dir()
+                .join(format!("mydownloader-queue-{}", DownloadId::new()))
+                .join("file.bin"),
             Timestamp::from_unix_millis(1),
         ))
     }
@@ -1502,6 +1619,58 @@ mod tests {
             supports_yt_dlp_pause: true,
         });
         Ok((repository, engine, release_sender))
+    }
+
+    async fn persist_item_in_status(
+        repository: &SqliteDownloadRepository,
+        status: DownloadStatus,
+    ) -> Result<DownloadId, Box<dyn std::error::Error>> {
+        let download = item()?;
+        let id = download.id();
+        repository.create(&download).await?;
+        let state_machine = DownloadStateMachine::new(repository.clone());
+        match status {
+            DownloadStatus::Queued => {}
+            DownloadStatus::Preparing => {
+                state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+            }
+            DownloadStatus::Downloading => {
+                state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+                state_machine
+                    .transition(id, DownloadStatus::Downloading)
+                    .await?;
+            }
+            DownloadStatus::Paused => {
+                state_machine.transition(id, DownloadStatus::Paused).await?;
+            }
+            DownloadStatus::Completed => {
+                state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+                state_machine
+                    .transition(id, DownloadStatus::Downloading)
+                    .await?;
+                state_machine
+                    .transition(id, DownloadStatus::Completed)
+                    .await?;
+            }
+            DownloadStatus::Failed => {
+                state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+                state_machine.transition(id, DownloadStatus::Failed).await?;
+            }
+            DownloadStatus::Cancelled => {
+                state_machine
+                    .transition(id, DownloadStatus::Cancelled)
+                    .await?;
+            }
+        }
+        Ok(id)
     }
 
     async fn wait_for_active(
@@ -1788,6 +1957,319 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remove_queued_download_deletes_storage_and_queue_entry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        let download = item()?;
+        let id = download.id();
+        let destination = download.destination().to_path_buf();
+        let test_directory = destination
+            .parent()
+            .ok_or("missing test directory")?
+            .to_path_buf();
+        let partial = PathBuf::from(format!("{}.part", destination.display()));
+        let segment = PathBuf::from(format!("{}.segment-0", destination.display()));
+        tokio::fs::create_dir_all(destination.parent().ok_or("missing parent")?).await?;
+        tokio::fs::write(&destination, b"completed user data").await?;
+        tokio::fs::write(&partial, b"partial user data").await?;
+        tokio::fs::write(&segment, b"segment user data").await?;
+        manager.enqueue_deferred(download).await?;
+
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert!(
+            manager
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .all(|item| item.id() != id)
+        );
+        assert_eq!(tokio::fs::read(destination).await?, b"completed user data");
+        assert_eq!(tokio::fs::read(partial).await?, b"partial user data");
+        assert_eq!(tokio::fs::read(segment).await?, b"segment user data");
+        tokio::fs::remove_dir_all(test_directory).await?;
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_paused_download_cancels_inactive_engine_then_deletes_record()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let id = persist_item_in_status(&repository, DownloadStatus::Queued).await?;
+        let manager = QueueManager::new_with_deferred(
+            repository.clone(),
+            engine,
+            QueueConfig::default(),
+            HashSet::from([id]),
+        )
+        .await?;
+        manager.pause(id).await?;
+
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert!(manager.snapshot().await?.paused.is_empty());
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_inactive_engine_cancellation_preserves_paused_download()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let id = persist_item_in_status(&repository, DownloadStatus::Paused).await?;
+        let manager = QueueManager::new(
+            repository.clone(),
+            Arc::new(RejectInactiveCancelEngine),
+            QueueConfig::default(),
+        )
+        .await?;
+
+        assert!(matches!(
+            manager.remove_download(id).await,
+            Err(QueueError::Engine(
+                DownloadEngineError::Aria2ReconciliationRequired
+            ))
+        ));
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .ok_or("missing download")?
+                .status(),
+            DownloadStatus::Paused
+        );
+        assert!(
+            manager
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .any(|item| item.id() == id)
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_completed_download_preserves_destination_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let id = persist_item_in_status(&repository, DownloadStatus::Completed).await?;
+        let destination = repository
+            .get(id)
+            .await?
+            .ok_or("missing item")?
+            .destination()
+            .to_path_buf();
+        let test_directory = destination
+            .parent()
+            .ok_or("missing test directory")?
+            .to_path_buf();
+        tokio::fs::create_dir_all(&test_directory).await?;
+        tokio::fs::write(&destination, b"completed file").await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert_eq!(tokio::fs::read(destination).await?, b"completed file");
+        tokio::fs::remove_dir_all(test_directory).await?;
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_failed_download_deletes_persisted_and_in_memory_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let id = persist_item_in_status(&repository, DownloadStatus::Failed).await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert!(
+            manager
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .all(|item| item.id() != id)
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_cancelled_download_deletes_persisted_and_in_memory_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let id = persist_item_in_status(&repository, DownloadStatus::Cancelled).await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert!(
+            manager
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .all(|item| item.id() != id)
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_unknown_download_reports_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository, engine, QueueConfig::default()).await?;
+        let id = DownloadId::new();
+
+        assert!(matches!(
+            manager.remove_download(id).await,
+            Err(QueueError::DownloadNotFound(missing)) if missing == id
+        ));
+
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_active_download_waits_for_cancellation_before_deleting_and_dispatching()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(
+            repository.clone(),
+            engine,
+            QueueConfig {
+                max_active_downloads: 1,
+                global_connection_limit: 1,
+            },
+        )
+        .await?;
+        let active = item()?;
+        let active_id = active.id();
+        let next = item()?;
+        let next_id = next.id();
+        manager.enqueue(active).await?;
+        manager.enqueue(next).await?;
+        wait_for_active(&manager, 1).await?;
+
+        manager.remove_download(active_id).await?;
+
+        assert!(repository.get(active_id).await?.is_none());
+        let snapshot = wait_for_active(&manager, 1).await?;
+        assert_eq!(snapshot.active[0].item.id(), next_id);
+        assert!(snapshot.items.iter().all(|item| item.id() != active_id));
+        manager.remove_download(next_id).await?;
+        assert!(repository.get(next_id).await?.is_none());
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn removal_racing_worker_completion_never_leaves_or_resurrects_record()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, release) = setup_engine().await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        let download = item()?;
+        let id = download.id();
+        manager.enqueue(download.clone()).await?;
+        wait_for_active(&manager, 1).await?;
+
+        release.send(true)?;
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert!(
+            manager
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .all(|item| item.id() != id)
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_then_reenqueue_same_id_does_not_resurrect_old_worker()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        let download = item()?;
+        let id = download.id();
+        manager.enqueue(download.clone()).await?;
+        wait_for_active(&manager, 1).await?;
+
+        manager.remove_download(id).await?;
+        manager.enqueue(download).await?;
+
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if repository
+                    .get(id)
+                    .await?
+                    .is_some_and(|item| item.status() == DownloadStatus::Downloading)
+                {
+                    return Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert_eq!(snapshot.active[0].item.id(), id);
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .ok_or("re-added item missing")?
+                .status(),
+            DownloadStatus::Downloading
+        );
+        manager.remove_download(id).await?;
+        assert!(repository.get(id).await?.is_none());
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remove_racing_queue_dispatch_leaves_no_worker_or_stale_entry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        let download = item()?;
+        let id = download.id();
+        manager.enqueue(download).await?;
+
+        manager.remove_download(id).await?;
+
+        assert!(repository.get(id).await?.is_none());
+        assert!(manager.snapshot().await?.active.is_empty());
+        assert!(
+            manager
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .all(|item| item.id() != id)
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn inactive_engine_cancellation_must_succeed_before_paused_state_changes()
     -> Result<(), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
@@ -2058,6 +2540,8 @@ mod tests {
                     shutdown_requeue: false,
                     pause_waiters: Vec::new(),
                     cancel_waiters: Vec::new(),
+                    removing: false,
+                    remove_waiters: Vec::new(),
                 },
             ),
             (
@@ -2075,6 +2559,8 @@ mod tests {
                     shutdown_requeue: false,
                     pause_waiters: Vec::new(),
                     cancel_waiters: Vec::new(),
+                    removing: false,
+                    remove_waiters: Vec::new(),
                 },
             ),
         ]);

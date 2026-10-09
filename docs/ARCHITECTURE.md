@@ -54,7 +54,10 @@ engines report desired and currently active concurrency so existing requests are
 counted as freed until they actually stop. Pause, resume, cancel, priority changes, and
 graceful shutdown are serialized through the queue actor. Queue order is persisted in
 SQLite and resumed downloads are moved to its tail. Queue pause state is retained across
-shutdown; work interrupted while running is requeued at startup.
+shutdown; work interrupted while running is requeued at startup. Removal is also
+actor-serialized: active work receives cooperative cancellation and its worker is joined
+before the persisted record and in-memory entry are removed. Removing a record preserves
+destination files, partial downloads, and segment artifacts.
 
 `EngineDispatcher` can be supplied to the queue as its managed engine. It reads each
 persisted item's `EngineKind` and forwards the existing control channels to the selected
