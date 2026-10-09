@@ -1,6 +1,10 @@
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -12,15 +16,18 @@ use mydownloader_models::{
 use mydownloader_storage::DownloadRepository;
 use reqwest::{
     Client, Response, StatusCode, Url,
-    header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE},
+    header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE},
 };
 use tokio::{
     fs::{self, File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt, SeekFrom},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom},
     sync::watch,
+    task::JoinSet,
+    time::interval,
 };
 use tracing::{info, warn};
 
+use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{DownloadEngine, DownloadEngineError};
 
 const DEFAULT_USER_AGENT: &str = concat!("MyDownloader/", env!("CARGO_PKG_VERSION"));
@@ -36,6 +43,10 @@ pub struct HttpEngineConfig {
     pub progress_bytes_interval: u64,
     pub progress_time_interval: Duration,
     pub user_agent: String,
+    /// Fixed number of simultaneous byte ranges; values outside 2..=16 disable segmentation.
+    pub segment_count: usize,
+    /// Files smaller than this threshold use the single-stream path.
+    pub minimum_segmented_file_size: u64,
 }
 
 struct BodyContext {
@@ -45,6 +56,15 @@ struct BodyContext {
     total_bytes: Option<u64>,
     expected_response_bytes: Option<u64>,
     temporary_path: PathBuf,
+}
+
+struct SegmentedContext {
+    id: DownloadId,
+    item: DownloadItem,
+    expected_updated_at: Timestamp,
+    status: DownloadStatus,
+    url: Url,
+    total_size: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -59,6 +79,17 @@ struct UnsatisfiedRange {
     total: u64,
 }
 
+enum SegmentedOutcome {
+    Completed(Box<DownloadItem>),
+    Fallback,
+}
+
+enum SegmentedStop {
+    Fallback,
+    Cancelled,
+    Failure(DownloadEngineError),
+}
+
 impl Default for HttpEngineConfig {
     fn default() -> Self {
         Self {
@@ -67,6 +98,8 @@ impl Default for HttpEngineConfig {
             progress_bytes_interval: 1024 * 1024,
             progress_time_interval: Duration::from_secs(1),
             user_agent: DEFAULT_USER_AGENT.to_owned(),
+            segment_count: 4,
+            minimum_segmented_file_size: 4 * 1024 * 1024,
         }
     }
 }
@@ -228,7 +261,7 @@ where
         let mut expected_updated_at = item.updated_at();
         let initial_progress = DownloadProgress::new(existing_size, None, None, None)?;
         item.set_progress_at(initial_progress, next_timestamp(item.updated_at())?)?;
-        let current_status = if already_downloading {
+        let mut current_status = if already_downloading {
             DownloadStatus::Downloading
         } else {
             DownloadStatus::Preparing
@@ -241,6 +274,52 @@ where
         let mut response = self
             .send_request(url.clone(), range_start, cancellation)
             .await?;
+        let segmentation_enabled = (2..=16).contains(&self.config.segment_count)
+            && self.config.minimum_segmented_file_size > 0;
+        if !partial_exists
+            && segmentation_enabled
+            && response.status() == StatusCode::OK
+            && response
+                .headers()
+                .get(ACCEPT_RANGES)
+                .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"bytes"))
+            && response.url() == &url
+            && parse_content_length(&response)?
+                .is_some_and(|size| size >= self.config.minimum_segmented_file_size)
+        {
+            let total_size = parse_content_length(&response)?
+                .ok_or(DownloadEngineError::InvalidContentLength)?;
+            drop(response);
+            match self
+                .download_segmented(
+                    SegmentedContext {
+                        id,
+                        item,
+                        expected_updated_at,
+                        status: current_status,
+                        url: url.clone(),
+                        total_size,
+                    },
+                    cancellation,
+                )
+                .await?
+            {
+                SegmentedOutcome::Completed(completed) => return Ok(*completed),
+                SegmentedOutcome::Fallback => {
+                    cleanup_segment_files(&temporary_path, self.config.segment_count, total_size)
+                        .await?;
+                    item = self
+                        .repository
+                        .get(id)
+                        .await?
+                        .ok_or(DownloadEngineError::NotFound(id))?;
+                    current_status = item.status();
+                    expected_updated_at = item.updated_at();
+                    response = self.send_request(url.clone(), None, cancellation).await?;
+                }
+            }
+        }
+
         let mut append = false;
         let mut reset_before_download = false;
         let mut expected_response_bytes = None;
@@ -361,6 +440,234 @@ where
                 }
             }
         }
+    }
+
+    async fn download_segmented(
+        &self,
+        context: SegmentedContext,
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<SegmentedOutcome, DownloadEngineError> {
+        let SegmentedContext {
+            id,
+            mut item,
+            mut expected_updated_at,
+            mut status,
+            url,
+            total_size,
+        } = context;
+        let temporary_path = temporary_path(item.destination());
+        let mut segments =
+            segments::plan_segments(total_size, self.config.segment_count, |index| {
+                segment_file_path(
+                    &temporary_path,
+                    self.config.segment_count,
+                    total_size,
+                    index,
+                )
+            })
+            .map_err(|_| DownloadEngineError::InvalidConfiguration)?
+            .ok_or(DownloadEngineError::InvalidConfiguration)?;
+
+        let mut already_downloaded = 0_u64;
+        for segment in &mut segments {
+            if !segments::prepare_segment(segment).await? {
+                return Ok(SegmentedOutcome::Fallback);
+            }
+            already_downloaded = already_downloaded
+                .checked_add(segment.current)
+                .ok_or(DownloadEngineError::ByteCountOverflow)?;
+        }
+        if already_downloaded > total_size {
+            return Ok(SegmentedOutcome::Fallback);
+        }
+
+        if status == DownloadStatus::Preparing {
+            item = self
+                .state_machine
+                .transition(id, DownloadStatus::Downloading)
+                .await?;
+            status = DownloadStatus::Downloading;
+            expected_updated_at = item.updated_at();
+        }
+        item.set_progress_at(
+            DownloadProgress::new(already_downloaded, Some(total_size), None, None)?,
+            next_timestamp(item.updated_at())?,
+        )?;
+        self.persist_if_status(&item, status, expected_updated_at)
+            .await?;
+        expected_updated_at = item.updated_at();
+
+        let downloaded = Arc::new(AtomicU64::new(already_downloaded));
+        let (stop_sender, stop_receiver) = watch::channel(false);
+        let mut tasks = JoinSet::new();
+        for mut segment in segments {
+            if segment.state == SegmentState::Complete {
+                continue;
+            }
+            let client = self.client.clone();
+            let url = url.clone();
+            let mut cancellation = cancellation.clone();
+            let mut stop = stop_receiver.clone();
+            let downloaded = Arc::clone(&downloaded);
+            tasks.spawn(async move {
+                let index = segment.index;
+                let result = segments::download_segment(
+                    &mut segment,
+                    total_size,
+                    &url,
+                    &client,
+                    &mut cancellation,
+                    &mut stop,
+                    &downloaded,
+                )
+                .await;
+                result.map(|result| (index, result))
+            });
+        }
+
+        let mut remaining = tasks.len();
+        let mut stop_reason = None;
+        let poll_interval = self
+            .config
+            .progress_time_interval
+            .min(Duration::from_millis(50));
+        let mut progress_timer = interval(poll_interval);
+        let _ = progress_timer.tick().await;
+        let mut last_persisted_bytes = already_downloaded;
+        let mut last_persisted_at = Instant::now();
+        while remaining > 0 {
+            tokio::select! {
+                changed = cancellation.changed(), if stop_reason.is_none() => {
+                    if changed.is_err() || *cancellation.borrow_and_update() {
+                        stop_reason = Some(SegmentedStop::Cancelled);
+                        let _ = stop_sender.send(true);
+                    }
+                }
+                _ = progress_timer.tick(), if stop_reason.is_none() => {
+                    let current_bytes = downloaded.load(Ordering::Acquire);
+                    if current_bytes.saturating_sub(last_persisted_bytes)
+                        >= self.config.progress_bytes_interval
+                        || last_persisted_at.elapsed() >= self.config.progress_time_interval
+                    {
+                        if let Err(error) = self.persist_segment_progress(
+                            &mut item,
+                            &mut expected_updated_at,
+                            status,
+                            total_size,
+                            &downloaded,
+                        ).await {
+                            stop_reason = Some(SegmentedStop::Failure(error));
+                            let _ = stop_sender.send(true);
+                        } else {
+                            last_persisted_bytes = current_bytes;
+                            last_persisted_at = Instant::now();
+                        }
+                    }
+                }
+                joined = tasks.join_next() => {
+                    remaining = remaining.saturating_sub(1);
+                    match joined {
+                        Some(Ok(Ok((_, SegmentResult::Complete)))) => {}
+                        Some(Ok(Ok((_, SegmentResult::Fallback)))) if stop_reason.is_none() => {
+                            stop_reason = Some(SegmentedStop::Fallback);
+                            let _ = stop_sender.send(true);
+                        }
+                        Some(Ok(Ok((_, SegmentResult::Cancelled)))) => {}
+                        Some(Ok(Err(error))) if stop_reason.is_none() => {
+                            stop_reason = Some(SegmentedStop::Failure(error));
+                            let _ = stop_sender.send(true);
+                        }
+                        Some(Err(_)) if stop_reason.is_none() => {
+                            stop_reason = Some(SegmentedStop::Failure(
+                                DownloadEngineError::SegmentWorkerFailed
+                            ));
+                            let _ = stop_sender.send(true);
+                        }
+                        Some(_) => {}
+                        None => remaining = 0,
+                    }
+                }
+            }
+        }
+
+        let actual_segment_bytes =
+            segment_files_size(&temporary_path, self.config.segment_count, total_size).await?;
+        downloaded.store(actual_segment_bytes, Ordering::Release);
+        if let Some(reason) = stop_reason {
+            self.persist_segment_progress(
+                &mut item,
+                &mut expected_updated_at,
+                status,
+                total_size,
+                &downloaded,
+            )
+            .await?;
+            return match reason {
+                SegmentedStop::Fallback => Ok(SegmentedOutcome::Fallback),
+                SegmentedStop::Cancelled => Err(DownloadEngineError::Cancelled),
+                SegmentedStop::Failure(error) => Err(error),
+            };
+        }
+
+        self.persist_segment_progress(
+            &mut item,
+            &mut expected_updated_at,
+            status,
+            total_size,
+            &downloaded,
+        )
+        .await?;
+        if downloaded.load(Ordering::Acquire) != total_size {
+            return Err(DownloadEngineError::IncompleteResponse {
+                expected: total_size,
+                actual: downloaded.load(Ordering::Acquire),
+            });
+        }
+
+        assemble_segments(
+            &segments::plan_segments(total_size, self.config.segment_count, |index| {
+                segment_file_path(
+                    &temporary_path,
+                    self.config.segment_count,
+                    total_size,
+                    index,
+                )
+            })
+            .map_err(|_| DownloadEngineError::InvalidConfiguration)?
+            .ok_or(DownloadEngineError::InvalidConfiguration)?,
+            &temporary_path,
+            total_size,
+            cancellation,
+        )
+        .await?;
+        cleanup_segment_files(&temporary_path, self.config.segment_count, total_size).await?;
+        publish_without_replacement(&temporary_path, item.destination()).await?;
+
+        let completed = self
+            .state_machine
+            .transition(id, DownloadStatus::Completed)
+            .await?;
+        info!(download_id = %id, bytes = total_size, "segmented download completed");
+        Ok(SegmentedOutcome::Completed(Box::new(completed)))
+    }
+
+    async fn persist_segment_progress(
+        &self,
+        item: &mut DownloadItem,
+        expected_updated_at: &mut Timestamp,
+        status: DownloadStatus,
+        total_size: u64,
+        downloaded: &AtomicU64,
+    ) -> Result<(), DownloadEngineError> {
+        let downloaded_bytes = downloaded.load(Ordering::Acquire);
+        item.set_progress_at(
+            DownloadProgress::new(downloaded_bytes, Some(total_size), None, None)?,
+            next_timestamp(item.updated_at())?,
+        )?;
+        self.persist_if_status(item, status, *expected_updated_at)
+            .await?;
+        *expected_updated_at = item.updated_at();
+        Ok(())
     }
 
     async fn receive_body(
@@ -812,6 +1119,168 @@ fn temporary_path(destination: &Path) -> PathBuf {
     let mut name: OsString = destination.as_os_str().to_os_string();
     name.push(".part");
     PathBuf::from(name)
+}
+
+fn segment_file_path(
+    temporary: &Path,
+    segment_count: usize,
+    total_size: u64,
+    index: usize,
+) -> PathBuf {
+    let mut name: OsString = temporary.as_os_str().to_os_string();
+    name.push(format!(".segments-{segment_count}-{total_size}-{index}"));
+    PathBuf::from(name)
+}
+
+async fn segment_files_size(
+    temporary: &Path,
+    segment_count: usize,
+    total_size: u64,
+) -> Result<u64, DownloadEngineError> {
+    let planned = segments::plan_segments(total_size, segment_count, |index| {
+        segment_file_path(temporary, segment_count, total_size, index)
+    })
+    .map_err(|_| DownloadEngineError::InvalidConfiguration)?
+    .ok_or(DownloadEngineError::InvalidConfiguration)?;
+    let mut total = 0_u64;
+    for segment in planned {
+        let size = match fs::symlink_metadata(&segment.path).await {
+            Ok(metadata) if metadata.file_type().is_file() => metadata.len(),
+            Ok(_) => return Err(DownloadEngineError::InvalidPartialFile),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        };
+        if size > segment.expected_length {
+            return Err(DownloadEngineError::SegmentFailed {
+                index: segment.index,
+                start: segment.start,
+                end: segment.end,
+            });
+        }
+        total = total
+            .checked_add(size)
+            .ok_or(DownloadEngineError::ByteCountOverflow)?;
+    }
+    Ok(total)
+}
+
+async fn assemble_segments(
+    segments: &[Segment],
+    temporary: &Path,
+    total_size: u64,
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<(), DownloadEngineError> {
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    let mut copied = 0_u64;
+    let mut buffer = vec![0_u8; 64 * 1024];
+
+    for segment in segments {
+        if segment.expected_length != segment.end - segment.start + 1 {
+            return Err(DownloadEngineError::SegmentFailed {
+                index: segment.index,
+                start: segment.start,
+                end: segment.end,
+            });
+        }
+        let metadata = fs::symlink_metadata(&segment.path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        if !metadata.file_type().is_file() || metadata.len() != segment.expected_length {
+            return Err(DownloadEngineError::SegmentFailed {
+                index: segment.index,
+                start: segment.start,
+                end: segment.end,
+            });
+        }
+        let mut input = File::open(&segment.path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let mut segment_copied = 0_u64;
+        loop {
+            if *cancellation.borrow_and_update() {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            let read = input
+                .read(&mut buffer)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            if read == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..read])
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            let read = u64::try_from(read).map_err(|_| DownloadEngineError::ByteCountOverflow)?;
+            segment_copied = segment_copied
+                .checked_add(read)
+                .ok_or(DownloadEngineError::ByteCountOverflow)?;
+            copied = copied
+                .checked_add(read)
+                .ok_or(DownloadEngineError::ByteCountOverflow)?;
+            if segment_copied > segment.expected_length || copied > total_size {
+                return Err(DownloadEngineError::SegmentFailed {
+                    index: segment.index,
+                    start: segment.start,
+                    end: segment.end,
+                });
+            }
+        }
+        if segment_copied != segment.expected_length {
+            return Err(DownloadEngineError::SegmentFailed {
+                index: segment.index,
+                start: segment.start,
+                end: segment.end,
+            });
+        }
+    }
+
+    if copied != total_size {
+        return Err(DownloadEngineError::IncompleteResponse {
+            expected: total_size,
+            actual: copied,
+        });
+    }
+    output.flush().await.map_err(DownloadEngineError::Io)?;
+    output.sync_all().await.map_err(DownloadEngineError::Io)?;
+    let final_size = output
+        .metadata()
+        .await
+        .map_err(DownloadEngineError::Io)?
+        .len();
+    if final_size != total_size {
+        return Err(DownloadEngineError::IncompleteResponse {
+            expected: total_size,
+            actual: final_size,
+        });
+    }
+    Ok(())
+}
+
+async fn cleanup_segment_files(
+    temporary: &Path,
+    segment_count: usize,
+    total_size: u64,
+) -> Result<(), DownloadEngineError> {
+    for index in 0..segment_count {
+        let path = segment_file_path(temporary, segment_count, total_size, index);
+        match fs::symlink_metadata(&path).await {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                fs::remove_file(path)
+                    .await
+                    .map_err(DownloadEngineError::Io)?;
+            }
+            Ok(_) => return Err(DownloadEngineError::InvalidPartialFile),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 async fn publish_without_replacement(

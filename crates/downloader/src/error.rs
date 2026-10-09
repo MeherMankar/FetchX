@@ -40,6 +40,10 @@ pub enum DownloadEngineError {
     InvalidPartialFile,
     #[error("partial download file changed while it was being opened")]
     PartialFileChanged,
+    #[error("segment {index} (bytes {start}-{end}) failed validation or transfer")]
+    SegmentFailed { index: usize, start: u64, end: u64 },
+    #[error("a segmented download worker failed unexpectedly")]
+    SegmentWorkerFailed,
     #[error("response exceeded Content-Length ({expected} bytes)")]
     ContentLengthExceeded { expected: u64 },
     #[error("response ended after {actual} bytes; expected {expected}")]
@@ -104,6 +108,8 @@ impl DownloadEngineError {
             | Self::UnexpectedPartialResponse
             | Self::InvalidPartialFile
             | Self::PartialFileChanged
+            | Self::SegmentFailed { .. }
+            | Self::SegmentWorkerFailed
             | Self::ContentLengthExceeded { .. }
             | Self::IncompleteResponse { .. }
             | Self::ByteCountOverflow => (

@@ -6,7 +6,7 @@
 4. Phase 4 — Download state machine (completed)
 5. Phase 5 — Direct HTTP downloader (completed)
 6. Phase 6 — Resume and Range support (completed)
-7. Phase 7 — Segment manager
+7. Phase 7 — Segment manager (completed)
 8. Phase 8 — Adaptive acceleration
 9. Phase 9 — Queue manager
 10. Phase 10 — Scheduler

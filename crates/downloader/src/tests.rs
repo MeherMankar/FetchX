@@ -1,6 +1,10 @@
 use std::{
     error::Error,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -12,7 +16,7 @@ use mydownloader_storage::{Database, DownloadRepository};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{oneshot, watch},
+    sync::{Mutex as AsyncMutex, oneshot, watch},
     task::JoinHandle,
     time::sleep,
 };
@@ -51,6 +55,23 @@ struct ScriptedResponse {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+enum SegmentServerMode {
+    Valid,
+    WrongStart,
+    WrongEnd,
+    WrongTotal,
+    ShortBody,
+    IgnoreRange,
+    Fail,
+}
+
+struct SegmentServerReport {
+    requests: Vec<String>,
+    max_active_segments: usize,
+    completion_order: Vec<usize>,
 }
 
 impl ServerResponse {
@@ -235,6 +256,199 @@ async fn read_request(stream: &mut TcpStream) -> Option<String> {
     None
 }
 
+async fn start_segment_server(
+    body: Vec<u8>,
+    segment_count: usize,
+    mode: SegmentServerMode,
+    total_connections: usize,
+    delayed: bool,
+) -> Result<(String, JoinHandle<SegmentServerReport>), std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let requests = Arc::new(AsyncMutex::new(Vec::new()));
+    let completion_order = Arc::new(AsyncMutex::new(Vec::new()));
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_active = Arc::new(AtomicUsize::new(0));
+    let no_range_requests = Arc::new(AtomicUsize::new(0));
+    let task = tokio::spawn(async move {
+        let mut connections = Vec::with_capacity(total_connections);
+        while connections.len() < total_connections {
+            let accepted =
+                tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
+            let Ok(Ok((stream, _))) = accepted else {
+                break;
+            };
+            let body = body.clone();
+            let requests = Arc::clone(&requests);
+            let completion_order = Arc::clone(&completion_order);
+            let active = Arc::clone(&active);
+            let max_active = Arc::clone(&max_active);
+            let no_range_requests = Arc::clone(&no_range_requests);
+            connections.push(tokio::spawn(async move {
+                serve_segment_connection(
+                    stream,
+                    body,
+                    segment_count,
+                    mode,
+                    delayed,
+                    requests,
+                    completion_order,
+                    active,
+                    max_active,
+                    no_range_requests,
+                )
+                .await
+            }));
+        }
+        for connection in connections {
+            let _ = connection.await;
+        }
+        SegmentServerReport {
+            requests: Arc::try_unwrap(requests)
+                .map(|requests| requests.into_inner())
+                .unwrap_or_default(),
+            max_active_segments: max_active.load(Ordering::Acquire),
+            completion_order: Arc::try_unwrap(completion_order)
+                .map(|order| order.into_inner())
+                .unwrap_or_default(),
+        }
+    });
+
+    Ok((format!("http://{address}/file"), task))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn serve_segment_connection(
+    mut stream: TcpStream,
+    body: Vec<u8>,
+    segment_count: usize,
+    mode: SegmentServerMode,
+    delayed: bool,
+    requests: Arc<AsyncMutex<Vec<String>>>,
+    completion_order: Arc<AsyncMutex<Vec<usize>>>,
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
+    no_range_requests: Arc<AtomicUsize>,
+) {
+    let Some(request) = read_request(&mut stream).await else {
+        return;
+    };
+    let range = range_header(&request).map(str::to_owned);
+    requests.lock().await.push(request);
+
+    let Some(range) = range else {
+        let _ = no_range_requests.fetch_add(1, Ordering::AcqRel);
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        if stream.write_all(headers.as_bytes()).await.is_err() || stream.flush().await.is_err() {
+            return;
+        }
+        if !delayed {
+            let _ = stream.write_all(&body).await;
+        } else {
+            for chunk in body.chunks(16 * 1024) {
+                if stream.write_all(chunk).await.is_err() {
+                    return;
+                }
+                sleep(Duration::from_millis(1)).await;
+            }
+        }
+        let _ = stream.flush().await;
+        return;
+    };
+
+    let Some((start, end)) = range
+        .strip_prefix("bytes=")
+        .and_then(|value| value.split_once('-'))
+        .and_then(|(start, end)| Some((start.parse::<usize>().ok()?, end.parse::<usize>().ok()?)))
+    else {
+        return;
+    };
+    let segment_size = body.len().div_ceil(segment_count);
+    let segment_index = start / segment_size.max(1);
+    let current = active.fetch_add(1, Ordering::AcqRel) + 1;
+    max_active.fetch_max(current, Ordering::AcqRel);
+
+    if delayed {
+        sleep(Duration::from_millis(
+            u64::try_from(segment_count.saturating_sub(segment_index) * 20).unwrap_or(0),
+        ))
+        .await;
+    }
+
+    let (status, response_start, response_end, response_total, response_body, content_length) =
+        match mode {
+            SegmentServerMode::IgnoreRange => (200, 0, 0, 0, body.clone(), body.len()),
+            SegmentServerMode::Fail => (500, start, end, body.len(), Vec::new(), 0),
+            SegmentServerMode::WrongStart => (
+                206,
+                start.saturating_add(1),
+                end,
+                body.len(),
+                body.get(start..=end).unwrap_or_default().to_vec(),
+                end.saturating_sub(start).saturating_add(1),
+            ),
+            SegmentServerMode::WrongEnd => (
+                206,
+                start,
+                start.saturating_sub(1),
+                body.len(),
+                Vec::new(),
+                0,
+            ),
+            SegmentServerMode::WrongTotal => (
+                206,
+                start,
+                end,
+                body.len().saturating_sub(1),
+                body.get(start..=end).unwrap_or_default().to_vec(),
+                end.saturating_sub(start).saturating_add(1),
+            ),
+            SegmentServerMode::ShortBody => (
+                206,
+                start,
+                end,
+                body.len(),
+                body.get(start..end).unwrap_or_default().to_vec(),
+                end.saturating_sub(start).saturating_add(1),
+            ),
+            SegmentServerMode::Valid => (
+                206,
+                start,
+                end,
+                body.len(),
+                body.get(start..=end).unwrap_or_default().to_vec(),
+                end.saturating_sub(start).saturating_add(1),
+            ),
+        };
+
+    let mut headers = format!(
+        "HTTP/1.1 {} Segment\r\nContent-Length: {content_length}\r\nConnection: close\r\n",
+        status
+    );
+    if status == 206 {
+        headers.push_str(&format!(
+            "Content-Range: bytes {response_start}-{response_end}/{response_total}\r\n"
+        ));
+    }
+    headers.push_str("\r\n");
+    if stream.write_all(headers.as_bytes()).await.is_ok() {
+        for chunk in response_body.chunks(16 * 1024) {
+            if stream.write_all(chunk).await.is_err() {
+                break;
+            }
+            if delayed {
+                sleep(Duration::from_millis(1)).await;
+            }
+        }
+        let _ = stream.flush().await;
+    }
+    let _ = active.fetch_sub(1, Ordering::AcqRel);
+    completion_order.lock().await.push(segment_index);
+}
+
 fn scripted_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> ScriptedResponse {
     ScriptedResponse {
         status,
@@ -251,6 +465,16 @@ fn range_header(request: &str) -> Option<&str> {
         let (name, value) = line.split_once(':')?;
         name.eq_ignore_ascii_case("range").then(|| value.trim())
     })
+}
+
+fn segmented_config(minimum_size: u64) -> HttpEngineConfig {
+    HttpEngineConfig {
+        segment_count: 4,
+        minimum_segmented_file_size: minimum_size,
+        progress_bytes_interval: 16 * 1024,
+        progress_time_interval: Duration::from_millis(50),
+        ..HttpEngineConfig::default()
+    }
 }
 
 async fn serve_connection(mut stream: TcpStream, response: &mut ServerResponse) -> bool {
@@ -370,6 +594,279 @@ async fn run_download(
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
     Ok(engine.download(id, receiver).await?)
+}
+
+#[tokio::test]
+async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
+-> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 1024 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 251) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 5, true).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("segmented.bin");
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let report = server.await?;
+
+    assert_eq!(report.requests.len(), 5);
+    assert_eq!(range_header(&report.requests[0]), None);
+    let ranges = report.requests[1..]
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+    for expected in [
+        "bytes=0-262143",
+        "bytes=262144-524287",
+        "bytes=524288-786431",
+        "bytes=786432-1048575",
+    ] {
+        assert!(
+            ranges.contains(&expected),
+            "missing request range {expected}"
+        );
+    }
+    assert!(report.max_active_segments > 1);
+    assert!(report.max_active_segments <= 4);
+    assert_ne!(report.completion_order.first(), Some(&0));
+    assert_eq!(tokio::fs::read(&destination).await?, body);
+    assert_eq!(tokio::fs::metadata(destination).await?.len(), TOTAL as u64);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(completed.progress().downloaded_bytes(), TOTAL as u64);
+    let part_path = PathBuf::from(format!(
+        "{}.part",
+        directory.destination("segmented.bin").display()
+    ));
+    for index in 0..4 {
+        assert!(
+            !PathBuf::from(format!(
+                "{}.segments-4-{TOTAL}-{index}",
+                part_path.display()
+            ))
+            .exists()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_segment_ranges_fall_back_to_a_fresh_single_stream() -> Result<(), Box<dyn Error>> {
+    let body: Vec<u8> = (0..256 * 1024).map(|index| (index % 239) as u8).collect();
+    for mode in [
+        SegmentServerMode::WrongStart,
+        SegmentServerMode::WrongEnd,
+        SegmentServerMode::WrongTotal,
+    ] {
+        let (url, server) = start_segment_server(body.clone(), 4, mode, 6, false).await?;
+        let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+        let destination = directory.destination("invalid-range.bin");
+        let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+        let report = server.await?;
+
+        let range_requests = report
+            .requests
+            .iter()
+            .filter(|request| range_header(request).is_some())
+            .count();
+        assert!((1..=4).contains(&range_requests));
+        assert_eq!(
+            report
+                .requests
+                .iter()
+                .filter(|request| range_header(request).is_none())
+                .count(),
+            2
+        );
+        assert_eq!(report.requests.len(), range_requests + 2);
+        assert_eq!(tokio::fs::read(destination).await?, body);
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ignored_segment_ranges_fall_back_without_mixing_segment_bodies()
+-> Result<(), Box<dyn Error>> {
+    let body: Vec<u8> = (0..256 * 1024).map(|index| (index % 233) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::IgnoreRange, 6, false).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("ignored-segment-ranges.bin");
+    run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let report = server.await?;
+
+    let range_requests = report
+        .requests
+        .iter()
+        .filter(|request| range_header(request).is_some())
+        .count();
+    assert!((1..=4).contains(&range_requests));
+    assert_eq!(
+        report
+            .requests
+            .iter()
+            .filter(|request| range_header(request).is_none())
+            .count(),
+        2
+    );
+    assert_eq!(report.requests.len(), range_requests + 2);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    Ok(())
+}
+
+#[tokio::test]
+async fn short_segment_body_fails_without_publishing_destination() -> Result<(), Box<dyn Error>> {
+    let body: Vec<u8> = (0..256 * 1024).map(|index| (index % 229) as u8).collect();
+    let (url, server) =
+        start_segment_server(body, 4, SegmentServerMode::ShortBody, 5, false).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("short-segment.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::SegmentFailed { .. })
+            | Err(DownloadEngineError::IncompleteResponse { .. })
+    ));
+    let report = server.await?;
+    assert!(report.requests.len() >= 2);
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_segment_does_not_publish_any_destination() -> Result<(), Box<dyn Error>> {
+    let body: Vec<u8> = (0..256 * 1024).map(|index| (index % 227) as u8).collect();
+    let (url, server) = start_segment_server(body, 4, SegmentServerMode::Fail, 5, false).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("failed-segment.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::SegmentFailed { .. })
+    ));
+    let report = server.await?;
+    assert!(report.requests.len() >= 2);
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_keeps_segment_bytes_and_later_invocation_resumes_them()
+-> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 8 * 1024 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 223) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 5, true).await?;
+    let config = HttpEngineConfig {
+        progress_bytes_interval: 16 * 1024,
+        progress_time_interval: Duration::from_secs(60),
+        ..segmented_config(1024)
+    };
+    let (database, engine, directory) = setup_engine(config).await?;
+    let destination = directory.destination("cancelled-segments.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (sender, receiver) = watch::channel(false);
+    let engine_task = tokio::spawn(async move { engine.download(id, receiver).await });
+
+    let mut observed_downloaded_bytes = false;
+    for _ in 0..300 {
+        let current = database.downloads().get(id).await?;
+        if current.is_some_and(|item| item.progress().downloaded_bytes() > 0) {
+            observed_downloaded_bytes = true;
+            break;
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    assert!(observed_downloaded_bytes);
+    sender.send(true)?;
+    assert!(matches!(
+        engine_task.await?,
+        Err(DownloadEngineError::Cancelled)
+    ));
+    let first_report = server.await?;
+    assert_eq!(first_report.requests.len(), 5);
+    assert!(!destination.exists());
+
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    let mut preserved_bytes = 0_u64;
+    let mut incomplete_segments = 0_usize;
+    for index in 0..4 {
+        let path = PathBuf::from(format!(
+            "{}.segments-4-{TOTAL}-{index}",
+            partial_path.display()
+        ));
+        if tokio::fs::try_exists(&path).await? {
+            let size = tokio::fs::metadata(path).await?.len();
+            preserved_bytes += size;
+            if size < (TOTAL / 4) as u64 {
+                incomplete_segments += 1;
+            }
+        } else {
+            incomplete_segments += 1;
+        }
+    }
+    assert!(preserved_bytes > 0 && preserved_bytes < TOTAL as u64);
+
+    let (resume_url, resume_server) = start_segment_server(
+        body.clone(),
+        4,
+        SegmentServerMode::Valid,
+        incomplete_segments + 1,
+        false,
+    )
+    .await?;
+    let cancelled = database
+        .downloads()
+        .get(id)
+        .await?
+        .ok_or("cancelled segmented download missing")?;
+    let resumed_item = DownloadItem::from_parts(
+        cancelled.id(),
+        DownloadSource::new(resume_url, EngineKind::DirectHttp)?,
+        cancelled.filename().clone(),
+        cancelled.destination().to_path_buf(),
+        DownloadStatus::Cancelled,
+        cancelled.priority(),
+        cancelled.progress().clone(),
+        cancelled.created_at(),
+        Timestamp::from_unix_millis(cancelled.updated_at().as_unix_millis() + 1),
+        None,
+    )?;
+    database.downloads().update(&resumed_item).await?;
+    let resume_engine = DirectHttpEngine::new(database.downloads())?;
+    let (_sender, receiver) = watch::channel(false);
+    let completed = resume_engine.download(id, receiver).await?;
+    let resume_report = resume_server.await?;
+
+    assert_eq!(resume_report.requests.len(), incomplete_segments + 1);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn files_below_threshold_use_one_non_range_request() -> Result<(), Box<dyn Error>> {
+    let body = b"small file".to_vec();
+    let (url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 1, false).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("small-not-segmented.bin");
+    run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let report = server.await?;
+
+    assert_eq!(report.requests.len(), 1);
+    assert_eq!(range_header(&report.requests[0]), None);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    Ok(())
 }
 
 #[tokio::test]

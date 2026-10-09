@@ -43,11 +43,11 @@ database. The caller's journal mode is left unchanged rather than forcing WAL.
 The `downloader` crate provides a single-stream `DirectHttpEngine` using Reqwest and
 Tokio file I/O. It accepts only HTTP/HTTPS URLs without embedded credentials, follows
 at most ten HTTP(S) redirects without HTTPS downgrade, and uses connect/read timeouts.
-Response chunks stream into a sibling `.part` file; progress checkpoints are persisted
-by byte/time thresholds through status- and timestamp-conditional repository updates.
-If a regular
-`.part` file already exists and is non-empty, the engine sends `Range: bytes=N-`, where
-`N` is the file's current size, not the database progress value.
+For single-stream transfers, response chunks stream into a sibling `.part` file.
+Progress checkpoints are persisted by byte/time thresholds through status- and
+timestamp-conditional repository updates. If a regular `.part` file already exists and
+is non-empty, the engine sends `Range: bytes=N-`, where `N` is the file's current size,
+not the database progress value.
 
 The engine appends only after a `206 Partial Content` response has a valid
 `Content-Range` whose start matches `N`, whose end is not before the start, and whose
@@ -70,11 +70,33 @@ Range responses reached through a redirect to a different effective URL are reje
 rather than appended because no persisted redirect target is available for comparison.
 Parent directories are not created automatically.
 
-Downloads remain single-stream: segmentation, parallel ranges, retries, and speed
-calculations are not implemented. After content validation and file sync, a
-same-directory hard link publishes the file without replacing an existing destination.
-Filesystem publication and database completion are separate operations, so a crash in
-between can leave a published file whose persisted state is not yet `Completed`.
+For a fresh download, if the initial response advertises `Accept-Ranges: bytes`, has a
+known size of at least 4 MiB, and is not redirected, the engine attempts four fixed
+inclusive byte ranges concurrently. Segment count is configurable within a bounded
+range (2–16); the default remains four. Each response's status, final URL, Content-Range,
+total size, body length, and local segment size are validated before bytes are accepted.
+If a segment endpoint ignores Range or returns unusable range metadata, the engine
+discards segment artifacts and falls back to a fresh single-stream request. Unknown-size,
+small, redirected, or non-range responses use single-stream downloading immediately.
+
+Segments write to separate sibling temporary files identified by segment count, total
+size, and index. Segment workers are bounded by the fixed segment count. Global progress
+is the sum of actual local segment-file lengths and is periodically persisted; per-segment
+state is not stored in SQLite. Cancellation and transfer failures keep segment files so
+a later invocation can reconcile them from disk and request only each segment's missing
+suffix. After all ranges complete, every segment's exact length and the contiguous
+assembly size are checked. Segments are copied in index order into `.part`, flushed and
+synced, then published with the same no-overwrite hard-link operation. Completed segment
+temporary files are removed before publication.
+
+The engine does not persist ETag or Last-Modified validators. Segment temp files are
+keyed by destination, count, size, and index—not by remote representation—so a stale
+segment can theoretically be reused if a resource changes without changing its length.
+Startup reconciliation is not implemented. Phase 8 may add adaptive concurrency; no
+dynamic segment sizing or throughput-driven tuning exists yet. Downloads remain
+single-source, without retries or speed calculations. Filesystem publication and
+database completion are separate operations, so a crash between them can leave a
+published file whose persisted state is not yet `Completed`.
 
 Queue workers, application services, UI, and non-HTTP engine adapters are not
 implemented yet.

@@ -3,6 +3,7 @@
 mod engine;
 mod error;
 mod http;
+mod segments;
 
 pub use engine::DownloadEngine;
 pub use error::DownloadEngineError;
