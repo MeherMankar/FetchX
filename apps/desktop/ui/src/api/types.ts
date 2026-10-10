@@ -47,6 +47,22 @@ export interface AddDownloadRequest {
   url: string;
 }
 
+export interface SetPriorityRequest {
+  priority: DownloadPriority;
+}
+
+export interface ScheduleDownloadRequest {
+  /** Unix milliseconds at which the download should start. */
+  scheduled_at_ms: number;
+}
+
+export interface DownloadSchedule {
+  download_id: string;
+  /** Unix milliseconds at which the download is scheduled to start. */
+  scheduled_at_ms: number;
+  enabled: boolean;
+}
+
 export interface DeleteDownloadResponse {
   download_id: string;
   removed: boolean;

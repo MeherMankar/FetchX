@@ -350,6 +350,61 @@ h2 {
   gap: 6px;
 }
 
+.priority-select {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #dce2e8;
+  border-radius: 7px;
+  background: #fff;
+  color: #354453;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.priority-select:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.schedule-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #74808b;
+}
+
+.schedule-label {
+  flex: 1;
+}
+
+.schedule-input {
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid #d7dee6;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  color: #17212b;
+  background: #fff;
+}
+
+.schedule-input:focus {
+  border-color: #2463eb;
+  box-shadow: 0 0 0 3px rgb(36 99 235 / 12%);
+  outline: none;
+}
+
+.button-xs {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
 .app-footer {
   padding-top: 10px;
   color: #78838d;

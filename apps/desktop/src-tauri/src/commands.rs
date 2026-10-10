@@ -10,7 +10,7 @@ use mydownloader_models::{
     EngineKind, FileName, Timestamp,
 };
 use mydownloader_queue::{EventRepository, QueueError, QueueManager};
-use mydownloader_scheduler::Scheduler;
+use mydownloader_scheduler::{ScheduleError, Scheduler};
 use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -112,12 +112,66 @@ impl AppState {
             .await
             .map_err(IpcError::from_queue)
     }
+
+    async fn set_priority(
+        &self,
+        id: DownloadId,
+        priority: DownloadPriority,
+    ) -> Result<DownloadDto, IpcError> {
+        self.queue
+            .set_priority(id, priority)
+            .await
+            .map_err(IpcError::from_queue)?;
+        self.get(id).await
+    }
+
+    async fn schedule(&self, id: DownloadId, scheduled_at_ms: u64) -> Result<(), IpcError> {
+        let scheduled_at = Timestamp::from_unix_millis(scheduled_at_ms);
+        self.scheduler
+            .schedule_download(id, scheduled_at)
+            .await
+            .map_err(IpcError::from_schedule)
+    }
+
+    async fn remove_schedule(&self, id: DownloadId) -> Result<(), IpcError> {
+        self.scheduler
+            .remove_schedule(id)
+            .await
+            .map_err(IpcError::from_schedule)
+    }
+
+    async fn get_schedule(&self, id: DownloadId) -> Result<Option<ScheduleDto>, IpcError> {
+        self.scheduler
+            .get_schedule(id)
+            .await
+            .map_err(IpcError::from_schedule)
+            .map(|opt| {
+                opt.map(|schedule| ScheduleDto {
+                    download_id: schedule.download_id().to_string(),
+                    scheduled_at_ms: schedule.scheduled_at().as_unix_millis(),
+                    enabled: schedule.enabled(),
+                })
+            })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddDownloadRequest {
     pub url: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetPriorityRequest {
+    pub priority: DownloadPriority,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleDownloadRequest {
+    /// Unix timestamp in milliseconds at which the download should start.
+    pub scheduled_at_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -154,6 +208,15 @@ pub struct DownloadProgressDto {
 pub struct DownloadErrorDto {
     pub code: DownloadErrorCode,
     pub message: String,
+}
+
+/// Transfer object for a persisted one-shot schedule.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ScheduleDto {
+    pub download_id: String,
+    /// Unix milliseconds at which the download is scheduled to start.
+    pub scheduled_at_ms: u64,
+    pub enabled: bool,
 }
 
 impl From<DownloadItem> for DownloadDto {
@@ -247,6 +310,19 @@ impl IpcError {
             | QueueError::UnsupportedEngineOperation { .. }
             | QueueError::PauseSuperseded
             | QueueError::ResourceLimitInUse => Self::conflict(),
+            _ => Self::internal(),
+        }
+    }
+
+    fn from_schedule(error: ScheduleError) -> Self {
+        match error {
+            ScheduleError::DownloadNotFound(_) | ScheduleError::ScheduleNotFound(_) => {
+                Self::not_found()
+            }
+            ScheduleError::InvalidState { .. } | ScheduleError::InvalidSchedule(_) => {
+                Self::conflict()
+            }
+            ScheduleError::Timestamp(_) => Self::internal(),
             _ => Self::internal(),
         }
     }
@@ -362,6 +438,58 @@ pub async fn delete_download(
         download_id,
         removed: true,
     })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_download_priority(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    download_id: String,
+    request: SetPriorityRequest,
+) -> Result<DownloadDto, IpcError> {
+    let id = parse_download_id(&download_id)?;
+    let download = state.set_priority(id, request.priority).await?;
+    emit_event(
+        &app,
+        DOWNLOAD_UPDATED,
+        &DownloadUpdatedEvent {
+            download: download.clone(),
+        },
+    );
+    Ok(download)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn schedule_download(
+    state: State<'_, AppState>,
+    download_id: String,
+    request: ScheduleDownloadRequest,
+) -> Result<ScheduleDto, IpcError> {
+    let id = parse_download_id(&download_id)?;
+    state.schedule(id, request.scheduled_at_ms).await?;
+    // Return the persisted schedule so the frontend has the confirmed value.
+    state
+        .get_schedule(id)
+        .await?
+        .ok_or_else(IpcError::not_found)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn remove_download_schedule(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<(), IpcError> {
+    let id = parse_download_id(&download_id)?;
+    state.remove_schedule(id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_download_schedule(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<Option<ScheduleDto>, IpcError> {
+    let id = parse_download_id(&download_id)?;
+    state.get_schedule(id).await
 }
 
 fn emit_event<T: Serialize + Clone>(app: &AppHandle, name: &str, payload: &T) {
@@ -668,6 +796,136 @@ mod tests {
         let serialized = serde_json::to_string(&updated)?;
         assert!(serialized.contains(r#""download":{"id":"00000000-0000-4000-8000-000000000000""#));
         assert!(serialized.contains(r#""status":"queued""#));
+        Ok(())
+    }
+
+    #[test]
+    fn new_request_types_reject_unknown_fields() -> Result<(), serde_json::Error> {
+        // SetPriorityRequest must not accept extra fields.
+        assert!(
+            serde_json::from_str::<super::SetPriorityRequest>(
+                r#"{"priority":"high","extra":true}"#
+            )
+            .is_err()
+        );
+        // ScheduleDownloadRequest must not accept extra fields.
+        assert!(
+            serde_json::from_str::<super::ScheduleDownloadRequest>(
+                r#"{"scheduled_at_ms":1000000,"extra":true}"#
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn schedule_dto_serializes_stably() -> Result<(), serde_json::Error> {
+        let dto = super::ScheduleDto {
+            download_id: "00000000-0000-4000-8000-000000000000".to_owned(),
+            scheduled_at_ms: 1_725_000_000_000,
+            enabled: true,
+        };
+        let serialized = serde_json::to_string(&dto)?;
+        assert!(serialized.contains(r#""scheduled_at_ms":1725000000000"#));
+        assert!(serialized.contains(r#""enabled":true"#));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_priority_changes_persisted_value() -> Result<(), Box<dyn Error>> {
+        use mydownloader_models::DownloadPriority;
+
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/priority.bin".to_owned(),
+            })
+            .await?;
+        assert_eq!(download.priority, DownloadPriority::Normal);
+
+        let updated = state
+            .set_priority(DownloadId::parse(&download.id)?, DownloadPriority::High)
+            .await?;
+        assert_eq!(updated.priority, DownloadPriority::High);
+        assert_eq!(updated.id, download.id);
+
+        // Confirm it is persisted.
+        let listed = state.list().await?;
+        assert_eq!(listed[0].priority, DownloadPriority::High);
+
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn set_priority_on_missing_download_returns_not_found() -> Result<(), Box<dyn Error>> {
+        use mydownloader_models::DownloadPriority;
+
+        let state = test_state().await?;
+        let result = state
+            .set_priority(DownloadId::new(), DownloadPriority::High)
+            .await;
+        assert_eq!(result.err().map(|e| e.code), Some(IpcErrorCode::NotFound));
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn schedule_and_remove_schedule_round_trip() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/scheduled.bin".to_owned(),
+            })
+            .await?;
+        let id = DownloadId::parse(&download.id)?;
+        // The download must be in Queued or Paused state for scheduling.
+        // Pause it immediately so the engine cannot start it first.
+        wait_for_status(&state, id, DownloadStatus::Downloading).await?;
+        let paused = state.pause(id).await?;
+        assert_eq!(paused.status, DownloadStatus::Paused);
+
+        // Schedule one minute into the future so the download stays deferred.
+        let future_ms = mydownloader_models::Timestamp::now()?.as_unix_millis() + 60_000;
+        state.schedule(id, future_ms).await?;
+
+        let schedule = state.get_schedule(id).await?;
+        assert!(schedule.is_some());
+        let schedule = schedule.unwrap();
+        assert_eq!(schedule.scheduled_at_ms, future_ms);
+        assert!(schedule.enabled);
+
+        // Remove the schedule — the download is released back to the queue.
+        state.remove_schedule(id).await?;
+        let after_remove = state.get_schedule(id).await?;
+        assert!(after_remove.is_none());
+
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn schedule_on_missing_download_returns_not_found() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let future_ms = mydownloader_models::Timestamp::now()?.as_unix_millis() + 60_000;
+        let result = state.schedule(DownloadId::new(), future_ms).await;
+        assert_eq!(result.err().map(|e| e.code), Some(IpcErrorCode::NotFound));
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_schedule_returns_none_for_unscheduled_download() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/nosched.bin".to_owned(),
+            })
+            .await?;
+        let id = DownloadId::parse(&download.id)?;
+        let schedule = state.get_schedule(id).await?;
+        assert!(schedule.is_none());
+        state.scheduler.shutdown().await?;
         Ok(())
     }
 }
