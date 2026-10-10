@@ -125,6 +125,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::schedule_download,
             commands::remove_download_schedule,
             commands::get_download_schedule,
+            commands::retry_download,
+            commands::get_queue_snapshot,
         ])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;

@@ -83,3 +83,11 @@ export interface DownloadUpdatedEvent {
 export interface DownloadRemovedEvent {
   download_id: string;
 }
+
+export interface QueueSnapshot {
+  active_count: number;
+  queued_count: number;
+  paused_count: number;
+  used_connections: number;
+  total_connections: number;
+}

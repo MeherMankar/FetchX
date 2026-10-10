@@ -65,3 +65,22 @@ export function errorMessage(error: unknown): string {
   if (typeof error === "string") return error;
   return "The request could not be completed.";
 }
+
+/**
+ * Returns a relative time string (e.g. "Just now", "3 minutes ago", "2 hours ago").
+ * Falls back to an absolute datetime string for events older than 24 hours.
+ */
+export function formatRelativeTime(ms: number): string {
+  const diffMs = Date.now() - ms;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 10) return "Just now";
+  if (diffSec < 60) return `${diffSec} seconds ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return diffMin === 1 ? "1 minute ago" : `${diffMin} minutes ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return diffHr === 1 ? "1 hour ago" : `${diffHr} hours ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay === 1) return "Yesterday";
+  // Older than 2 days — show absolute date.
+  return formatDatetime(ms);
+}

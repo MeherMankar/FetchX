@@ -1,6 +1,6 @@
 import type { Download, DownloadSchedule } from "../api/types";
-import { formatBytes, formatDatetime, formatEta, formatPercent, formatSpeed } from "../lib/format";
-import { canSchedule, canChangePriority, canPause, canResume, canCancel } from "../lib/status";
+import { formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTime, formatSpeed } from "../lib/format";
+import { canSchedule, canChangePriority, canPause, canResume, canCancel, canRetry } from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
 import type { DownloadPriority } from "../api/types";
 
@@ -19,6 +19,7 @@ interface DetailPanelProps {
   onResume: (id: string) => void;
   onCancel: (id: string) => void;
   onDelete: (id: string) => void;
+  onRetry: (id: string) => void;
   onPriorityChange: (id: string, priority: DownloadPriority) => void;
   onSetSchedule: (id: string, ms: number) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
@@ -34,6 +35,7 @@ export function DetailPanel({
   onResume,
   onCancel,
   onDelete,
+  onRetry,
   onPriorityChange,
   onSetSchedule,
   onClearSchedule,
@@ -129,9 +131,9 @@ export function DetailPanel({
               )}
             </dd>
             <dt>Added</dt>
-            <dd>{formatDatetime(download.created_at)}</dd>
+            <dd title={formatDatetime(download.created_at)}>{formatRelativeTime(download.created_at)}</dd>
             <dt>Updated</dt>
-            <dd>{formatDatetime(download.updated_at)}</dd>
+            <dd title={formatDatetime(download.updated_at)}>{formatRelativeTime(download.updated_at)}</dd>
           </dl>
         </section>
 
@@ -168,6 +170,15 @@ export function DetailPanel({
               onClick={() => onResume(download.id)}
             >
               Resume
+            </button>
+          )}
+          {canRetry(download.status) && (
+            <button
+              className="button button-secondary"
+              disabled={busy}
+              onClick={() => onRetry(download.id)}
+            >
+              Retry
             </button>
           )}
           {canCancel(download.status) && (

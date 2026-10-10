@@ -28,6 +28,10 @@ export function canSchedule(status: DownloadStatus): boolean {
   return status === "queued" || status === "paused";
 }
 
+export function canRetry(status: DownloadStatus): boolean {
+  return status === "failed" || status === "cancelled";
+}
+
 // ---------------------------------------------------------------------------
 // Summary counts derived from download list
 // ---------------------------------------------------------------------------

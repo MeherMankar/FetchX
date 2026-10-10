@@ -996,6 +996,222 @@ a {
 }
 
 /* ============================================================
+   Snapshot Bar (sidebar footer)
+   ============================================================ */
+
+.snapshot-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255 255 255 / 8%);
+  margin-top: auto;
+  font-size: 11px;
+}
+
+.snapshot-item {
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.snapshot-label {
+  color: rgba(255 255 255 / 45%);
+}
+
+.snapshot-value {
+  color: rgba(255 255 255 / 80%);
+  font-weight: 600;
+}
+
+.snapshot-sep {
+  color: rgba(255 255 255 / 25%);
+}
+
+/* ============================================================
+   Bulk Action Bar
+   ============================================================ */
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: var(--color-accent-subtle);
+  border-bottom: 1px solid #c5d8ff;
+  flex-shrink: 0;
+}
+
+.bulk-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ============================================================
+   Row Checkbox
+   ============================================================ */
+
+.row-checkbox-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 2px;
+}
+
+.row-checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.download-card--checked {
+  background: #f0f5ff;
+  border-color: #c5d8ff;
+}
+
+.download-time {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Drag-and-drop
+   ============================================================ */
+
+.download-pane {
+  position: relative;
+}
+
+.download-pane--drag-over {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -4px;
+  background: var(--color-accent-subtle);
+}
+
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-accent);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ============================================================
+   Confirmation Dialog
+   ============================================================ */
+
+.dialog-sm {
+  max-width: 380px;
+}
+
+.confirm-body {
+  padding: 16px 18px 0;
+}
+
+.confirm-message {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.confirm-footer {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ============================================================
+   Toast Notifications
+   ============================================================ */
+
+.toast-stack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  pointer-events: all;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 15%);
+  animation: toast-in 200ms ease;
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+.toast-hiding {
+  opacity: 0;
+  transform: translateX(20px);
+}
+
+.toast-success {
+  background: var(--color-success-subtle);
+  border: 1px solid #b7e4cc;
+  color: var(--color-success);
+}
+
+.toast-info {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.toast-error {
+  background: var(--color-danger-subtle);
+  border: 1px solid var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.toast-close {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ============================================================
+   Footer hint
+   ============================================================ */
+
+.footer-hint {
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+/* ============================================================
    Responsive — Narrow desktop (< 900px)
    ============================================================ */
 

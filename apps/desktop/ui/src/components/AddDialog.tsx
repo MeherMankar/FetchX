@@ -5,12 +5,13 @@ import type { DownloadPriority } from "../api/types";
 import { errorMessage, msToDatetimeLocal } from "../lib/format";
 
 interface AddDialogProps {
+  initialUrl?: string;
   onAdded: () => void;
   onClose: () => void;
 }
 
-export function AddDialog({ onAdded, onClose }: AddDialogProps) {
-  const [url, setUrl] = useState("");
+export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps) {
+  const [url, setUrl] = useState(initialUrl);
   const [priority, setPriority] = useState<DownloadPriority>("normal");
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduledAt, setScheduledAt] = useState(

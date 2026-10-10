@@ -1,9 +1,12 @@
 import type { NavSection } from "../App";
+import type { QueueSnapshot } from "../api/types";
 import type { StatusCounts } from "../lib/status";
+import { SnapshotBar } from "./SnapshotBar";
 
 interface SidebarProps {
   active: NavSection;
   counts: StatusCounts;
+  snapshot: QueueSnapshot | null;
   onSelect: (section: NavSection) => void;
 }
 
@@ -13,7 +16,7 @@ interface NavItem {
   count?: number;
 }
 
-export function Sidebar({ active, counts, onSelect }: SidebarProps) {
+export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
   const items: NavItem[] = [
     { section: "all", label: "All Downloads", count: counts.total },
     { section: "active", label: "Active", count: counts.active },
@@ -50,6 +53,8 @@ export function Sidebar({ active, counts, onSelect }: SidebarProps) {
           </li>
         ))}
       </ul>
+
+      <SnapshotBar snapshot={snapshot} />
     </nav>
   );
 }

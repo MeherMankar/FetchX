@@ -8,6 +8,7 @@ import type {
   DownloadRemovedEvent,
   DownloadSchedule,
   DownloadUpdatedEvent,
+  QueueSnapshot,
   ScheduleDownloadRequest,
   SetPriorityRequest,
 } from "./types";
@@ -59,6 +60,14 @@ export function removeDownloadSchedule(downloadId: string): Promise<void> {
 
 export function getDownloadSchedule(downloadId: string): Promise<DownloadSchedule | null> {
   return invoke<DownloadSchedule | null>("get_download_schedule", { download_id: downloadId });
+}
+
+export function retryDownload(downloadId: string): Promise<Download> {
+  return invoke<Download>("retry_download", { download_id: downloadId });
+}
+
+export function getQueueSnapshot(): Promise<QueueSnapshot> {
+  return invoke<QueueSnapshot>("get_queue_snapshot");
 }
 
 export async function listenForDownloadChanges(

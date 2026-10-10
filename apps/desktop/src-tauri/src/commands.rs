@@ -113,6 +113,99 @@ impl AppState {
             .map_err(IpcError::from_queue)
     }
 
+    /// Retry a failed or cancelled download by transitioning it back to Queued.
+    ///
+    /// The existing `QueueManager::resume` only handles `Paused`.  Failed and
+    /// Cancelled items need to be re-enqueued through their own path: the
+    /// StateMachine allows `Failed|Cancelled → Preparing`, and QueueManager
+    /// startup already reconciles `Preparing → Queued`.  The simplest safe
+    /// approach is to transition through the state machine directly, then
+    /// update the queue's in-memory entries by calling `enqueue` on the item
+    /// after it has been moved to the queue tail (so it sorts after existing
+    /// queued items).  We use `QueueManager::enqueue` after a state-machine
+    /// reset.  Since enqueue persists the item, we first delete the record
+    /// and re-create it via the state machine's own `recover_interrupted`
+    /// path — but that requires the engine to be running.
+    ///
+    /// The cleaner and architecturally correct solution is to expose the
+    /// queue's existing `resume` path for the two extra statuses, which would
+    /// require a QueueManager change.  For Phase 15B we implement a targeted
+    /// Tauri command that does the minimum: transitions the item back to
+    /// `Queued` through the StateMachine and then calls `enqueue` on the
+    /// existing repository record (the queue's `new_with_deferred` already
+    /// loads persisted items at startup; we can't call it again, but we CAN
+    /// use `enqueue` because `enqueue` calls `repository.create` which will
+    /// fail on a duplicate).  Instead, the cleanest path available is:
+    /// delete the record, then re-add it (preserving filename/URL) as a fresh
+    /// queued download via the existing `add` path.  This is exactly what a
+    /// "retry" means from the user's perspective: a fresh attempt.
+    ///
+    /// NOTE: This intentionally creates a new download ID. The old failed
+    /// record is removed. Partial files and destination are preserved because
+    /// `remove_download` preserves filesystem state.
+    async fn retry(&self, id: DownloadId) -> Result<DownloadDto, IpcError> {
+        // Load the existing item before removing it.
+        let item = self
+            .repository
+            .get(id)
+            .await
+            .map_err(|_| IpcError::internal())?
+            .ok_or_else(IpcError::not_found)?;
+
+        // Only failed or cancelled downloads can be retried.
+        if !matches!(
+            item.status(),
+            DownloadStatus::Failed | DownloadStatus::Cancelled
+        ) {
+            return Err(IpcError::conflict());
+        }
+
+        // Remove the old record (preserves partial files).
+        self.queue
+            .remove_download(id)
+            .await
+            .map_err(IpcError::from_queue)?;
+
+        // Re-enqueue using the same URL (the engine kind is re-derived from
+        // the URL; filename/destination are re-derived the same way as add()).
+        let canonical_url = validate_http_source_url(item.source().url())
+            .map_err(|_| IpcError::invalid_request())?;
+        let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
+        let filename = filename_for_url(&parsed_url);
+        let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
+        let destination = self.downloads_dir.join(filename.as_str());
+        let new_id = DownloadId::new();
+        let source = DownloadSource::new(canonical_url, EngineKind::DirectHttp)
+            .map_err(|_| IpcError::invalid_request())?;
+        let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
+        let new_item = DownloadItem::new(new_id, source, filename, destination, created_at);
+
+        self.queue
+            .enqueue(new_item)
+            .await
+            .map_err(IpcError::from_queue)?;
+        self.get(new_id).await
+    }
+
+    async fn snapshot(&self) -> Result<QueueSnapshotDto, IpcError> {
+        let snap = self.queue.snapshot().await.map_err(IpcError::from_queue)?;
+
+        let active_count = snap.active.len();
+        let used_connections: usize = snap
+            .active
+            .iter()
+            .map(|a| a.active_connections.max(a.allocated_connections).max(1))
+            .sum();
+
+        Ok(QueueSnapshotDto {
+            active_count,
+            queued_count: snap.queued.len(),
+            paused_count: snap.paused.len(),
+            used_connections,
+            total_connections: snap.global_connection_limit,
+        })
+    }
+
     async fn set_priority(
         &self,
         id: DownloadId,
@@ -218,6 +311,16 @@ pub struct ScheduleDto {
     /// Unix milliseconds at which the download is scheduled to start.
     pub scheduled_at_ms: u64,
     pub enabled: bool,
+}
+
+/// Live queue statistics for the status bar.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct QueueSnapshotDto {
+    pub active_count: usize,
+    pub queued_count: usize,
+    pub paused_count: usize,
+    pub used_connections: usize,
+    pub total_connections: usize,
 }
 
 impl From<DownloadItem> for DownloadDto {
@@ -492,6 +595,29 @@ pub async fn get_download_schedule(
 ) -> Result<Option<ScheduleDto>, IpcError> {
     let id = parse_download_id(&download_id)?;
     state.get_schedule(id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn retry_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<DownloadDto, IpcError> {
+    let id = parse_download_id(&download_id)?;
+    let download = state.retry(id).await?;
+    emit_event(
+        &app,
+        DOWNLOAD_UPDATED,
+        &DownloadUpdatedEvent {
+            download: download.clone(),
+        },
+    );
+    Ok(download)
+}
+
+#[tauri::command]
+pub async fn get_queue_snapshot(state: State<'_, AppState>) -> Result<QueueSnapshotDto, IpcError> {
+    state.snapshot().await
 }
 
 fn emit_event<T: Serialize + Clone>(app: &AppHandle, name: &str, payload: &T) {
@@ -929,6 +1055,96 @@ mod tests {
         let schedule = state.get_schedule(id).await?;
         assert!(schedule.is_none());
         state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_reflects_queue_state() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        // Before adding anything, counts should be zero.
+        let snap = state.snapshot().await?;
+        assert_eq!(snap.queued_count, 0);
+        assert_eq!(snap.active_count, 0);
+
+        // Add a download — it starts, so active count becomes non-zero.
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/snap.bin".to_owned(),
+            })
+            .await?;
+        wait_for_status(
+            &state,
+            DownloadId::parse(&download.id)?,
+            DownloadStatus::Downloading,
+        )
+        .await?;
+
+        let snap = state.snapshot().await?;
+        assert_eq!(snap.active_count, 1);
+        assert!(snap.total_connections > 0);
+
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_failed_creates_fresh_download() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/retry.bin".to_owned(),
+            })
+            .await?;
+        let id = DownloadId::parse(&download.id)?;
+        wait_for_status(&state, id, DownloadStatus::Downloading).await?;
+
+        // Cancel it so we have a terminal download.
+        let cancelled = state.cancel(id).await?;
+        assert_eq!(cancelled.status, DownloadStatus::Cancelled);
+
+        // Retry should create a new download.
+        let retried = state.retry(id).await?;
+        assert_eq!(retried.status, DownloadStatus::Queued);
+        assert_ne!(retried.id, download.id, "retry must produce a new ID");
+
+        // Original record must be gone.
+        assert!(state.repository.get(id).await?.is_none());
+
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_on_active_download_returns_conflict() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/activeretry.bin".to_owned(),
+            })
+            .await?;
+        let id = DownloadId::parse(&download.id)?;
+        wait_for_status(&state, id, DownloadStatus::Downloading).await?;
+
+        // Cannot retry a download that's still active.
+        let result = state.retry(id).await;
+        assert_eq!(result.err().map(|e| e.code), Some(IpcErrorCode::Conflict));
+
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn queue_snapshot_dto_serializes_stably() -> Result<(), serde_json::Error> {
+        let dto = super::QueueSnapshotDto {
+            active_count: 2,
+            queued_count: 5,
+            paused_count: 1,
+            used_connections: 8,
+            total_connections: 16,
+        };
+        let s = serde_json::to_string(&dto)?;
+        assert!(s.contains(r#""active_count":2"#));
+        assert!(s.contains(r#""total_connections":16"#));
         Ok(())
     }
 }

@@ -1,3 +1,5 @@
+import { type RefObject } from "react";
+
 import type { SortKey } from "../App";
 
 interface ToolbarProps {
@@ -5,6 +7,7 @@ interface ToolbarProps {
   count: number;
   search: string;
   sort: SortKey;
+  searchRef: RefObject<HTMLInputElement | null>;
   onSearchChange: (value: string) => void;
   onSortChange: (sort: SortKey) => void;
   onRefresh: () => void;
@@ -17,6 +20,7 @@ export function Toolbar({
   count,
   search,
   sort,
+  searchRef,
   onSearchChange,
   onSortChange,
   onRefresh,
@@ -36,6 +40,7 @@ export function Toolbar({
         <label className="visually-hidden" htmlFor="search-input">Search downloads</label>
         <input
           id="search-input"
+          ref={searchRef}
           className="search-input"
           type="search"
           placeholder="Search…"

@@ -9,6 +9,7 @@ import {
   pauseDownload,
   removeDownloadSchedule,
   resumeDownload,
+  retryDownload,
   scheduleDownload,
   setDownloadPriority,
 } from "../api/downloads";
@@ -140,6 +141,30 @@ export function useDownloads() {
     [withBusy],
   );
 
+  const retry = useCallback(
+    (id: string) => withBusy(id, () => retryDownload(id)),
+    [withBusy],
+  );
+
+  /**
+   * Runs an action on each id sequentially, collecting per-item errors.
+   * Never stops early on failure.  Returns list of failure messages.
+   */
+  const bulkOperation = useCallback(
+    async (ids: string[], action: (id: string) => Promise<void>): Promise<string[]> => {
+      const failures: string[] = [];
+      for (const id of ids) {
+        try {
+          await action(id);
+        } catch (cause) {
+          failures.push(errorMessage(cause));
+        }
+      }
+      return failures;
+    },
+    [],
+  );
+
   const setPriority = useCallback(
     async (id: string, priority: DownloadPriority) => {
       setBusyId(id);
@@ -204,6 +229,8 @@ export function useDownloads() {
     resume,
     cancel,
     remove,
+    retry,
+    bulkOperation,
     setPriority,
     setSchedule,
     clearSchedule,

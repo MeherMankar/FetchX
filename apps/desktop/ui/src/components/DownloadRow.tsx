@@ -1,8 +1,23 @@
 import { memo } from "react";
 
 import type { Download, DownloadPriority, DownloadSchedule } from "../api/types";
-import { formatBytes, formatDatetime, formatEta, formatPercent, formatSpeed } from "../lib/format";
-import { canCancel, canChangePriority, canPause, canResume, canSchedule, isActive } from "../lib/status";
+import {
+  formatBytes,
+  formatDatetime,
+  formatEta,
+  formatPercent,
+  formatRelativeTime,
+  formatSpeed,
+} from "../lib/format";
+import {
+  canCancel,
+  canChangePriority,
+  canPause,
+  canResume,
+  canRetry,
+  canSchedule,
+  isActive,
+} from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
 
 interface DownloadRowProps {
@@ -10,11 +25,14 @@ interface DownloadRowProps {
   schedule: DownloadSchedule | null | undefined;
   busy: boolean;
   selected: boolean;
+  checked: boolean;
   onSelect: () => void;
+  onCheckToggle: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onCancel: (id: string) => void;
   onDelete: (id: string) => void;
+  onRetry: (id: string) => void;
   onPriorityChange: (id: string, priority: DownloadPriority) => void;
   onSetSchedule: (id: string, ms: number) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
@@ -27,11 +45,14 @@ export const DownloadRow = memo(function DownloadRow({
   schedule,
   busy,
   selected,
+  checked,
   onSelect,
+  onCheckToggle,
   onPause,
   onResume,
   onCancel,
   onDelete,
+  onRetry,
   onPriorityChange,
   onSetSchedule,
   onClearSchedule,
@@ -46,11 +67,11 @@ export const DownloadRow = memo(function DownloadRow({
 
   return (
     <article
-      className={`download-card${selected ? " download-card--selected" : ""}`}
+      className={`download-card${selected ? " download-card--selected" : ""}${checked ? " download-card--checked" : ""}`}
       aria-selected={selected}
       onClick={onSelect}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
+        if (e.key === "Enter") {
           e.preventDefault();
           onSelect();
         }
@@ -59,12 +80,32 @@ export const DownloadRow = memo(function DownloadRow({
       role="button"
       aria-label={`${download.filename}, ${download.status}`}
     >
+      {/* Checkbox — stops row selection propagation */}
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+      <div
+        className="row-checkbox-wrap"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <input
+          type="checkbox"
+          className="row-checkbox"
+          checked={checked}
+          onChange={onCheckToggle}
+          aria-label={`Select ${download.filename}`}
+          tabIndex={-1}
+        />
+      </div>
+
       <div className="download-main">
         <div className="download-title">
           <strong title={download.filename}>{download.filename}</strong>
           <span className={`status status-${download.status}`}>{download.status}</span>
           {schedule?.enabled && (
-            <span className="badge-scheduled" title={`Scheduled: ${formatDatetime(schedule.scheduled_at_ms)}`}>
+            <span
+              className="badge-scheduled"
+              title={`Scheduled: ${formatDatetime(schedule.scheduled_at_ms)}`}
+            >
               ⏱
             </span>
           )}
@@ -85,10 +126,19 @@ export const DownloadRow = memo(function DownloadRow({
             {progress.total_bytes !== null ? ` / ${formatBytes(progress.total_bytes)}` : ""}
             {pct !== null ? ` · ${formatPercent(pct)}` : ""}
           </span>
-          {isActive(download.status) && (
+          {isActive(download.status) ? (
             <span className="download-speed">
               <span>{formatSpeed(progress.speed_bytes_per_second)}</span>
-              <span className="download-eta">ETA {formatEta(progress.estimated_remaining_seconds)}</span>
+              <span className="download-eta">
+                ETA {formatEta(progress.estimated_remaining_seconds)}
+              </span>
+            </span>
+          ) : (
+            <span
+              className="download-time"
+              title={formatDatetime(download.updated_at)}
+            >
+              {formatRelativeTime(download.updated_at)}
             </span>
           )}
         </div>
@@ -98,7 +148,6 @@ export const DownloadRow = memo(function DownloadRow({
         )}
 
         {canSchedule(download.status) && (
-          // Stop propagation so clicking the editor doesn't select/deselect the row.
           // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
           <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <ScheduleEditor
@@ -113,7 +162,6 @@ export const DownloadRow = memo(function DownloadRow({
         )}
       </div>
 
-      {/* Inline actions — stop propagation so they don't trigger row selection */}
       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <div
         className="download-actions"
@@ -130,7 +178,9 @@ export const DownloadRow = memo(function DownloadRow({
               className="priority-select"
               value={download.priority}
               disabled={busy}
-              onChange={(e) => onPriorityChange(download.id, e.target.value as DownloadPriority)}
+              onChange={(e) =>
+                onPriorityChange(download.id, e.target.value as DownloadPriority)
+              }
               aria-label={`Priority for ${download.filename}`}
             >
               <option value="low">Low</option>
@@ -157,6 +207,16 @@ export const DownloadRow = memo(function DownloadRow({
             aria-label={`Resume ${download.filename}`}
           >
             Resume
+          </button>
+        )}
+        {canRetry(download.status) && (
+          <button
+            className="button button-secondary"
+            disabled={busy}
+            onClick={() => onRetry(download.id)}
+            aria-label={`Retry ${download.filename}`}
+          >
+            Retry
           </button>
         )}
         {canCancel(download.status) && (
