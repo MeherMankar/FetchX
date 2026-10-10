@@ -48,6 +48,8 @@ export interface Download {
 
 export interface AddDownloadRequest {
   url: string;
+  /** Optional engine selection. Omitting defaults to Direct HTTP on the backend. */
+  engine_kind?: EngineKind;
 }
 
 export interface SetPriorityRequest {

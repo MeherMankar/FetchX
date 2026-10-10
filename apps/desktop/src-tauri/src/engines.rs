@@ -104,6 +104,19 @@ impl EngineRuntime {
             }
         }
     }
+
+    /// Returns `true` when the given engine kind is currently available at runtime.
+    /// Direct HTTP is always available.
+    pub fn is_available(&self, kind: mydownloader_models::EngineKind) -> bool {
+        use mydownloader_models::EngineKind;
+        match kind {
+            EngineKind::DirectHttp => true,
+            EngineKind::Aria2 => matches!(self.status.aria2, EngineAvailability::Available { .. }),
+            EngineKind::YtDlp => {
+                matches!(self.status.yt_dlp, EngineAvailability::Available { .. })
+            }
+        }
+    }
 }
 
 fn log_availability(name: &str, avail: &EngineAvailability) {

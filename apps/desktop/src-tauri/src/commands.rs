@@ -75,7 +75,17 @@ impl AppState {
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
         let destination = self.downloads_dir.join(filename.as_str());
         let id = DownloadId::new();
-        let source = DownloadSource::new(canonical_url, EngineKind::DirectHttp)
+
+        // Resolve the requested engine, defaulting to DirectHttp when unspecified.
+        let engine_kind = request.engine_kind.unwrap_or(EngineKind::DirectHttp);
+
+        // Backend validates availability — the frontend cannot bypass this check.
+        // Direct HTTP is always available; optional engines must be running.
+        if !self.engine_runtime.is_available(engine_kind) {
+            return Err(IpcError::engine_unavailable(engine_kind));
+        }
+
+        let source = DownloadSource::new(canonical_url, engine_kind)
             .map_err(|_| IpcError::invalid_request())?;
         let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
         let item = DownloadItem::new(id, source, filename, destination, created_at);
@@ -147,7 +157,8 @@ impl AppState {
     ///
     /// NOTE: This intentionally creates a new download ID. The old failed
     /// record is removed. Partial files and destination are preserved because
-    /// `remove_download` preserves filesystem state.
+    /// `remove_download` preserves filesystem state.  The original engine
+    /// kind is preserved and re-validated for current availability.
     async fn retry(&self, id: DownloadId) -> Result<DownloadDto, IpcError> {
         // Load the existing item before removing it.
         let item = self
@@ -171,8 +182,16 @@ impl AppState {
             .await
             .map_err(IpcError::from_queue)?;
 
-        // Re-enqueue using the same URL (the engine kind is re-derived from
-        // the URL; filename/destination are re-derived the same way as add()).
+        // Re-enqueue preserving the original engine kind.
+        // The engine is re-validated for current availability so a retry
+        // cannot silently switch engines.
+        let original_engine = item.source().engine();
+        if !self.engine_runtime.is_available(original_engine) {
+            // The engine that was used originally is no longer available.
+            // Reject rather than silently switching to a different engine.
+            return Err(IpcError::engine_unavailable(original_engine));
+        }
+
         let canonical_url = validate_http_source_url(item.source().url())
             .map_err(|_| IpcError::invalid_request())?;
         let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
@@ -180,7 +199,7 @@ impl AppState {
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
         let destination = self.downloads_dir.join(filename.as_str());
         let new_id = DownloadId::new();
-        let source = DownloadSource::new(canonical_url, EngineKind::DirectHttp)
+        let source = DownloadSource::new(canonical_url, original_engine)
             .map_err(|_| IpcError::invalid_request())?;
         let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
         let new_item = DownloadItem::new(new_id, source, filename, destination, created_at);
@@ -257,6 +276,10 @@ impl AppState {
 #[serde(deny_unknown_fields)]
 pub struct AddDownloadRequest {
     pub url: String,
+    /// Optional engine selection.  `None` (or absent from JSON) means Direct HTTP.
+    /// The backend validates availability; the frontend cannot bypass this check.
+    #[serde(default)]
+    pub engine_kind: Option<EngineKind>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -434,6 +457,28 @@ impl IpcError {
             }
             ScheduleError::Timestamp(_) => Self::internal(),
             _ => Self::internal(),
+        }
+    }
+
+    /// Used when an explicitly requested engine is not available at runtime.
+    /// The user's engine selection is respected — we do not silently fall back.
+    pub(crate) fn engine_unavailable(kind: EngineKind) -> Self {
+        // Static messages per engine; do not expose process details or secrets.
+        let message: &'static str = match kind {
+            EngineKind::Aria2 => {
+                "aria2 is currently unavailable. Please check Settings → Download Engines."
+            }
+            EngineKind::YtDlp => {
+                "yt-dlp is currently unavailable. Please check Settings → Download Engines."
+            }
+            EngineKind::DirectHttp => {
+                // DirectHttp is always available; this branch should not be reached.
+                "The requested download engine is not available."
+            }
+        };
+        Self {
+            code: IpcErrorCode::Conflict,
+            message,
         }
     }
 }
@@ -665,7 +710,7 @@ mod tests {
     use tokio::{sync::watch, time::timeout};
 
     use super::{
-        AddDownloadRequest, AppState, DownloadDto, IpcErrorCode, filename_for_url,
+        AddDownloadRequest, AppState, DownloadDto, IpcError, IpcErrorCode, filename_for_url,
         parse_download_id, validate_http_source_url,
     };
     use crate::config::ConfigService;
@@ -831,6 +876,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/file.zip".to_owned(),
             })
             .await?;
@@ -854,6 +900,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/control.bin".to_owned(),
             })
             .await?;
@@ -890,6 +937,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/delete.bin".to_owned(),
             })
             .await?;
@@ -988,6 +1036,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/priority.bin".to_owned(),
             })
             .await?;
@@ -1025,6 +1074,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/scheduled.bin".to_owned(),
             })
             .await?;
@@ -1069,6 +1119,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/nosched.bin".to_owned(),
             })
             .await?;
@@ -1090,6 +1141,7 @@ mod tests {
         // Add a download — it starts, so active count becomes non-zero.
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/snap.bin".to_owned(),
             })
             .await?;
@@ -1113,6 +1165,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/retry.bin".to_owned(),
             })
             .await?;
@@ -1140,6 +1193,7 @@ mod tests {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
+                engine_kind: None,
                 url: "https://example.test/activeretry.bin".to_owned(),
             })
             .await?;
@@ -1167,5 +1221,169 @@ mod tests {
         assert!(s.contains(r#""active_count":2"#));
         assert!(s.contains(r#""total_connections":16"#));
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 16C engine-selection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn add_request_accepts_no_engine_kind() -> Result<(), serde_json::Error> {
+        // engine_kind is optional with a default of None.
+        let req: AddDownloadRequest =
+            serde_json::from_str(r#"{"url":"https://example.test/file.zip"}"#)?;
+        assert_eq!(req.engine_kind, None);
+        Ok(())
+    }
+
+    #[test]
+    fn add_request_accepts_explicit_direct_http() -> Result<(), serde_json::Error> {
+        let req: AddDownloadRequest = serde_json::from_str(
+            r#"{"url":"https://example.test/file.zip","engine_kind":"direct_http"}"#,
+        )?;
+        assert_eq!(
+            req.engine_kind,
+            Some(mydownloader_models::EngineKind::DirectHttp)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_request_accepts_aria2_engine_kind() -> Result<(), serde_json::Error> {
+        let req: AddDownloadRequest = serde_json::from_str(
+            r#"{"url":"https://example.test/file.zip","engine_kind":"aria2"}"#,
+        )?;
+        assert_eq!(
+            req.engine_kind,
+            Some(mydownloader_models::EngineKind::Aria2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn add_request_rejects_unknown_engine_kind() -> Result<(), serde_json::Error> {
+        // An unrecognised value must fail deserialization.
+        let result: Result<AddDownloadRequest, _> = serde_json::from_str(
+            r#"{"url":"https://example.test/file.zip","engine_kind":"unknown_engine"}"#,
+        );
+        assert!(
+            result.is_err(),
+            "unknown engine_kind value must be rejected"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_download_none_engine_uses_direct_http() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/engine-default.zip".to_owned(),
+                engine_kind: None,
+            })
+            .await?;
+        assert_eq!(download.engine, mydownloader_models::EngineKind::DirectHttp);
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_download_explicit_direct_http_is_accepted() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/explicit-http.zip".to_owned(),
+                engine_kind: Some(mydownloader_models::EngineKind::DirectHttp),
+            })
+            .await?;
+        assert_eq!(download.engine, mydownloader_models::EngineKind::DirectHttp);
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_download_unavailable_aria2_is_rejected() -> Result<(), Box<dyn Error>> {
+        // Default EngineConfig has aria2 disabled → unavailable.
+        let state = test_state().await?;
+        let result = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/aria2-attempt.zip".to_owned(),
+                engine_kind: Some(mydownloader_models::EngineKind::Aria2),
+            })
+            .await;
+        // Must be Conflict — not silently accepted as DirectHttp.
+        assert_eq!(
+            result.err().map(|e| e.code),
+            Some(IpcErrorCode::Conflict),
+            "disabled aria2 must be rejected with Conflict"
+        );
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_download_unavailable_ytdlp_is_rejected() -> Result<(), Box<dyn Error>> {
+        // Default EngineConfig has yt-dlp disabled → unavailable.
+        let state = test_state().await?;
+        let result = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/ytdlp-attempt.zip".to_owned(),
+                engine_kind: Some(mydownloader_models::EngineKind::YtDlp),
+            })
+            .await;
+        assert_eq!(
+            result.err().map(|e| e.code),
+            Some(IpcErrorCode::Conflict),
+            "disabled yt-dlp must be rejected with Conflict"
+        );
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_engine_kind_for_direct_http() -> Result<(), Box<dyn Error>> {
+        let state = test_state().await?;
+        // Add a DirectHttp download and cancel it.
+        let download = state
+            .add(AddDownloadRequest {
+                url: "https://example.test/retry-engine.zip".to_owned(),
+                engine_kind: None, // → DirectHttp
+            })
+            .await?;
+        let id = DownloadId::parse(&download.id)?;
+        wait_for_status(&state, id, DownloadStatus::Downloading).await?;
+        let cancelled = state.cancel(id).await?;
+        assert_eq!(cancelled.status, DownloadStatus::Cancelled);
+
+        // Retry must produce a new download with the same engine.
+        let retried = state.retry(id).await?;
+        assert_eq!(
+            retried.engine,
+            mydownloader_models::EngineKind::DirectHttp,
+            "retry must preserve DirectHttp engine assignment"
+        );
+        assert_ne!(
+            retried.id, download.id,
+            "retry must create a new download ID"
+        );
+
+        state.scheduler.shutdown().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn engine_unavailable_error_contains_no_secrets() {
+        for kind in [
+            mydownloader_models::EngineKind::Aria2,
+            mydownloader_models::EngineKind::YtDlp,
+            mydownloader_models::EngineKind::DirectHttp,
+        ] {
+            let err = IpcError::engine_unavailable(kind);
+            let json = serde_json::to_string(&err).unwrap();
+            assert!(!json.contains("secret"), "error must not leak secrets");
+            assert!(!json.contains("token"), "error must not leak tokens");
+            assert!(!json.contains("rpc"), "error must not expose RPC details");
+            assert_eq!(err.code, IpcErrorCode::Conflict);
+        }
     }
 }

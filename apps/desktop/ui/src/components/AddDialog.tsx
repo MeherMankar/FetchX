@@ -1,7 +1,8 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import { getEngineStatus } from "../api/engine";
 import { addDownload, scheduleDownload, setDownloadPriority } from "../api/downloads";
-import type { DownloadPriority } from "../api/types";
+import type { DownloadPriority, EngineKind, EngineStatus } from "../api/types";
 import { errorMessage, msToDatetimeLocal } from "../lib/format";
 
 interface AddDialogProps {
@@ -10,9 +11,48 @@ interface AddDialogProps {
   onClose: () => void;
 }
 
+/** Display label and serde key for each engine option. */
+const ENGINE_OPTIONS: { kind: EngineKind; label: string }[] = [
+  { kind: "direct_http", label: "Direct HTTP" },
+  { kind: "aria2",       label: "aria2" },
+  { kind: "yt_dlp",      label: "yt-dlp" },
+];
+
+/**
+ * Returns true when the given engine kind is runtime-available according to
+ * the status object loaded from the backend.
+ * Direct HTTP is always available; optional engines must be Available.
+ */
+function isEngineAvailable(kind: EngineKind, status: EngineStatus | null): boolean {
+  if (!status) return kind === "direct_http"; // safe default while loading
+  switch (kind) {
+    case "direct_http": return status.direct_http.available;
+    case "aria2":       return status.aria2.available;
+    case "yt_dlp":      return status.yt_dlp.available;
+  }
+}
+
+function engineUnavailableReason(kind: EngineKind, status: EngineStatus | null): string | null {
+  if (!status) return null;
+  switch (kind) {
+    case "direct_http": return null;
+    case "aria2":
+      if (!status.aria2.enabled) return "disabled in Settings";
+      if (!status.aria2.available) return status.aria2.error ?? "unavailable";
+      return null;
+    case "yt_dlp":
+      if (!status.yt_dlp.enabled) return "disabled in Settings";
+      if (!status.yt_dlp.available) return status.yt_dlp.error ?? "unavailable";
+      return null;
+  }
+}
+
 export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps) {
   const [url, setUrl] = useState(initialUrl);
   const [priority, setPriority] = useState<DownloadPriority>("normal");
+  const [engineKind, setEngineKind] = useState<EngineKind>("direct_http");
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [engineStatusLoading, setEngineStatusLoading] = useState(true);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduledAt, setScheduledAt] = useState(
     msToDatetimeLocal(Math.ceil(Date.now() / 60000) * 60000 + 3_600_000),
@@ -21,11 +61,30 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
+  // Load engine availability once when the dialog opens.
+  // No polling — one fetch on mount.
+  useEffect(() => {
+    let cancelled = false;
+    void getEngineStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setEngineStatus(status);
+          setEngineStatusLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          // If the status fetch fails, fall back to Direct HTTP only.
+          setEngineStatusLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
 
-    // Validate schedule time before sending to backend.
     if (scheduleEnabled) {
       const ms = new Date(scheduledAt).getTime();
       if (!Number.isFinite(ms) || ms <= Date.now()) {
@@ -36,17 +95,18 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
     setBusy(true);
     try {
-      // addDownload creates a queued item at normal priority.
-      // Priority and scheduling are separate commands once the download exists,
-      // because the backend models them independently.
-      const download = await addDownload({ url });
+      // Pass the selected engine to the backend.
+      // The backend re-validates availability — the frontend cannot bypass this check.
+      // Omit engine_kind when Direct HTTP is selected to use the backend default.
+      const download = await addDownload({
+        url,
+        engine_kind: engineKind === "direct_http" ? undefined : engineKind,
+      });
 
-      // Apply priority if not normal (the backend defaults to normal).
       if (priority !== "normal") {
         await setDownloadPriority(download.id, priority);
       }
 
-      // Apply schedule if requested.
       if (scheduleEnabled) {
         const ms = new Date(scheduledAt).getTime();
         await scheduleDownload(download.id, ms);
@@ -65,20 +125,32 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
   return (
     // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
-    <div className="dialog-backdrop" onClick={handleBackdropClick} aria-modal="true" role="dialog" aria-labelledby="add-dialog-title">
+    <div
+      className="dialog-backdrop"
+      onClick={handleBackdropClick}
+      aria-modal="true"
+      role="dialog"
+      aria-labelledby="add-dialog-title"
+    >
       <div className="dialog">
         <header className="dialog-header">
           <h2 id="add-dialog-title">Add download</h2>
-          <button className="icon-button" aria-label="Close dialog" onClick={onClose}>×</button>
+          <button className="icon-button" aria-label="Close dialog" onClick={onClose}>
+            ×
+          </button>
         </header>
 
         <form className="dialog-body" onSubmit={(e) => void submit(e)}>
           {error && (
-            <div className="dialog-error" role="alert">{error}</div>
+            <div className="dialog-error" role="alert">
+              {error}
+            </div>
           )}
 
           <div className="field">
-            <label htmlFor="add-url" className="field-label">URL <span className="required" aria-hidden="true">*</span></label>
+            <label htmlFor="add-url" className="field-label">
+              URL <span className="required" aria-hidden="true">*</span>
+            </label>
             <input
               id="add-url"
               ref={urlInputRef}
@@ -92,11 +164,46 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               disabled={busy}
               autoFocus
             />
-            <p className="field-hint">HTTP and HTTPS URLs only. Credentials in URLs are not accepted.</p>
+            <p className="field-hint">
+              HTTP and HTTPS URLs only. Credentials in URLs are not accepted.
+            </p>
           </div>
 
           <div className="field">
-            <label htmlFor="add-priority" className="field-label">Priority</label>
+            <label htmlFor="add-engine" className="field-label">
+              Engine
+            </label>
+            {engineStatusLoading ? (
+              <p className="field-hint">Loading engine status…</p>
+            ) : (
+              <select
+                id="add-engine"
+                className="field-select"
+                value={engineKind}
+                onChange={(e) => setEngineKind(e.target.value as EngineKind)}
+                disabled={busy}
+                aria-describedby="add-engine-hint"
+              >
+                {ENGINE_OPTIONS.map(({ kind, label }) => {
+                  const available = isEngineAvailable(kind, engineStatus);
+                  const reason = engineUnavailableReason(kind, engineStatus);
+                  return (
+                    <option key={kind} value={kind} disabled={!available}>
+                      {available ? label : `${label} — ${reason ?? "unavailable"}`}
+                    </option>
+                  );
+                })}
+              </select>
+            )}
+            <p id="add-engine-hint" className="field-hint">
+              Only available engines are selectable. Configure engines in Settings.
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor="add-priority" className="field-label">
+              Priority
+            </label>
             <select
               id="add-priority"
               className="field-select"
@@ -123,7 +230,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
           {scheduleEnabled && (
             <div className="field">
-              <label htmlFor="add-scheduled-at" className="field-label">Start at</label>
+              <label htmlFor="add-scheduled-at" className="field-label">
+                Start at
+              </label>
               <input
                 id="add-scheduled-at"
                 type="datetime-local"
@@ -137,13 +246,22 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
           <div className="dialog-footer">
             <p className="field-hint dialog-notice">
-              Engine, filename, and destination are determined by the backend.
+              Filename and destination are determined by the backend.
             </p>
             <div className="dialog-actions">
-              <button type="button" className="button button-secondary" onClick={onClose} disabled={busy}>
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={onClose}
+                disabled={busy}
+              >
                 Cancel
               </button>
-              <button type="submit" className="button button-primary" disabled={busy || !url}>
+              <button
+                type="submit"
+                className="button button-primary"
+                disabled={busy || !url || engineStatusLoading}
+              >
                 {busy ? "Adding…" : "Add download"}
               </button>
             </div>
