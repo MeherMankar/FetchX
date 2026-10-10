@@ -9,7 +9,7 @@ use mydownloader_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
     EngineKind, FileName, Timestamp,
 };
-use mydownloader_queue::{QueueError, QueueManager};
+use mydownloader_queue::{EventRepository, QueueError, QueueManager};
 use mydownloader_scheduler::Scheduler;
 use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
 use reqwest::Url;
@@ -20,11 +20,18 @@ use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
 
+/// The concrete repository type used by the desktop application.
+///
+/// Wrapping `SqliteDownloadRepository` in `EventRepository` causes every
+/// persistence write to publish a `DownloadEvent` to the broadcast bus,
+/// which the event bridge task then forwards to the Tauri frontend.
+pub(crate) type AppRepository = EventRepository<SqliteDownloadRepository>;
+
 pub struct AppState {
     _database: Database,
-    repository: SqliteDownloadRepository,
+    pub(crate) repository: AppRepository,
     queue: QueueManager,
-    pub(crate) scheduler: Scheduler<SqliteDownloadRepository>,
+    pub(crate) scheduler: Scheduler<AppRepository>,
     downloads_dir: PathBuf,
     pub(crate) shutdown_state: Arc<AtomicU8>,
 }
@@ -32,8 +39,8 @@ pub struct AppState {
 impl AppState {
     pub(crate) fn new(
         database: Database,
-        repository: SqliteDownloadRepository,
-        scheduler: Scheduler<SqliteDownloadRepository>,
+        repository: AppRepository,
+        scheduler: Scheduler<AppRepository>,
         queue: QueueManager,
         downloads_dir: PathBuf,
     ) -> Self {
@@ -391,7 +398,7 @@ mod tests {
         DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
     };
     use mydownloader_models::{DownloadId, DownloadItem, DownloadStatus};
-    use mydownloader_queue::QueueConfig;
+    use mydownloader_queue::{DownloadEventBus, EventRepository, QueueConfig};
     use mydownloader_scheduler::Scheduler;
     use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
     use tokio::{sync::watch, time::timeout};
@@ -458,11 +465,13 @@ mod tests {
 
     async fn test_state() -> Result<AppState, Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;
-        let repository = database.downloads();
+        let inner_repository = database.downloads();
+        let event_bus = DownloadEventBus::new();
+        let repository = EventRepository::new(inner_repository.clone(), event_bus);
         let scheduler = Scheduler::start(
             repository.clone(),
             Arc::new(WaitingEngine {
-                repository: repository.clone(),
+                repository: inner_repository,
             }),
             QueueConfig::default(),
         )

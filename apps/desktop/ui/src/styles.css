@@ -327,6 +327,16 @@ h2 {
   font-size: 10px;
 }
 
+.download-speed {
+  display: flex;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.download-eta {
+  color: #8d99a6;
+}
+
 .download-error {
   margin-top: 8px;
   color: #b42318;

@@ -29,7 +29,7 @@ function errorMessage(error: unknown): string {
 
 function formatBytes(value: number | null): string {
   if (value === null) {
-    return "Unknown";
+    return "—";
   }
   if (value < 1024) {
     return `${value} B`;
@@ -42,6 +42,32 @@ function formatBytes(value: number | null): string {
     unit += 1;
   } while (size >= 1024 && unit < units.length - 1);
   return `${size.toFixed(1)} ${units[unit]}`;
+}
+
+function formatSpeed(bytesPerSecond: number | null): string {
+  if (bytesPerSecond === null) {
+    return "—";
+  }
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+function formatEta(seconds: number | null): string {
+  if (seconds === null) {
+    return "—";
+  }
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  }
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+function isActive(status: DownloadStatus): boolean {
+  return status === "downloading";
 }
 
 function canPause(status: DownloadStatus): boolean {
@@ -217,8 +243,21 @@ export function App() {
                       max={100}
                     />
                     <div className="download-meta">
-                      <span>{formatBytes(download.progress.downloaded_bytes)} of {formatBytes(download.progress.total_bytes)}</span>
-                      {percentage !== null && <span>{(percentage / 100).toFixed(1)}%</span>}
+                      <span>
+                        {formatBytes(download.progress.downloaded_bytes)}
+                        {download.progress.total_bytes !== null
+                          ? ` / ${formatBytes(download.progress.total_bytes)}`
+                          : ""}
+                        {percentage !== null ? ` · ${(percentage / 100).toFixed(1)}%` : ""}
+                      </span>
+                      {isActive(download.status) && (
+                        <span className="download-speed">
+                          <span>{formatSpeed(download.progress.speed_bytes_per_second)}</span>
+                          <span className="download-eta">
+                            ETA {formatEta(download.progress.estimated_remaining_seconds)}
+                          </span>
+                        </span>
+                      )}
                     </div>
                     {download.error && (
                       <p className="download-error">{download.error.message}</p>

@@ -4,14 +4,17 @@ use std::{
 };
 
 use mydownloader_downloader::DirectHttpEngine;
-use mydownloader_queue::QueueConfig;
+use mydownloader_queue::{DownloadEvent, DownloadEventBus, EventRepository, QueueConfig};
 use mydownloader_scheduler::Scheduler;
 use mydownloader_storage::Database;
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent};
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
-use crate::commands::{self, AppState};
+use crate::commands::{self, AppState, DownloadDto};
+use crate::events::{
+    DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
+};
 
 const SHUTDOWN_RUNNING: u8 = 0;
 const SHUTDOWN_IN_PROGRESS: u8 = 1;
@@ -28,20 +31,78 @@ impl AppState {
         fs::create_dir_all(&downloads_dir).await?;
 
         let database = Database::connect_path(database_path).await?;
-        let repository = database.downloads();
+        let inner_repository = database.downloads();
+
+        // Wrap the repository in the event bus so every persistence write
+        // automatically publishes a DownloadEvent.
+        let event_bus = DownloadEventBus::new();
+        let repository = EventRepository::new(inner_repository, event_bus);
+
         let engine = Arc::new(DirectHttpEngine::new(repository.clone())?);
 
         let scheduler =
             Scheduler::start(repository.clone(), engine, QueueConfig::default()).await?;
         let queue = scheduler.queue_manager();
 
-        Ok(Self::new(
+        Ok(AppState::new(
             database,
             repository,
             scheduler,
             queue,
             downloads_dir,
         ))
+    }
+}
+
+/// Spawns a background task that reads from the event bus and forwards each
+/// `DownloadEvent` to the Tauri frontend as a typed application event.
+///
+/// The task exits cleanly when the broadcast sender is dropped (i.e. when the
+/// `EventRepository` is dropped during shutdown), so no explicit cancellation
+/// signal is required.
+pub fn spawn_event_bridge(app: tauri::AppHandle, event_bus: &DownloadEventBus) {
+    let mut rx = event_bus.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    forward_event(&app, event);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        skipped = n,
+                        "event bridge lagged; frontend may have missed events and should refresh"
+                    );
+                    // Continue — the frontend will reconcile on the next event.
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // The event bus has been dropped (shutdown). Exit the bridge.
+                    break;
+                }
+            }
+        }
+        tracing::debug!("event bridge task exited cleanly");
+    });
+}
+
+fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
+    match event {
+        DownloadEvent::Created { item, .. } | DownloadEvent::Updated { item, .. } => {
+            let payload = DownloadUpdatedEvent {
+                download: DownloadDto::from(item),
+            };
+            if let Err(error) = app.emit(DOWNLOAD_UPDATED, payload) {
+                tracing::warn!(%error, event = DOWNLOAD_UPDATED, "could not emit desktop event");
+            }
+        }
+        DownloadEvent::Removed { id, .. } => {
+            let payload = DownloadRemovedEvent {
+                download_id: id.to_string(),
+            };
+            if let Err(error) = app.emit(DOWNLOAD_REMOVED, payload) {
+                tracing::warn!(%error, event = DOWNLOAD_REMOVED, "could not emit desktop event");
+            }
+        }
     }
 }
 
@@ -67,6 +128,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let database_path = app_data_dir.join("mydownloader.db");
             let state =
                 tauri::async_runtime::block_on(AppState::initialize(database_path, downloads_dir))?;
+            // Start the event bridge before managing state so events are never
+            // lost between setup and the first frontend subscription.
+            spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
             }
