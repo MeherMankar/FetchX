@@ -91,3 +91,60 @@ export interface QueueSnapshot {
   used_connections: number;
   total_connections: number;
 }
+
+// ---------------------------------------------------------------------------
+// Engine configuration
+// ---------------------------------------------------------------------------
+
+export interface DirectHttpConfigDto {
+  enabled: boolean;
+}
+
+export interface Aria2ConfigDto {
+  enabled: boolean;
+  executable_path: string | null;
+  rpc_port: number;
+  /** True when a non-empty secret is stored. The actual secret is never returned. */
+  has_secret: boolean;
+}
+
+export interface YtDlpConfigDto {
+  enabled: boolean;
+  executable_path: string | null;
+}
+
+export interface EngineConfigDto {
+  direct_http: DirectHttpConfigDto;
+  aria2: Aria2ConfigDto;
+  yt_dlp: YtDlpConfigDto;
+}
+
+export interface SaveAria2ConfigRequest {
+  enabled: boolean;
+  executable_path: string | null;
+  rpc_port: number;
+  /** null = leave existing secret unchanged. "" = clear secret. "token" = set. */
+  rpc_secret_update: string | null;
+}
+
+export interface SaveYtDlpConfigRequest {
+  enabled: boolean;
+  executable_path: string | null;
+}
+
+export interface SaveEngineConfigRequest {
+  aria2: SaveAria2ConfigRequest;
+  yt_dlp: SaveYtDlpConfigRequest;
+}
+
+export interface DiagnosticResult {
+  available: boolean;
+  executable: string | null;
+  version: string | null;
+  message: string;
+}
+
+export interface EngineIpcError {
+  code: "invalid_config" | "executable_not_found" | "executable_invalid";
+  message: string;
+}

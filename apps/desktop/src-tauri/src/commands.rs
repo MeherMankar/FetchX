@@ -1,5 +1,5 @@
 use std::{
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     sync::{Arc, atomic::AtomicU8},
 };
 
@@ -16,6 +16,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::config::ConfigService;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
@@ -32,8 +33,9 @@ pub struct AppState {
     pub(crate) repository: AppRepository,
     queue: QueueManager,
     pub(crate) scheduler: Scheduler<AppRepository>,
-    downloads_dir: PathBuf,
+    downloads_dir: std::path::PathBuf,
     pub(crate) shutdown_state: Arc<AtomicU8>,
+    pub(crate) config_service: ConfigService,
 }
 
 impl AppState {
@@ -42,7 +44,8 @@ impl AppState {
         repository: AppRepository,
         scheduler: Scheduler<AppRepository>,
         queue: QueueManager,
-        downloads_dir: PathBuf,
+        downloads_dir: std::path::PathBuf,
+        config_service: ConfigService,
     ) -> Self {
         Self {
             _database: database,
@@ -51,6 +54,7 @@ impl AppState {
             scheduler,
             downloads_dir,
             shutdown_state: Arc::new(AtomicU8::new(0)),
+            config_service,
         }
     }
 
@@ -663,6 +667,7 @@ mod tests {
         AddDownloadRequest, AppState, DownloadDto, IpcErrorCode, filename_for_url,
         parse_download_id, validate_http_source_url,
     };
+    use crate::config::ConfigService;
 
     struct WaitingEngine {
         repository: SqliteDownloadRepository,
@@ -733,12 +738,14 @@ mod tests {
         )
         .await?;
         let queue = scheduler.queue_manager();
+        let config_service = ConfigService::new(database.config());
         Ok(AppState::new(
             database,
             repository,
             scheduler,
             queue,
             PathBuf::from("test-downloads"),
+            config_service,
         ))
     }
 

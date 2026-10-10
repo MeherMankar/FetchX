@@ -1268,3 +1268,226 @@ a {
     width: 100%;
   }
 }
+
+/* ============================================================
+   Sidebar footer nav (Settings link)
+   ============================================================ */
+
+.sidebar-footer-nav {
+  border-top: 1px solid rgba(255 255 255 / 8%);
+  padding: 6px 0 4px;
+}
+
+.nav-item-settings {
+  color: var(--color-sidebar-text);
+}
+
+/* ============================================================
+   Settings page
+   ============================================================ */
+
+.settings-page {
+  max-width: 640px;
+  padding: 0 0 32px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-title {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.settings-loading {
+  padding: 40px 20px;
+  color: var(--color-text-secondary);
+}
+
+.settings-notice {
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.settings-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 14px;
+}
+
+.settings-section-title {
+  font-size: 14px;
+  font-weight: 650;
+  margin: 0 0 16px;
+  color: var(--color-text);
+}
+
+.settings-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.settings-row:last-of-type {
+  margin-bottom: 0;
+}
+
+.settings-label {
+  flex-shrink: 0;
+  width: 140px;
+  padding-top: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.settings-control {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-input {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  outline: none;
+  width: 100%;
+}
+
+.settings-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(36 99 235 / 10%);
+}
+
+.settings-input-sm {
+  width: 100px;
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.settings-builtin-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-light);
+}
+
+/* ============================================================
+   Secret field
+   ============================================================ */
+
+.secret-display,
+.secret-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secret-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================
+   Status dots
+   ============================================================ */
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-ok  { background: var(--color-success); }
+.dot-err { background: var(--color-danger); }
+.dot-idle { background: var(--color-border); }
+
+/* ============================================================
+   Diagnostic box
+   ============================================================ */
+
+.diagnostic-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.diagnostic-ok {
+  background: var(--color-success-subtle);
+  border-color: #b7e4cc;
+  color: var(--color-success);
+}
+
+.diagnostic-err {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
+}
+
+.diagnostic-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.diagnostic-version {
+  font-weight: 600;
+}
+
+.diagnostic-path {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}

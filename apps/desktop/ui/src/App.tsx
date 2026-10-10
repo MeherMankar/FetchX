@@ -10,6 +10,7 @@ import { DetailPanel } from "./components/DetailPanel";
 import { DownloadRow } from "./components/DownloadRow";
 import { EmptyState } from "./components/EmptyState";
 import { Sidebar } from "./components/Sidebar";
+import { SettingsPage } from "./components/SettingsPage";
 import { ToastStack, useToasts } from "./components/Toast";
 import { Toolbar } from "./components/Toolbar";
 import { useDownloads } from "./hooks/useDownloads";
@@ -27,7 +28,8 @@ export type NavSection =
   | "scheduled"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "settings";
 
 export type SortKey =
   | "newest"
@@ -108,6 +110,7 @@ function sortDownloads(downloads: Download[], sort: SortKey): Download[] {
 const SECTION_TITLES: Record<NavSection, string> = {
   all: "All Downloads", active: "Active", queued: "Queued", paused: "Paused",
   scheduled: "Scheduled", completed: "Completed", failed: "Failed", cancelled: "Cancelled",
+  settings: "Settings",
 };
 
 const EMPTY_MESSAGES: Record<NavSection, { title: string; subtitle: string }> = {
@@ -119,6 +122,7 @@ const EMPTY_MESSAGES: Record<NavSection, { title: string; subtitle: string }> = 
   completed: { title: "No completed downloads",    subtitle: "Finished downloads will appear here." },
   failed:    { title: "No failed downloads",       subtitle: "Downloads that encounter errors will appear here." },
   cancelled: { title: "No cancelled downloads",    subtitle: "" },
+  settings:  { title: "",                          subtitle: "" },
 };
 
 // ---------------------------------------------------------------------------
@@ -554,7 +558,7 @@ export function App() {
           </div>
         )}
 
-        {checkedIds.size > 0 && (
+        {checkedIds.size > 0 && navSection !== "settings" && (
           <BulkActionBar
             count={checkedIds.size}
             canPauseAny={canPauseAny}
@@ -566,6 +570,13 @@ export function App() {
           />
         )}
 
+        {navSection === "settings" ? (
+          <div className="content-area">
+            <div className="download-pane">
+              <SettingsPage />
+            </div>
+          </div>
+        ) : (
         <div className={`content-area${selectedDownload ? " content-area--split" : ""}`}>
           <div
             className={`download-pane${isDragging ? " download-pane--drag-over" : ""}`}
@@ -648,6 +659,7 @@ export function App() {
             />
           )}
         </div>
+        )} {/* end settings ternary */}
 
         <footer className="app-footer">
           Downloads are stored in your system Downloads folder. Removing an item preserves its files.

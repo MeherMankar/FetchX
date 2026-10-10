@@ -3,6 +3,8 @@
 
 mod app;
 mod commands;
+mod config;
+mod engine_commands;
 mod events;
 
 fn main() {

@@ -12,6 +12,8 @@ use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
 use crate::commands::{self, AppState, DownloadDto};
+use crate::config::ConfigService;
+use crate::engine_commands;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
@@ -44,12 +46,15 @@ impl AppState {
             Scheduler::start(repository.clone(), engine, QueueConfig::default()).await?;
         let queue = scheduler.queue_manager();
 
+        let config_service = ConfigService::new(database.config());
+
         Ok(AppState::new(
             database,
             repository,
             scheduler,
             queue,
             downloads_dir,
+            config_service,
         ))
     }
 }
@@ -127,6 +132,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_download_schedule,
             commands::retry_download,
             commands::get_queue_snapshot,
+            engine_commands::get_engine_config,
+            engine_commands::save_engine_config,
+            engine_commands::reset_engine_config,
+            engine_commands::test_aria2_config,
+            engine_commands::test_ytdlp_config,
         ])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;

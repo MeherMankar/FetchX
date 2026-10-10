@@ -55,6 +55,17 @@ export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
       </ul>
 
       <SnapshotBar snapshot={snapshot} />
+
+      {/* Settings link at the bottom */}
+      <div className="sidebar-footer-nav">
+        <button
+          className={`nav-item nav-item-settings${active === "settings" ? " nav-item--active" : ""}`}
+          onClick={() => onSelect("settings")}
+          aria-current={active === "settings" ? "page" : undefined}
+        >
+          <span className="nav-label">⚙ Settings</span>
+        </button>
+      </div>
     </nav>
   );
 }

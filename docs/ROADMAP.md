@@ -17,10 +17,12 @@
 15. Phase 14A — Tauri 2 desktop foundation with minimal React shell (completed)
 16. Phase 14B — Live download events/progress (completed)
 17. Phase 14C — Priority + scheduling controls (completed)
-18. Phase 15 — Full React desktop UI
-19. Phase 16 — Browser extension
-20. Phase 17 — CLI
-21. Phase 18 — Plugin architecture
-22. Phase 19 — Android
-23. Phase 20 — Remote/headless mode
-24. Phase 21 — Production packaging and releases
+18. Phase 15A — Full React desktop UI (completed)
+19. Phase 15B — UI polish: queue snapshot, bulk actions, drag-and-drop, keyboard shortcuts, confirmations, toasts, retry (completed)
+20. Phase 16 — Engine configuration UI (aria2 + yt-dlp setup, config persistence)
+21. Phase 17 — Browser extension
+22. Phase 18 — CLI
+23. Phase 19 — Plugin architecture
+24. Phase 20 — Android
+25. Phase 21 — Remote/headless mode
+26. Phase 22 — Production packaging and releases

@@ -6,7 +6,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
-use crate::{SqliteDownloadRepository, StorageError};
+use crate::{SqliteConfigRepository, SqliteDownloadRepository, StorageError};
 
 static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
     migrations: Cow::Owned(vec![
@@ -32,6 +32,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             MigrationType::Simple,
             Cow::Borrowed(include_str!(
                 "../../../migrations/0003_create_download_schedules.sql"
+            )),
+            false,
+        ),
+        Migration::new(
+            4,
+            Cow::Borrowed("create_engine_config"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0004_create_engine_config.sql"
             )),
             false,
         ),
@@ -98,6 +107,12 @@ impl Database {
     #[must_use]
     pub fn downloads(&self) -> SqliteDownloadRepository {
         SqliteDownloadRepository::new(self.pool.clone())
+    }
+
+    /// Returns a repository for application configuration key-value entries.
+    #[must_use]
+    pub fn config(&self) -> SqliteConfigRepository {
+        SqliteConfigRepository::new(self.pool.clone())
     }
 
     #[cfg(test)]

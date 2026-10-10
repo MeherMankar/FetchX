@@ -8,7 +8,7 @@ mod sqlite;
 pub use database::Database;
 pub use error::StorageError;
 pub use repository::DownloadRepository;
-pub use sqlite::SqliteDownloadRepository;
+pub use sqlite::{SqliteConfigRepository, SqliteDownloadRepository};
 
 #[cfg(test)]
 mod tests;
