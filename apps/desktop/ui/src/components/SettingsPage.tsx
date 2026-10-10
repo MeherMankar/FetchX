@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import {
   getEngineConfig,
+  getEngineStatus,
   resetEngineConfig,
   saveEngineConfig,
   testAria2Config,
@@ -10,6 +11,8 @@ import {
 import type {
   DiagnosticResult,
   EngineConfigDto,
+  EngineInstanceStatus,
+  EngineStatus,
   SaveAria2ConfigRequest,
   SaveYtDlpConfigRequest,
 } from "../api/types";
@@ -71,11 +74,12 @@ function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
 
 interface Aria2SectionProps {
   cfg: EngineConfigDto;
+  runtimeStatus: EngineInstanceStatus | null;
   onSaved: (updated: EngineConfigDto) => void;
   onError: (msg: string) => void;
 }
 
-function Aria2Section({ cfg, onSaved, onError }: Aria2SectionProps) {
+function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProps) {
   const [enabled, setEnabled] = useState(cfg.aria2.enabled);
   const [execPath, setExecPath] = useState(cfg.aria2.executable_path ?? "");
   const [port, setPort] = useState(String(cfg.aria2.rpc_port));
@@ -137,7 +141,10 @@ function Aria2Section({ cfg, onSaved, onError }: Aria2SectionProps) {
 
   return (
     <section className="settings-section" aria-labelledby="aria2-heading">
-      <h3 id="aria2-heading" className="settings-section-title">aria2</h3>
+      <div className="settings-section-header">
+        <h3 id="aria2-heading" className="settings-section-title">aria2</h3>
+        <RuntimeStatusBadge status={runtimeStatus} />
+      </div>
 
       <div className="settings-row">
         <label className="settings-label" htmlFor="aria2-enabled">Enabled</label>
@@ -270,11 +277,12 @@ function Aria2Section({ cfg, onSaved, onError }: Aria2SectionProps) {
 
 interface YtDlpSectionProps {
   cfg: EngineConfigDto;
+  runtimeStatus: EngineInstanceStatus | null;
   onSaved: (updated: EngineConfigDto) => void;
   onError: (msg: string) => void;
 }
 
-function YtDlpSection({ cfg, onSaved, onError }: YtDlpSectionProps) {
+function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProps) {
   const [enabled, setEnabled] = useState(cfg.yt_dlp.enabled);
   const [execPath, setExecPath] = useState(cfg.yt_dlp.executable_path ?? "");
   const [busy, setBusy] = useState(false);
@@ -326,7 +334,10 @@ function YtDlpSection({ cfg, onSaved, onError }: YtDlpSectionProps) {
 
   return (
     <section className="settings-section" aria-labelledby="ytdlp-heading">
-      <h3 id="ytdlp-heading" className="settings-section-title">yt-dlp</h3>
+      <div className="settings-section-header">
+        <h3 id="ytdlp-heading" className="settings-section-title">yt-dlp</h3>
+        <RuntimeStatusBadge status={runtimeStatus} />
+      </div>
 
       <div className="settings-row">
         <label className="settings-label" htmlFor="ytdlp-enabled">Enabled</label>
@@ -385,10 +396,13 @@ function YtDlpSection({ cfg, onSaved, onError }: YtDlpSectionProps) {
 // Direct HTTP section
 // ---------------------------------------------------------------------------
 
-function DirectHttpSection() {
+function DirectHttpSection({ runtimeStatus }: { runtimeStatus: EngineInstanceStatus | null }) {
   return (
     <section className="settings-section" aria-labelledby="directhttp-heading">
-      <h3 id="directhttp-heading" className="settings-section-title">Direct HTTP</h3>
+      <div className="settings-section-header">
+        <h3 id="directhttp-heading" className="settings-section-title">Direct HTTP</h3>
+        <RuntimeStatusBadge status={runtimeStatus ?? { enabled: true, available: true, version: null, error: null }} />
+      </div>
       <div className="settings-row">
         <span className="settings-label">Status</span>
         <div className="settings-control">
@@ -407,11 +421,39 @@ function DirectHttpSection() {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime status badge
+// ---------------------------------------------------------------------------
+
+function RuntimeStatusBadge({ status }: { status: EngineInstanceStatus | null }) {
+  if (!status) return null;
+
+  if (!status.enabled) {
+    return <span className="runtime-badge runtime-badge-disabled">Disabled</span>;
+  }
+  if (status.available) {
+    return (
+      <span className="runtime-badge runtime-badge-ok">
+        ● Running{status.version ? ` · ${status.version}` : ""}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="runtime-badge runtime-badge-err"
+      title={status.error ?? undefined}
+    >
+      ● Unavailable
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Root SettingsPage
 // ---------------------------------------------------------------------------
 
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
+  const [runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
@@ -419,8 +461,12 @@ export function SettingsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const loaded = await getEngineConfig();
+      const [loaded, status] = await Promise.all([
+        getEngineConfig(),
+        getEngineStatus(),
+      ]);
       setCfg(loaded);
+      setRuntimeStatus(status);
       setError(null);
     } catch (cause) {
       setError(errorMessage(cause));
@@ -488,14 +534,16 @@ export function SettingsPage() {
 
       {cfg && (
         <>
-          <DirectHttpSection />
+          <DirectHttpSection runtimeStatus={runtimeStatus?.direct_http ?? null} />
           <Aria2Section
             cfg={cfg}
+            runtimeStatus={runtimeStatus?.aria2 ?? null}
             onSaved={setCfg}
             onError={setError}
           />
           <YtDlpSection
             cfg={cfg}
+            runtimeStatus={runtimeStatus?.yt_dlp ?? null}
             onSaved={setCfg}
             onError={setError}
           />

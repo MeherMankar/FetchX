@@ -5,6 +5,7 @@ mod app;
 mod commands;
 mod config;
 mod engine_commands;
+mod engines;
 mod events;
 
 fn main() {

@@ -17,15 +17,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::config::ConfigService;
+use crate::engines::EngineRuntime;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
 
 /// The concrete repository type used by the desktop application.
-///
-/// Wrapping `SqliteDownloadRepository` in `EventRepository` causes every
-/// persistence write to publish a `DownloadEvent` to the broadcast bus,
-/// which the event bridge task then forwards to the Tauri frontend.
 pub(crate) type AppRepository = EventRepository<SqliteDownloadRepository>;
 
 pub struct AppState {
@@ -36,6 +33,8 @@ pub struct AppState {
     downloads_dir: std::path::PathBuf,
     pub(crate) shutdown_state: Arc<AtomicU8>,
     pub(crate) config_service: ConfigService,
+    /// Owns the optional engine supervisors and the dispatcher.
+    pub(crate) engine_runtime: Arc<EngineRuntime>,
 }
 
 impl AppState {
@@ -46,6 +45,7 @@ impl AppState {
         queue: QueueManager,
         downloads_dir: std::path::PathBuf,
         config_service: ConfigService,
+        engine_runtime: EngineRuntime,
     ) -> Self {
         Self {
             _database: database,
@@ -55,6 +55,7 @@ impl AppState {
             downloads_dir,
             shutdown_state: Arc::new(AtomicU8::new(0)),
             config_service,
+            engine_runtime: Arc::new(engine_runtime),
         }
     }
 
@@ -668,6 +669,7 @@ mod tests {
         parse_download_id, validate_http_source_url,
     };
     use crate::config::ConfigService;
+    use crate::engines::EngineRuntime;
 
     struct WaitingEngine {
         repository: SqliteDownloadRepository,
@@ -729,6 +731,18 @@ mod tests {
         let inner_repository = database.downloads();
         let event_bus = DownloadEventBus::new();
         let repository = EventRepository::new(inner_repository.clone(), event_bus);
+        let config_service = ConfigService::new(database.config());
+
+        // Use the default config (all optional engines disabled) to build an
+        // EngineRuntime with only DirectHttp.  The runtime provides the dispatcher
+        // reference stored in AppState, but the test scheduler uses WaitingEngine
+        // so the existing test behaviour (wait for Downloading, then act) is preserved.
+        let engine_config = crate::config::EngineConfig::default();
+        let engine_runtime =
+            EngineRuntime::initialize(repository.clone(), &engine_config, std::env::temp_dir())
+                .await?;
+
+        // Build scheduler with WaitingEngine so tests can observe lifecycle transitions.
         let scheduler = Scheduler::start(
             repository.clone(),
             Arc::new(WaitingEngine {
@@ -738,7 +752,6 @@ mod tests {
         )
         .await?;
         let queue = scheduler.queue_manager();
-        let config_service = ConfigService::new(database.config());
         Ok(AppState::new(
             database,
             repository,
@@ -746,6 +759,7 @@ mod tests {
             queue,
             PathBuf::from("test-downloads"),
             config_service,
+            engine_runtime,
         ))
     }
 

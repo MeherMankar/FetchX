@@ -311,10 +311,70 @@ pub async fn reset_engine_config(
     Ok(EngineConfigDto::from(&cfg))
 }
 
-/// Tests whether the configured aria2 executable is present and reports its
-/// version.  Does NOT start a permanent aria2 process.
-///
-/// Uses structured arguments only — no shell concatenation.
+/// Live runtime status of a single engine instance.
+/// Never includes secrets or internal process state.
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineInstanceStatusDto {
+    pub enabled: bool,
+    pub available: bool,
+    pub version: Option<String>,
+    /// Human-readable error when available == false.
+    pub error: Option<String>,
+}
+
+/// Runtime status of all engines returned to the frontend.
+#[derive(Clone, Debug, Serialize)]
+pub struct EngineStatusDto {
+    pub direct_http: EngineInstanceStatusDto,
+    pub aria2: EngineInstanceStatusDto,
+    pub yt_dlp: EngineInstanceStatusDto,
+}
+
+pub(crate) fn engine_instance_dto(
+    avail: &crate::engines::EngineAvailability,
+) -> EngineInstanceStatusDto {
+    use crate::engines::EngineAvailability;
+    match avail {
+        EngineAvailability::Disabled => EngineInstanceStatusDto {
+            enabled: false,
+            available: false,
+            version: None,
+            error: None,
+        },
+        EngineAvailability::Available { version } => EngineInstanceStatusDto {
+            enabled: true,
+            available: true,
+            version: Some(version.clone()),
+            error: None,
+        },
+        EngineAvailability::Unavailable { reason } => EngineInstanceStatusDto {
+            enabled: true,
+            available: false,
+            version: None,
+            error: Some(reason.clone()),
+        },
+    }
+}
+
+/// Returns the live runtime availability of each engine.
+/// Reflects what actually happened at startup, not just persisted config.
+/// Secrets are never included.
+#[tauri::command]
+pub async fn get_engine_status(
+    state: State<'_, AppState>,
+) -> Result<EngineStatusDto, EngineIpcError> {
+    let status = &state.engine_runtime.status;
+    Ok(EngineStatusDto {
+        direct_http: EngineInstanceStatusDto {
+            enabled: true,
+            available: true,
+            version: None,
+            error: None,
+        },
+        aria2: engine_instance_dto(&status.aria2),
+        yt_dlp: engine_instance_dto(&status.yt_dlp),
+    })
+}
 #[tauri::command]
 pub async fn test_aria2_config(
     state: State<'_, AppState>,

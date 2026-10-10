@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   DiagnosticResult,
   EngineConfigDto,
+  EngineStatus,
   SaveEngineConfigRequest,
 } from "./types";
 
@@ -26,4 +27,8 @@ export function testAria2Config(): Promise<DiagnosticResult> {
 
 export function testYtDlpConfig(): Promise<DiagnosticResult> {
   return invoke<DiagnosticResult>("test_ytdlp_config");
+}
+
+export function getEngineStatus(): Promise<EngineStatus> {
+  return invoke<EngineStatus>("get_engine_status");
 }

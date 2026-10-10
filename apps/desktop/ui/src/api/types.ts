@@ -148,3 +148,21 @@ export interface EngineIpcError {
   code: "invalid_config" | "executable_not_found" | "executable_invalid";
   message: string;
 }
+
+// ---------------------------------------------------------------------------
+// Engine runtime status
+// ---------------------------------------------------------------------------
+
+export interface EngineInstanceStatus {
+  enabled: boolean;
+  available: boolean;
+  version: string | null;
+  /** Human-readable error when available == false and enabled == true. */
+  error: string | null;
+}
+
+export interface EngineStatus {
+  direct_http: EngineInstanceStatus;
+  aria2: EngineInstanceStatus;
+  yt_dlp: EngineInstanceStatus;
+}
