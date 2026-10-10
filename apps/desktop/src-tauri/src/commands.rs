@@ -189,6 +189,7 @@ pub struct DownloadDto {
     pub destination: String,
     pub status: DownloadStatus,
     pub priority: DownloadPriority,
+    pub engine: EngineKind,
     pub progress: DownloadProgressDto,
     pub error: Option<DownloadErrorDto>,
     pub created_at: u64,
@@ -229,6 +230,7 @@ impl From<DownloadItem> for DownloadDto {
             destination: item.destination().to_string_lossy().into_owned(),
             status: item.status(),
             priority: item.priority(),
+            engine: item.source().engine(),
             progress: DownloadProgressDto {
                 downloaded_bytes: progress.downloaded_bytes(),
                 total_bytes: progress.total_bytes(),
@@ -781,6 +783,7 @@ mod tests {
                 destination: "downloads/file".to_owned(),
                 status: DownloadStatus::Queued,
                 priority: mydownloader_models::DownloadPriority::Normal,
+                engine: mydownloader_models::EngineKind::DirectHttp,
                 progress: super::DownloadProgressDto {
                     downloaded_bytes: 0,
                     total_bytes: None,

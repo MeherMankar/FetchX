@@ -30,6 +30,8 @@ export interface DownloadError {
   message: string;
 }
 
+export type EngineKind = "direct_http" | "aria2" | "yt_dlp";
+
 export interface Download {
   id: string;
   url: string;
@@ -37,6 +39,7 @@ export interface Download {
   destination: string;
   status: DownloadStatus;
   priority: DownloadPriority;
+  engine: EngineKind;
   progress: DownloadProgress;
   error: DownloadError | null;
   created_at: number;
