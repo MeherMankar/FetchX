@@ -62,6 +62,33 @@ pub enum Command {
 
     /// Monitor active downloads in real time (Ctrl+C to exit).
     Monitor,
+
+    /// Plugin management commands.
+    Plugins(PluginsOpts),
+}
+
+// ── Plugins ───────────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct PluginsOpts {
+    #[command(subcommand)]
+    pub command: Option<PluginsCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PluginsCommand {
+    /// List all registered plugins.
+    List,
+    /// Show information about one plugin.
+    Info {
+        /// Plugin ID.
+        id: String,
+    },
+    /// Show the runtime status of one plugin.
+    Status {
+        /// Plugin ID.
+        id: String,
+    },
 }
 
 // ── Add ──────────────────────────────────────────────────────────────────

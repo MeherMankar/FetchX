@@ -69,7 +69,40 @@
        design but still contain some duplicated service initialization
        code. Consolidation is a future task.
 
-25. Phase 19 — Plugin architecture
+25. Phase 19 — Plugin architecture (completed)
+
+    Architecture: Out-of-process plugin model. Plugins run as external
+    child processes communicating with the host via a length-prefixed JSON
+    protocol over stdin/stdout. No in-process dynamic loading.
+
+    New crates:
+    - `crates/plugin-api` — shared protocol types: versioned manifest
+      schema, IPC framing (4-byte LE length + JSON, max 64 KiB), typed
+      host request / plugin response messages, manifest validation.
+    - `crates/plugin-manager` — `PluginManager` service: directory
+      discovery, manifest validation, registry, process lifecycle
+      (start/handshake/stop), bounded timeouts, failure isolation.
+
+    Security boundary:
+    - No secrets forwarded to plugin processes.
+    - Structured process invocation only (no shell strings).
+    - Executable paths must be absolute with no path traversal.
+    - IPC messages bounded at 64 KiB before allocation.
+    - `#![forbid(unsafe_code)]` in both new crates.
+    - `deny_unknown_fields` on manifest and protocol types.
+
+    Capabilities defined: engine, post_processor, url_resolver, metadata.
+
+    CLI extension: `mydownloader plugins [list|info|status]` with --json.
+
+    Known limitations:
+    1. Built-in engines (DirectHttp, aria2, yt-dlp) are NOT converted to
+       plugins. The `engine` capability defines the interface for future
+       external engine plugins only.
+    2. Plugin enable/disable state is not yet persisted in SQLite.
+    3. No plugin sandboxing (filesystem/network isolation) in this phase.
+    4. Plugin hot-reload and restart-on-crash are not implemented.
+
 26. Phase 20 — Android
 27. Phase 21 — Remote/headless mode
 28. Phase 22 — Production packaging and releases

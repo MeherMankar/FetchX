@@ -2213,6 +2213,7 @@ dependencies = [
  "mydownloader-core-services",
  "mydownloader-downloader",
  "mydownloader-models",
+ "mydownloader-plugin-manager",
  "mydownloader-queue",
  "mydownloader-scheduler",
  "mydownloader-storage",
@@ -2323,6 +2324,27 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "mydownloader-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mydownloader-plugin-manager"
+version = "0.1.0"
+dependencies = [
+ "mydownloader-plugin-api",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

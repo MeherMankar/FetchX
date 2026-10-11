@@ -70,3 +70,8 @@ pub async fn start() -> Result<CoreServices, CoreServicesError> {
     );
     CoreServices::start(cfg).await
 }
+
+/// Returns the plugin directory: `{data_dir}/plugins/`.
+pub fn plugin_dir() -> Option<std::path::PathBuf> {
+    Some(app_data_dir().join("plugins"))
+}

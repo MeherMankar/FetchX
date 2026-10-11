@@ -4,6 +4,7 @@ pub mod engines;
 pub mod lifecycle;
 pub mod list;
 pub mod monitor;
+pub mod plugins;
 pub mod priority;
 pub mod schedule;
 pub mod status;

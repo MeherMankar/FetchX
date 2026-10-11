@@ -7,6 +7,8 @@ members = [
     "crates/queue",
     "crates/scheduler",
     "crates/browser-protocol",
+    "crates/plugin-api",
+    "crates/plugin-manager",
     "crates/core-services",
     "crates/cli",
     "apps/desktop/src-tauri",

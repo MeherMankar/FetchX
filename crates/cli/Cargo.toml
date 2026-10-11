@@ -12,6 +12,7 @@ path = "src/main.rs"
 mydownloader-core-services = { path = "../core-services" }
 mydownloader-downloader    = { path = "../downloader" }
 mydownloader-models        = { path = "../models" }
+mydownloader-plugin-manager = { path = "../plugin-manager" }
 mydownloader-queue         = { path = "../queue" }
 mydownloader-scheduler     = { path = "../scheduler" }
 mydownloader-storage       = { path = "../storage" }
