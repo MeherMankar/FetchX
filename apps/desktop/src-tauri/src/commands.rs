@@ -97,6 +97,37 @@ impl AppState {
         self.get(id).await
     }
 
+    /// Adds a download from the browser integration IPC path.
+    ///
+    /// Shares exactly the same validation and queue path as the Tauri command,
+    /// but is called from `browser_ipc` rather than through Tauri IPC.
+    /// The browser may only supply a URL; engine, filename, and destination
+    /// are determined by the application exactly as for the desktop UI.
+    pub(crate) async fn add_from_browser(
+        &self,
+        request: AddDownloadRequest,
+    ) -> Result<DownloadDto, IpcError> {
+        self.add(request).await
+    }
+
+    /// Creates a lightweight clone suitable for the browser IPC service.
+    ///
+    /// `AppState` is not `Clone` because `_database` is not, but the browser
+    /// IPC service only needs the queue, repository, engine_runtime, and
+    /// downloads_dir — all of which are already Arc-backed or cheaply cloneable.
+    pub(crate) fn clone_for_browser(&self) -> Self {
+        Self {
+            _database: self._database.clone(),
+            repository: self.repository.clone(),
+            queue: self.queue.clone(),
+            scheduler: self.scheduler.clone(),
+            downloads_dir: self.downloads_dir.clone(),
+            shutdown_state: Arc::clone(&self.shutdown_state),
+            config_service: self.config_service.clone(),
+            engine_runtime: Arc::clone(&self.engine_runtime),
+        }
+    }
+
     async fn get(&self, id: DownloadId) -> Result<DownloadDto, IpcError> {
         self.repository
             .get(id)

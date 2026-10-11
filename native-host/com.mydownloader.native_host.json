@@ -1,0 +1,9 @@
+{
+  "name": "com.mydownloader.native_host",
+  "description": "MyDownloader native messaging host",
+  "path": "D:\\Projects\\MyDownloader\\target\\release\\mydownloader-native-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://PASTE_YOUR_EXTENSION_ID_HERE/"
+  ]
+}

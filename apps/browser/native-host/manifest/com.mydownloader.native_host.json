@@ -1,0 +1,9 @@
+{
+  "name": "com.mydownloader.native_host",
+  "description": "MyDownloader native messaging host",
+  "path": "REPLACE_WITH_ABSOLUTE_PATH_TO_mydownloader-native-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACE_WITH_YOUR_EXTENSION_ID/"
+  ]
+}

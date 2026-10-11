@@ -9,6 +9,7 @@ build = "build.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+mydownloader-browser-protocol = { path = "../../../crates/browser-protocol" }
 mydownloader-core = { path = "../../../crates/core" }
 mydownloader-downloader = { path = "../../../crates/downloader" }
 mydownloader-models = { path = "../../../crates/models" }
@@ -23,6 +24,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

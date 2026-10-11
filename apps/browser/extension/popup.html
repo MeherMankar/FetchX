@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyDownloader</title>
+    <link rel="stylesheet" href="dist/mydownloader-extension.css" />
+  </head>
+  <body>
+    <div class="popup-root">
+
+      <!-- Header -->
+      <header class="popup-header">
+        <div class="popup-logo">
+          <img src="icons/icon32.png" alt="" width="18" height="18" />
+          <span class="popup-title">MyDownloader</span>
+        </div>
+        <div class="header-right">
+          <div id="status-badge" class="status-badge status-checking">
+            <span class="status-dot"></span>
+            <span id="status-text">Checking…</span>
+          </div>
+          <button id="settings-btn" class="icon-btn-sm" title="Settings" aria-label="Settings">⚙</button>
+        </div>
+      </header>
+
+      <!-- Tab bar -->
+      <nav class="tab-bar" role="tablist">
+        <button class="tab-btn tab-active" data-tab="add"       role="tab" aria-selected="true">Add</button>
+        <button class="tab-btn"            data-tab="tasks"     role="tab" aria-selected="false">Tasks</button>
+        <button class="tab-btn"            data-tab="resources" role="tab" aria-selected="false">Resources</button>
+      </nav>
+
+      <!-- TAB: Add -->
+      <div id="tab-add" class="tab-panel">
+        <div class="input-group">
+          <input
+            id="url-input"
+            class="url-input"
+            type="url"
+            placeholder="Paste or use current tab URL…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="use-tab-btn" class="icon-btn" title="Use current tab URL" aria-label="Use current tab URL">⇥</button>
+        </div>
+        <button id="submit-btn" class="submit-btn" type="button" disabled>
+          <span class="btn-icon">↓</span>
+          <span id="btn-text">Download with MyDownloader</span>
+        </button>
+        <div id="result-banner" class="result-banner hidden" role="alert"></div>
+      </div>
+
+      <!-- TAB: Tasks -->
+      <div id="tab-tasks" class="tab-panel hidden">
+        <div class="panel-toolbar">
+          <span class="panel-label">Recent downloads</span>
+          <button id="refresh-tasks-btn" class="text-btn">↺ Refresh</button>
+        </div>
+        <div id="task-list" class="task-list">
+          <p class="empty-msg">No downloads yet</p>
+        </div>
+      </div>
+
+      <!-- TAB: Resources -->
+      <div id="tab-resources" class="tab-panel hidden">
+        <div class="panel-toolbar">
+          <span class="panel-label">Page resources</span>
+          <div class="filter-group">
+            <button class="filter-btn filter-active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="video">Video</button>
+            <button class="filter-btn" data-filter="audio">Audio</button>
+            <button class="filter-btn" data-filter="image">Image</button>
+            <button class="filter-btn" data-filter="file">File</button>
+          </div>
+        </div>
+        <div id="scan-empty" class="scan-prompt">
+          <button id="scan-btn" class="submit-btn">
+            <span>🔍 Scan this page</span>
+          </button>
+        </div>
+        <div id="resource-list" class="resource-list hidden"></div>
+        <div id="resource-actions" class="resource-actions hidden">
+          <span id="selected-count" class="selected-count">0 selected</span>
+          <button id="download-selected-btn" class="submit-btn submit-btn-sm" disabled>↓ Download selected</button>
+        </div>
+      </div>
+
+      <!-- Settings panel (overlay) -->
+      <div id="settings-panel" class="settings-panel hidden">
+        <div class="settings-header">
+          <span class="settings-title">Settings</span>
+          <button id="settings-close-btn" class="icon-btn-sm">✕</button>
+        </div>
+        <div class="settings-body">
+          <label class="setting-row">
+            <span class="setting-label">Auto-intercept downloads</span>
+            <input id="set-auto-intercept" type="checkbox" class="toggle" />
+          </label>
+          <label class="setting-row">
+            <span class="setting-label">Minimum file size (MB, 0 = all)</span>
+            <input id="set-min-size" type="number" min="0" max="10240" class="num-input" />
+          </label>
+          <label class="setting-row">
+            <span class="setting-label">Show notifications</span>
+            <input id="set-notifications" type="checkbox" class="toggle" />
+          </label>
+          <div class="settings-save-row">
+            <button id="settings-save-btn" class="submit-btn submit-btn-sm">Save</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <script src="dist/popup.js"></script>
+  </body>
+</html>

@@ -10,6 +10,7 @@ use tauri::{Emitter, Manager, RunEvent};
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
+use crate::browser_ipc::BrowserIpcServer;
 use crate::commands::{self, AppState, DownloadDto};
 use crate::config::ConfigService;
 use crate::engine_commands;
@@ -155,6 +156,30 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
             }
+
+            // Start the browser integration IPC server after state is managed.
+            // The server borrows AppState via the Tauri handle so it shares the
+            // same queue/engine runtime without duplication.
+            // Failures are non-fatal: the desktop remains fully usable.
+            {
+                let app_handle = app.handle().clone();
+                let data_dir = app_data_dir.clone();
+                tauri::async_runtime::spawn(async move {
+                    let app_state = app_handle.state::<AppState>();
+                    match BrowserIpcServer::start(&app_state, data_dir, env!("CARGO_PKG_VERSION"))
+                        .await
+                    {
+                        Ok(srv) => {
+                            tracing::info!(port = srv.port, "browser IPC server started");
+                            let _ = app_handle.manage(srv);
+                        }
+                        Err(e) => {
+                            tracing::warn!(%e, "browser IPC server failed to start");
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())?;
@@ -180,6 +205,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             tracing::error!(%error, "scheduler failed to shut down cleanly");
                         }
                         engine_runtime.shutdown().await;
+                        // Shut down browser IPC server if it is running.
+                        if let Some(browser_server) = app_handle.try_state::<BrowserIpcServer>() {
+                            browser_server.shutdown().await;
+                        }
                         shutdown_state.store(SHUTDOWN_COMPLETE, Ordering::Release);
                         app_handle.exit(0);
                     });

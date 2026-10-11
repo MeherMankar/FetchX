@@ -19,10 +19,12 @@
 17. Phase 14C — Priority + scheduling controls (completed)
 18. Phase 15A — Full React desktop UI (completed)
 19. Phase 15B — UI polish: queue snapshot, bulk actions, drag-and-drop, keyboard shortcuts, confirmations, toasts, retry (completed)
-20. Phase 16 — Engine configuration UI (aria2 + yt-dlp setup, config persistence)
-21. Phase 17 — Browser extension
-22. Phase 18 — CLI
-23. Phase 19 — Plugin architecture
-24. Phase 20 — Android
-25. Phase 21 — Remote/headless mode
-26. Phase 22 — Production packaging and releases
+20. Phase 16A — Engine configuration UI: persistent aria2 + yt-dlp settings, secret masking, diagnostic commands (completed)
+21. Phase 16B — Runtime engine activation: EngineRuntime, EngineDispatcher integration, optional engine startup, graceful shutdown (completed)
+22. Phase 16C — Engine selection in Add Download: per-download engine choice, backend availability validation, retry preserves engine (completed)
+23. Phase 17 — Browser extension: MV3 extension, native messaging host, context menu, popup, loopback IPC server, protocol types, URL validation (completed)
+24. Phase 18 — CLI
+25. Phase 19 — Plugin architecture
+26. Phase 20 — Android
+27. Phase 21 — Remote/headless mode
+28. Phase 22 — Production packaging and releases

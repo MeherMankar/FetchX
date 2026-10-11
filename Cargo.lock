@@ -2104,6 +2104,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mydownloader-browser-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "url",
+]
+
+[[package]]
 name = "mydownloader-core"
 version = "0.1.0"
 dependencies = [
@@ -2117,6 +2127,7 @@ dependencies = [
 name = "mydownloader-desktop"
 version = "0.1.0"
 dependencies = [
+ "mydownloader-browser-protocol",
  "mydownloader-core",
  "mydownloader-downloader",
  "mydownloader-models",
@@ -2132,6 +2143,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -2159,6 +2171,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "mydownloader-native-host"
+version = "0.1.0"
+dependencies = [
+ "mydownloader-browser-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

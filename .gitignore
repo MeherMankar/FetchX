@@ -1,5 +1,19 @@
+# Rust build artefacts
 /target/
+
+# Tauri generated schemas and platform build outputs
 /apps/desktop/src-tauri/gen/
 /apps/desktop/src-tauri/target/
+
+# Desktop UI
 /apps/desktop/ui/node_modules/
 /apps/desktop/ui/dist/
+
+# Browser extension
+/apps/browser/extension/node_modules/
+/apps/browser/extension/dist/
+/apps/browser/extension/dist-chromium/
+/apps/browser/extension/dist-firefox/
+
+# Native host — no generated files to exclude currently
+# (built by Cargo into the workspace /target/ above)

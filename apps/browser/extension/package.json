@@ -1,0 +1,19 @@
+{
+  "name": "mydownloader-extension",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build":         "tsc --noEmit && npm run build:chromium && npm run build:firefox",
+    "build:chromium":"vite build && vite build --config vite.popup.config.ts && node scripts/assemble.mjs chromium",
+    "build:firefox": "vite build && vite build --config vite.popup.config.ts && node scripts/assemble.mjs firefox",
+    "typecheck":     "tsc --noEmit",
+    "dev":           "vite build --watch"
+  },
+  "devDependencies": {
+    "@types/chrome":     "^0.0.300",
+    "@types/firefox-webext-browser": "^120.0.3",
+    "typescript":        "^5.8.3",
+    "vite":              "^7.0.0"
+  }
+}

@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod browser_ipc;
 mod commands;
 mod config;
 mod engine_commands;
