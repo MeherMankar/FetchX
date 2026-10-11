@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MyDownloader</string>
+    <string name="downloads_tab_active">Active</string>
+    <string name="downloads_tab_queued">Queued</string>
+    <string name="downloads_tab_completed">Completed</string>
+    <string name="downloads_tab_failed">Failed</string>
+    <string name="downloads_action_pause">Pause</string>
+    <string name="downloads_action_resume">Resume</string>
+    <string name="downloads_action_cancel">Cancel</string>
+    <string name="downloads_action_remove">Remove</string>
+    <string name="downloads_action_retry">Retry</string>
+    <string name="downloads_empty">No downloads</string>
+    <string name="downloads_speed_unit_bs">B/s</string>
+    <string name="downloads_speed_unit_kbs">KB/s</string>
+    <string name="downloads_speed_unit_mbs">MB/s</string>
+</resources>

@@ -103,6 +103,79 @@
     3. No plugin sandboxing (filesystem/network isolation) in this phase.
     4. Plugin hot-reload and restart-on-crash are not implemented.
 
-26. Phase 20 — Android
-27. Phase 21 — Remote/headless mode
-28. Phase 22 — Production packaging and releases
+26. Phase 20A — Android foundation (completed)
+
+    Browser engine decision: After evaluating Android System WebView (Chromium),
+    GeckoView (Mozilla), Crosswalk (EOL), and a custom Chromium build, GeckoView
+    was selected. Justification: GeckoView is the only embeddable Android engine
+    with a real WebExtension API (via WebExtensionController), built-in Enhanced
+    Tracking Protection, per-session profile isolation, and native private browsing.
+    The ~37 MB arm64 APK size cost is accepted. Chromium WebView was rejected due
+    to no extension API, no privacy controls, and no profile isolation.
+    Full comparison: docs/ANDROID_BROWSER.md
+
+    SDK versions:
+    - minSdk = 26 (Android 8.0 Oreo — NotificationChannel, reliable JobScheduler)
+    - targetSdk = 35 (Android 15 — Google Play requirement)
+    - compileSdk = 35
+
+    Android module structure created at apps/android/:
+    - :app — MainActivity, MyDownloaderApp, AppNavigation, MyDownloaderTheme,
+      Screen sealed class. Single-Activity architecture with Compose NavHost.
+    - :core — Domain models: DownloadItem, DownloadState, DownloadEvent,
+      DownloadPriority, DownloadRepository (interface), NetworkRoute.
+      No Android framework APIs in the main source set. This is the stable
+      interface the UI layer uses; never depends on the Rust bridge directly.
+    - :downloads — DownloadsScreen (four tabs: Active/Queued/Completed/Failed),
+      DownloadItemRow (progress, speed, ETA, actions), DownloadsViewModel (stub;
+      wired to real DownloadRepository in Phase 20B).
+
+    Gradle tooling:
+    - Kotlin 2.0.21, AGP 8.7.3, Compose BOM 2024.12.01
+    - Version catalog: apps/android/gradle/libs.versions.toml
+    - GeckoView version pinned in version catalog comment (not added as
+      dependency until Phase 20F browser module)
+
+    Architecture: Kotlin/Compose owns Android presentation and platform
+    integration. Rust owns downloader business logic. The Android application
+    does NOT reimplement the Rust downloader. The DownloadRepository interface
+    in :core will be implemented by a UniFFI-backed class in Phase 20B.
+
+    Security configuration:
+    - network_security_config.xml: cleartext HTTP blocked by default;
+      localhost exempt for development tooling only.
+    - Permissions declared: INTERNET, FOREGROUND_SERVICE,
+      FOREGROUND_SERVICE_DATA_SYNC, POST_NOTIFICATIONS.
+
+    New documentation:
+    - docs/ANDROID_BROWSER.md — browser engine comparison and GeckoView decision
+    - docs/ANDROID_ARCHITECTURE.md — layered architecture, data flow, event flow,
+      module breakdown, storage strategy, background execution strategy
+    - docs/ANDROID_PRIVACY.md — threat model, ETP, cookie isolation, private
+      browsing, fingerprinting resistance, WebRTC controls, HTTPS-first
+    - docs/ANDROID_EXTENSIONS.md — GeckoView WebExtensionController, available
+      WebExtension APIs, permission model, security isolation, phase plan
+
+    Rust workspace: unchanged. No Rust crates added or modified in Phase 20A.
+
+    Next phase: Phase 20B — Rust ↔ Android bridge via UniFFI.
+    Deliverables: crates/mobile-api crate, mobile_api.udl, generated Kotlin
+    bindings, real DownloadRepository implementation, UniFFI callback model
+    for DownloadEvent propagation.
+27. Phase 20B — Rust ↔ Android bridge
+28. Phase 20C — Download manager
+29. Phase 20D — Background downloads
+30. Phase 20E — WebView browser shell
+31. Phase 20F — Download interception
+32. Phase 20G — Tabs / private tabs
+33. Phase 20H — History / bookmarks
+34. Phase 20I — Tracker blocking
+35. Phase 20J — Privacy / fingerprinting controls
+36. Phase 20K — Extension framework
+37. Phase 20L — Extension permissions
+38. Phase 20M — VPN / Tor integration research
+39. Phase 20N — Android storage / notifications
+40. Phase 20O — Security / privacy audit
+41. Phase 20P — Android release build
+42. Phase 21 — Remote/headless mode
+43. Phase 22 — Production packaging and releases
