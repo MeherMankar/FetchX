@@ -1,0 +1,21 @@
+[package]
+name = "mydownloader-core-services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mydownloader-downloader = { path = "../downloader" }
+mydownloader-models     = { path = "../models" }
+mydownloader-queue      = { path = "../queue" }
+mydownloader-scheduler  = { path = "../scheduler" }
+mydownloader-storage    = { path = "../storage" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

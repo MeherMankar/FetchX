@@ -7,6 +7,8 @@ members = [
     "crates/queue",
     "crates/scheduler",
     "crates/browser-protocol",
+    "crates/core-services",
+    "crates/cli",
     "apps/desktop/src-tauri",
     "apps/browser/native-host",
 ]
@@ -18,7 +20,7 @@ edition = "2024"
 rust-version = "1.85"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time", "test-util"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time", "test-util"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -30,6 +32,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-r
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 netstat2 = "0.11.2"
 url = "2"
+clap = { version = "4", features = ["derive", "env"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

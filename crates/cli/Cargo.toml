@@ -1,0 +1,28 @@
+[package]
+name = "mydownloader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mydownloader"
+path = "src/main.rs"
+
+[dependencies]
+mydownloader-core-services = { path = "../core-services" }
+mydownloader-downloader    = { path = "../downloader" }
+mydownloader-models        = { path = "../models" }
+mydownloader-queue         = { path = "../queue" }
+mydownloader-scheduler     = { path = "../scheduler" }
+mydownloader-storage       = { path = "../storage" }
+clap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
