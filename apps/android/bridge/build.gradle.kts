@@ -36,8 +36,11 @@ dependencies {
     // :bridge implements the DownloadRepository interface from :core
     implementation(project(":core"))
     implementation(libs.kotlinx.coroutines.android)
-    // UniFFI 0.29 requires JNA for calling native methods on Android
-    implementation(libs.jna)
+    // UniFFI 0.29 uses JNA for FFI dispatch on Android.
+    // The @aar classifier is required — it bundles libjnidispatch.so for each ABI.
+    // Without it the plain JVM jar is used which lacks the native dispatch library,
+    // causing UnsatisfiedLinkError at runtime on device.
+    implementation("net.java.dev.jna:jna:5.15.0@aar")
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)

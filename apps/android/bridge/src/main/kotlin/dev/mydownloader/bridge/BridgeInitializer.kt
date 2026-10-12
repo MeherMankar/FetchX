@@ -46,7 +46,20 @@ object BridgeInitializer {
         synchronized(this) {
             repository?.let { return it }
 
-            // Load the native library. This must be done before constructing DownloadService.
+            // Step 1: pre-load libjnidispatch.so via Android's native loader BEFORE any JNA
+            // class is touched. JNA normally loads it from the classpath JAR, but on Android
+            // the .so lives in the APK's lib/ directory — Android's System.loadLibrary can find
+            // it there, but JNA's classpath extraction cannot. Loading it first lets JNA's
+            // own initialization skip the extraction and use the already-loaded library.
+            try {
+                System.loadLibrary("jnidispatch")
+                Log.i(TAG, "libjnidispatch loaded")
+            } catch (e: UnsatisfiedLinkError) {
+                Log.w(TAG, "libjnidispatch not pre-loaded (may be bundled inside JNA AAR): $e")
+                // Non-fatal — JNA may still find it via its own mechanism
+            }
+
+            // Step 2: Load the Rust bridge native library.
             try {
                 System.loadLibrary("mydownloader_android_bridge")
                 Log.i(TAG, "Native library loaded successfully")
@@ -83,6 +96,12 @@ object BridgeInitializer {
             }
         }
     }
+
+    /**
+     * Returns the initialized repository if the bridge is ready, or null if
+     * initialization failed or has not been called. Never throws.
+     */
+    fun repositoryOrNull(): BridgeDownloadRepository? = repository
 
     /**
      * Returns the initialized repository, or throws if [initialize] was not called first.

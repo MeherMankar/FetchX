@@ -22,18 +22,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 
 private val TABS = listOf("Active", "Queued", "Completed", "Failed")
 
 /**
  * Top-level Downloads screen with four tabs: Active, Queued, Completed, Failed.
- * Uses [DownloadsViewModel] which will be backed by the Rust bridge in Phase 20B/20C.
+ * The [viewModel] must be created with [DownloadsViewModel.Factory] and passed in
+ * from the NavGraph so the factory has access to the bridge repository.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(
-    viewModel: DownloadsViewModel = viewModel()
+    viewModel: DownloadsViewModel
 ) {
     @Suppress("UNUSED_VARIABLE")
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
@@ -80,11 +80,11 @@ fun DownloadsScreen(
                     items(filtered, key = { it.id }) { item ->
                         DownloadItemRow(
                             item = item,
-                            onPause = { /* Phase 20B: viewModel.pause(item.id) */ },
-                            onResume = { /* Phase 20B: viewModel.resume(item.id) */ },
-                            onCancel = { /* Phase 20B: viewModel.cancel(item.id) */ },
-                            onRemove = { /* Phase 20B: viewModel.remove(item.id) */ },
-                            onRetry = { /* Phase 20B: viewModel.retry(item.id) */ }
+                            onPause = { viewModel.pause(item.id) },
+                            onResume = { viewModel.resume(item.id) },
+                            onCancel = { viewModel.cancel(item.id) },
+                            onRemove = { viewModel.remove(item.id) },
+                            onRetry = { viewModel.retry(item.id) }
                         )
                     }
                 }
