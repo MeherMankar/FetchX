@@ -1,7 +1,10 @@
 package dev.mydownloader.app
 
 import android.app.Application
+import android.util.Log
 import dev.mydownloader.bridge.BridgeInitializer
+
+private const val TAG = "MyDownloaderApp"
 
 /**
  * Application class for MyDownloader Android.
@@ -18,7 +21,11 @@ class MyDownloaderApp : Application() {
         super.onCreate()
         // Initialize the Rust bridge. This starts the Tokio runtime and CoreServices.
         // The returned repository is the single source of truth for download data.
-        BridgeInitializer.initialize(this)
+        try {
+            BridgeInitializer.initialize(this)
+        } catch (it: Throwable) {
+            Log.e(TAG, "Bridge initialization failed — app will degrade gracefully: $it", it)
+        }
     }
 
     override fun onTerminate() {

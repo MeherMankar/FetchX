@@ -1,9 +1,12 @@
 package dev.mydownloader.bridge
 
 import android.content.Context
+import android.util.Log
 import dev.mydownloader.bridge.uniffi.CoreConfig
 import dev.mydownloader.bridge.uniffi.DownloadService
 import java.io.File
+
+private const val TAG = "MyDownloaderBridge"
 
 /**
  * Manages the lifecycle of the Rust bridge ([DownloadService]).
@@ -30,6 +33,10 @@ object BridgeInitializer {
     @Volatile
     private var repository: BridgeDownloadRepository? = null
 
+    /** Non-null if the last [initialize] call failed; null on success. */
+    @Volatile
+    var initError: Throwable? = null
+
     /**
      * Initializes the Rust bridge and returns the [BridgeDownloadRepository]
      * that wraps it. Idempotent — subsequent calls return the existing instance.
@@ -40,7 +47,14 @@ object BridgeInitializer {
             repository?.let { return it }
 
             // Load the native library. This must be done before constructing DownloadService.
-            System.loadLibrary("mydownloader_android_bridge")
+            try {
+                System.loadLibrary("mydownloader_android_bridge")
+                Log.i(TAG, "Native library loaded successfully")
+            } catch (it: UnsatisfiedLinkError) {
+                Log.e(TAG, "Failed to load native library: $it")
+                initError = it
+                throw RuntimeException("Native library load failed", it)
+            }
 
             val dataDir = context.filesDir
             val dlDir = context.getExternalFilesDir(null)
@@ -55,12 +69,18 @@ object BridgeInitializer {
                 runtimeDir = runtimeDir.absolutePath,
             )
 
-            val svc = DownloadService(config)
-            service = svc
+            try {
+                val svc = DownloadService(config)
+                service = svc
 
-            val repo = BridgeDownloadRepository(svc)
-            repository = repo
-            return repo
+                val repo = BridgeDownloadRepository(svc)
+                repository = repo
+                Log.i(TAG, "Bridge initialized successfully")
+                return repo
+            } catch (e: Exception) {
+                Log.e(TAG, "Bridge initialization failed: $e")
+                throw e
+            }
         }
     }
 
