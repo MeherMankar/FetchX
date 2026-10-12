@@ -48,6 +48,7 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(project(":downloads"))
+    implementation(project(":bridge"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.androidx.core.ktx)

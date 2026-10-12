@@ -8,3 +8,18 @@ captures/
 .idea/
 *.iml
 *.hprof
+
+# Kotlin daemon session files
+.kotlin/
+
+# Gradle wrapper (generated — checked in only if explicitly committed)
+# gradle/wrapper/gradle-wrapper.jar
+# gradlew
+# gradlew.bat
+
+# Gradle replay / crash logs
+replay_pid*.log
+
+# UniFFI-generated Kotlin bindings are checked IN (not ignored).
+# Native .so files are NOT checked in — only .gitkeep placeholders.
+# bridge/src/main/jniLibs/*/**.so

@@ -1,0 +1,109 @@
+namespace android_bridge {};
+
+[Error]
+enum MobileApiError {
+    "Validation",
+    "NotFound",
+    "UnavailableEngine",
+    "InvalidStateTransition",
+    "Storage",
+    "Runtime",
+};
+
+dictionary CoreConfig {
+    string database_path;
+    string downloads_dir;
+    string runtime_dir;
+};
+
+enum DownloadStatusDto {
+    "Queued",
+    "Preparing",
+    "Downloading",
+    "Paused",
+    "Completed",
+    "Failed",
+    "Cancelled",
+};
+
+enum DownloadPriorityDto {
+    "Low",
+    "Normal",
+    "High",
+};
+
+dictionary DownloadProgressDto {
+    u64 downloaded_bytes;
+    i64 total_bytes;
+    i64 speed_bytes_per_second;
+    i64 estimated_remaining_seconds;
+};
+
+dictionary DownloadInfoDto {
+    string id;
+    string url;
+    string engine;
+    string filename;
+    string destination;
+    DownloadStatusDto status;
+    DownloadPriorityDto priority;
+    DownloadProgressDto progress;
+    i64 created_at_millis;
+    i64 updated_at_millis;
+    string? error_message;
+};
+
+[Enum]
+interface DownloadEventDto {
+    Created(DownloadInfoDto item);
+    Updated(DownloadInfoDto item);
+    Removed(string id);
+};
+
+callback interface DownloadEventListener {
+    void on_event(DownloadEventDto event);
+};
+
+interface DownloadService {
+    [Throws=MobileApiError]
+    constructor(CoreConfig config);
+
+    [Throws=MobileApiError]
+    sequence<DownloadInfoDto> list_downloads();
+
+    [Throws=MobileApiError]
+    DownloadInfoDto? get_download(string id);
+
+    [Throws=MobileApiError]
+    string add_download(
+        string url,
+        string filename,
+        string destination,
+        DownloadPriorityDto priority
+    );
+
+    [Throws=MobileApiError]
+    void pause_download(string id);
+
+    [Throws=MobileApiError]
+    void resume_download(string id);
+
+    [Throws=MobileApiError]
+    void cancel_download(string id);
+
+    [Throws=MobileApiError]
+    void remove_download(string id);
+
+    [Throws=MobileApiError]
+    string retry_download(string id);
+
+    [Throws=MobileApiError]
+    void set_priority(string id, DownloadPriorityDto priority);
+
+    [Throws=MobileApiError]
+    void schedule_download(string id, i64 start_at_millis);
+
+    void add_event_listener(DownloadEventListener listener);
+
+    void shutdown();
+};

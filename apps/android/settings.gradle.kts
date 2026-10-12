@@ -19,3 +19,4 @@ rootProject.name = "MyDownloader"
 include(":app")
 include(":core")
 include(":downloads")
+include(":bridge")

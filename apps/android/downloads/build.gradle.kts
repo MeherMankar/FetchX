@@ -28,6 +28,7 @@ android {
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":bridge"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

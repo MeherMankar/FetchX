@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -61,13 +60,17 @@ fun DownloadItemRow(
                 is DownloadState.Active -> {
                     Spacer(modifier = Modifier.height(6.dp))
 
+                    // Capture nullable properties as locals so the compiler can smart-cast them.
+                    val totalBytes = state.totalBytes
+                    val etaSeconds = state.etaSeconds
+
                     // Progress bar
-                    val progress = if (state.totalBytes != null && state.totalBytes > 0) {
-                        state.downloadedBytes.toFloat() / state.totalBytes.toFloat()
+                    val progress = if (totalBytes != null && totalBytes > 0) {
+                        state.downloadedBytes.toFloat() / totalBytes.toFloat()
                     } else {
                         0f
                     }
-                    if (state.totalBytes != null) {
+                    if (totalBytes != null) {
                         LinearProgressIndicator(
                             progress = { progress },
                             modifier = Modifier.fillMaxWidth()
@@ -84,9 +87,9 @@ fun DownloadItemRow(
                             text = formatSpeed(state.speedBytesPerSec),
                             style = MaterialTheme.typography.labelMedium
                         )
-                        if (state.etaSeconds != null) {
+                        if (etaSeconds != null) {
                             Text(
-                                text = " — ${formatEta(state.etaSeconds)}",
+                                text = " \u2014 ${formatEta(etaSeconds)}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -128,7 +131,7 @@ fun DownloadItemRow(
                     Spacer(modifier = Modifier.height(4.dp))
                     Row {
                         Text(
-                            text = "Completed · ${formatBytes(state.totalBytes)}",
+                            text = "Completed \u00b7 ${formatBytes(state.totalBytes)}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary
                         )

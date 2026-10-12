@@ -11,6 +11,7 @@ members = [
     "crates/plugin-manager",
     "crates/core-services",
     "crates/cli",
+    "crates/android-bridge",
     "apps/desktop/src-tauri",
     "apps/browser/native-host",
 ]
