@@ -1,6 +1,8 @@
 package dev.mydownloader.app.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -20,15 +22,32 @@ fun AppNavigation() {
 
     // Resolve the repository from the bridge, or fall back to a no-op implementation
     // if the bridge failed to initialize (e.g. native library not yet present).
-    val repository = BridgeInitializer.repositoryOrNull() ?: NoOpDownloadRepository()
-    val vmFactory = DownloadsViewModel.Factory(repository)
+    // Capture the result once so bridgeAvailable and repository are always consistent.
+    val repo = BridgeInitializer.repositoryOrNull()
+    val bridgeAvailable = repo != null
+    val repository = repo ?: NoOpDownloadRepository()
+    // Wrap in remember{} so the factory is not reconstructed on every recomposition.
+    // The factory depends only on repository and bridgeAvailable, both of which are
+    // stable for the lifetime of this composable (bridge state never changes mid-session).
+    val vmFactory = remember(repository, bridgeAvailable) {
+        DownloadsViewModel.Factory(repository, bridgeAvailable)
+    }
+
+    // Resolve the downloads directory path inside the Composable using LocalContext
+    // so the ViewModel never holds an Android Context.
+    val context = LocalContext.current
+    val downloadsDir: String = context.getExternalFilesDir(null)?.absolutePath
+        ?: "${context.filesDir.absolutePath}/downloads"
 
     NavHost(
         navController = navController,
-        startDestination = Screen.Downloads.route
+        startDestination = Screen.Downloads.route,
     ) {
         composable(Screen.Downloads.route) {
-            DownloadsScreen(viewModel = viewModel(factory = vmFactory))
+            DownloadsScreen(
+                viewModel = viewModel(factory = vmFactory),
+                downloadsDir = downloadsDir,
+            )
         }
     }
 }

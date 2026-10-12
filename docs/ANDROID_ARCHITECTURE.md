@@ -92,9 +92,9 @@ the main source set.
 
 **Responsibility:** Download manager UI — screens, ViewModels, row composables.
 
-- `DownloadsScreen` — four-tab screen (Active, Queued, Completed, Failed).
-- `DownloadItemRow` — composable row showing progress, speed, ETA, actions.
-- `DownloadsViewModel` — stub in Phase 20A; wired to `DownloadRepository` in 20B.
+Phase 20A: Scaffold screens with four tabs (Active/Queued/Completed/Failed).
+
+Phase 20D: Full production UI. See _UI Layer (Phase 20D)_ section below.
 
 **Depends on:** `:core`, Compose, Material 3, lifecycle-viewmodel-compose
 
@@ -413,7 +413,7 @@ are tracked for resolution in the next phase.
 | 20A | :app, :core, :downloads | Foundation, models, interfaces, download UI scaffold |
 | 20B | crates/mobile-api, :core bridge impl | UniFFI bridge, real DownloadRepository |
 | 20C | :app, :core | CoreServices Android adapter, engine runtime wiring |
-| 20D | :downloads | Full download list UI (progress, speed, ETA, actions) |
+| 20D | :downloads | Full download manager UI (progress, speed, ETA, actions) |
 | 20E | :app service | ForegroundService, WorkManager, notifications |
 | 20F | :browser (new) | GeckoView shell, address bar, tabs, navigation |
 | 20G | :browser | Download interception, handoff to DownloadRepository |
@@ -426,3 +426,83 @@ are tracked for resolution in the next phase.
 | 20N | :app, :downloads | Scoped storage, MediaStore, notification channels |
 | 20O | All | Security/privacy audit |
 | 20P | :app | Release build, signing, ProGuard, AAB |
+
+---
+
+## UI Layer (Phase 20D)
+
+Phase 20D replaced the placeholder download screen with a production-quality
+download manager UI. All download state originates from the Rust core via the
+existing DownloadRepository → BridgeDownloadRepository → UniFFI → Rust chain.
+No business logic lives in composables.
+
+### DownloadsUiState
+
+```kotlin
+data class DownloadsUiState(
+    val isLoading: Boolean = false,
+    val error: String? = null,         // user-readable; never a stack trace
+    val bridgeAvailable: Boolean = true
+)
+```
+
+Surface as `StateFlow<DownloadsUiState>` from `DownloadsViewModel`.
+
+### DownloadsViewModel — filtered StateFlows
+
+Each tab has its own `StateFlow<List<DownloadItem>>` derived from the source
+`downloads` StateFlow using `map { }.stateIn(WhileSubscribed(5_000))`:
+
+| StateFlow          | Filter predicate                     |
+|--------------------|--------------------------------------|
+| `allDownloads`     | All items, sorted newest-first        |
+| `activeDownloads`  | `state is DownloadState.Active`       |
+| `queuedDownloads`  | `state is DownloadState.Queued`       |
+| `completedDownloads` | `state is DownloadState.Completed` |
+| `failedDownloads`  | `state is DownloadState.Failed`       |
+| `cancelledDownloads` | `state is DownloadState.Cancelled` |
+
+### DownloadsScreen layout
+
+```
+Scaffold
+├── TopAppBar ("Downloads")
+├── FAB (Add Download)
+├── SnackbarHost
+└── Column
+    ├── [Bridge-unavailable banner if bridgeAvailable == false]
+    ├── TabRow (All | Active | Queued | Completed | Failed | Cancelled)
+    └── Content
+        ├── Empty state (All tab): icon + "No downloads yet" + Button("Add Download")
+        ├── Empty state (other tabs): Text("No <tab> downloads")
+        └── LazyColumn (key = item.id)
+            └── DownloadItemRow (per item)
+```
+
+### AddDownloadDialog fields
+
+| Field            | Type         | Notes                                              |
+|------------------|--------------|----------------------------------------------------|
+| URL              | OutlinedTextField | Client-side: blank → error; no http/https → error |
+| File name        | OutlinedTextField | Auto-derived from URL path segment; user-editable  |
+| Destination      | Text (read-only) | `"$downloadsDir/$fileName"`                        |
+| Priority         | FilterChip row | LOW / NORMAL / HIGH (CRITICAL never shown)         |
+
+### Rule: CRITICAL priority not exposed in UI
+
+`DownloadPriority.CRITICAL` is a Rust internal value (maps to `High` at the bridge
+level). The `AddDownloadDialog` only shows LOW / NORMAL / HIGH. The
+`PriorityBadge` in `DownloadItemRow` displays CRITICAL as "HIGH".
+
+### Lifecycle and recomposition rules
+
+- `collectAsStateWithLifecycle` used everywhere — not `collectAsState`.
+- `LazyColumn` item keys are always `item.id` — stable identity prevents
+  unnecessary item recomposition on list updates.
+- `rememberSaveable` used for dialog state (`showAddDialog`, URL field, etc.)
+  so configuration changes do not dismiss a half-filled dialog.
+- No expensive sorting or filtering inside composable bodies — all filtering
+  happens in the ViewModel's derived StateFlows.
+- Snackbar errors shown via `LaunchedEffect(uiState.error)` — one snackbar
+  per error event, cleared via `viewModel.clearError()` after display.
+

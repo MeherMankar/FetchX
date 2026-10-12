@@ -284,7 +284,88 @@
     Rust native libraries are now in the APK. Runtime bridge activation
     is blocked by the JNA configuration issue above. Resolved in next phase.
 
-29. Phase 20D — Background downloads
+29. Phase 20D — Android Download Manager UI (completed)
+
+    Implemented a production-quality download manager UI on top of the Phase 20B/20C
+    Rust-UniFFI bridge. All state is derived from the existing DownloadRepository;
+    no business logic was added to the UI layer.
+
+    DownloadsViewModel changes:
+    - Added DownloadsUiState(isLoading, error, bridgeAvailable) surfaced as StateFlow.
+    - Replaced four computed get() filtered lists with six derived StateFlow<List<DownloadItem>>:
+      allDownloads (sorted newest-first), activeDownloads, queuedDownloads,
+      completedDownloads, failedDownloads, cancelledDownloads — all using
+      SharingStarted.WhileSubscribed(5_000) to avoid spurious upstream subscriptions.
+    - Added addDownload(url, fileName, destinationPath, priority): maps repository
+      exceptions to user-readable strings — no stack traces or internal messages exposed.
+    - Added clearError() for Snackbar dismissal.
+    - Factory extended with bridgeAvailable: Boolean parameter.
+
+    AddDownloadDialog (new):
+    - AlertDialog with URL field, file name field (auto-derived from URL path segment),
+      read-only destination hint, and priority chips (LOW/NORMAL/HIGH — CRITICAL not shown).
+    - Client-side format validation: blank URL, missing http/https scheme.
+    - rememberSaveable for all dialog state (survives configuration changes).
+    - No URL values are logged.
+
+    DownloadsScreen changes:
+    - 6-tab TabRow: All, Active, Queued, Completed, Failed, Cancelled.
+    - FAB (Add Download) → opens AddDownloadDialog.
+    - Snackbar for ViewModel errors via SnackbarHostState + LaunchedEffect.
+    - Bridge-unavailable banner (errorContainer) when uiState.bridgeAvailable == false.
+    - Rich empty state on "All" tab: icon + "No downloads yet" + "Add Download" button.
+    - Simple empty messages on other tabs.
+    - All StateFlow collection uses collectAsStateWithLifecycle.
+    - LazyColumn item keys = item.id.
+    - No business logic in composables.
+
+    DownloadItemRow changes:
+    - Priority badge (Surface chip) beside engine badge: LOW/NORMAL/HIGH colour-coded.
+    - Active state: percentage + downloaded/total size line below progress bar.
+    - Completed state: destination filename hint shown beneath status line.
+    - formatBytes/formatSpeed/formatEta promoted to internal visibility.
+
+    AppNavigation changes:
+    - bridgeAvailable flag passed to DownloadsViewModel.Factory.
+    - downloadsDir resolved from LocalContext (getExternalFilesDir) and passed
+      to DownloadsScreen — ViewModel stays Context-free.
+
+    Tests added (DownloadsViewModelTest — 14 tests):
+    - emptyStateWhenNoDl, downloadAppearsInList, addDownloadCallsRepository,
+      pauseCallsRepository, resumeCallsRepository, cancelCallsRepository,
+      retryCallsRepository, removeCallsRepository, filteringActiveReturnsOnlyActive,
+      filteringCompletedReturnsOnlyCompleted, filteringCancelledReturnsOnlyCancelled,
+      bridgeUnavailableSetsBridgeAvailableFalse, urlValidationEmptyShowsError,
+      clearErrorResetsError.
+    - FakeDownloadRepository: full DownloadRepository test double with MutableStateFlow
+      and per-method call tracking.
+
+    Validation:
+    - cargo fmt --check: pass. cargo check --workspace: pass.
+    - ./gradlew :downloads:test: 14/14 tests pass. BUILD SUCCESSFUL.
+    - ./gradlew assembleDebug: BUILD SUCCESSFUL.
+    - APK: apps/android/app/build/outputs/apk/debug/app-debug.apk.
+    - Device test: no device connected during this phase.
+
+    Review findings addressed (iteration 2):
+    - lifecycle-runtime-compose added as an explicit direct dependency in
+      downloads/build.gradle.kts and libs.versions.toml so collectAsStateWithLifecycle
+      no longer relies solely on transitive exposure from lifecycle-viewmodel-compose.
+    - mapAddDownloadError no longer interpolates e.message for IllegalArgumentException;
+      the raw bridge/Rust message is never surfaced in the user-visible error string.
+    - sanitizeFailureReason() 80-char passthrough tightened: strings containing colons
+      or snake_case tokens (structural internal-origin signals) fall through to the
+      generic fallback instead of being shown verbatim.
+
+    Known limitations:
+    1. The Phase 20C JNA/libjnidispatch UnsatisfiedLinkError remains unresolved at
+       runtime. The UI falls back to NoOpDownloadRepository (empty list + bridge-
+       unavailable banner displayed).
+    2. No background download service yet (Phase 20E).
+    3. Open-file action for completed downloads is not implemented — no filesystem
+       behaviour was invented; only Remove is offered.
+
+30. Phase 20E — Background downloads
 30. Phase 20E — WebView browser shell
 31. Phase 20F — Download interception
 32. Phase 20G — Tabs / private tabs
