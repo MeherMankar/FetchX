@@ -226,6 +226,7 @@
        all Kotlin bridge code is correct, but bridge calls will produce
        UnsatisfiedLinkError at runtime until the NDK pipeline is set up.
        jniLibs/ directories contain .gitkeep placeholders.
+       → NDK pipeline limitation resolved in Phase 20C (see below).
     2. DownloadPriority.CRITICAL has no Rust equivalent; mapped to High.
     3. Engine status not yet surfaced via the DownloadRepository interface.
     4. ProcessLifecycleOwner shutdown not yet wired (Application.onTerminate
@@ -238,7 +239,51 @@
     - ./gradlew assembleDebug: BUILD SUCCESSFUL (122 tasks).
     - ./gradlew :bridge:test: all JVM unit tests pass.
     - APK: apps/android/app/build/outputs/apk/debug/app-debug.apk (~10 MB).
-28. Phase 20C — Download manager
+28. Phase 20C — Android Rust Native Build & Runtime Integration (partial)
+
+    Goal: package Rust native libraries into the Android APK so the UniFFI
+    bridge can execute on a real physical device.
+
+    Environment setup:
+    - Android NDK r27 (27.2.12479018) installed at D:\Android\Sdk\ndk\27.2.12479018
+      via command-line sdkmanager. Android Studio not used.
+    - Rust Android targets installed: aarch64-linux-android, x86_64-linux-android.
+    - cargo-ndk 4.1.2 installed; used to cross-compile the bridge crate.
+    - .cargo/config.toml updated with NDK linker paths for both targets.
+
+    Native build:
+    - crates/android-bridge built as cdylib (+ lib for host tests).
+    - arm64-v8a library: libmydownloader_android_bridge.so (~12.6 MB, unstripped debug)
+    - x86_64 library: libmydownloader_android_bridge.so (~12.3 MB, unstripped debug)
+    - Build script: scripts/build-android-native.ps1 -Release
+    - Both .so files packaged into APK via apps/android/bridge/src/main/jniLibs/.
+    - .so files excluded from git (.gitignore); .gitkeep placeholders preserve dirs.
+
+    APK:
+    - apps/android/app/build/outputs/apk/debug/app-debug.apk (~34 MB with .so)
+    - APK confirmed to contain arm64-v8a and x86_64 native libraries.
+    - :bridge:test (JVM unit tests): all pass.
+
+    Physical device test result: FAILED (partial)
+    - Device connected and APK installed successfully. App launched.
+    - Two runtime failures observed:
+
+      ISSUE 1 (bridge, primary): UnsatisfiedLinkError for JNA's own
+      libjnidispatch.so (com/sun/jna/android-aarch64/libjnidispatch.so not found
+      in resource path). The generated android_bridge.kt uses a JNA-based UniFFI
+      scaffold; JNA requires its Android AAR variant (jna:X.Y.Z:@aar) to supply
+      libjnidispatch.so. Either switch to the JNA Android AAR dependency, or
+      regenerate the Kotlin bindings with the uniffi-bindgen version that matches
+      uniffi 0.29 (which should not require JNA at all).
+
+      ISSUE 2 (UI, secondary): FATAL EXCEPTION — DownloadsViewModel cannot be
+      instantiated without a factory (NoSuchMethodException for the no-arg
+      constructor). DownloadsViewModel requires a ViewModelProvider.Factory or
+      dependency injection. Unrelated to the native build.
+
+    Rust native libraries are now in the APK. Runtime bridge activation
+    is blocked by the JNA configuration issue above. Resolved in next phase.
+
 29. Phase 20D — Background downloads
 30. Phase 20E — WebView browser shell
 31. Phase 20F — Download interception
