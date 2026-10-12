@@ -1,0 +1,10 @@
+# Android cross-compilation linker configuration.
+# NDK version: 27.2.12479018
+# These linkers are used when cross-compiling Rust for Android targets.
+# API level 33 = Android 13 (minimum supported target device).
+
+[target.aarch64-linux-android]
+linker = "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\aarch64-linux-android33-clang.cmd"
+
+[target.x86_64-linux-android]
+linker = "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\x86_64-linux-android33-clang.cmd"
