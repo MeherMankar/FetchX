@@ -1,11 +1,11 @@
 [package]
-name = "mydownloader-storage"
+name = "fetchx-storage"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-mydownloader-models = { path = "../models" }
+fetchx-models = { path = "../models" }
 sqlx.workspace = true
 thiserror.workspace = true
 
@@ -14,3 +14,4 @@ workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+

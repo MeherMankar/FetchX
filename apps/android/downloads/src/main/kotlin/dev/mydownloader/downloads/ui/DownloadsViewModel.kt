@@ -1,12 +1,12 @@
-package dev.mydownloader.downloads.ui
+package dev.fetchx.downloads.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import dev.mydownloader.core.download.DownloadItem
-import dev.mydownloader.core.download.DownloadPriority
-import dev.mydownloader.core.download.DownloadRepository
-import dev.mydownloader.core.download.DownloadState
+import dev.fetchx.core.download.DownloadItem
+import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadRepository
+import dev.fetchx.core.download.DownloadState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -52,7 +52,7 @@ class DownloadsViewModel(
     /** Observed by the screen for loading/error/degraded-mode signals. */
     val uiState: StateFlow<DownloadsUiState> = _uiState.asStateFlow()
 
-    // ── Reactive download lists ───────────────────────────────────────────
+    // ── Reactive download lists ────────────────────────────────────────────
 
     /** Reactive list of all downloads. Updated on every Rust event. */
     val downloads: StateFlow<List<DownloadItem>> = repository
@@ -117,7 +117,7 @@ class DownloadsViewModel(
             initialValue = emptyList(),
         )
 
-    // ── Actions ───────────────────────────────────────────────────────────
+    // ── Actions ────────────────────────────────────────────────────────────
 
     /**
      * Add a new download. Errors are mapped to user-readable messages and
@@ -198,7 +198,7 @@ class DownloadsViewModel(
             "Download could not be added. Please try again."
     }
 
-    // ── Factory ───────────────────────────────────────────────────────────
+    // ── Factory ────────────────────────────────────────────────────────────
 
     /**
      * Factory for creating [DownloadsViewModel] with the required [DownloadRepository].
@@ -219,3 +219,4 @@ class DownloadsViewModel(
         }
     }
 }
+

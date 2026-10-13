@@ -1,12 +1,12 @@
-package dev.mydownloader.bridge
+package dev.fetchx.bridge
 
 import android.content.Context
 import android.util.Log
-import dev.mydownloader.bridge.uniffi.CoreConfig
-import dev.mydownloader.bridge.uniffi.DownloadService
+import dev.fetchx.bridge.uniffi.CoreConfig
+import dev.fetchx.bridge.uniffi.DownloadService
 import java.io.File
 
-private const val TAG = "MyDownloaderBridge"
+private const val TAG = "FetchXBridge"
 
 /**
  * Manages the lifecycle of the Rust bridge ([DownloadService]).
@@ -61,7 +61,7 @@ object BridgeInitializer {
 
             // Step 2: Load the Rust bridge native library.
             try {
-                System.loadLibrary("mydownloader_android_bridge")
+                System.loadLibrary("fetchx_android_bridge")
                 Log.i(TAG, "Native library loaded successfully")
             } catch (it: UnsatisfiedLinkError) {
                 Log.e(TAG, "Failed to load native library: $it")
@@ -77,7 +77,7 @@ object BridgeInitializer {
             runtimeDir.mkdirs()
 
             val config = CoreConfig(
-                databasePath = File(dataDir, "mydownloader.db").absolutePath,
+                databasePath = File(dataDir, "fetchx.db").absolutePath,
                 downloadsDir = dlDir.absolutePath,
                 runtimeDir = runtimeDir.absolutePath,
             )
@@ -121,3 +121,4 @@ object BridgeInitializer {
         }
     }
 }
+

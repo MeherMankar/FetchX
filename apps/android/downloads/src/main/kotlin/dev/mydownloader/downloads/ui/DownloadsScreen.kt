@@ -1,4 +1,4 @@
-package dev.mydownloader.downloads.ui
+package dev.fetchx.downloads.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -200,3 +200,4 @@ fun DownloadsScreen(
         )
     }
 }
+

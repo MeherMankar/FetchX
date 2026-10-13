@@ -1,7 +1,7 @@
 # Android Privacy Architecture
 
 > **Phase 20 privacy design document.** Establishes what privacy properties the
-> MyDownloader Android application provides, how they are implemented, and what
+> FetchX Android application provides, how they are implemented, and what
 > the clear boundaries of each privacy mechanism are.
 
 ---
@@ -36,8 +36,8 @@
 ### What we do NOT claim
 
 - **Anonymity** — private browsing is not anonymity. The network operator, ISP, and
-  destination server can still see connection metadata. See the "Private Browsing ≠
-  VPN ≠ Tor" section below.
+  destination server can still see connection metadata. See the "Private Browsing ≠ 
+  VPN ≠  Tor" section below.
 - **Protection from Tor deanonymisation** — Tor routing is an optional feature
   (Phase 20M) and requires Orbot or a bundled Tor binary. The browser does not
   provide Tor by default.
@@ -64,7 +64,7 @@ and the built-in Disconnect.me tracking protection database.
 | Standard | Tracking cookies, cryptominers, fingerprinters, social trackers (tracking content only in private windows) |
 | Custom | User-configurable combination of the above categories |
 
-Default mode for MyDownloader Android: **Strict** (Phase 20J configurable).
+Default mode for FetchX Android: **Strict** (Phase 20J configurable).
 
 ### ETP categories
 
@@ -151,7 +151,7 @@ is updated (i.e., when the app is updated) — not via a separate network reques
 
 **No telemetry is sent** by the tracker blocking logic itself. GeckoView does not
 report blocking decisions to Mozilla unless the application explicitly enables
-GeckoView telemetry (`GeckoRuntimeSettings.telemetryEnabled`), which MyDownloader
+GeckoView telemetry (`GeckoRuntimeSettings.telemetryEnabled`), which FetchX
 does NOT enable.
 
 List update mechanism for Phase 20J: evaluate whether to use GeckoView's built-in
@@ -171,7 +171,7 @@ fingerprinting scripts rely on:
 - Audio API fingerprinting is mitigated
 - Navigator properties are normalised
 
-Note: MyDownloader uses a **consistent fingerprint profile** rather than random
+Note: FetchX uses a **consistent fingerprint profile** rather than random
 spoofing on each page load. Research by privacy engineers (notably the Tor Project
 and EFF's Cover Your Tracks) has shown that random spoofing can make a browser
 *more* identifiable because the randomly-spoofed values are themselves unusual.
@@ -209,7 +209,7 @@ GeckoView exposes `GeckoRuntimeSettings.webRtcIpHandling` with these policy valu
 | `DEFAULT_PUBLIC_AND_PRIVATE_INTERFACES` | Public + private IP |
 | `DISABLE_NON_PROXIED_UDP` | Only relay via TURN; requires TURN server |
 
-Default for MyDownloader: `DEFAULT_PUBLIC_INTERFACE_ONLY` (prevents local network
+Default for FetchX: `DEFAULT_PUBLIC_INTERFACE_ONLY` (prevents local network
 topology leakage while keeping WebRTC functional). Configurable in Settings
 (Phase 20N).
 
@@ -275,10 +275,11 @@ This distinction must be communicated clearly to users.
 | **VPN** | ISP traffic monitoring, IP-based geo-blocking | The VPN provider itself, app-level tracking, fingerprinting |
 | **Tor** | IP-based identification, ISP monitoring | End-to-end content surveillance (if destination is HTTP), malicious exit nodes, correlation attacks |
 
-Private Browsing in MyDownloader protects your **on-device browsing history and
+Private Browsing in FetchX protects your **on-device browsing history and
 cookie state**. It does not hide your traffic from your network provider or from
 websites that track you by fingerprint rather than cookie.
 
 Use a VPN (Phase 20M) if you need to hide your IP from destination servers.
 Use Tor (Phase 20M) if you need to hide your IP from your ISP and destination servers
 simultaneously (with the trade-offs Tor involves).
+

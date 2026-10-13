@@ -1,4 +1,4 @@
-package dev.mydownloader.core.download
+package dev.fetchx.core.download
 
 /**
  * A download item as seen by the Android UI layer.
@@ -26,3 +26,4 @@ data class DownloadItem(
     /** Epoch millis when the download was added. */
     val createdAt: Long
 )
+

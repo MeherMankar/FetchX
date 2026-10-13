@@ -1,4 +1,4 @@
-# MyDownloader ProGuard rules
+# FetchX ProGuard rules
 # Add project-specific ProGuard rules here.
 
 # Keep Kotlin metadata for reflection

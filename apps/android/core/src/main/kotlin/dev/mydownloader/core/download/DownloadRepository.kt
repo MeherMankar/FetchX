@@ -1,4 +1,4 @@
-package dev.mydownloader.core.download
+package dev.fetchx.core.download
 
 import kotlinx.coroutines.flow.Flow
 
@@ -54,3 +54,4 @@ interface DownloadRepository {
     /** Retrieve a single download by ID, or null if not found. */
     suspend fun getDownload(downloadId: String): DownloadItem?
 }
+

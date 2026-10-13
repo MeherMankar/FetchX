@@ -1,6 +1,6 @@
-# MyDownloader Native Messaging Host
+# FetchX Native Messaging Host
 
-This is the Rust binary that bridges the browser extension to the MyDownloader
+This is the Rust binary that bridges the browser extension to the FetchX
 desktop application.  The browser launches it as a child process via the
 [Chrome Native Messaging](https://developer.chrome.com/docs/apps/nativeMessaging/)
 API.
@@ -12,7 +12,7 @@ Browser extension
       ↓  stdin/stdout (4-byte LE length + JSON)
 Native messaging host  (this binary)
       ↓  loopback TCP + session token
-MyDownloader desktop application
+FetchX desktop application
       ↓  existing QueueManager / EngineDispatcher
 Download engine
 ```
@@ -34,10 +34,10 @@ browser opens a new host process for each request.
 ## Building
 
 ```sh
-cargo build --release -p mydownloader-native-host
+cargo build --release -p fetchx-native-host
 ```
 
-The resulting binary is at `target/release/mydownloader-native-host` (or `.exe` on
+The resulting binary is at `target/release/fetchx-native-host` (or `.exe` on
 Windows).
 
 ## Installation (Windows)
@@ -51,7 +51,7 @@ cd apps\browser\native-host\manifest
 .\install-windows.ps1 -ExtensionId "your32characterextensionidhere"
 ```
 
-This writes the native messaging host manifest to `%APPDATA%\MyDownloader\native-host\`
+This writes the native messaging host manifest to `%APPDATA%\fetchx\native-host\`
 and registers it in the Windows Registry for Chrome and Microsoft Edge.
 
 To uninstall:
@@ -67,11 +67,11 @@ can find its loopback port and session token:
 
 | Platform | Path |
 |----------|------|
-| Windows  | `%LOCALAPPDATA%\com.mydownloader.desktop\browser-ipc.json` |
-| Linux    | `$XDG_RUNTIME_DIR/mydownloader/browser-ipc.json` |
-| macOS    | `~/Library/Application Support/com.mydownloader.desktop/browser-ipc.json` |
+| Windows  | `%LOCALAPPDATA%\com.fetchx.desktop\browser-ipc.json` |
+| Linux    | `$XDG_RUNTIME_DIR/fetchx/browser-ipc.json` |
+| macOS    | `~/Library/Application Support/com.fetchx.desktop/browser-ipc.json` |
 
-The state file is removed when MyDownloader shuts down.
+The state file is removed when FetchX shuts down.
 
 ## Extension ID
 
@@ -90,3 +90,4 @@ the extension is packed.
 For production deployment, a packed extension has a stable ID derived from its
 signing key.  See [Chrome's documentation](https://developer.chrome.com/docs/extensions/reference/manifest/key)
 for details on generating a stable ID.
+

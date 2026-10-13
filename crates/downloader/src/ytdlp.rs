@@ -9,11 +9,11 @@ use std::{
     time::Duration,
 };
 
-use mydownloader_core::{DownloadStateMachine, StateMachineError};
-use mydownloader_models::{
+use fetchx_core::{DownloadStateMachine, StateMachineError};
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
 };
-use mydownloader_storage::DownloadRepository;
+use fetchx_storage::DownloadRepository;
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
@@ -33,8 +33,8 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
-const PROGRESS_PREFIX: &str = "MYDOWNLOADER_PROGRESS|";
-const PROGRESS_TEMPLATE: &str = "download:MYDOWNLOADER_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
+const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
+const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
 const MAX_PROGRESS_EVENTS: usize = 32;
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -743,7 +743,7 @@ fn workspace_path(destination: &Path, id: DownloadId) -> PathBuf {
         .filter(|parent| !parent.as_os_str().is_empty());
     parent
         .unwrap_or_else(|| Path::new("."))
-        .join(format!(".mydownloader-ytdlp-{id}"))
+        .join(format!(".fetchx-ytdlp-{id}"))
 }
 
 async fn prepare_workspace(path: &Path) -> Result<(), YtDlpError> {
@@ -818,7 +818,7 @@ fn next_timestamp(previous: Timestamp) -> Result<Timestamp, DownloadEngineError>
     let next = previous
         .as_unix_millis()
         .checked_add(1)
-        .ok_or(mydownloader_models::TimestampError::OutOfRange)?;
+        .ok_or(fetchx_models::TimestampError::OutOfRange)?;
     Ok(Timestamp::now()?.max(Timestamp::from_unix_millis(next)))
 }
 
@@ -1020,8 +1020,8 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use mydownloader_models::{DownloadId, DownloadSource, FileName};
-    use mydownloader_storage::{Database, DownloadRepository};
+    use fetchx_models::{DownloadId, DownloadSource, FileName};
+    use fetchx_storage::{Database, DownloadRepository};
 
     use super::*;
     use crate::{DownloadEngine, ManagedDownloadControl};
@@ -1096,7 +1096,7 @@ mod tests {
                     .await
                     .map_err(|_| YtDlpError::ProcessRunner)?;
                 let progress_lines = if progress_lines.is_empty() {
-                    vec!["MYDOWNLOADER_PROGRESS|50%|5|10|NA|1|1".to_owned()]
+                    vec!["FETCHX_PROGRESS|50%|5|10|NA|1|1".to_owned()]
                 } else {
                     progress_lines
                 };
@@ -1119,7 +1119,7 @@ mod tests {
         runner: FakeRunner,
     ) -> Result<
         (
-            YtDlpEngine<mydownloader_storage::SqliteDownloadRepository>,
+            YtDlpEngine<fetchx_storage::SqliteDownloadRepository>,
             PathBuf,
             DownloadId,
         ),
@@ -1128,7 +1128,7 @@ mod tests {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let id = DownloadId::new();
-        let base = std::env::temp_dir().join(format!("mydownloader-ytdlp-test-{id}"));
+        let base = std::env::temp_dir().join(format!("fetchx-ytdlp-test-{id}"));
         tokio::fs::create_dir_all(&base).await?;
         let item = DownloadItem::new(
             id,
@@ -1150,7 +1150,7 @@ mod tests {
 
     #[test]
     fn parses_complete_and_indeterminate_progress_records() {
-        let complete = parse_progress_line("MYDOWNLOADER_PROGRESS| 25.4%|254|1000|NA|12.5|8")
+        let complete = parse_progress_line("FETCHX_PROGRESS| 25.4%|254|1000|NA|12.5|8")
             .expect("valid progress");
         assert_eq!(complete.percentage_basis_points, Some(2_540));
         assert_eq!(complete.downloaded_bytes, Some(254));
@@ -1158,7 +1158,7 @@ mod tests {
         assert_eq!(complete.speed_bytes_per_second, Some(13));
         assert_eq!(complete.estimated_remaining_seconds, Some(8));
 
-        let unknown = parse_progress_line("MYDOWNLOADER_PROGRESS|NA|73|NA|NA|NA|NA")
+        let unknown = parse_progress_line("FETCHX_PROGRESS|NA|73|NA|NA|NA|NA")
             .expect("unknown totals are valid");
         assert_eq!(unknown.percentage_basis_points, None);
         assert_eq!(unknown.downloaded_bytes, Some(73));
@@ -1166,7 +1166,7 @@ mod tests {
         assert_eq!(unknown.speed_bytes_per_second, None);
         assert_eq!(unknown.estimated_remaining_seconds, None);
 
-        let no_downloaded_count = parse_progress_line("MYDOWNLOADER_PROGRESS|NA|NA|NA|NA|NA|NA")
+        let no_downloaded_count = parse_progress_line("FETCHX_PROGRESS|NA|NA|NA|NA|NA|NA")
             .expect("unknown downloaded count is accepted");
         assert_eq!(no_downloaded_count.downloaded_bytes, None);
     }
@@ -1175,10 +1175,10 @@ mod tests {
     fn rejects_malformed_progress_records() {
         for line in [
             "unrelated output",
-            "MYDOWNLOADER_PROGRESS|101%|1|2|NA|1|0",
-            "MYDOWNLOADER_PROGRESS|10%|not-bytes|20|NA|1|0",
-            "MYDOWNLOADER_PROGRESS|10%|1|2|NA|1",
-            "MYDOWNLOADER_PROGRESS|10%|1|2|NA|1|0|extra",
+            "FETCHX_PROGRESS|101%|1|2|NA|1|0",
+            "FETCHX_PROGRESS|10%|not-bytes|20|NA|1|0",
+            "FETCHX_PROGRESS|10%|1|2|NA|1",
+            "FETCHX_PROGRESS|10%|1|2|NA|1|0|extra",
         ] {
             assert!(matches!(
                 parse_progress_line(line),
@@ -1250,8 +1250,8 @@ mod tests {
             let mut state = runner.state.lock().expect("test runner mutex");
             state.output = b"video".to_vec();
             state.progress_lines = vec![
-                "MYDOWNLOADER_PROGRESS|50%|5|10|NA|1|1".to_owned(),
-                "MYDOWNLOADER_PROGRESS|40%|4|10|NA|1|1".to_owned(),
+                "FETCHX_PROGRESS|50%|5|10|NA|1|1".to_owned(),
+                "FETCHX_PROGRESS|40%|4|10|NA|1|1".to_owned(),
             ];
         }
         let (engine, base, id) = fixture("https://example.test/video", runner).await?;
@@ -1322,3 +1322,4 @@ mod tests {
         Ok(())
     }
 }
+

@@ -1,11 +1,11 @@
-package dev.mydownloader.bridge
+package dev.fetchx.bridge
 
-import dev.mydownloader.bridge.uniffi.DownloadInfoDto
-import dev.mydownloader.bridge.uniffi.DownloadPriorityDto
-import dev.mydownloader.bridge.uniffi.DownloadProgressDto
-import dev.mydownloader.bridge.uniffi.DownloadStatusDto
-import dev.mydownloader.core.download.DownloadPriority
-import dev.mydownloader.core.download.DownloadState
+import dev.fetchx.bridge.uniffi.DownloadInfoDto
+import dev.fetchx.bridge.uniffi.DownloadPriorityDto
+import dev.fetchx.bridge.uniffi.DownloadProgressDto
+import dev.fetchx.bridge.uniffi.DownloadStatusDto
+import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -139,7 +139,7 @@ class MappingTest {
         assertEquals(DownloadState.Queued, mapped.state)
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────
+    // ── Helpers ────────────────────────────────────────────────────────────
 
     private fun makeDto(
         status: DownloadStatusDto = DownloadStatusDto.QUEUED,
@@ -182,7 +182,7 @@ private class FakeRepository {
     // Reuse the mapping logic by delegating to a helper wrapper.
     private val delegate = MappingDelegate()
 
-    fun mapPriorityToDto(priority: dev.mydownloader.core.download.DownloadPriority) =
+    fun mapPriorityToDto(priority: dev.fetchx.core.download.DownloadPriority) =
         delegate.mapPriorityToDto(priority)
 
     fun mapPriorityFromDto(dto: DownloadPriorityDto) = delegate.mapPriorityFromDto(dto)
@@ -194,22 +194,22 @@ private class FakeRepository {
  * Contains the extracted mapping logic, testable without a real [DownloadService].
  */
 private class MappingDelegate {
-    fun mapPriorityToDto(priority: dev.mydownloader.core.download.DownloadPriority): DownloadPriorityDto = when (priority) {
-        dev.mydownloader.core.download.DownloadPriority.LOW -> DownloadPriorityDto.LOW
-        dev.mydownloader.core.download.DownloadPriority.NORMAL -> DownloadPriorityDto.NORMAL
-        dev.mydownloader.core.download.DownloadPriority.HIGH -> DownloadPriorityDto.HIGH
-        dev.mydownloader.core.download.DownloadPriority.CRITICAL -> DownloadPriorityDto.HIGH
+    fun mapPriorityToDto(priority: dev.fetchx.core.download.DownloadPriority): DownloadPriorityDto = when (priority) {
+        dev.fetchx.core.download.DownloadPriority.LOW -> DownloadPriorityDto.LOW
+        dev.fetchx.core.download.DownloadPriority.NORMAL -> DownloadPriorityDto.NORMAL
+        dev.fetchx.core.download.DownloadPriority.HIGH -> DownloadPriorityDto.HIGH
+        dev.fetchx.core.download.DownloadPriority.CRITICAL -> DownloadPriorityDto.HIGH
     }
 
-    fun mapPriorityFromDto(dto: DownloadPriorityDto): dev.mydownloader.core.download.DownloadPriority = when (dto) {
-        DownloadPriorityDto.LOW -> dev.mydownloader.core.download.DownloadPriority.LOW
-        DownloadPriorityDto.NORMAL -> dev.mydownloader.core.download.DownloadPriority.NORMAL
-        DownloadPriorityDto.HIGH -> dev.mydownloader.core.download.DownloadPriority.HIGH
+    fun mapPriorityFromDto(dto: DownloadPriorityDto): dev.fetchx.core.download.DownloadPriority = when (dto) {
+        DownloadPriorityDto.LOW -> dev.fetchx.core.download.DownloadPriority.LOW
+        DownloadPriorityDto.NORMAL -> dev.fetchx.core.download.DownloadPriority.NORMAL
+        DownloadPriorityDto.HIGH -> dev.fetchx.core.download.DownloadPriority.HIGH
     }
 
-    fun mapItemPublic(dto: DownloadInfoDto): dev.mydownloader.core.download.DownloadItem {
+    fun mapItemPublic(dto: DownloadInfoDto): dev.fetchx.core.download.DownloadItem {
         val state = mapState(dto)
-        return dev.mydownloader.core.download.DownloadItem(
+        return dev.fetchx.core.download.DownloadItem(
             id = dto.id,
             fileName = dto.filename,
             url = dto.url,
@@ -223,25 +223,26 @@ private class MappingDelegate {
         )
     }
 
-    private fun mapState(dto: DownloadInfoDto): dev.mydownloader.core.download.DownloadState = when (dto.status) {
-        DownloadStatusDto.QUEUED -> dev.mydownloader.core.download.DownloadState.Queued
+    private fun mapState(dto: DownloadInfoDto): dev.fetchx.core.download.DownloadState = when (dto.status) {
+        DownloadStatusDto.QUEUED -> dev.fetchx.core.download.DownloadState.Queued
         DownloadStatusDto.PREPARING,
-        DownloadStatusDto.DOWNLOADING -> dev.mydownloader.core.download.DownloadState.Active(
+        DownloadStatusDto.DOWNLOADING -> dev.fetchx.core.download.DownloadState.Active(
             downloadedBytes = dto.progress.downloadedBytes.toLong(),
             totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
             speedBytesPerSec = dto.progress.speedBytesPerSecond.takeIf { it >= 0L } ?: 0L,
             etaSeconds = dto.progress.estimatedRemainingSeconds.takeIf { it >= 0L },
             segmentCount = 1,
         )
-        DownloadStatusDto.PAUSED -> dev.mydownloader.core.download.DownloadState.Paused
-        DownloadStatusDto.COMPLETED -> dev.mydownloader.core.download.DownloadState.Completed(
+        DownloadStatusDto.PAUSED -> dev.fetchx.core.download.DownloadState.Paused
+        DownloadStatusDto.COMPLETED -> dev.fetchx.core.download.DownloadState.Completed(
             totalBytes = dto.progress.totalBytes.takeIf { it >= 0L } ?: 0L,
             destinationPath = dto.destination,
         )
-        DownloadStatusDto.FAILED -> dev.mydownloader.core.download.DownloadState.Failed(
+        DownloadStatusDto.FAILED -> dev.fetchx.core.download.DownloadState.Failed(
             reason = dto.errorMessage ?: "unknown error",
             retryable = true,
         )
-        DownloadStatusDto.CANCELLED -> dev.mydownloader.core.download.DownloadState.Cancelled
+        DownloadStatusDto.CANCELLED -> dev.fetchx.core.download.DownloadState.Cancelled
     }
 }
+

@@ -1,4 +1,4 @@
-# MyDownloader Native Messaging Host — Firefox Installation Script (Windows)
+# FetchX Native Messaging Host — Firefox Installation Script (Windows)
 #
 # Firefox uses a different registry path and a different extension ID format
 # compared to Chrome/Edge.
@@ -6,20 +6,20 @@
 # Usage:
 #   .\install-firefox-windows.ps1 [-Uninstall]
 #
-# The Firefox extension ID is fixed as "mydownloader@mydownloader.app"
+# The Firefox extension ID is fixed as "FetchX@FetchX.app"
 # (set in manifest-firefox/manifest.json).
 # No need to pass it as a parameter.
 
 param([switch]$Uninstall)
 
-$HostName    = "com.mydownloader.native_host"
-$ExtensionId = "mydownloader@mydownloader.app"
-$ManifestDir = "$env:APPDATA\MyDownloader\native-host"
+$HostName    = "com.fetchx.native_host"
+$ExtensionId = "FetchX@FetchX.app"
+$ManifestDir = "$env:APPDATA\fetchx\native-host"
 $ManifestPath = "$ManifestDir\$HostName.json"
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot    = Split-Path -Parent (Split-Path -Parent $ScriptDir)
-$HostBinary  = Join-Path $RepoRoot "target\release\mydownloader-native-host.exe"
+$HostBinary  = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 
 # Firefox uses HKCU\Software\Mozilla\NativeMessagingHosts
 $FirefoxKey  = "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName"
@@ -34,7 +34,7 @@ if ($Uninstall) {
 
 if (-not (Test-Path $HostBinary)) {
   Write-Error "Native host binary not found at: $HostBinary"
-  Write-Error "Build it first: cargo build --release -p mydownloader-native-host"
+  Write-Error "Build it first: cargo build --release -p fetchx-native-host"
   exit 1
 }
 
@@ -42,10 +42,10 @@ New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
 
 $Manifest = @{
   name            = $HostName
-  description     = "MyDownloader native messaging host"
+  description     = "FetchX native messaging host"
   path            = $HostBinary
   type            = "stdio"
-  # Firefox uses the extension ID (e.g. "mydownloader@mydownloader.app")
+  # Firefox uses the extension ID (e.g. "FetchX@FetchX.app")
   # not the chrome-extension:// origin format
   allowed_extensions = @($ExtensionId)
 } | ConvertTo-Json -Depth 3
@@ -58,3 +58,4 @@ Set-ItemProperty -Path $FirefoxKey -Name "(Default)" -Value $ManifestPath
 Write-Host "Registered Firefox native messaging host: $FirefoxKey"
 Write-Host ""
 Write-Host "Restart Firefox for changes to take effect."
+

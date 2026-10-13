@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use mydownloader_models::{DownloadId, DownloadItem, EngineKind};
+use fetchx_models::{DownloadId, DownloadItem, EngineKind};
 use tokio::sync::{mpsc, watch};
 
 use crate::DownloadEngineError;
@@ -55,3 +55,4 @@ pub trait ManagedDownloadEngine: DownloadEngine {
         async { Ok(()) }
     }
 }
+

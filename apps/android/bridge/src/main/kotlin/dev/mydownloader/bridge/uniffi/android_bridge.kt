@@ -3,7 +3,7 @@
 
 @file:Suppress("NAME_SHADOWING")
 
-package dev.mydownloader.bridge.uniffi
+package dev.fetchx.bridge.uniffi
 
 // Common helper code.
 //
@@ -59,7 +59,7 @@ open class RustBuffer : Structure() {
     companion object {
         internal fun alloc(size: ULong = 0UL) = uniffiRustCall() { status ->
             // Note: need to convert the size to a `Long` value to make this work with JVM.
-            UniffiLib.INSTANCE.ffi_mydownloader_android_bridge_rustbuffer_alloc(size.toLong(), status)
+            UniffiLib.INSTANCE.ffi_fetchx_android_bridge_rustbuffer_alloc(size.toLong(), status)
         }.also {
             if(it.data == null) {
                throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=${size})")
@@ -75,7 +75,7 @@ open class RustBuffer : Structure() {
         }
 
         internal fun free(buf: RustBuffer.ByValue) = uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.ffi_mydownloader_android_bridge_rustbuffer_free(buf, status)
+            UniffiLib.INSTANCE.ffi_fetchx_android_bridge_rustbuffer_free(buf, status)
         }
     }
 
@@ -375,7 +375,7 @@ private fun findLibraryName(componentName: String): String {
     if (libOverride != null) {
         return libOverride
     }
-    return "mydownloader_android_bridge"
+    return "fetchx_android_bridge"
 }
 
 private inline fun <reified Lib : Library> loadIndirect(
@@ -776,35 +776,35 @@ internal open class UniffiVTableCallbackInterfaceDownloadEventListener(
 // when the library is loaded.
 internal interface IntegrityCheckingUniffiLib : Library {
     // Integrity check functions only
-    fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_add_download(
+    fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_add_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_add_event_listener(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_add_event_listener(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_cancel_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_cancel_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_get_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_get_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_list_downloads(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_list_downloads(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_pause_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_pause_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_remove_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_remove_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_resume_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_resume_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_retry_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_retry_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_schedule_download(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_schedule_download(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_set_priority(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_set_priority(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadservice_shutdown(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadservice_shutdown(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_constructor_downloadservice_new(
+fun uniffi_fetchx_android_bridge_checksum_constructor_downloadservice_new(
 ): Short
-fun uniffi_mydownloader_android_bridge_checksum_method_downloadeventlistener_on_event(
+fun uniffi_fetchx_android_bridge_checksum_method_downloadeventlistener_on_event(
 ): Short
-fun ffi_mydownloader_android_bridge_uniffi_contract_version(
+fun ffi_fetchx_android_bridge_uniffi_contract_version(
 ): Int
 
 }
@@ -854,149 +854,149 @@ internal interface UniffiLib : Library {
     }
 
     // FFI functions
-    fun uniffi_mydownloader_android_bridge_fn_clone_downloadservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_fetchx_android_bridge_fn_clone_downloadservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
-fun uniffi_mydownloader_android_bridge_fn_free_downloadservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_free_downloadservice(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_constructor_downloadservice_new(`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_constructor_downloadservice_new(`config`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_add_download(`ptr`: Pointer,`url`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`destination`: RustBuffer.ByValue,`priority`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_add_download(`ptr`: Pointer,`url`: RustBuffer.ByValue,`filename`: RustBuffer.ByValue,`destination`: RustBuffer.ByValue,`priority`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_add_event_listener(`ptr`: Pointer,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_add_event_listener(`ptr`: Pointer,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_cancel_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_cancel_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_get_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_get_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_list_downloads(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_list_downloads(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_pause_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_pause_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_remove_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_remove_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_resume_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_resume_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_retry_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_retry_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_schedule_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,`startAtMillis`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_schedule_download(`ptr`: Pointer,`id`: RustBuffer.ByValue,`startAtMillis`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_set_priority(`ptr`: Pointer,`id`: RustBuffer.ByValue,`priority`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_set_priority(`ptr`: Pointer,`id`: RustBuffer.ByValue,`priority`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_method_downloadservice_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_fetchx_android_bridge_fn_method_downloadservice_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_mydownloader_android_bridge_fn_init_callback_vtable_downloadeventlistener(`vtable`: UniffiVTableCallbackInterfaceDownloadEventListener,
+fun uniffi_fetchx_android_bridge_fn_init_callback_vtable_downloadeventlistener(`vtable`: UniffiVTableCallbackInterfaceDownloadEventListener,
 ): Unit
-fun ffi_mydownloader_android_bridge_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun ffi_mydownloader_android_bridge_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun ffi_mydownloader_android_bridge_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rustbuffer_free(`buf`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun ffi_mydownloader_android_bridge_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun ffi_mydownloader_android_bridge_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_u8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_u8(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_u8(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_u8(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_u8(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_u8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
-fun ffi_mydownloader_android_bridge_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_i8(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_i8(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_i8(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_i8(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_i8(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_i8(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
-fun ffi_mydownloader_android_bridge_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_u16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_u16(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_u16(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_u16(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_u16(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_u16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Short
-fun ffi_mydownloader_android_bridge_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_i16(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_i16(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_i16(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_i16(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_i16(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_i16(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Short
-fun ffi_mydownloader_android_bridge_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_u32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_u32(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_u32(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_u32(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_u32(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_u32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Int
-fun ffi_mydownloader_android_bridge_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_i32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_i32(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_i32(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_i32(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_i32(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_i32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Int
-fun ffi_mydownloader_android_bridge_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_u64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_u64(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_u64(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_u64(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_u64(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_u64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Long
-fun ffi_mydownloader_android_bridge_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_i64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_i64(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_i64(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_i64(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_i64(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_i64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Long
-fun ffi_mydownloader_android_bridge_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_f32(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_f32(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_f32(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_f32(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_f32(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_f32(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Float
-fun ffi_mydownloader_android_bridge_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_f64(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_f64(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_f64(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_f64(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_f64(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_f64(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Double
-fun ffi_mydownloader_android_bridge_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_pointer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_pointer(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_pointer(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_pointer(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_pointer(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_pointer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
-fun ffi_mydownloader_android_bridge_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_rust_buffer(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_rust_buffer(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_rust_buffer(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_rust_buffer(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_rust_buffer(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_rust_buffer(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
-fun ffi_mydownloader_android_bridge_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
+fun ffi_fetchx_android_bridge_rust_future_poll_void(`handle`: Long,`callback`: UniffiRustFutureContinuationCallback,`callbackData`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_cancel_void(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_cancel_void(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_free_void(`handle`: Long,
+fun ffi_fetchx_android_bridge_rust_future_free_void(`handle`: Long,
 ): Unit
-fun ffi_mydownloader_android_bridge_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun ffi_fetchx_android_bridge_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 
 }
@@ -1005,53 +1005,53 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
     // Get the bindings contract version from our ComponentInterface
     val bindings_contract_version = 29
     // Get the scaffolding contract version by calling the into the dylib
-    val scaffolding_contract_version = lib.ffi_mydownloader_android_bridge_uniffi_contract_version()
+    val scaffolding_contract_version = lib.ffi_fetchx_android_bridge_uniffi_contract_version()
     if (bindings_contract_version != scaffolding_contract_version) {
         throw RuntimeException("UniFFI contract version mismatch: try cleaning and rebuilding your project")
     }
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_add_download() != 1201.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_add_download() != 1201.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_add_event_listener() != 64625.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_add_event_listener() != 64625.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_cancel_download() != 20268.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_cancel_download() != 20268.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_get_download() != 12576.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_get_download() != 12576.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_list_downloads() != 14876.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_list_downloads() != 14876.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_pause_download() != 63539.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_pause_download() != 63539.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_remove_download() != 37177.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_remove_download() != 37177.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_resume_download() != 5791.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_resume_download() != 5791.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_retry_download() != 3920.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_retry_download() != 3920.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_schedule_download() != 48766.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_schedule_download() != 48766.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_set_priority() != 42808.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_set_priority() != 42808.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadservice_shutdown() != 39280.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadservice_shutdown() != 39280.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_constructor_downloadservice_new() != 3917.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_constructor_downloadservice_new() != 3917.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_mydownloader_android_bridge_checksum_method_downloadeventlistener_on_event() != 14336.toShort()) {
+    if (lib.uniffi_fetchx_android_bridge_checksum_method_downloadeventlistener_on_event() != 14336.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1480,7 +1480,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
     constructor(`config`: CoreConfig) :
         this(
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_constructor_downloadservice_new(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_constructor_downloadservice_new(
         FfiConverterTypeCoreConfig.lower(`config`),_status)
 }
     )
@@ -1536,7 +1536,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         override fun run() {
             pointer?.let { ptr ->
                 uniffiRustCall { status ->
-                    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_free_downloadservice(ptr, status)
+                    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_free_downloadservice(ptr, status)
                 }
             }
         }
@@ -1544,7 +1544,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
 
     fun uniffiClonePointer(): Pointer {
         return uniffiRustCall() { status ->
-            UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_clone_downloadservice(pointer!!, status)
+            UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_clone_downloadservice(pointer!!, status)
         }
     }
 
@@ -1553,7 +1553,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_add_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_add_download(
         it, FfiConverterString.lower(`url`),FfiConverterString.lower(`filename`),FfiConverterString.lower(`destination`),FfiConverterTypeDownloadPriorityDto.lower(`priority`),_status)
 }
     }
@@ -1565,7 +1565,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_add_event_listener(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_add_event_listener(
         it, FfiConverterTypeDownloadEventListener.lower(`listener`),_status)
 }
     }
@@ -1577,7 +1577,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_cancel_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_cancel_download(
         it, FfiConverterString.lower(`id`),_status)
 }
     }
@@ -1589,7 +1589,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
             return FfiConverterOptionalTypeDownloadInfoDto.lift(
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_get_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_get_download(
         it, FfiConverterString.lower(`id`),_status)
 }
     }
@@ -1602,7 +1602,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
             return FfiConverterSequenceTypeDownloadInfoDto.lift(
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_list_downloads(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_list_downloads(
         it, _status)
 }
     }
@@ -1615,7 +1615,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_pause_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_pause_download(
         it, FfiConverterString.lower(`id`),_status)
 }
     }
@@ -1627,7 +1627,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_remove_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_remove_download(
         it, FfiConverterString.lower(`id`),_status)
 }
     }
@@ -1639,7 +1639,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_resume_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_resume_download(
         it, FfiConverterString.lower(`id`),_status)
 }
     }
@@ -1651,7 +1651,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
             return FfiConverterString.lift(
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_retry_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_retry_download(
         it, FfiConverterString.lower(`id`),_status)
 }
     }
@@ -1664,7 +1664,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_schedule_download(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_schedule_download(
         it, FfiConverterString.lower(`id`),FfiConverterLong.lower(`startAtMillis`),_status)
 }
     }
@@ -1676,7 +1676,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCallWithError(MobileApiException) { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_set_priority(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_set_priority(
         it, FfiConverterString.lower(`id`),FfiConverterTypeDownloadPriorityDto.lower(`priority`),_status)
 }
     }
@@ -1687,7 +1687,7 @@ open class DownloadService: Disposable, AutoCloseable, DownloadServiceInterface
         = 
     callWithPointer {
     uniffiRustCall() { _status ->
-    UniffiLib.INSTANCE.uniffi_mydownloader_android_bridge_fn_method_downloadservice_shutdown(
+    UniffiLib.INSTANCE.uniffi_fetchx_android_bridge_fn_method_downloadservice_shutdown(
         it, _status)
 }
     }
@@ -2149,7 +2149,7 @@ internal object uniffiCallbackInterfaceDownloadEventListener {
     // Registers the foreign callback with the Rust side.
     // This method is generated for each callback interface.
     internal fun register(lib: UniffiLib) {
-        lib.uniffi_mydownloader_android_bridge_fn_init_callback_vtable_downloadeventlistener(vtable)
+        lib.uniffi_fetchx_android_bridge_fn_init_callback_vtable_downloadeventlistener(vtable)
     }
 }
 
@@ -2251,4 +2251,5 @@ public object FfiConverterSequenceTypeDownloadInfoDto: FfiConverterRustBuffer<Li
         }
     }
 }
+
 

@@ -1,11 +1,11 @@
 //! Pause, resume, cancel, remove, retry — all delegate to QueueManager.
 
-use mydownloader_core_services::CoreServices;
-use mydownloader_downloader::validate_http_source_url;
-use mydownloader_models::{
+use fetchx_core_services::CoreServices;
+use fetchx_downloader::validate_http_source_url;
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadSource, DownloadStatus, FileName, Timestamp,
 };
-use mydownloader_queue::QueueError;
+use fetchx_queue::QueueError;
 use reqwest::Url;
 
 use crate::{
@@ -13,7 +13,7 @@ use crate::{
     output,
 };
 
-// ── Pause ─────────────────────────────────────────────────────────────────
+// ── Pause ──────────────────────────────────────────────────────────────────
 
 pub async fn pause(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
     let (id, _) = match resolve(&id_str, json) {
@@ -65,7 +65,7 @@ pub async fn remove(svc: &CoreServices, id_str: String, json: bool) -> ExitCode 
     }
 }
 
-// ── Retry ─────────────────────────────────────────────────────────────────
+// ── Retry ──────────────────────────────────────────────────────────────────
 
 pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
     let (id, item) = match resolve(&id_str, json) {
@@ -96,7 +96,7 @@ pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
     if !svc.engine_runtime.is_available(original_engine) {
         output::print_error(
             json,
-            &format!("{original_engine:?} engine is not available. Check `mydownloader engines`."),
+            &format!("{original_engine:?} engine is not available. Check `FetchX engines`."),
         );
         return exit::ENGINE_UNAVAILABLE;
     }
@@ -166,7 +166,7 @@ pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
     exit::SUCCESS
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Parse the ID and optionally fetch the item for commands that need it.
 fn resolve(id_str: &str, json: bool) -> Option<(DownloadId, Option<DownloadItem>)> {
@@ -186,7 +186,7 @@ pub async fn resolve_with_item(
     id_str: &str,
     json: bool,
 ) -> Option<(DownloadId, DownloadItem)> {
-    use mydownloader_storage::DownloadRepository;
+    use fetchx_storage::DownloadRepository;
     let id = match super::parse_id(id_str) {
         Ok(id) => id,
         Err(_) => {
@@ -230,3 +230,4 @@ fn queue_error(json: bool, e: &QueueError) -> ExitCode {
     output::print_error(json, &msg);
     code
 }
+

@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use mydownloader_core_services::{CoreServices, CoreServicesConfig};
-use mydownloader_models::{
+use fetchx_core_services::{CoreServices, CoreServicesConfig};
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadSource, DownloadStatus, FileName, Timestamp,
 };
-use mydownloader_storage::DownloadRepository as _;
+use fetchx_storage::DownloadRepository as _;
 use tokio::sync::broadcast;
 use tracing::warn;
 
@@ -15,7 +15,7 @@ use crate::dto::{
 };
 use crate::error::MobileApiError;
 
-// ── Inner state that lives only while the service is running ─────────────
+// ── Inner state that lives only while the service is running ──────────────
 
 struct ServiceInner {
     runtime: tokio::runtime::Runtime,
@@ -56,7 +56,7 @@ impl DownloadService {
         })
     }
 
-    // ── Helper: lock inner and execute a blocking async call ─────────────
+    // ── Helper: lock inner and execute a blocking async call ──────────────
 
     fn with_inner<T, F>(&self, f: F) -> Result<T, MobileApiError>
     where
@@ -98,7 +98,7 @@ impl DownloadService {
         })
     }
 
-    // ── Add ───────────────────────────────────────────────────────────────
+    // ── Add ────────────────────────────────────────────────────────────────
 
     pub fn add_download(
         &self,
@@ -115,7 +115,7 @@ impl DownloadService {
         }
         let fname =
             FileName::new(&filename).map_err(|e| MobileApiError::Validation(e.to_string()))?;
-        let source = DownloadSource::new(&url, mydownloader_models::EngineKind::DirectHttp)
+        let source = DownloadSource::new(&url, fetchx_models::EngineKind::DirectHttp)
             .map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let dest = PathBuf::from(&destination);
         let rust_priority = priority_from_dto(priority);
@@ -221,7 +221,7 @@ impl DownloadService {
         })
     }
 
-    // ── Retry ─────────────────────────────────────────────────────────────
+    // ── Retry ──────────────────────────────────────────────────────────────
 
     pub fn retry_download(&self, id: String) -> Result<String, MobileApiError> {
         let old_id = DownloadId::parse(&id)
@@ -295,7 +295,7 @@ impl DownloadService {
             return;
         };
 
-        let mut rx: broadcast::Receiver<mydownloader_queue::DownloadEvent> =
+        let mut rx: broadcast::Receiver<fetchx_queue::DownloadEvent> =
             inner.core.event_bus.subscribe();
 
         // UniFFI callback interface objects are Send + Sync, wrap in Arc for the async task.
@@ -612,3 +612,4 @@ mod tests {
         svc.shutdown();
     }
 }
+

@@ -1,21 +1,21 @@
 [package]
-name = "mydownloader"
+name = "fetchx"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "mydownloader"
+name = "fetchx"
 path = "src/main.rs"
 
 [dependencies]
-mydownloader-core-services = { path = "../core-services" }
-mydownloader-downloader    = { path = "../downloader" }
-mydownloader-models        = { path = "../models" }
-mydownloader-plugin-manager = { path = "../plugin-manager" }
-mydownloader-queue         = { path = "../queue" }
-mydownloader-scheduler     = { path = "../scheduler" }
-mydownloader-storage       = { path = "../storage" }
+fetchx-core-services = { path = "../core-services" }
+fetchx-downloader    = { path = "../downloader" }
+fetchx-models        = { path = "../models" }
+fetchx-plugin-manager = { path = "../plugin-manager" }
+fetchx-queue         = { path = "../queue" }
+fetchx-scheduler     = { path = "../scheduler" }
+fetchx-storage       = { path = "../storage" }
 clap.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -27,3 +27,4 @@ tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+

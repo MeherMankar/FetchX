@@ -1,8 +1,8 @@
 use std::io;
 
-use mydownloader_core::StateMachineError;
-use mydownloader_models::{DownloadError, DownloadErrorCode, DownloadId};
-use mydownloader_storage::StorageError;
+use fetchx_core::StateMachineError;
+use fetchx_models::{DownloadError, DownloadErrorCode, DownloadId};
+use fetchx_storage::StorageError;
 use thiserror::Error;
 
 use crate::aria2::Aria2ClientError;
@@ -67,13 +67,13 @@ pub enum DownloadEngineError {
     #[error("download byte count overflowed")]
     ByteCountOverflow,
     #[error("download progress could not be represented: {0}")]
-    Progress(#[from] mydownloader_models::DownloadProgressError),
+    Progress(#[from] fetchx_models::DownloadProgressError),
     #[error("download diagnostic could not be represented: {0}")]
-    DomainError(#[from] mydownloader_models::DownloadErrorMessageError),
+    DomainError(#[from] fetchx_models::DownloadErrorMessageError),
     #[error("download item could not be updated: {0}")]
-    Domain(#[from] mydownloader_models::DownloadItemError),
+    Domain(#[from] fetchx_models::DownloadItemError),
     #[error("download timestamp could not be updated: {0}")]
-    Timestamp(#[from] mydownloader_models::TimestampError),
+    Timestamp(#[from] fetchx_models::TimestampError),
     #[error("download state transition failed: {0}")]
     StateMachine(#[from] StateMachineError),
     #[error("download persistence failed: {0}")]
@@ -106,7 +106,7 @@ pub enum DownloadEngineError {
 impl DownloadEngineError {
     pub(crate) fn persisted_error(
         &self,
-    ) -> Result<DownloadError, mydownloader_models::DownloadErrorMessageError> {
+    ) -> Result<DownloadError, fetchx_models::DownloadErrorMessageError> {
         let (code, message) = match self {
             Self::InvalidUrl
             | Self::UnsupportedScheme
@@ -232,3 +232,4 @@ impl From<io::Error> for DownloadEngineError {
         }
     }
 }
+

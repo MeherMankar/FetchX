@@ -1,6 +1,6 @@
-use mydownloader_core_services::CoreServices;
-use mydownloader_models::DownloadStatus;
-use mydownloader_storage::DownloadRepository;
+use fetchx_core_services::CoreServices;
+use fetchx_models::DownloadStatus;
+use fetchx_storage::DownloadRepository;
 use serde_json::json;
 
 use crate::{
@@ -87,3 +87,4 @@ pub async fn run(svc: &CoreServices, opts: ListOpts, json: bool) -> ExitCode {
 
     exit::SUCCESS
 }
+

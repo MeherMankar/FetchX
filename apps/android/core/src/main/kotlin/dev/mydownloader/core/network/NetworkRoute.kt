@@ -1,4 +1,4 @@
-package dev.mydownloader.core.network
+package dev.fetchx.core.network
 
 /**
  * The network routing mode for a download or browser session.
@@ -20,3 +20,4 @@ sealed class NetworkRoute {
      */
     data object Tor : NetworkRoute()
 }
+

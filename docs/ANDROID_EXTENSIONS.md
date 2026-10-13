@@ -1,7 +1,7 @@
 # Android Extension Architecture
 
 > **Phase 20 extension design document.** Describes the WebExtension support
-> architecture for MyDownloader Android, based on GeckoView's
+> architecture for FetchX Android, based on GeckoView's
 > `WebExtensionController` API.
 
 ---
@@ -60,9 +60,9 @@ consistent with the Firefox for Android extension API surface:
 
 | Feature | Status | Reason |
 |---|---|---|
-| `chrome.downloads` API | ❌ Not available to extensions | Download interception in MyDownloader is done at the `GeckoSession.NavigationDelegate` level (app code), not inside an extension. Extensions cannot route a download to MyDownloader via the WebExtension API. |
+| `chrome.downloads` API | ❌ Not available to extensions | Download interception in FetchX is done at the `GeckoSession.NavigationDelegate` level (app code), not inside an extension. Extensions cannot route a download to FetchX via the WebExtension API. |
 | Native messaging from extension to Rust | ❌ Not available | GeckoView does not expose WebExtension native messaging to the embedding app. Security boundary: extensions run in the Gecko sandbox and cannot call Android JNI or the Rust bridge. |
-| Full `chrome.*` namespace | ❌ Partial | GeckoView exposes `browser.*` (WebExtension standard). Some `chrome.*` aliases exist for compat but are not guaranteed. Extensions that rely on Chrome-only APIs will not work. |
+| Full `chrome.*` namespace | ⚠️ Partial | GeckoView exposes `browser.*` (WebExtension standard). Some `chrome.*` aliases exist for compat but are not guaranteed. Extensions that rely on Chrome-only APIs will not work. |
 | `browser.devtools` | ❌ Not available on Android | DevTools protocol not exposed in GeckoView mobile |
 | `browser.tabGroups` | ❌ Not available | Chrome-specific API |
 | `browser.sidePanel` | ❌ Not available | Chrome-specific API |
@@ -88,7 +88,7 @@ GeckoView reads manifest.json, validates permissions
 Phase 20L: PermissionPromptDelegate called with permission list
     │
     ▼
-User approves permissions in MyDownloader permission UI
+User approves permissions in FetchX permission UI
     │
     ▼
 Extension installed; background script starts
@@ -99,7 +99,7 @@ Extension appears in "Installed Extensions" list (:extensions screen)
 
 ### Built-in extensions (bundled with the app)
 
-MyDownloader may bundle a content-blocking extension as a built-in extension:
+FetchX may bundle a content-blocking extension as a built-in extension:
 
 ```kotlin
 // Phase 20K — example
@@ -148,7 +148,7 @@ An extension that attempts to exfiltrate data can use `fetch()` / `XMLHttpReques
 to send data to a remote server — this is governed by the extension's `host_permissions`
 and the standard `webRequest` blocking (other extensions or built-in rules can block it).
 
-The MyDownloader built-in content blocker extension will run with elevated trust
+The FetchX built-in content blocker extension will run with elevated trust
 (`installBuiltIn`) and is distributed as part of the signed APK.
 
 ---
@@ -187,7 +187,7 @@ application-defined port name for `browser.runtime.connectNative` messages.
 | `browser.storage.sync` | Requires Firefox Account | Not available without FxA integration — document this limitation to users |
 
 `storage.sync` limitation: extensions that rely on `storage.sync` for cross-device
-synchronisation will fall back to `storage.local` on MyDownloader Android unless
+synchronisation will fall back to `storage.local` on FetchX Android unless
 FxA integration is added (not planned for Phase 20 scope).
 
 ---
@@ -195,14 +195,14 @@ FxA integration is added (not planned for Phase 20 scope).
 ## Relationship to Desktop Extension (apps/browser/extension/)
 
 The existing `apps/browser/extension/` is an MV3 Chrome/Firefox browser extension
-for the desktop. It communicates with the MyDownloader desktop app via native
+for the desktop. It communicates with the FetchX desktop app via native
 messaging.
 
 The Android WebExtension architecture is separate:
 
 | Aspect | Desktop extension | Android WebExtension |
 |---|---|---|
-| Host | Chrome / Firefox desktop | GeckoView (MyDownloader app IS the browser) |
+| Host | Chrome / Firefox desktop | GeckoView (FetchX app IS the browser) |
 | Communication | Native messaging (stdin/stdout) | `WebExtensionController.MessageDelegate` (in-process) |
 | Intercept mechanism | `chrome.downloads.onCreated` / `browser.downloads` | `GeckoSession.NavigationDelegate.onNewSession` + download MIME detection |
 | Distribution | Chrome Web Store / Firefox Add-ons | Bundled with app or sideloaded .xpi |
@@ -220,3 +220,4 @@ platforms.
 | 20F | GeckoView initialised with `WebExtensionController`; built-in content blocker installed |
 | 20K | Extension management UI: install, list, enable/disable, uninstall |
 | 20L | Permission prompt UI; per-extension permission revocation; `GrantedPermissions` persistence |
+

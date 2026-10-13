@@ -1,6 +1,6 @@
-use mydownloader_core_services::CoreServicesError;
-use mydownloader_queue::QueueError;
-use mydownloader_scheduler::ScheduleError;
+use fetchx_core_services::CoreServicesError;
+use fetchx_queue::QueueError;
+use fetchx_scheduler::ScheduleError;
 
 /// Error type that maps all internal errors to a flat mobile-friendly enum.
 /// Variants must match the [Error] enum in android_bridge.udl exactly.
@@ -54,7 +54,7 @@ impl From<QueueError> for MobileApiError {
             }
             QueueError::StateMachine(e) => {
                 // StateMachineError::NotFound should surface as NotFound, not InvalidStateTransition.
-                use mydownloader_core::StateMachineError;
+                use fetchx_core::StateMachineError;
                 match e {
                     StateMachineError::NotFound(id) => {
                         MobileApiError::NotFound(format!("download {id} not found"))
@@ -101,3 +101,4 @@ impl From<CoreServicesError> for MobileApiError {
         MobileApiError::Runtime(e.to_string())
     }
 }
+

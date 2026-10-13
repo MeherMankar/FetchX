@@ -1,6 +1,6 @@
-use mydownloader_core_services::CoreServices;
-use mydownloader_downloader::validate_http_source_url;
-use mydownloader_models::{
+use fetchx_core_services::CoreServices;
+use fetchx_downloader::validate_http_source_url;
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, EngineKind, FileName, Timestamp,
 };
 use reqwest::Url;
@@ -31,7 +31,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         }
     };
 
-    // ── Engine resolution ───────────────────────────────────────────────
+    // ── Engine resolution ────────────────────────────────────────────────
 
     let engine_kind = match parse_engine(opts.engine.as_deref()) {
         Ok(e) => e,
@@ -46,7 +46,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             json,
             &format!(
                 "{engine_kind:?} engine is not available. \
-                      Check `mydownloader engines` or engine settings."
+                      Check `FetchX engines` or engine settings."
             ),
         );
         return exit::ENGINE_UNAVAILABLE;
@@ -99,7 +99,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         }
     }
 
-    // ── Enqueue ─────────────────────────────────────────────────────────
+    // ── Enqueue ──────────────────────────────────────────────────────────
 
     if let Err(e) = svc.queue().enqueue(item).await {
         output::print_error(json, &format!("failed to enqueue: {e}"));
@@ -124,7 +124,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         }
     }
 
-    // ── Success output ───────────────────────────────────────────────────
+    // ── Success output ────────────────────────────────────────────────────
 
     if json {
         output::print_json_ok(&serde_json::json!({
@@ -142,7 +142,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
     exit::SUCCESS
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 
 pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
     match s.unwrap_or("direct-http").to_ascii_lowercase().as_str() {
@@ -173,3 +173,4 @@ fn filename_for_url(url: &Url) -> String {
         .unwrap_or("download")
         .to_owned()
 }
+

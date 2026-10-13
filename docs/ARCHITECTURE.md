@@ -112,7 +112,7 @@ Parent directories are not created automatically.
 For a fresh download, if the initial response advertises `Accept-Ranges: bytes`, has a
 known size of at least 4 MiB, and is not redirected, the engine plans up to eight
 inclusive byte ranges and initially starts four workers. `HttpEngineConfig::segment_count`
-sets the number of planned ranges (bounded to 2–16); the adaptive controller independently
+sets the number of planned ranges (bounded to 2—16); the adaptive controller independently
 limits active requests to at most eight. Each response's status, final URL, Content-Range,
 total size, body length, and local segment size are validated before bytes are accepted.
 If a segment endpoint ignores Range or returns unusable range metadata, the engine
@@ -188,10 +188,10 @@ files and directories are removed on startup failure, process exit, and shutdown
 
 aria2 GIDs remain memory-only and are tagged with the process generation. A GID from an
 older generation is discarded without RPC use. An active item whose process exits is
-resubmitted to the replacement daemon from its persisted MyDownloader item; aria2's
+resubmitted to the replacement daemon from its persisted FetchX item; aria2's
 `continue` option uses aria2's regular local `.aria2` control file when persisted
 progress is nonzero; if that resume metadata is absent or reports fewer bytes than
-MyDownloader has committed, recovery fails closed and preserves the stored progress.
+FetchX has committed, recovery fails closed and preserves the stored progress.
 Queue startup already
 recovers only `Preparing`/`Downloading` records to `Queued`, while paused, completed,
 failed, and cancelled records are not automatically resurrected. SQLite lifecycle and
@@ -289,3 +289,4 @@ not introduced in this foundation phase.
 The main webview capability grants only the event listener permissions required by
 the shell. It has no filesystem, shell, process, or unrestricted-network plugin
 permissions. Engine process management and filesystem publication remain Rust-owned.
+

@@ -1,12 +1,12 @@
 {
   "manifest_version": 2,
-  "name": "MyDownloader",
+  "name": "FetchX",
   "version": "0.2.0",
-  "description": "Capture links, intercept downloads, scan page resources — send everything to MyDownloader.",
+  "description": "Capture links, intercept downloads, scan page resources — send everything to FetchX.",
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "mydownloader@mydownloader.app",
+      "id": "FetchX@FetchX.app",
       "strict_min_version": "109.0"
     }
   },
@@ -36,7 +36,7 @@
 
   "browser_action": {
     "default_popup": "popup.html",
-    "default_title": "MyDownloader",
+    "default_title": "FetchX",
     "default_icon": {
       "16":  "icons/icon16.png",
       "32":  "icons/icon32.png",
@@ -52,3 +52,4 @@
     "128": "icons/icon128.png"
   }
 }
+

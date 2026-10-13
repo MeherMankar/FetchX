@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MyDownloader",
+  "productName": "FetchX",
   "version": "0.1.0",
-  "identifier": "com.mydownloader.desktop",
+  "identifier": "com.fetchx.desktop",
   "build": {
     "beforeDevCommand": "npm --prefix ../ui run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "MyDownloader",
+        "title": "FetchX",
         "width": 1000,
         "height": 700,
         "minWidth": 760,
@@ -30,3 +30,4 @@
     "icon": ["icons/icon.ico"]
   }
 }
+

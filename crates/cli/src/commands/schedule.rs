@@ -1,5 +1,5 @@
-use mydownloader_core_services::CoreServices;
-use mydownloader_models::Timestamp;
+use fetchx_core_services::CoreServices;
+use fetchx_models::Timestamp;
 
 use crate::{
     args::ScheduleOpts,
@@ -134,7 +134,7 @@ pub fn parse_datetime(s: &str) -> Result<Timestamp, String> {
     Ok(ts)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────
+// ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -166,3 +166,4 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 }
+

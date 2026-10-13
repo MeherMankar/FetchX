@@ -3,7 +3,7 @@ import { PROTOCOL_VERSION, isError, userMessageForCode } from "../types/protocol
 import { NativeHostError, hasEmbeddedCredentials, isHttpUrl, sendToNativeHost } from "../shared/native";
 import type { ExtensionSettings } from "../background/service-worker";
 
-// ── DOM refs ──────────────────────────────────────────────────────────────
+// ──DOM refs ──────────────────────────────────────────────────────────────
 
 const statusBadge  = q<HTMLElement>("#status-badge");
 const statusText   = q<HTMLElement>("#status-text");
@@ -32,7 +32,7 @@ function q<T extends Element>(sel: string): T {
   return document.querySelector<T>(sel)!;
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────
+// ──Tabs ──────────────────────────────────────────────────────────────────
 
 document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -45,14 +45,14 @@ document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
   });
 });
 
-// ── Status ────────────────────────────────────────────────────────────────
+// ──Status ────────────────────────────────────────────────────────────────
 
 function setStatus(state: "checking" | "connected" | "disconnected", label?: string) {
   statusBadge.className = `status-badge status-${state}`;
   statusText.textContent = label ?? { checking: "Checking…", connected: "Connected", disconnected: "Not running" }[state];
 }
 
-// ── Result banner ─────────────────────────────────────────────────────────
+// ──Result banner ─────────────────────────────────────────────────────────
 
 function showResult(kind: "success" | "error", msg: string) {
   resultBanner.textContent = msg;
@@ -63,7 +63,7 @@ function clearResult() {
   resultBanner.textContent = "";
 }
 
-// ── URL / Add tab ─────────────────────────────────────────────────────────
+// ──URL / Add tab ─────────────────────────────────────────────────────────
 
 function validateUrl(url: string): string | null {
   if (!url.trim()) return "Please enter a URL.";
@@ -106,19 +106,19 @@ async function submit() {
     if (isError(resp)) {
       showResult("error", userMessageForCode(resp.error.code));
     } else {
-      showResult("success", "✓ Download added to MyDownloader");
+      showResult("success", "✓ Download added to FetchX");
       urlInput.value = "";
       updateSubmit();
     }
   } catch (e) {
-    showResult("error", e instanceof NativeHostError ? e.message : "Could not reach MyDownloader.");
+    showResult("error", e instanceof NativeHostError ? e.message : "Could not reach FetchX.");
   } finally {
-    btnText.textContent = "Download with MyDownloader";
+    btnText.textContent = "Download with FetchX";
     updateSubmit();
   }
 }
 
-// ── Tasks tab ─────────────────────────────────────────────────────────────
+// ──Tasks tab ─────────────────────────────────────────────────────────────
 
 const STATUS_ICON: Record<string, string> = {
   downloading: "↓", completed: "✓", failed: "✗",
@@ -171,7 +171,7 @@ refreshBtn.addEventListener("click", () => {
   void chrome.runtime.sendMessage({ type: "refresh_tasks" }).then(() => loadTasks());
 });
 
-// ── Resources tab ─────────────────────────────────────────────────────────
+// ──Resources tab ─────────────────────────────────────────────────────────
 
 interface Resource { url: string; type: string; label: string; }
 
@@ -276,7 +276,7 @@ async function downloadSelected() {
   }
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────
+// ──Settings ──────────────────────────────────────────────────────────────
 
 settingsBtn.addEventListener("click", () => { void loadSettings(); settingsPanel.classList.remove("hidden"); });
 settingsClose.addEventListener("click", () => settingsPanel.classList.add("hidden"));
@@ -300,13 +300,13 @@ async function saveSettings() {
   settingsPanel.classList.add("hidden");
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// ──Helpers ───────────────────────────────────────────────────────────────
 
 function esc(s: string): string {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────
+// ──Boot ──────────────────────────────────────────────────────────────────
 
 async function init() {
   void fillTab();

@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mydownloader.bridge"
+    namespace = "dev.fetchx.bridge"
     compileSdk = 35
 
     defaultConfig {
@@ -45,3 +45,4 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
 }
+

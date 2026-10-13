@@ -3,10 +3,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use mydownloader_models::{
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, Timestamp,
 };
-use mydownloader_storage::{DownloadRepository, StorageError};
+use fetchx_storage::{DownloadRepository, StorageError};
 use tokio::sync::broadcast;
 
 const EVENT_BUFFER_CAPACITY: usize = 2048;
@@ -205,10 +205,10 @@ where
 mod tests {
     use std::path::PathBuf;
 
-    use mydownloader_models::{
+    use fetchx_models::{
         DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
     };
-    use mydownloader_storage::{Database, DownloadRepository};
+    use fetchx_storage::{Database, DownloadRepository};
     use tokio::sync::broadcast;
 
     use super::{DownloadEvent, DownloadEventBus, EventRepository};
@@ -224,7 +224,7 @@ mod tests {
     }
 
     async fn event_repo() -> (
-        EventRepository<mydownloader_storage::SqliteDownloadRepository>,
+        EventRepository<fetchx_storage::SqliteDownloadRepository>,
         broadcast::Receiver<DownloadEvent>,
     ) {
         let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -316,3 +316,4 @@ mod tests {
         repo.create(&item).await.unwrap();
     }
 }
+

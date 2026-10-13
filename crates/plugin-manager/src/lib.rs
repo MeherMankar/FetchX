@@ -1,16 +1,16 @@
 //! Plugin Manager — Phase 19
 //!
 //! Discovers, validates, registers, and manages the lifecycle of external
-//! MyDownloader plugins.
+//! FetchX plugins.
 //!
 //! # Architecture
 //! ```text
 //! PluginManager
-//!   ├── discover()  — scans plugin directory for plugin.json manifests
-//!   ├── register()  — validates and adds a plugin to the registry
-//!   ├── start()     — spawns plugin process, performs handshake
-//!   ├── stop()      — sends Shutdown, waits, kills if needed
-//!   └── registry()  — read-only view of registered plugins
+//!   ┌── discover()  — scans plugin directory for plugin.json manifests
+//!   ┌── register()  — validates and adds a plugin to the registry
+//!   ┌── start()     — spawns plugin process, performs handshake
+//!   ┌── stop()      — sends Shutdown, waits, kills if needed
+//!   └─── registry()  — read-only view of registered plugins
 //! ```
 //!
 //! # Security
@@ -28,7 +28,7 @@ pub mod registry;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
-use mydownloader_plugin_api::{
+use fetchx_plugin_api::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginManifest,
     PluginResponseBody, parse_manifest, parse_plugin_response,
 };
@@ -423,7 +423,7 @@ async fn do_handshake(
         .await
         .map_err(|e| PluginManagerError::HandshakeFailed(e.to_string()))?;
     let resp_len = u32::from_le_bytes(len_buf);
-    if resp_len > mydownloader_plugin_api::protocol::MAX_IPC_PAYLOAD_BYTES {
+    if resp_len > fetchx_plugin_api::protocol::MAX_IPC_PAYLOAD_BYTES {
         return Err(PluginManagerError::HandshakeFailed(format!(
             "response too large ({resp_len} bytes)"
         )));
@@ -509,3 +509,4 @@ pub enum PluginManagerError {
     #[error("I/O error: {0}")]
     Io(#[source] std::io::Error),
 }
+

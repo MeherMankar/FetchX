@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{error::Error, path::PathBuf};
 
-use mydownloader_models::{
+use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
     DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
@@ -57,7 +57,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
 async fn connect_path_preserves_special_path_characters() -> Result<(), Box<dyn Error>> {
     let special_characters = if cfg!(windows) { "# %20" } else { "? # %20" };
     let path = std::env::temp_dir().join(format!(
-        "mydownloader-path-{}-{}.db",
+        "FetchX-path-{}-{}.db",
         std::process::id(),
         special_characters
     ));
@@ -209,7 +209,7 @@ async fn schedules_round_trip_update_and_delete() -> Result<(), Box<dyn Error>> 
 async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
 -> Result<(), Box<dyn Error>> {
     let path = std::env::temp_dir().join(format!(
-        "mydownloader-schedules-{}-{}.db",
+        "FetchX-schedules-{}-{}.db",
         std::process::id(),
         TEMP_DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
@@ -356,3 +356,4 @@ async fn values_outside_sqlite_integer_range_are_rejected() -> Result<(), Box<dy
     ));
     Ok(())
 }
+

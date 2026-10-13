@@ -1,11 +1,11 @@
-//! MyDownloader Native Messaging Host (Phase 17)
+//! FetchX Native Messaging Host (Phase 17)
 //!
 //! This binary is registered as a Chrome/Edge native messaging host.
 //! The browser launches it as a child process and communicates via:
 //!   stdin  → 4-byte LE length + JSON request
 //!   stdout ← 4-byte LE length + JSON response
 //!
-//! The host forwards the request to the running MyDownloader desktop
+//! The host forwards the request to the running FetchX desktop
 //! application via a loopback TCP socket.  Connection details
 //! (port + session token) are read from a per-session state file that the
 //! desktop writes to its app-data directory on startup.
@@ -25,7 +25,7 @@
 
 use std::io::{self, BufReader, BufWriter};
 
-use mydownloader_browser_protocol::{
+use fetchx_browser_protocol::{
     BrowserErrorCode, BrowserRequest, BrowserResponse, NativeMessagingError, read_frame,
     write_frame,
 };
@@ -79,7 +79,7 @@ fn run_once() -> Result<(), HostError> {
     };
 
     // Parse and validate the protocol request.
-    let request = match mydownloader_browser_protocol::parse_request(&frame) {
+    let request = match fetchx_browser_protocol::parse_request(&frame) {
         Ok(r) => r,
         Err(error_response) => {
             write_frame(&mut writer, &error_response)?;
@@ -103,7 +103,7 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
             return Ok(BrowserResponse::error(
                 None,
                 BrowserErrorCode::DesktopUnavailable,
-                "MyDownloader does not appear to be running. Please start the application.",
+                "FetchX does not appear to be running. Please start the application.",
             ));
         }
     };
@@ -128,14 +128,14 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
                 return Ok(BrowserResponse::error(
                     None,
                     BrowserErrorCode::DesktopUnavailable,
-                    "MyDownloader is not responding. Please check that it is running.",
+                    "FetchX is not responding. Please check that it is running.",
                 ));
             }
             Err(_) => {
                 return Ok(BrowserResponse::error(
                     None,
                     BrowserErrorCode::DesktopUnavailable,
-                    "Connection to MyDownloader timed out.",
+                    "Connection to FetchX timed out.",
                 ));
             }
         };
@@ -168,20 +168,20 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
                 return Ok(BrowserResponse::error(
                     None,
                     BrowserErrorCode::DesktopUnavailable,
-                    "MyDownloader did not respond in time.",
+                    "FetchX did not respond in time.",
                 ));
             }
             Err(_) => {
                 return Ok(BrowserResponse::error(
                     None,
                     BrowserErrorCode::DesktopUnavailable,
-                    "MyDownloader response timed out.",
+                    "FetchX response timed out.",
                 ));
             }
         }
 
         let resp_len = u32::from_le_bytes(len_buf) as usize;
-        if resp_len > mydownloader_browser_protocol::MAX_MESSAGE_BYTES as usize {
+        if resp_len > fetchx_browser_protocol::MAX_MESSAGE_BYTES as usize {
             error!(resp_len, "desktop returned oversized response");
             return Ok(BrowserResponse::error(
                 None,
@@ -225,3 +225,4 @@ enum HostError {
     #[error("Tokio runtime error: {0}")]
     Runtime(String),
 }
+

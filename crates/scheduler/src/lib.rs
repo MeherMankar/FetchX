@@ -6,13 +6,13 @@ use std::{
     time::Duration,
 };
 
-use mydownloader_downloader::ManagedDownloadEngine;
-use mydownloader_models::{
+use fetchx_downloader::ManagedDownloadEngine;
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadSchedule, DownloadScheduleError, DownloadStatus, Timestamp,
     TimestampError,
 };
-use mydownloader_queue::{QueueConfig, QueueError, QueueManager};
-use mydownloader_storage::{DownloadRepository, StorageError};
+use fetchx_queue::{QueueConfig, QueueError, QueueManager};
+use fetchx_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
 use tokio::{
     sync::{Mutex, mpsc, oneshot},
@@ -483,16 +483,16 @@ mod tests {
         time::Duration,
     };
 
-    use mydownloader_core::DownloadStateMachine;
-    use mydownloader_downloader::{
+    use fetchx_core::DownloadStateMachine;
+    use fetchx_downloader::{
         DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
     };
-    use mydownloader_models::{
+    use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSchedule,
         DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
     };
-    use mydownloader_queue::{QueueConfig, QueueError};
-    use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
+    use fetchx_queue::{QueueConfig, QueueError};
+    use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
     use tokio::{sync::watch, time::timeout};
 
     use super::{ScheduleError, Scheduler};
@@ -1183,3 +1183,4 @@ mod tests {
         Ok(())
     }
 }
+

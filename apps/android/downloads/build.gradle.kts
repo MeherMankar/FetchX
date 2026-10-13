@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mydownloader.downloads"
+    namespace = "dev.fetchx.downloads"
     compileSdk = 35
 
     defaultConfig {
@@ -45,3 +45,4 @@ dependencies {
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
 }
+

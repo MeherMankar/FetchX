@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use mydownloader_models::{DownloadId, DownloadItem, EngineKind};
-use mydownloader_storage::DownloadRepository;
+use fetchx_models::{DownloadId, DownloadItem, EngineKind};
+use fetchx_storage::DownloadRepository;
 use tokio::sync::watch;
 
 use crate::{
@@ -124,10 +124,10 @@ mod tests {
         time::Duration,
     };
 
-    use mydownloader_models::{
+    use fetchx_models::{
         DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
     };
-    use mydownloader_storage::{Database, DownloadRepository};
+    use fetchx_storage::{Database, DownloadRepository};
     use tokio::sync::{mpsc, watch};
 
     use super::EngineDispatcher;
@@ -241,7 +241,7 @@ mod tests {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let base = std::env::temp_dir().join(format!(
-            "mydownloader-dispatcher-test-{}",
+            "fetchx-dispatcher-test-{}",
             DownloadId::new()
         ));
         tokio::fs::create_dir_all(&base).await?;
@@ -293,3 +293,4 @@ mod tests {
         Ok(())
     }
 }
+

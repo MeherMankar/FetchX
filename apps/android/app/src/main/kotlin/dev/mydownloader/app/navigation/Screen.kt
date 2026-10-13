@@ -1,4 +1,4 @@
-package dev.mydownloader.app.navigation
+package dev.fetchx.app.navigation
 
 /**
  * Sealed class representing all top-level navigation destinations.
@@ -16,3 +16,4 @@ sealed class Screen(val route: String) {
     // Phase 20N: Settings screen
     // data object Settings : Screen("settings")
 }
+

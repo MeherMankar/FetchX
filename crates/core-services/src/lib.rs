@@ -1,4 +1,4 @@
-//! Platform-independent service bootstrap for MyDownloader.
+//! Platform-independent service bootstrap for FetchX.
 //!
 //! Both the Tauri desktop application and the CLI share the same core
 //! services: database, repository, engine runtime, queue, and scheduler.
@@ -8,13 +8,13 @@
 //! # Usage
 //!
 //! ```no_run
-//! # use mydownloader_core_services::{CoreServices, CoreServicesConfig};
+//! # use fetchx_core_services::{CoreServices, CoreServicesConfig};
 //! # use std::path::PathBuf;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = CoreServicesConfig {
-//!     database_path: PathBuf::from("/data/mydownloader.db"),
+//!     database_path: PathBuf::from("/data/fetchx.db"),
 //!     downloads_dir: PathBuf::from("/downloads"),
-//!     runtime_dir:   PathBuf::from("/tmp/mydownloader-runtime"),
+//!     runtime_dir:   PathBuf::from("/tmp/fetchx-runtime"),
 //! };
 //! let services = CoreServices::start(config).await?;
 //! // use services.queue(), services.scheduler(), etc.
@@ -27,14 +27,14 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use mydownloader_downloader::{
+use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
     DirectHttpEngine, EngineDispatcher, YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine,
 };
-use mydownloader_models::EngineKind;
-use mydownloader_queue::{DownloadEventBus, EventRepository, QueueConfig, QueueManager};
-use mydownloader_scheduler::Scheduler;
-use mydownloader_storage::{Database, SqliteDownloadRepository};
+use fetchx_models::EngineKind;
+use fetchx_queue::{DownloadEventBus, EventRepository, QueueConfig, QueueManager};
+use fetchx_scheduler::Scheduler;
+use fetchx_storage::{Database, SqliteDownloadRepository};
 use thiserror::Error;
 use tokio::{fs, process::Command, time::Duration};
 use tracing::{info, warn};
@@ -156,7 +156,7 @@ impl CoreServices {
         &self.downloads_dir
     }
 
-    // ── Shutdown ─────────────────────────────────────────────────────────
+    // ── Shutdown ──────────────────────────────────────────────────────────
 
     /// Gracefully shuts down all services.
     ///
@@ -242,7 +242,7 @@ fn log_avail(name: &str, avail: &EngineAvailability) {
     }
 }
 
-// ── aria2 init ───────────────────────────────────────────────────────────
+// ── aria2 init ────────────────────────────────────────────────────────────
 
 async fn init_aria2(
     repository: CoreRepository,
@@ -356,3 +356,4 @@ pub enum CoreServicesError {
     #[error("queue error: {0}")]
     Queue(String),
 }
+

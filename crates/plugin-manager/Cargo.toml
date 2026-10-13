@@ -1,11 +1,11 @@
 [package]
-name = "mydownloader-plugin-manager"
+name = "fetchx-plugin-manager"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-mydownloader-plugin-api = { path = "../plugin-api" }
+fetchx-plugin-api = { path = "../plugin-api" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -14,3 +14,4 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+

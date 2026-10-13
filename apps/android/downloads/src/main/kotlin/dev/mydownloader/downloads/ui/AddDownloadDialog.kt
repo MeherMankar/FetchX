@@ -1,4 +1,4 @@
-package dev.mydownloader.downloads.ui
+package dev.fetchx.downloads.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,7 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import dev.mydownloader.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadPriority
 
 /**
  * Dialog for adding a new download.
@@ -182,3 +182,4 @@ internal fun validateUrl(url: String): String? {
     }
     return null
 }
+

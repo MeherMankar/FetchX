@@ -23,7 +23,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use mydownloader_browser_protocol::{
+use fetchx_browser_protocol::{
     BrowserErrorCode, BrowserRequest, BrowserRequestBody, BrowserResponse, MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION, validate_url,
 };
@@ -210,7 +210,7 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
         return BrowserResponse::error(
             None,
             BrowserErrorCode::UnsupportedVersion,
-            "Protocol version is not supported. Please update MyDownloader.",
+            "Protocol version is not supported. Please update FetchX.",
         );
     }
 
@@ -308,3 +308,4 @@ pub enum BrowserIpcError {
     #[error("browser IPC message exceeds maximum size ({0} bytes)")]
     OversizedMessage(u32),
 }
+

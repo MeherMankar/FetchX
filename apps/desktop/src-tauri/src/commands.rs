@@ -3,15 +3,15 @@ use std::{
     sync::{Arc, atomic::AtomicU8},
 };
 
-use mydownloader_core::StateMachineError;
-use mydownloader_downloader::validate_http_source_url;
-use mydownloader_models::{
+use fetchx_core::StateMachineError;
+use fetchx_downloader::validate_http_source_url;
+use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
     EngineKind, FileName, Timestamp,
 };
-use mydownloader_queue::{EventRepository, QueueError, QueueManager};
-use mydownloader_scheduler::{ScheduleError, Scheduler};
-use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
+use fetchx_queue::{EventRepository, QueueError, QueueManager};
+use fetchx_scheduler::{ScheduleError, Scheduler};
+use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -523,7 +523,7 @@ pub struct DeleteDownloadResponse {
 #[tauri::command]
 pub fn get_app_info() -> AppInfo {
     AppInfo {
-        name: "MyDownloader",
+        name: "FetchX",
         version: env!("CARGO_PKG_VERSION"),
         ipc_version: 1,
     }
@@ -730,14 +730,14 @@ fn is_single_normal_component(value: &str) -> bool {
 mod tests {
     use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
 
-    use mydownloader_core::DownloadStateMachine;
-    use mydownloader_downloader::{
+    use fetchx_core::DownloadStateMachine;
+    use fetchx_downloader::{
         DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
     };
-    use mydownloader_models::{DownloadId, DownloadItem, DownloadStatus};
-    use mydownloader_queue::{DownloadEventBus, EventRepository, QueueConfig};
-    use mydownloader_scheduler::Scheduler;
-    use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
+    use fetchx_models::{DownloadId, DownloadItem, DownloadStatus};
+    use fetchx_queue::{DownloadEventBus, EventRepository, QueueConfig};
+    use fetchx_scheduler::Scheduler;
+    use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
     use tokio::{sync::watch, time::timeout};
 
     use super::{
@@ -849,7 +849,7 @@ mod tests {
                 if let Some(item) = state.repository.get(id).await?
                     && item.status() == status
                 {
-                    return Ok::<(), mydownloader_storage::StorageError>(());
+                    return Ok::<(), fetchx_storage::StorageError>(());
                 }
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
@@ -1008,8 +1008,8 @@ mod tests {
                 filename: "file".to_owned(),
                 destination: "downloads/file".to_owned(),
                 status: DownloadStatus::Queued,
-                priority: mydownloader_models::DownloadPriority::Normal,
-                engine: mydownloader_models::EngineKind::DirectHttp,
+                priority: fetchx_models::DownloadPriority::Normal,
+                engine: fetchx_models::EngineKind::DirectHttp,
                 progress: super::DownloadProgressDto {
                     downloaded_bytes: 0,
                     total_bytes: None,
@@ -1062,7 +1062,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_priority_changes_persisted_value() -> Result<(), Box<dyn Error>> {
-        use mydownloader_models::DownloadPriority;
+        use fetchx_models::DownloadPriority;
 
         let state = test_state().await?;
         let download = state
@@ -1089,7 +1089,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_priority_on_missing_download_returns_not_found() -> Result<(), Box<dyn Error>> {
-        use mydownloader_models::DownloadPriority;
+        use fetchx_models::DownloadPriority;
 
         let state = test_state().await?;
         let result = state
@@ -1117,7 +1117,7 @@ mod tests {
         assert_eq!(paused.status, DownloadStatus::Paused);
 
         // Schedule one minute into the future so the download stays deferred.
-        let future_ms = mydownloader_models::Timestamp::now()?.as_unix_millis() + 60_000;
+        let future_ms = fetchx_models::Timestamp::now()?.as_unix_millis() + 60_000;
         state.schedule(id, future_ms).await?;
 
         let schedule = state.get_schedule(id).await?;
@@ -1138,7 +1138,7 @@ mod tests {
     #[tokio::test]
     async fn schedule_on_missing_download_returns_not_found() -> Result<(), Box<dyn Error>> {
         let state = test_state().await?;
-        let future_ms = mydownloader_models::Timestamp::now()?.as_unix_millis() + 60_000;
+        let future_ms = fetchx_models::Timestamp::now()?.as_unix_millis() + 60_000;
         let result = state.schedule(DownloadId::new(), future_ms).await;
         assert_eq!(result.err().map(|e| e.code), Some(IpcErrorCode::NotFound));
         state.scheduler.shutdown().await?;
@@ -1274,7 +1274,7 @@ mod tests {
         )?;
         assert_eq!(
             req.engine_kind,
-            Some(mydownloader_models::EngineKind::DirectHttp)
+            Some(fetchx_models::EngineKind::DirectHttp)
         );
         Ok(())
     }
@@ -1286,7 +1286,7 @@ mod tests {
         )?;
         assert_eq!(
             req.engine_kind,
-            Some(mydownloader_models::EngineKind::Aria2)
+            Some(fetchx_models::EngineKind::Aria2)
         );
         Ok(())
     }
@@ -1313,7 +1313,7 @@ mod tests {
                 engine_kind: None,
             })
             .await?;
-        assert_eq!(download.engine, mydownloader_models::EngineKind::DirectHttp);
+        assert_eq!(download.engine, fetchx_models::EngineKind::DirectHttp);
         state.scheduler.shutdown().await?;
         Ok(())
     }
@@ -1324,10 +1324,10 @@ mod tests {
         let download = state
             .add(AddDownloadRequest {
                 url: "https://example.test/explicit-http.zip".to_owned(),
-                engine_kind: Some(mydownloader_models::EngineKind::DirectHttp),
+                engine_kind: Some(fetchx_models::EngineKind::DirectHttp),
             })
             .await?;
-        assert_eq!(download.engine, mydownloader_models::EngineKind::DirectHttp);
+        assert_eq!(download.engine, fetchx_models::EngineKind::DirectHttp);
         state.scheduler.shutdown().await?;
         Ok(())
     }
@@ -1339,7 +1339,7 @@ mod tests {
         let result = state
             .add(AddDownloadRequest {
                 url: "https://example.test/aria2-attempt.zip".to_owned(),
-                engine_kind: Some(mydownloader_models::EngineKind::Aria2),
+                engine_kind: Some(fetchx_models::EngineKind::Aria2),
             })
             .await;
         // Must be Conflict — not silently accepted as DirectHttp.
@@ -1359,7 +1359,7 @@ mod tests {
         let result = state
             .add(AddDownloadRequest {
                 url: "https://example.test/ytdlp-attempt.zip".to_owned(),
-                engine_kind: Some(mydownloader_models::EngineKind::YtDlp),
+                engine_kind: Some(fetchx_models::EngineKind::YtDlp),
             })
             .await;
         assert_eq!(
@@ -1390,7 +1390,7 @@ mod tests {
         let retried = state.retry(id).await?;
         assert_eq!(
             retried.engine,
-            mydownloader_models::EngineKind::DirectHttp,
+            fetchx_models::EngineKind::DirectHttp,
             "retry must preserve DirectHttp engine assignment"
         );
         assert_ne!(
@@ -1405,9 +1405,9 @@ mod tests {
     #[test]
     fn engine_unavailable_error_contains_no_secrets() {
         for kind in [
-            mydownloader_models::EngineKind::Aria2,
-            mydownloader_models::EngineKind::YtDlp,
-            mydownloader_models::EngineKind::DirectHttp,
+            fetchx_models::EngineKind::Aria2,
+            fetchx_models::EngineKind::YtDlp,
+            fetchx_models::EngineKind::DirectHttp,
         ] {
             let err = IpcError::engine_unavailable(kind);
             let json = serde_json::to_string(&err).unwrap();
@@ -1418,3 +1418,4 @@ mod tests {
         }
     }
 }
+

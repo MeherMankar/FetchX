@@ -1,15 +1,15 @@
 [package]
-name = "mydownloader-native-host"
+name = "fetchx-native-host"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "mydownloader-native-host"
+name = "fetchx-native-host"
 path = "src/main.rs"
 
 [dependencies]
-mydownloader-browser-protocol = { path = "../../../crates/browser-protocol" }
+fetchx-browser-protocol = { path = "../../../crates/browser-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -19,3 +19,4 @@ tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
+

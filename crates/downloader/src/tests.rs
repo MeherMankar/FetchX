@@ -8,11 +8,11 @@ use std::{
     time::Duration,
 };
 
-use mydownloader_models::{
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadSource, DownloadStatus, EngineKind,
     FileName, Timestamp,
 };
-use mydownloader_storage::{Database, DownloadRepository};
+use fetchx_storage::{Database, DownloadRepository};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -27,7 +27,7 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Result<Self, std::io::Error> {
-        let path = std::env::temp_dir().join(format!("mydownloader-{}", DownloadId::new()));
+        let path = std::env::temp_dir().join(format!("FetchX-{}", DownloadId::new()));
         std::fs::create_dir(&path)?;
         Ok(Self(path))
     }
@@ -611,7 +611,7 @@ async fn setup_engine(
 ) -> Result<
     (
         Database,
-        DirectHttpEngine<mydownloader_storage::SqliteDownloadRepository>,
+        DirectHttpEngine<fetchx_storage::SqliteDownloadRepository>,
         TestDirectory,
     ),
     Box<dyn Error>,
@@ -623,7 +623,7 @@ async fn setup_engine(
 }
 
 async fn run_download(
-    engine: &DirectHttpEngine<mydownloader_storage::SqliteDownloadRepository>,
+    engine: &DirectHttpEngine<fetchx_storage::SqliteDownloadRepository>,
     database: &Database,
     item: DownloadItem,
 ) -> Result<DownloadItem, Box<dyn Error>> {
@@ -1641,3 +1641,4 @@ async fn progress_is_persisted_during_transfer_and_final_state_is_complete()
     assert_eq!(tokio::fs::read(destination).await?, body);
     Ok(())
 }
+

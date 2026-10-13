@@ -7,12 +7,12 @@ Browser (Chrome / Edge)
         │
         │  Native Messaging (stdin/stdout, 4-byte LE length + JSON)
         ▼
-apps/browser/native-host   (mydownloader-native-host binary)
+apps/browser/native-host   (fetchx-native-host binary)
         │
         │  Loopback TCP  127.0.0.1:<random port>
         │  Session token (per-desktop-startup UUID)
         ▼
-apps/desktop  (MyDownloader desktop application)
+apps/desktop  (FetchX desktop application)
         │
         │  Existing application path (same as UI add_download)
         ▼
@@ -69,22 +69,22 @@ Supported types: `add_download`, `ping`
 | Code | Meaning |
 |------|---------|
 | `invalid_request` | Malformed JSON or unknown fields |
-| `unsupported_version` | Protocol version mismatch — update MyDownloader |
+| `unsupported_version` | Protocol version mismatch — update FetchX |
 | `unsupported_message` | Unknown message type |
 | `invalid_url` | URL is syntactically invalid |
 | `credentials_in_url` | URL contains `user:pass@` |
 | `unsupported_scheme` | Not `http://` or `https://` |
-| `desktop_unavailable` | MyDownloader is not running or not responding |
+| `desktop_unavailable` | FetchX is not running or not responding |
 | `download_rejected` | Desktop queue or engine rejected the download |
 | `internal_error` | Unexpected server-side error |
 
 ## Native Messaging framing
 
 ```
-┌──────────────────────┬────────────────────────────────┐
+┌──────────────────────┬───────────────────────────────┐
 │  4 bytes (LE uint32) │  N bytes UTF-8 JSON             │
 │  message length = N  │  { "version": 1, "type": … }   │
-└──────────────────────┴────────────────────────────────┘
+└───────────────────────┴───────────────────────────────┘
 ```
 
 Maximum payload: **64 KiB**.  Larger frames are rejected before allocation.
@@ -102,9 +102,9 @@ State file locations:
 
 | Platform | Path |
 |----------|------|
-| Windows  | `%LOCALAPPDATA%\com.mydownloader.desktop\browser-ipc.json` |
-| Linux    | `$XDG_RUNTIME_DIR/mydownloader/browser-ipc.json` |
-| macOS    | `~/Library/Application Support/com.mydownloader.desktop/browser-ipc.json` |
+| Windows  | `%LOCALAPPDATA%\com.fetchx.desktop\browser-ipc.json` |
+| Linux    | `$XDG_RUNTIME_DIR/fetchx/browser-ipc.json` |
+| macOS    | `~/Library/Application Support/com.fetchx.desktop/browser-ipc.json` |
 
 The native host reads this file to learn the port and token.  The file is
 removed on desktop shutdown.
@@ -138,3 +138,4 @@ See [`apps/browser/extension/README.md`](../apps/browser/extension/README.md) an
   browser-initiated downloads use Direct HTTP.  The user can change the engine in
   the desktop UI after the download is created.
 - Production packaging (installer, signed extension) is deferred to Phase 22.
+

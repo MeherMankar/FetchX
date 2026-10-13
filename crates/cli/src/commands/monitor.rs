@@ -1,4 +1,4 @@
-//! `mydownloader monitor` — live updating terminal view.
+//! `FetchX monitor` — live updating terminal view.
 //!
 //! Subscribes to the existing DownloadEvent broadcast bus so updates
 //! arrive immediately without polling SQLite aggressively.
@@ -6,10 +6,10 @@
 //!
 //! Ctrl+C shuts down cleanly.
 
-use mydownloader_core_services::CoreServices;
-use mydownloader_models::DownloadStatus;
-use mydownloader_queue::DownloadEvent;
-use mydownloader_storage::DownloadRepository;
+use fetchx_core_services::CoreServices;
+use fetchx_models::DownloadStatus;
+use fetchx_queue::DownloadEvent;
+use fetchx_storage::DownloadRepository;
 
 use crate::{exit::ExitCode, output};
 
@@ -84,7 +84,7 @@ async fn print_active(svc: &CoreServices) {
     // Clear previous output with ANSI escape (best-effort — ignored on non-ANSI terminals).
     print!("\x1B[2J\x1B[H");
 
-    println!("MyDownloader — Monitor  (Ctrl+C to exit)");
+    println!("FetchX — Monitor  (Ctrl+C to exit)");
     println!(
         "Active: {}  Completed: {}  Failed: {}",
         active.len(),
@@ -113,3 +113,4 @@ async fn print_active(svc: &CoreServices) {
         table.print();
     }
 }
+

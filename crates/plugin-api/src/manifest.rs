@@ -100,7 +100,7 @@ pub struct PluginManifestRaw {
 impl PluginManifestRaw {
     /// Validates all fields and returns a [`PluginManifest`] on success.
     pub fn validate(self) -> Result<PluginManifest, ManifestValidationError> {
-        // ── ID ───────────────────────────────────────────────────────────
+        // ──ID ───────────────────────────────────────────────────────────
         if self.id.is_empty() || self.id.len() > 64 {
             return Err(ManifestValidationError::InvalidId(self.id));
         }
@@ -115,7 +115,7 @@ impl PluginManifestRaw {
             return Err(ManifestValidationError::InvalidId(self.id));
         }
 
-        // ── Required string fields ───────────────────────────────────────
+        // ──Required string fields ───────────────────────────────────────
         if self.name.trim().is_empty() {
             return Err(ManifestValidationError::EmptyField("name"));
         }
@@ -129,14 +129,14 @@ impl PluginManifestRaw {
             return Err(ManifestValidationError::DescriptionTooLong);
         }
 
-        // ── API version ──────────────────────────────────────────────────
+        // ──API version ──────────────────────────────────────────────────
         if self.api_version != PLUGIN_API_VERSION {
             return Err(ManifestValidationError::UnsupportedApiVersion(
                 self.api_version,
             ));
         }
 
-        // ── Executable path ──────────────────────────────────────────────
+        // ──Executable path ──────────────────────────────────────────────
         // Must be absolute — no relative paths, no path traversal tricks.
         if !self.executable.is_absolute() {
             return Err(ManifestValidationError::ExecutableNotAbsolute(
@@ -153,7 +153,7 @@ impl PluginManifestRaw {
             }
         }
 
-        // ── Capabilities ─────────────────────────────────────────────────
+        // ──Capabilities ─────────────────────────────────────────────────
         if self.capabilities.is_empty() {
             return Err(ManifestValidationError::NoCapabilities);
         }

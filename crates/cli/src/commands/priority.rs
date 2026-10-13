@@ -1,4 +1,4 @@
-use mydownloader_core_services::CoreServices;
+use fetchx_core_services::CoreServices;
 
 use crate::{
     args::PriorityOpts,
@@ -41,3 +41,4 @@ pub async fn run(svc: &CoreServices, opts: PriorityOpts, json: bool) -> ExitCode
         }
     }
 }
+

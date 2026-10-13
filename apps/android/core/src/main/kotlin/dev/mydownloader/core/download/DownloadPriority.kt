@@ -1,4 +1,4 @@
-package dev.mydownloader.core.download
+package dev.fetchx.core.download
 
 /** Download priority — mirrors the Rust Priority enum (Phase 20B will map these via UniFFI). */
 enum class DownloadPriority {
@@ -11,3 +11,4 @@ enum class DownloadPriority {
         val DEFAULT = NORMAL
     }
 }
+

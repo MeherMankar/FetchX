@@ -1,4 +1,4 @@
-use mydownloader_models::DownloadId;
+use fetchx_models::DownloadId;
 use thiserror::Error;
 
 /// Errors returned by database initialization and repository operations.
@@ -28,3 +28,4 @@ impl StorageError {
         }
     }
 }
+

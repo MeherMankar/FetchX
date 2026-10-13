@@ -808,7 +808,7 @@ fn same_path(left: &Path, right: &Path) -> bool {
 async fn create_workspace(destination: &Path) -> Result<PathBuf, FfmpegError> {
     let parent = destination.parent().ok_or(FfmpegError::InvalidOutput)?;
     for _ in 0..3 {
-        let workspace = parent.join(format!(".mydownloader-ffmpeg-{}", Uuid::new_v4()));
+        let workspace = parent.join(format!(".fetchx-ffmpeg-{}", Uuid::new_v4()));
         match tokio::fs::create_dir(&workspace).await {
             Ok(()) => {
                 #[cfg(unix)]
@@ -1704,7 +1704,7 @@ mod tests {
     fn arguments_are_structured_and_only_use_closed_options() {
         let input = Path::new(r#"C:\media\source with "quotes".mkv"#);
         let output =
-            Path::new(r#"C:\media\odd "quote"; 'apostrophe' & | `tick` $(false) 媒体.mp4"#);
+            Path::new(r#"C:\media\odd "quote"; 'apostrophe' & | `tick` $(false) åª’ä½“.mp4"#);
         let arguments = build_process_arguments(
             &MediaOperation::Remux {
                 container: MediaContainer::Mp4,
@@ -1761,7 +1761,7 @@ mod tests {
     async fn configured_executables_are_validated_and_ffprobe_is_selected()
     -> Result<(), Box<dyn Error>> {
         let base =
-            std::env::temp_dir().join(format!("mydownloader-ffmpeg-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&base).await?;
         let executable = std::env::current_exe()?;
         let runner = FakeRunner::default();
@@ -1780,7 +1780,7 @@ mod tests {
             &[
                 "media with spaces.mkv",
                 "apostrophe's.mkv",
-                "unicodé-媒体.mkv",
+                "unicode-äöü.mkv",
                 "semi;colon.mkv",
                 "amp&ersand.mkv",
                 "backtick`file.mkv",
@@ -1794,7 +1794,7 @@ mod tests {
                 "media with spaces.mkv",
                 r#"quoted"name.mkv"#,
                 "apostrophe's.mkv",
-                "unicodé-媒体.mkv",
+                "unicode-äöü.mkv",
                 "semi;colon.mkv",
                 "amp&ersand.mkv",
                 "pipe|and`backtick.mkv",
@@ -1878,7 +1878,7 @@ mod tests {
     async fn remux_publishes_without_overwriting_and_cleans_workspace() -> Result<(), Box<dyn Error>>
     {
         let base =
-            std::env::temp_dir().join(format!("mydownloader-ffmpeg-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let runner = FakeRunner::default();
         runner
             .state
@@ -1936,7 +1936,7 @@ mod tests {
     async fn process_failure_and_cancellation_preserve_input_and_remove_workspace()
     -> Result<(), Box<dyn Error>> {
         let base =
-            std::env::temp_dir().join(format!("mydownloader-ffmpeg-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let runner = FakeRunner::default();
         {
             let mut state = runner.state.lock().expect("fake runner mutex");
@@ -1976,7 +1976,7 @@ mod tests {
     #[tokio::test]
     async fn output_larger_than_configured_limit_is_not_published() -> Result<(), Box<dyn Error>> {
         let base =
-            std::env::temp_dir().join(format!("mydownloader-ffmpeg-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&base).await?;
         let runner = FakeRunner::default();
         runner
@@ -2023,7 +2023,7 @@ mod tests {
     async fn cancellation_waits_for_runner_and_cleans_temporary_output()
     -> Result<(), Box<dyn Error>> {
         let base =
-            std::env::temp_dir().join(format!("mydownloader-ffmpeg-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let runner = FakeRunner::default();
         let started = Arc::new(tokio::sync::Notify::new());
         {
@@ -2063,7 +2063,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_input_output_collision_and_pre_cancelled_work() -> Result<(), Box<dyn Error>> {
         let base =
-            std::env::temp_dir().join(format!("mydownloader-ffmpeg-test-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let processor = setup(FakeRunner::default(), &base).await?;
         let input = base.join("source with spaces.mkv");
         tokio::fs::write(&input, b"source").await?;
@@ -2089,3 +2089,4 @@ mod tests {
         Ok(())
     }
 }
+

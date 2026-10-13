@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use mydownloader_plugin_api::PluginManifest;
+use fetchx_plugin_api::PluginManifest;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -72,7 +72,7 @@ impl PluginRegistry {
 mod tests {
     use std::path::PathBuf;
 
-    use mydownloader_plugin_api::{Capability, PLUGIN_API_VERSION, PluginManifest};
+    use fetchx_plugin_api::{Capability, PLUGIN_API_VERSION, PluginManifest};
 
     use super::*;
 
@@ -135,3 +135,4 @@ mod tests {
         assert_eq!(ids, ["aa-plugin", "zz-plugin"]);
     }
 }
+

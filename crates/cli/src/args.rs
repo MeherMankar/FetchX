@@ -2,12 +2,12 @@
 
 use clap::{Args, Parser, Subcommand};
 
-/// MyDownloader — a fast, extensible download manager.
+/// FetchX — a fast, extensible download manager.
 #[derive(Parser, Debug)]
 #[command(
-    name = "mydownloader",
+    name = "fetchx",
     version  = env!("CARGO_PKG_VERSION"),
-    about    = "MyDownloader command-line interface",
+    about    = "FetchX command-line interface",
     long_about = None,
 )]
 pub struct Cli {
@@ -67,7 +67,7 @@ pub enum Command {
     Plugins(PluginsOpts),
 }
 
-// ── Plugins ───────────────────────────────────────────────────────────────
+// ── Plugins ────────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
 pub struct PluginsOpts {
@@ -112,7 +112,7 @@ pub struct AddOpts {
     pub schedule: Option<String>,
 }
 
-// ── List ─────────────────────────────────────────────────────────────────
+// ── List ──────────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
 pub struct ListOpts {
@@ -144,7 +144,7 @@ pub struct PriorityOpts {
     pub priority: String,
 }
 
-// ── Schedule ─────────────────────────────────────────────────────────────
+// ── Schedule ──────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
 pub struct ScheduleOpts {
@@ -159,3 +159,4 @@ pub struct ScheduleOpts {
     #[arg(long, conflicts_with = "at")]
     pub clear: bool,
 }
+

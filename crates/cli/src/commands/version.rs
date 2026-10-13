@@ -6,9 +6,10 @@ pub fn run(json: bool) {
         output::print_json_ok(&serde_json::json!({
             "ok": true,
             "version": version,
-            "name": "MyDownloader"
+            "name": "FetchX"
         }));
     } else {
-        output::print_human(&format!("MyDownloader {version}"));
+        output::print_human(&format!("FetchX {version}"));
     }
 }
+

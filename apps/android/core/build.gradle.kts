@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mydownloader.core"
+    namespace = "dev.fetchx.core"
     compileSdk = 35
 
     defaultConfig {
@@ -25,3 +25,4 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 }
+

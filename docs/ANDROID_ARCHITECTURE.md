@@ -1,7 +1,7 @@
 # Android Architecture
 
 > **Phase 20 foundation document.** Describes the layered architecture of the
-> MyDownloader Android application as established in Phase 20A.
+> FetchX Android application as established in Phase 20A.
 
 ---
 
@@ -11,36 +11,36 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Jetpack Compose UI                           │
 │  DownloadsScreen  BrowserScreen  SettingsScreen  HistoryScreen  │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                 ViewModel / Use-case Layer                       │
 │  DownloadsViewModel  BrowserViewModel  (Kotlin coroutines)      │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │               Repository Interfaces (:core module)              │
 │  DownloadRepository  (defined in :core, implemented in :bridge) │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │             Rust Bridge — UniFFI generated bindings             │
 │  (Phase 20B: crates/mobile-api → Kotlin bindings in :core)     │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │              crates/core-services (existing Rust)               │
 │  Database  EventRepository  ConfigService  EngineRuntime        │
 │  EngineDispatcher  QueueManager  Scheduler  PluginManager       │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
                               │
-                    ┌─────────┴─────────┐
+                    ┌──────────┬─────────┐
                     ▼                   ▼
-         ┌──────────────────┐  ┌──────────────────┐
+         ┌─────────────────┐  ┌─────────────────┐
          │  crates/queue    │  │ crates/downloader │
          │  crates/scheduler│  │  DirectHttp       │
          │  crates/storage  │  │  aria2            │
@@ -61,14 +61,14 @@ the Rust downloader.
 
 **Responsibility:** Application entry point, DI wiring, Activity, NavHost.
 
-- `MyDownloaderApp` — `Application` subclass, initialises singletons.
+- `FetchXApp` — `Application` subclass, initialises singletons.
   In Phase 20B this will load the UniFFI native library and initialise
   the `CoreServices` adapter.
 - `MainActivity` — single `ComponentActivity`, calls `enableEdgeToEdge()`,
   sets Compose content with `AppNavigation`.
 - `AppNavigation` — root `NavHost`, registers all top-level routes.
 - `Screen` — sealed class for all navigation destinations.
-- `MyDownloaderTheme` — Material 3 theme with dynamic colour (API 31+).
+- `FetchXTheme` — Material 3 theme with dynamic colour (API 31+).
 
 **Depends on:** `:core`, `:downloads`
 **Will depend on (later phases):** `:browser` (20F), `:privacy` (20J), `:extensions` (20K)
@@ -142,7 +142,7 @@ these reasons:
 
 `crates/mobile-api` (Phase 20B):
 - UDL file: `crates/mobile-api/src/mobile_api.udl`
-- Generated Kotlin: placed in `:core/src/main/kotlin/dev/mydownloader/core/bridge/`
+- Generated Kotlin: placed in `:core/src/main/kotlin/dev/fetchx/core/bridge/`
   as part of the Gradle build.
 - The UDL defines `DownloadService`, `DownloadInfo`, `DownloadEvent`, `DownloadPriority`.
 - The generated bindings implement the `DownloadRepository` interface defined in `:core`.
@@ -314,13 +314,13 @@ cross-compiles for Android ABIs without manual linker flags.
 Build command (one ABI at a time, release):
 
 ```
-cargo ndk -t arm64-v8a -o apps/android/bridge/src/main/jniLibs build --release -p mydownloader-android-bridge
+cargo ndk -t arm64-v8a -o apps/android/bridge/src/main/jniLibs build --release -p fetchx-android-bridge
 ```
 
 Both ABIs in one pass:
 
 ```
-cargo ndk -t arm64-v8a -t x86_64 -o apps/android/bridge/src/main/jniLibs build --release -p mydownloader-android-bridge
+cargo ndk -t arm64-v8a -t x86_64 -o apps/android/bridge/src/main/jniLibs build --release -p fetchx-android-bridge
 ```
 
 ### `.cargo/config.toml` Linker Configuration
@@ -335,10 +335,10 @@ Android target so plain `cargo build --target aarch64-linux-android` also works:
 
 ### Native Library
 
-- **Crate:** `crates/android-bridge` (renamed/aliased `mydownloader-android-bridge`)
+- **Crate:** `crates/android-bridge` (renamed/aliased `fetchx-android-bridge`)
 - **crate-type:** `["cdylib", "lib"]` — `cdylib` produces the `.so` for Android;
   `lib` keeps the rlib for host-side `cargo test`.
-- **Generated filename:** `libmydownloader_android_bridge.so`
+- **Generated filename:** `libfetchx_android_bridge.so`
 
 ### jniLibs Packaging
 
@@ -347,10 +347,10 @@ so that Gradle packages them into the APK automatically via `sourceSets`:
 
 ```
 apps/android/bridge/src/main/jniLibs/
-├── arm64-v8a/
-│   └── libmydownloader_android_bridge.so   ← generated by cargo-ndk
-└── x86_64/
-    └── libmydownloader_android_bridge.so   ← generated by cargo-ndk
+┌── arm64-v8a/
+│   └─── libfetchx_android_bridge.so   ← generated by cargo-ndk
+└─── x86_64/
+    └─── libfetchx_android_bridge.so   ← generated by cargo-ndk
 ```
 
 `apps/android/bridge/build.gradle.kts` wires this via:
@@ -466,17 +466,17 @@ Each tab has its own `StateFlow<List<DownloadItem>>` derived from the source
 
 ```
 Scaffold
-├── TopAppBar ("Downloads")
-├── FAB (Add Download)
-├── SnackbarHost
-└── Column
-    ├── [Bridge-unavailable banner if bridgeAvailable == false]
-    ├── TabRow (All | Active | Queued | Completed | Failed | Cancelled)
-    └── Content
-        ├── Empty state (All tab): icon + "No downloads yet" + Button("Add Download")
-        ├── Empty state (other tabs): Text("No <tab> downloads")
-        └── LazyColumn (key = item.id)
-            └── DownloadItemRow (per item)
+┌── TopAppBar ("Downloads")
+┌── FAB (Add Download)
+┌── SnackbarHost
+└─── Column
+    ┌── [Bridge-unavailable banner if bridgeAvailable == false]
+    ┌── TabRow (All | Active | Queued | Completed | Failed | Cancelled)
+    └─── Content
+        ┌── Empty state (All tab): icon + "No downloads yet" + Button("Add Download")
+        ┌── Empty state (other tabs): Text("No <tab> downloads")
+        └─── LazyColumn (key = item.id)
+            └─── DownloadItemRow (per item)
 ```
 
 ### AddDownloadDialog fields
@@ -505,4 +505,5 @@ level). The `AddDownloadDialog` only shows LOW / NORMAL / HIGH. The
   happens in the ViewModel's derived StateFlows.
 - Snackbar errors shown via `LaunchedEffect(uiState.error)` — one snackbar
   per error event, cleared via `viewModel.clearError()` after display.
+
 

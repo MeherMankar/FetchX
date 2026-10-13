@@ -1,5 +1,5 @@
 {
-  "name": "mydownloader-extension",
+  "name": "fetchx-extension",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -17,3 +17,4 @@
     "vite":              "^7.0.0"
   }
 }
+

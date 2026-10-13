@@ -1,4 +1,4 @@
-//! Shared browser-to-desktop protocol types for MyDownloader Phase 17.
+//! Shared browser-to-desktop protocol types for FetchX Phase 17.
 //!
 //! Used by:
 //! - The browser native messaging host (`apps/browser/native-host`)
@@ -38,7 +38,7 @@ pub const MAX_MESSAGE_BYTES: u32 = 65_536;
 // Requests (browser → desktop)
 // ============================================================
 
-/// A request sent from the browser extension to MyDownloader.
+/// A request sent from the browser extension to FetchX.
 ///
 /// Note: `deny_unknown_fields` is intentionally NOT on the outer struct because
 /// serde's internally-tagged enum + flatten combination does not support it.
@@ -80,7 +80,7 @@ pub struct AddDownloadRequest {
 // Responses (desktop → browser)
 // ============================================================
 
-/// A response sent from MyDownloader back to the browser extension.
+/// A response sent from FetchX back to the browser extension.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BrowserResponse {
     pub version: u32,
@@ -144,7 +144,7 @@ pub struct BrowserErrorDto {
 pub enum BrowserErrorCode {
     /// JSON was malformed or the request did not match the expected schema.
     InvalidRequest,
-    /// Protocol version is not supported by this build of MyDownloader.
+    /// Protocol version is not supported by this build of FetchX.
     UnsupportedVersion,
     /// The `type` field names an operation not supported in this version.
     UnsupportedMessage,
@@ -154,7 +154,7 @@ pub enum BrowserErrorCode {
     CredentialsInUrl,
     /// The URL scheme is not `http` or `https`.
     UnsupportedScheme,
-    /// MyDownloader is running but the desktop is temporarily unavailable.
+    /// FetchX is running but the desktop is temporarily unavailable.
     DesktopUnavailable,
     /// The URL was valid but the download was rejected by the queue/engine.
     DownloadRejected,
@@ -247,7 +247,7 @@ impl UrlValidationError {
 ///
 /// Returns the canonicalized URL string on success.
 /// This is intentionally a lightweight protocol-layer check that mirrors the
-/// behaviour of `mydownloader_downloader::validate_http_source_url`.
+/// behaviour of `fetchx_downloader::validate_http_source_url`.
 pub fn validate_url(url: &str) -> Result<String, UrlValidationError> {
     if url.trim().is_empty() {
         return Err(UrlValidationError::Empty);
@@ -286,7 +286,7 @@ pub fn parse_request(json: &[u8]) -> Result<BrowserRequest, BrowserResponse> {
         return Err(BrowserResponse::error(
             None,
             BrowserErrorCode::UnsupportedVersion,
-            "Protocol version is not supported. Please update MyDownloader.",
+            "Protocol version is not supported. Please update FetchX.",
         ));
     }
 
@@ -562,3 +562,4 @@ mod tests {
         assert!(!json.contains("secret"));
     }
 }
+

@@ -1,3 +1,4 @@
 [bindings.kotlin]
-package_name = "dev.mydownloader.bridge.uniffi"
-cdylib_name  = "mydownloader_android_bridge"
+package_name = "dev.fetchx.bridge.uniffi"
+cdylib_name  = "fetchx_android_bridge"
+

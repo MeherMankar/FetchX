@@ -9,12 +9,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use mydownloader_core::{DownloadStateMachine, StateMachineError};
-use mydownloader_models::{
+use fetchx_core::{DownloadStateMachine, StateMachineError};
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
     TimestampError,
 };
-use mydownloader_storage::DownloadRepository;
+use fetchx_storage::DownloadRepository;
 use reqwest::{
     Client, Response, StatusCode, Url,
     header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE},
@@ -33,7 +33,7 @@ use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDeman
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{DownloadEngine, DownloadEngineError};
 
-const DEFAULT_USER_AGENT: &str = concat!("MyDownloader/", env!("CARGO_PKG_VERSION"));
+const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
 const MAX_SEGMENT_ATTEMPTS: u8 = 3;
 
 /// Timeouts, request identity, and progress checkpoint policy for HTTP downloads.
@@ -1655,3 +1655,4 @@ async fn publish_without_replacement(
         Err(error) => Err(DownloadEngineError::Io(error)),
     }
 }
+

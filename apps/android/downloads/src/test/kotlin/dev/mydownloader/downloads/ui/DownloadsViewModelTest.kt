@@ -1,10 +1,10 @@
-package dev.mydownloader.downloads.ui
+package dev.fetchx.downloads.ui
 
-import dev.mydownloader.core.download.DownloadEvent
-import dev.mydownloader.core.download.DownloadItem
-import dev.mydownloader.core.download.DownloadPriority
-import dev.mydownloader.core.download.DownloadRepository
-import dev.mydownloader.core.download.DownloadState
+import dev.fetchx.core.download.DownloadEvent
+import dev.fetchx.core.download.DownloadItem
+import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadRepository
+import dev.fetchx.core.download.DownloadState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -57,7 +57,7 @@ class DownloadsViewModelTest {
         result.cancel()
     }
 
-    // ── 2. Download appears in list ───────────────────────────────────────
+    // ── 2. Download appears in list ────────────────────────────────────────
 
     @Test
     fun downloadAppearsInList() = runTest {
@@ -90,7 +90,7 @@ class DownloadsViewModelTest {
         assertEquals("https://example.com/file.zip", repo.lastAddUrl)
     }
 
-    // ── 4. pause calls repository ─────────────────────────────────────────
+    // ── 4. pause calls repository ──────────────────────────────────────────
 
     @Test
     fun pauseCallsRepository() = runTest {
@@ -120,7 +120,7 @@ class DownloadsViewModelTest {
         assertEquals("id1", repo.lastCancelledId)
     }
 
-    // ── 7. retry calls repository ─────────────────────────────────────────
+    // ── 7. retry calls repository ──────────────────────────────────────────
 
     @Test
     fun retryCallsRepository() = runTest {
@@ -150,7 +150,7 @@ class DownloadsViewModelTest {
         assertEquals("id1", repo.lastSetPriorityId)
     }
 
-    // ── 10. Filtering active ───────────────────────────────────────────────
+    // ── 10. Filtering active ────────────────────────────────────────────────
 
     @Test
     fun filteringActiveReturnsOnlyActive() = runTest {
@@ -172,7 +172,7 @@ class DownloadsViewModelTest {
         jobAll.cancel()
     }
 
-    // ── 11. Filtering completed ───────────────────────────────────────────
+    // ── 11. Filtering completed ────────────────────────────────────────────
 
     @Test
     fun filteringCompletedReturnsOnlyCompleted() = runTest {
@@ -194,7 +194,7 @@ class DownloadsViewModelTest {
         job.cancel()
     }
 
-    // ── 12. Filtering cancelled ───────────────────────────────────────────
+    // ── 12. Filtering cancelled ────────────────────────────────────────────
 
     @Test
     fun filteringCancelledReturnsOnlyCancelled() = runTest {
@@ -216,7 +216,7 @@ class DownloadsViewModelTest {
         job.cancel()
     }
 
-    // ── 13. Bridge unavailable sets bridgeAvailable = false ───────────────
+    // ── 13. Bridge unavailable sets bridgeAvailable = false ────────────────
 
     @Test
     fun bridgeUnavailableSetsBridgeAvailableFalse() = runTest {
@@ -333,3 +333,4 @@ private class FakeDownloadRepository : DownloadRepository {
 
     override suspend fun getDownload(downloadId: String): DownloadItem? = null
 }
+

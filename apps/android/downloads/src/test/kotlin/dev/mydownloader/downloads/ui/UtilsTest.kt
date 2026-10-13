@@ -1,4 +1,4 @@
-package dev.mydownloader.downloads.ui
+package dev.fetchx.downloads.ui
 
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -11,7 +11,7 @@ import kotlin.test.assertNotNull
  */
 class UtilsTest {
 
-    // ── sanitizeFailureReason ─────────────────────────────────────────────
+    // ── sanitizeFailureReason ──────────────────────────────────────────────
 
     @Test
     fun sanitize_blank_returns_unknown_error() {
@@ -164,7 +164,7 @@ class UtilsTest {
         assertEquals("Download failed. Please try again.", sanitizeFailureReason(longReason))
     }
 
-    // ── validateUrl ───────────────────────────────────────────────────────
+    // ── validateUrl ────────────────────────────────────────────────────────
 
     @Test
     fun validateUrl_blank_returns_error() {
@@ -198,3 +198,4 @@ class UtilsTest {
         assert(!error.contains("null")) { "Error must not contain 'null': $error" }
     }
 }
+

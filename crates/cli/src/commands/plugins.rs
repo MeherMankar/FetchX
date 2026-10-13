@@ -1,11 +1,11 @@
-//! `mydownloader plugins` command.
+//! `FetchX plugins` command.
 //!
 //! Lists, inspects, and shows status of registered plugins.
 //! Uses the shared PluginManager; does NOT add download logic here.
 
 use std::sync::Arc;
 
-use mydownloader_plugin_manager::PluginManager;
+use fetchx_plugin_manager::PluginManager;
 
 use crate::{
     args::{PluginsCommand, PluginsOpts},
@@ -137,3 +137,4 @@ async fn status(manager: &Arc<PluginManager>, id: &str, json: bool) -> ExitCode 
         }
     }
 }
+

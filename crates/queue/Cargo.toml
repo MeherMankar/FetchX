@@ -1,17 +1,18 @@
 [package]
-name = "mydownloader-queue"
+name = "fetchx-queue"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-mydownloader-core = { path = "../core" }
-mydownloader-downloader = { path = "../downloader" }
-mydownloader-models = { path = "../models" }
-mydownloader-storage = { path = "../storage" }
+fetchx-core = { path = "../core" }
+fetchx-downloader = { path = "../downloader" }
+fetchx-models = { path = "../models" }
+fetchx-storage = { path = "../storage" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [lints]
 workspace = true
+

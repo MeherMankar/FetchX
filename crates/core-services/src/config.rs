@@ -6,13 +6,13 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use mydownloader_storage::SqliteConfigRepository;
+use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
 const CURRENT_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: usize = 65_536;
 
-// ── Domain model ─────────────────────────────────────────────────────────
+// ── Domain model ──────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EngineConfig {
@@ -92,7 +92,7 @@ pub struct YtDlpConfig {
     pub executable_path: Option<PathBuf>,
 }
 
-// ── Validation ───────────────────────────────────────────────────────────
+// ── Validation ────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ConfigError {
@@ -175,3 +175,4 @@ impl ConfigService {
         Ok(defaults)
     }
 }
+

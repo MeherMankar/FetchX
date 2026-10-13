@@ -1,7 +1,7 @@
 /**
  * Typed Native Messaging client.
  *
- * Connects to the MyDownloader native host, sends one request, and returns
+ * Connects to the FetchX native host, sends one request, and returns
  * the response.  Each call opens a fresh port connection (Native Messaging
  * connections are stateless per-message in Manifest V3 service workers).
  *
@@ -16,7 +16,7 @@ import type { BrowserRequest, BrowserResponse } from "../types/protocol";
 
 /** The registered native messaging host name.
  *  Must match the `name` field in the native host manifest JSON file. */
-export const NATIVE_HOST_NAME = "com.mydownloader.native_host";
+export const NATIVE_HOST_NAME = "com.fetchx.native_host";
 
 /** Maximum time to wait for a response from the native host (milliseconds). */
 const RESPONSE_TIMEOUT_MS = 15_000;
@@ -32,7 +32,7 @@ export class NativeHostError extends Error {
 }
 
 /**
- * Sends a single request to the MyDownloader native host and returns the
+ * Sends a single request to the FetchX native host and returns the
  * response.  Throws {@link NativeHostError} on timeout, disconnection, or
  * if the response shape is unexpected.
  *
@@ -51,7 +51,7 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     try {
       port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
     } catch (err) {
-      reject(new NativeHostError("Could not connect to MyDownloader native host.", err));
+      reject(new NativeHostError("Could not connect to FetchX native host.", err));
       return;
     }
 

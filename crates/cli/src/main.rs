@@ -1,8 +1,8 @@
-//! MyDownloader CLI — Phase 18
+//! FetchX CLI — Phase 18
 //!
 //! Thin command-line interface over the existing Rust core services.
 //! No download logic lives here; everything delegates to the shared
-//! `mydownloader-core-services` crate (queue, scheduler, engines, storage).
+//! `fetchx-core-services` crate (queue, scheduler, engines, storage).
 
 #![forbid(unsafe_code)]
 
@@ -116,3 +116,4 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
         Plugins(opts) => Ok(commands::plugins::run(opts, cli.json).await),
     }
 }
+

@@ -3,15 +3,15 @@ use std::{
     sync::Arc,
 };
 
-use mydownloader_core::{DownloadStateMachine, StateMachineError};
-use mydownloader_downloader::{
+use fetchx_core::{DownloadStateMachine, StateMachineError};
+use fetchx_downloader::{
     DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand,
 };
-use mydownloader_models::{
+use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadStatus,
     EngineKind,
 };
-use mydownloader_storage::{DownloadRepository, StorageError};
+use fetchx_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
 use tokio::{
     sync::{Mutex, mpsc, oneshot, watch},
@@ -1401,18 +1401,18 @@ mod tests {
         time::Duration,
     };
 
-    use mydownloader_core::DownloadStateMachine;
-    use mydownloader_downloader::{
+    use fetchx_core::DownloadStateMachine;
+    use fetchx_downloader::{
         Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
         DownloadEngineError, EngineDispatcher, ManagedDownloadControl, ManagedDownloadEngine,
         ResourceDemand, YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner,
         YtDlpRunnerEvent, YtDlpRunnerFuture,
     };
-    use mydownloader_models::{
+    use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus, EngineKind,
         FileName, Timestamp,
     };
-    use mydownloader_storage::{Database, DownloadRepository, SqliteDownloadRepository};
+    use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -1550,7 +1550,7 @@ mod tests {
                     .map_err(|_| YtDlpError::ProcessRunner)?;
                 events
                     .send(YtDlpRunnerEvent::ProgressLine(
-                        "MYDOWNLOADER_PROGRESS|100%|5|5|NA|1|0".to_owned(),
+                        "FETCHX_PROGRESS|100%|5|5|NA|1|0".to_owned(),
                     ))
                     .await
                     .map_err(|_| YtDlpError::ProcessRunner)?;
@@ -1596,7 +1596,7 @@ mod tests {
             DownloadSource::new("https://example.test/file", EngineKind::DirectHttp)?,
             FileName::new("file.bin")?,
             std::env::temp_dir()
-                .join(format!("mydownloader-queue-{}", DownloadId::new()))
+                .join(format!("fetchx-queue-{}", DownloadId::new()))
                 .join("file.bin"),
             Timestamp::from_unix_millis(1),
         ))
@@ -1821,7 +1821,7 @@ mod tests {
         let repository = database.downloads();
         let (endpoint, mut requests, server) = start_aria2_mock().await?;
         let yt_dlp_base = std::env::temp_dir().join(format!(
-            "mydownloader-queue-ytdlp-test-{}",
+            "fetchx-queue-ytdlp-test-{}",
             DownloadId::new()
         ));
         tokio::fs::create_dir_all(&yt_dlp_base).await?;
@@ -1886,7 +1886,7 @@ mod tests {
                     && aria_status == Some(DownloadStatus::Failed)
                     && yt_dlp_status == Some(DownloadStatus::Completed)
                 {
-                    return Ok::<_, mydownloader_storage::StorageError>(());
+                    return Ok::<_, fetchx_storage::StorageError>(());
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
@@ -2321,7 +2321,7 @@ mod tests {
                 if let Some(item) = repository.get(id).await?
                     && item.status() == DownloadStatus::Failed
                 {
-                    return Ok::<_, mydownloader_storage::StorageError>(item);
+                    return Ok::<_, fetchx_storage::StorageError>(item);
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
@@ -2570,3 +2570,4 @@ mod tests {
         assert_eq!(used_connections(&workers), 3);
     }
 }
+

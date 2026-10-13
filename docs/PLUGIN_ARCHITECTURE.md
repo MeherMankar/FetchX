@@ -2,11 +2,11 @@
 
 ## Overview
 
-MyDownloader supports external plugins via a secure out-of-process model.
+FetchX supports external plugins via a secure out-of-process model.
 Plugins run as separate processes, communicate with the host through a
 length-prefixed JSON protocol, and are discovered from a well-known directory.
 
-The host (MyDownloader) remains authoritative for:
+The host (FetchX) remains authoritative for:
 - download queueing and scheduling
 - engine dispatch
 - persistence
@@ -21,17 +21,17 @@ Plugins are integration/extension points only.  They cannot bypass the core.
 ## Architecture
 
 ```
-MyDownloader host
-  └── PluginManager
-        ├── discover()   — scans {data_dir}/plugins/ for plugin.json
-        ├── register()   — validates manifest, adds to registry
-        ├── start()      — spawns process, performs handshake
-        ├── stop()       — sends Shutdown, waits, kills if needed
-        └── list/get()   — read-only registry views
+FetchX host
+  └─── PluginManager
+        ┌── discover()   — scans {data_dir}/plugins/ for plugin.json
+        ┌── register()   — validates manifest, adds to registry
+        ┌── start()      — spawns process, performs handshake
+        ┌── stop()       — sends Shutdown, waits, kills if needed
+        └─── list/get()   — read-only registry views
 
 Plugin process (external binary)
-  ├── stdin  ← HostRequest  (4-byte LE length + JSON)
-  └── stdout → PluginResponse (4-byte LE length + JSON)
+  ┌── stdin  ← HostRequest  (4-byte LE length + JSON)
+  └─── stdout → PluginResponse (4-byte LE length + JSON)
 ```
 
 ---
@@ -49,9 +49,9 @@ Plugins are installed as subdirectories of the application data directory:
 
 | Platform | `{data_dir}` |
 |----------|-------------|
-| Windows  | `%APPDATA%\com.mydownloader.desktop\` |
-| Linux    | `$XDG_DATA_HOME/mydownloader/` |
-| macOS    | `~/Library/Application Support/com.mydownloader.desktop/` |
+| Windows  | `%APPDATA%\com.fetchx.desktop\` |
+| Linux    | `$XDG_DATA_HOME/fetchx/` |
+| macOS    | `~/Library/Application Support/com.fetchx.desktop/` |
 
 ---
 
@@ -65,7 +65,7 @@ Required fields:
   "name":         "My Plugin",
   "version":      "0.1.0",
   "api_version":  1,
-  "description":  "A short description (≤ 256 chars)",
+  "description":  "A short description (≠¤ 256 chars)",
   "author":       "Author Name",
   "executable":   "/absolute/path/to/my-plugin",
   "capabilities": ["engine"],
@@ -81,7 +81,7 @@ Required fields:
 | `name` | Non-empty |
 | `version` | Non-empty |
 | `api_version` | Must equal current host API version (1) |
-| `description` | ≤ 256 characters |
+| `description` | ≠¤ 256 characters |
 | `author` | Non-empty |
 | `executable` | Absolute path, no `..` components |
 | `capabilities` | At least one; values from the known capability set |
@@ -111,10 +111,10 @@ Unknown capability values cause the manifest to be rejected.
 ### Framing
 
 ```
-┌──────────────────────┬──────────────────────────────────────┐
+┌──────────────────────┬─────────────────────────────────────┐
 │  4 bytes (LE u32)    │  N bytes UTF-8 JSON                  │
 │  payload length = N  │  { "version": 1, "type": "...", ... }│
-└──────────────────────┴──────────────────────────────────────┘
+└───────────────────────┴─────────────────────────────────────┘
 ```
 
 Maximum payload: **64 KiB**.  Frames larger than this are rejected before
@@ -206,9 +206,9 @@ A failed plugin does not crash the host.
 ## CLI
 
 ```
-mydownloader plugins [list]
-mydownloader plugins info <id>
-mydownloader plugins status <id>
+FetchX plugins [list]
+FetchX plugins info <id>
+FetchX plugins status <id>
 ```
 
 All commands support `--json`.  Output never includes executable paths,
@@ -237,3 +237,4 @@ The versioned protocol (`api_version` in the manifest, `version` in every
 message) ensures breaking changes can be introduced without silently
 breaking existing plugins.  When the protocol needs a new message type,
 increment `PROTOCOL_VERSION` and update both `plugin-api` and the host.
+

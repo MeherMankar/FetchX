@@ -1,4 +1,4 @@
-use mydownloader_core_services::EngineAvailability;
+use fetchx_core_services::EngineAvailability;
 
 use crate::{bootstrap, exit::ExitCode, output};
 
@@ -66,3 +66,4 @@ fn avail_json(avail: &EngineAvailability) -> serde_json::Value {
         }
     }
 }
+

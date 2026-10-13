@@ -21,7 +21,7 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"
 
 $Profile = if ($Release) { "--release" } else { "" }
 $OutDir = "apps/android/bridge/src/main/jniLibs"
-$Crate  = "mydownloader-android-bridge"
+$Crate  = "fetchx-android-bridge"
 
 Write-Host "[Phase 20C] Building arm64-v8a (release=$Release)..."
 $arm64Cmd = "cargo ndk -t arm64-v8a -o $OutDir build $Profile -p $Crate"
@@ -38,3 +38,4 @@ if ($LASTEXITCODE -ne 0) { Write-Warning "x86_64 build failed (non-critical)" }
 Write-Host ""
 Write-Host "[Phase 20C] Done. Libraries:"
 Get-ChildItem -Recurse $OutDir -Include "*.so" | Select-Object FullName, Length
+

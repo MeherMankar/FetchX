@@ -1,13 +1,13 @@
-package dev.mydownloader.app
+package dev.fetchx.app
 
 import android.app.Application
 import android.util.Log
-import dev.mydownloader.bridge.BridgeInitializer
+import dev.fetchx.bridge.BridgeInitializer
 
-private const val TAG = "MyDownloaderApp"
+private const val TAG = "FetchXApp"
 
 /**
- * Application class for MyDownloader Android.
+ * Application class for FetchX Android.
  *
  * Initialises the Rust bridge (UniFFI) on startup and shuts it down
  * when the process terminates.
@@ -15,7 +15,7 @@ private const val TAG = "MyDownloaderApp"
  * The bridge owns the Rust Tokio runtime and CoreServices. All download
  * operations during the app's lifetime go through [BridgeInitializer.getRepository].
  */
-class MyDownloaderApp : Application() {
+class FetchXApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
@@ -36,3 +36,4 @@ class MyDownloaderApp : Application() {
         super.onTerminate()
     }
 }
+

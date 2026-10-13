@@ -1,5 +1,5 @@
-use mydownloader_core_services::CoreServices;
-use mydownloader_storage::DownloadRepository;
+use fetchx_core_services::CoreServices;
+use fetchx_storage::DownloadRepository;
 
 use crate::{
     args::IdOpts,
@@ -116,3 +116,4 @@ fn chrono_fmt(ms: u64) -> String {
         )
     }
 }
+

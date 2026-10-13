@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.mydownloader.app"
+    namespace = "dev.fetchx.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.mydownloader.app"
+        applicationId = "dev.fetchx.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -64,3 +64,4 @@ dependencies {
 
     debugImplementation(libs.compose.ui.tooling)
 }
+

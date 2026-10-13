@@ -3,9 +3,9 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use mydownloader_queue::{DownloadEvent, DownloadEventBus, EventRepository, QueueConfig};
-use mydownloader_scheduler::Scheduler;
-use mydownloader_storage::Database;
+use fetchx_queue::{DownloadEvent, DownloadEventBus, EventRepository, QueueConfig};
+use fetchx_scheduler::Scheduler;
+use fetchx_storage::Database;
 use tauri::{Emitter, Manager, RunEvent};
 use tokio::fs;
 use tracing_subscriber::EnvFilter;
@@ -50,7 +50,7 @@ impl AppState {
         let runtime_dir = database_path
             .parent()
             .map(|p| p.join("runtime"))
-            .unwrap_or_else(|| std::env::temp_dir().join("mydownloader-runtime"));
+            .unwrap_or_else(|| std::env::temp_dir().join("fetchx-runtime"));
         fs::create_dir_all(&runtime_dir).await?;
         let engine_runtime =
             EngineRuntime::initialize(repository.clone(), &engine_config, runtime_dir).await?;
@@ -149,7 +149,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let downloads_dir = app.path().download_dir()?;
-            let database_path = app_data_dir.join("mydownloader.db");
+            let database_path = app_data_dir.join("fetchx.db");
             let state =
                 tauri::async_runtime::block_on(AppState::initialize(database_path, downloads_dir))?;
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
@@ -225,3 +225,4 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+

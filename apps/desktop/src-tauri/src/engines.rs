@@ -12,7 +12,7 @@
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use mydownloader_downloader::{
+use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
     DirectHttpEngine, EngineDispatcher, YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine,
 };
@@ -107,8 +107,8 @@ impl EngineRuntime {
 
     /// Returns `true` when the given engine kind is currently available at runtime.
     /// Direct HTTP is always available.
-    pub fn is_available(&self, kind: mydownloader_models::EngineKind) -> bool {
-        use mydownloader_models::EngineKind;
+    pub fn is_available(&self, kind: fetchx_models::EngineKind) -> bool {
+        use fetchx_models::EngineKind;
         match kind {
             EngineKind::DirectHttp => true,
             EngineKind::Aria2 => matches!(self.status.aria2, EngineAvailability::Available { .. }),
@@ -267,12 +267,12 @@ async fn init_ytdlp(
 
 #[cfg(test)]
 mod tests {
-    use mydownloader_storage::Database;
+    use fetchx_storage::Database;
 
     use super::*;
     use crate::commands::AppRepository;
     use crate::config::{EngineConfig, YtDlpConfig as CfgYtDlp};
-    use mydownloader_queue::{DownloadEventBus, EventRepository};
+    use fetchx_queue::{DownloadEventBus, EventRepository};
 
     async fn make_repository() -> AppRepository {
         let db = Database::connect("sqlite::memory:").await.unwrap();
@@ -393,3 +393,4 @@ mod tests {
         assert!(!dto.available);
     }
 }
+

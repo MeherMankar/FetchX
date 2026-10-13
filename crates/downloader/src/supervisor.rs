@@ -673,7 +673,7 @@ fn default_runtime_parent() -> Result<PathBuf, Aria2SupervisorError> {
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .map(|path| path.join("MyDownloader").join("aria2-runtime"))
+            .map(|path| path.join("FetchX").join("aria2-runtime"))
             .ok_or(Aria2SupervisorError::RuntimeConfiguration)
     }
     #[cfg(not(windows))]
@@ -681,7 +681,7 @@ fn default_runtime_parent() -> Result<PathBuf, Aria2SupervisorError> {
         Ok(std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
-            .join("mydownloader"))
+            .join("FetchX"))
     }
 }
 
@@ -1135,7 +1135,7 @@ mod tests {
     impl TestDirectory {
         fn new() -> Result<Self, Box<dyn Error>> {
             let path =
-                std::env::temp_dir().join(format!("mydownloader-test-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("fetchx-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path)?;
             Ok(Self(path))
         }
@@ -1385,11 +1385,11 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         use std::path::PathBuf;
 
-        use mydownloader_models::{
+        use fetchx_models::{
             DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName,
             Timestamp,
         };
-        use mydownloader_storage::{Database, DownloadRepository};
+        use fetchx_storage::{Database, DownloadRepository};
         use tokio::sync::watch;
 
         use crate::{
@@ -1496,3 +1496,4 @@ mod tests {
         Ok(())
     }
 }
+

@@ -1,7 +1,7 @@
-# MyDownloader Native Messaging Host — Windows Installation Script
+# FetchX Native Messaging Host — Windows Installation Script
 #
 # Run this script after:
-#   1. Building the native host:  cargo build --release -p mydownloader-native-host
+#   1. Building the native host:  cargo build --release -p fetchx-native-host
 #   2. Loading the unpacked extension in Chrome to get your extension ID.
 #
 # Usage:
@@ -9,8 +9,8 @@
 #
 # The script writes the native messaging host manifest to the Windows Registry
 # key that Chrome/Edge reads:
-#   HKCU\Software\Google\Chrome\NativeMessagingHosts\com.mydownloader.native_host
-#   HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.mydownloader.native_host
+#   HKCU\Software\Google\Chrome\NativeMessagingHosts\com.fetchx.native_host
+#   HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.fetchx.native_host
 
 param(
     [Parameter(Mandatory=$true)]
@@ -19,14 +19,14 @@ param(
     [switch]$Uninstall
 )
 
-$HostName = "com.mydownloader.native_host"
-$ManifestDir = "$env:APPDATA\MyDownloader\native-host"
+$HostName = "com.fetchx.native_host"
+$ManifestDir = "$env:APPDATA\fetchx\native-host"
 $ManifestPath = "$ManifestDir\$HostName.json"
 
 # Derive the native host binary path relative to this script.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
-$HostBinary = Join-Path $RepoRoot "target\release\mydownloader-native-host.exe"
+$HostBinary = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 
 $ChromeKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
 $EdgeKey   = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName"
@@ -43,7 +43,7 @@ if ($Uninstall) {
 # Validate inputs.
 if (-not (Test-Path $HostBinary)) {
     Write-Error "Native host binary not found at: $HostBinary"
-    Write-Error "Build it first: cargo build --release -p mydownloader-native-host"
+    Write-Error "Build it first: cargo build --release -p fetchx-native-host"
     exit 1
 }
 
@@ -56,7 +56,7 @@ if ($ExtensionId -notmatch '^[a-z]{32}$') {
 New-Item -ItemType Directory -Force -Path $ManifestDir | Out-Null
 $Manifest = @{
     name             = $HostName
-    description      = "MyDownloader native messaging host"
+    description      = "FetchX native messaging host"
     path             = $HostBinary
     type             = "stdio"
     allowed_origins  = @("chrome-extension://$ExtensionId/")
@@ -75,3 +75,4 @@ foreach ($Key in @($ChromeKey, $EdgeKey)) {
 Write-Host ""
 Write-Host "Installation complete."
 Write-Host "Restart Chrome/Edge for changes to take effect."
+

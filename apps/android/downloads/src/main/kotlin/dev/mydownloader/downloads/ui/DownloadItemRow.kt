@@ -1,4 +1,4 @@
-package dev.mydownloader.downloads.ui
+package dev.fetchx.downloads.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,9 +17,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.mydownloader.core.download.DownloadItem
-import dev.mydownloader.core.download.DownloadPriority
-import dev.mydownloader.core.download.DownloadState
+import dev.fetchx.core.download.DownloadItem
+import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadState
 
 /**
  * A single row in the downloads list.
@@ -215,7 +215,7 @@ fun DownloadItemRow(
     }
 }
 
-// ── Priority badge ─────────────────────────────────────────────────────────────
+// ── Priority badge ──────────────────────────────────────────────────────────────
 
 @Composable
 private fun PriorityBadge(priority: DownloadPriority) {
@@ -242,7 +242,7 @@ private fun PriorityBadge(priority: DownloadPriority) {
     }
 }
 
-// ── Formatting helpers ─────────────────────────────────────────────────────────
+// ── Formatting helpers ──────────────────────────────────────────────────────────
 
 internal fun formatSpeed(bytesPerSec: Long): String = when {
     bytesPerSec >= 1_048_576 -> String.format("%.1f MB/s", bytesPerSec / 1_048_576.0)
@@ -311,3 +311,4 @@ internal fun sanitizeFailureReason(reason: String): String {
         else -> "Download failed. Please try again."
     }
 }
+

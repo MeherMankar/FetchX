@@ -96,12 +96,12 @@ Tor Browser for Android, and Mullvad Browser).
 - **Licensing:** Mozilla Public License 2.0 — compatible with this project.  
   MPL 2.0 is a file-level copyleft: modifications to GeckoView files themselves must
   be shared under MPL 2.0, but application code that uses GeckoView is not affected.
-  There is no obligation to open-source the MyDownloader application.
+  There is no obligation to open-source the FetchX application.
 - **Chromium compatibility:** High — supports modern web standards (CSS Grid, WebGL,
   Web Workers, Service Workers, WebAssembly, etc.). Not Chromium, but compatible with
   the living standards.
 - **Firefox/WebExtension compatibility:** Yes (is the Firefox engine).
-- **RAM usage:** Higher than WebView — separate Gecko content process, ~50–80 MB
+- **RAM usage:** Higher than WebView — separate Gecko content process, ~50—80 MB
   baseline additional RAM.
 - **minSdk:** 21+ (GeckoView 133.x supports API 21+)
 - **Long-term viability:** EXCELLENT — actively maintained by Mozilla as the
@@ -132,7 +132,7 @@ system WebView was fragmented before Android 7.0 guaranteed updates).
 This option involves forking the Chromium source and maintaining a custom Chromium
 build for Android (e.g., as Brave, Kiwi, and other browsers do).
 
-- **APK size:** +80–150 MB minimum.
+- **APK size:** +80—150 MB minimum.
 - **Build time:** Hours per build cycle on high-end hardware; tens of minutes for
   incremental builds.
 - **Security maintenance:** Must manually backport all Chromium security fixes,
@@ -159,8 +159,8 @@ build for Android (e.g., as Brave, Kiwi, and other browsers do).
 | Private browsing | ❌ Manual clear-only | ✅ Native usePrivateMode | ❌ None | ⚠️ Must build yourself |
 | Fingerprinting resistance | ❌ None | ✅ Built-in (ETP) | ❌ None | ⚠️ Must build yourself |
 | WebRTC controls | ❌ None | ✅ ICE policy + mDNS | ❌ None | ⚠️ Must build yourself |
-| APK size impact | ✅ 0 MB (system) | ⚠️ ~37 MB (arm64, ABI split) | ❌ +70 MB | ❌ +80–150 MB |
-| RAM usage | ✅ Lowest | ⚠️ +50–80 MB (Gecko process) | ❌ High | ❌ High |
+| APK size impact | ✅ 0 MB (system) | ⚠️ ~37 MB (arm64, ABI split) | ❌ +70 MB | ❌ +80—150 MB |
+| RAM usage | ✅ Lowest | ⚠️ +50—80 MB (Gecko process) | ❌ High | ❌ High |
 | Licensing | ✅ Apache 2.0 | ✅ MPL 2.0 | ❌ EOL, no clear status | ⚠️ BSD/Apache (Chromium) |
 | Long-term viability | ✅ Google-backed | ✅ Mozilla-backed | ❌ EOL | ✅ Community-backed |
 | Status | ✅ Active | ✅ Active | ❌ Dead | ✅ Active (with effort) |
@@ -194,7 +194,7 @@ Justifications:
 
 5. **MPL 2.0 compatible** — No copyleft obligation on application code. The license
    is strictly file-level: only modifications to GeckoView source files themselves
-   need to be shared under MPL 2.0. The MyDownloader application code is not affected.
+   need to be shared under MPL 2.0. The FetchX application code is not affected.
 
 6. **Production-tested** — GeckoView is the production engine for Firefox for Android
    (hundreds of millions of users), Tor Browser for Android, and Mullvad Browser for
@@ -248,7 +248,7 @@ android {
 }
 ```
 
-### Key GeckoView APIs to use (Phase 20F–20L)
+### Key GeckoView APIs to use (Phase 20F—20L)
 
 | API | Purpose | Phase |
 |---|---|---|
@@ -262,3 +262,4 @@ android {
 | `GeckoSession.NavigationDelegate` | URL interception for download detection | 20G |
 | `GeckoSession.ContentDelegate` | Page load events | 20F |
 | `GeckoSession.ProgressDelegate` | Loading progress | 20F |
+

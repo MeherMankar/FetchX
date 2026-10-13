@@ -1,5 +1,5 @@
 [package]
-name = "mydownloader-plugin-api"
+name = "fetchx-plugin-api"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,3 +11,4 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+

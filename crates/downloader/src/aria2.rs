@@ -1,10 +1,10 @@
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 
-use mydownloader_core::{DownloadStateMachine, StateMachineError};
-use mydownloader_models::{
+use fetchx_core::{DownloadStateMachine, StateMachineError};
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
 };
-use mydownloader_storage::DownloadRepository;
+use fetchx_storage::DownloadRepository;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -991,7 +991,7 @@ fn next_timestamp(previous: Timestamp) -> Result<Timestamp, DownloadEngineError>
     let next = previous
         .as_unix_millis()
         .checked_add(1)
-        .ok_or(mydownloader_models::TimestampError::OutOfRange)?;
+        .ok_or(fetchx_models::TimestampError::OutOfRange)?;
     Ok(Timestamp::now()?.max(Timestamp::from_unix_millis(next)))
 }
 
@@ -1066,9 +1066,9 @@ where
 mod tests {
     use std::{collections::VecDeque, error::Error, path::PathBuf, time::Duration};
 
-    use mydownloader_core::DownloadStateMachine;
-    use mydownloader_models::{DownloadId, DownloadSource, FileName};
-    use mydownloader_storage::{Database, DownloadRepository};
+    use fetchx_core::DownloadStateMachine;
+    use fetchx_models::{DownloadId, DownloadSource, FileName};
+    use fetchx_storage::{Database, DownloadRepository};
     use serde_json::{Value, json};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -1082,7 +1082,7 @@ mod tests {
         Aria2DownloadStatus, Aria2Engine, Aria2Status, DownloadStatus, EngineKind, Timestamp,
     };
     use crate::{DownloadEngine, ManagedDownloadEngine};
-    use mydownloader_models::DownloadItem;
+    use fetchx_models::DownloadItem;
 
     const TEST_TOKEN: &str = "test-only-secret-token";
 
@@ -1689,7 +1689,7 @@ mod tests {
     impl TestDirectory {
         fn new(id: DownloadId) -> Result<Self, std::io::Error> {
             let path = std::env::temp_dir()
-                .join(format!("mydownloader-aria2-{}-{id}", std::process::id()));
+                .join(format!("fetchx-aria2-{}-{id}", std::process::id()));
             std::fs::create_dir(&path)?;
             Ok(Self(path))
         }
@@ -1852,7 +1852,7 @@ mod tests {
             Timestamp::now()?,
         );
         item.set_progress_at(
-            mydownloader_models::DownloadProgress::new(10, Some(20), None, None)?,
+            fetchx_models::DownloadProgress::new(10, Some(20), None, None)?,
             Timestamp::now()?,
         )?;
         database.downloads().create(&item).await?;
@@ -1926,3 +1926,4 @@ mod tests {
         Ok(())
     }
 }
+

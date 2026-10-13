@@ -1,12 +1,12 @@
-# MyDownloader Browser Extension
+# FetchX Browser Extension
 
 A minimal Manifest V3 browser extension that lets you send HTTP/HTTPS links
-from Chrome or Microsoft Edge to the MyDownloader desktop application.
+from Chrome or Microsoft Edge to the FetchX desktop application.
 
 ## Features
 
-- **Context menu**: right-click any link → "Send to MyDownloader"
-- **Popup**: paste a URL and click "Send to MyDownloader"
+- **Context menu**: right-click any link → "Send to FetchX"
+- **Popup**: paste a URL and click "Send to FetchX"
 - Displays connection status (connected / not running)
 
 ## What the extension does NOT do
@@ -20,11 +20,11 @@ The extension is intentionally restricted:
 - It does not inject scripts into web pages.
 - It does not bypass DRM, CAPTCHA, or access controls.
 
-All downloading is handled by the MyDownloader desktop application.
+All downloading is handled by the FetchX desktop application.
 
 ## Prerequisites
 
-- MyDownloader desktop application must be **running**.
+- FetchX desktop application must be **running**.
 - The [native messaging host](../native-host/README.md) must be installed.
 
 ## Building
@@ -47,7 +47,7 @@ Build output goes to `dist/`.
 
 ## Protocol
 
-The extension communicates with MyDownloader via Native Messaging.  Each
+The extension communicates with FetchX via Native Messaging.  Each
 request is a JSON object framed with a 4-byte little-endian length prefix:
 
 ```json
@@ -78,7 +78,7 @@ Error response:
   "ok": false,
   "error": {
     "code": "desktop_unavailable",
-    "message": "MyDownloader is not running."
+    "message": "FetchX is not running."
   }
 }
 ```
@@ -89,13 +89,13 @@ Error response:
 |---------|--------|
 | Google Chrome | ✅ Supported |
 | Microsoft Edge | ✅ Supported (Chromium) |
-| Firefox | ⚠ Not tested in Phase 17 |
+| Firefox | ⚠  Not tested in Phase 17 |
 
 ## Permissions used
 
 | Permission | Reason |
 |-----------|--------|
-| `contextMenus` | "Send to MyDownloader" right-click menu |
+| `contextMenus` | "Send to FetchX" right-click menu |
 | `nativeMessaging` | Communicate with the native host |
 
 No host permissions, cookies, history, tabs (except for popup URL pre-fill),
@@ -109,3 +109,4 @@ or webRequest are requested.
 - The native host validates the session token on every request.
 - The desktop application performs authoritative URL validation regardless of what
   the extension sends.
+

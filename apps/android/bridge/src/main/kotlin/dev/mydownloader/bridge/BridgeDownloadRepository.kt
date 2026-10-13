@@ -1,16 +1,16 @@
-package dev.mydownloader.bridge
+package dev.fetchx.bridge
 
-import dev.mydownloader.bridge.uniffi.DownloadEventDto
-import dev.mydownloader.bridge.uniffi.DownloadEventListener
-import dev.mydownloader.bridge.uniffi.DownloadInfoDto
-import dev.mydownloader.bridge.uniffi.DownloadPriorityDto
-import dev.mydownloader.bridge.uniffi.DownloadService
-import dev.mydownloader.bridge.uniffi.DownloadStatusDto
-import dev.mydownloader.core.download.DownloadEvent
-import dev.mydownloader.core.download.DownloadItem
-import dev.mydownloader.core.download.DownloadPriority
-import dev.mydownloader.core.download.DownloadRepository
-import dev.mydownloader.core.download.DownloadState
+import dev.fetchx.bridge.uniffi.DownloadEventDto
+import dev.fetchx.bridge.uniffi.DownloadEventListener
+import dev.fetchx.bridge.uniffi.DownloadInfoDto
+import dev.fetchx.bridge.uniffi.DownloadPriorityDto
+import dev.fetchx.bridge.uniffi.DownloadService
+import dev.fetchx.bridge.uniffi.DownloadStatusDto
+import dev.fetchx.core.download.DownloadEvent
+import dev.fetchx.core.download.DownloadItem
+import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadRepository
+import dev.fetchx.core.download.DownloadState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -224,3 +224,4 @@ class BridgeDownloadRepository(
         is DownloadEventDto.Removed -> null  // No matching Kotlin DownloadEvent variant
     }
 }
+

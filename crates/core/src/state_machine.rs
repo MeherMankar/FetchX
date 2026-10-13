@@ -1,7 +1,7 @@
-use mydownloader_models::{
+use fetchx_models::{
     DownloadId, DownloadItem, DownloadItemError, DownloadStatus, Timestamp, TimestampError,
 };
-use mydownloader_storage::{DownloadRepository, StorageError};
+use fetchx_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
 
 /// Validates a lifecycle transition without performing I/O or changing any state.
@@ -69,7 +69,7 @@ where
         &self,
         id: DownloadId,
         to: DownloadStatus,
-        error: mydownloader_models::DownloadError,
+        error: fetchx_models::DownloadError,
     ) -> Result<DownloadItem, StateMachineError> {
         self.transition_inner(id, to, Some(error)).await
     }
@@ -98,7 +98,7 @@ where
         &self,
         id: DownloadId,
         to: DownloadStatus,
-        error: Option<mydownloader_models::DownloadError>,
+        error: Option<fetchx_models::DownloadError>,
     ) -> Result<DownloadItem, StateMachineError> {
         let mut item = self
             .repository
@@ -155,7 +155,7 @@ pub enum StateMachineError {
     #[error("download state could not be updated: {0}")]
     Domain(#[from] DownloadItemError),
     #[error("download failure diagnostic is invalid: {0}")]
-    DomainError(#[from] mydownloader_models::DownloadErrorMessageError),
+    DomainError(#[from] fetchx_models::DownloadErrorMessageError),
     #[error("download state persistence failed: {0}")]
     Storage(#[from] StorageError),
 }
@@ -164,11 +164,11 @@ pub enum StateMachineError {
 mod tests {
     use std::{error::Error, path::PathBuf};
 
-    use mydownloader_models::{
+    use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSource,
         DownloadStatus, EngineKind, FileName, Timestamp,
     };
-    use mydownloader_storage::{Database, DownloadRepository};
+    use fetchx_storage::{Database, DownloadRepository};
 
     use super::{DownloadStateMachine, StateMachineError, validate_transition};
 
@@ -378,3 +378,4 @@ mod tests {
         Ok(())
     }
 }
+

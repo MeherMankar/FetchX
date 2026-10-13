@@ -1,13 +1,13 @@
 [package]
-name = "mydownloader-downloader"
+name = "fetchx-downloader"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-mydownloader-core = { path = "../core" }
-mydownloader-models = { path = "../models" }
-mydownloader-storage = { path = "../storage" }
+fetchx-core = { path = "../core" }
+fetchx-models = { path = "../models" }
+fetchx-storage = { path = "../storage" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -19,3 +19,4 @@ netstat2.workspace = true
 
 [lints]
 workspace = true
+

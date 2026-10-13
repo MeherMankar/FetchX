@@ -11,7 +11,8 @@ mod events;
 
 fn main() {
     if let Err(error) = app::run() {
-        eprintln!("MyDownloader desktop failed to start: {error}");
+        eprintln!("FetchX desktop failed to start: {error}");
         std::process::exit(1);
     }
 }
+

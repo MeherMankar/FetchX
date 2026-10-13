@@ -1,4 +1,4 @@
-package dev.mydownloader.core.download
+package dev.fetchx.core.download
 
 /**
  * Events emitted by the download engine.
@@ -35,3 +35,4 @@ sealed class DownloadEvent {
 
     data class Cancelled(override val downloadId: String) : DownloadEvent()
 }
+

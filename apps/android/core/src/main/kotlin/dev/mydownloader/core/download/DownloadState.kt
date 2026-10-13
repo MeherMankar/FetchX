@@ -1,4 +1,4 @@
-package dev.mydownloader.core.download
+package dev.fetchx.core.download
 
 /**
  * The lifecycle state of a download.
@@ -35,3 +35,4 @@ sealed class DownloadState {
     /** Cancelled by the user. */
     data object Cancelled : DownloadState()
 }
+

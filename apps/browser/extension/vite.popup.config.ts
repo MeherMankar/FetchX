@@ -9,7 +9,7 @@ export default defineConfig({
     emptyOutDir: false,
     lib: {
       entry: resolve(__dirname, "src/popup/popup.ts"),
-      name: "MyDownloaderPopup",
+      name: "FetchXPopup",
       fileName: () => "popup.js",
       formats: ["iife"],
     },

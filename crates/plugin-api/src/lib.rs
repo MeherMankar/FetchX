@@ -1,6 +1,6 @@
-//! MyDownloader Plugin API — Phase 19
+//! FetchX Plugin API — Phase 19
 //!
-//! Shared types used by both the MyDownloader host and external plugin processes.
+//! Shared types used by both the FetchX host and external plugin processes.
 //!
 //! # Protocol overview
 //!
@@ -11,7 +11,7 @@
 //! ┌──────────────────────┬─────────────────────────────┐
 //! │  4 bytes (LE u32)    │  N bytes UTF-8 JSON         │
 //! │  payload length = N  │  { "version": 1, ... }      │
-//! └──────────────────────┴─────────────────────────────┘
+//! └───────────────────────┴─────────────────────────────┘
 //! ```
 //!
 //! Maximum payload size: [`MAX_PAYLOAD_BYTES`] (64 KiB).
@@ -42,3 +42,4 @@ pub use protocol::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginResponse,
     PluginResponseBody, ProtocolError, parse_plugin_response,
 };
+

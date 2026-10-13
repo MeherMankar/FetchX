@@ -5,17 +5,17 @@
 
 use std::path::PathBuf;
 
-use mydownloader_core_services::{CoreServices, CoreServicesConfig, CoreServicesError};
+use fetchx_core_services::{CoreServices, CoreServicesConfig, CoreServicesError};
 
 /// Platform-specific path for the application data directory.
 fn app_data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        // %APPDATA%\com.mydownloader.desktop
+        // %APPDATA%\com.fetchx.desktop
         std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
-            .join("com.mydownloader.desktop")
+            .join("com.fetchx.desktop")
     }
     #[cfg(target_os = "macos")]
     {
@@ -23,7 +23,7 @@ fn app_data_dir() -> PathBuf {
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join("Library")
             .join("Application Support")
-            .join("com.mydownloader.desktop")
+            .join("com.fetchx.desktop")
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
@@ -35,7 +35,7 @@ fn app_data_dir() -> PathBuf {
                     .map(|h| PathBuf::from(h).join(".local").join("share"))
                     .unwrap_or_else(|| PathBuf::from("/tmp"))
             })
-            .join("mydownloader")
+            .join("FetchX")
     }
 }
 
@@ -59,7 +59,7 @@ fn downloads_dir() -> PathBuf {
 pub async fn start() -> Result<CoreServices, CoreServicesError> {
     let data_dir = app_data_dir();
     let cfg = CoreServicesConfig {
-        database_path: data_dir.join("mydownloader.db"),
+        database_path: data_dir.join("fetchx.db"),
         downloads_dir: downloads_dir(),
         runtime_dir: data_dir.join("runtime"),
     };
@@ -75,3 +75,4 @@ pub async fn start() -> Result<CoreServices, CoreServicesError> {
 pub fn plugin_dir() -> Option<std::path::PathBuf> {
     Some(app_data_dir().join("plugins"))
 }
+

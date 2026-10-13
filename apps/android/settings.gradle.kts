@@ -15,9 +15,10 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "MyDownloader"
+rootProject.name = "fetchx"
 include(":app")
 include(":core")
 include(":downloads")
 include(":bridge")
 include(":browser")
+

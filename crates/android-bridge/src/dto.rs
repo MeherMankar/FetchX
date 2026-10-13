@@ -65,10 +65,10 @@ pub enum DownloadEventDto {
 
 // ── Conversion helpers ────────────────────────────────────────────────────
 
-use mydownloader_models::{
+use fetchx_models::{
     DownloadItem, DownloadPriority, DownloadProgress, DownloadStatus, EngineKind,
 };
-use mydownloader_queue::DownloadEvent;
+use fetchx_queue::DownloadEvent;
 
 /// Converts a `DownloadStatus` to its DTO counterpart.
 pub fn status_to_dto(s: DownloadStatus) -> DownloadStatusDto {
@@ -161,3 +161,4 @@ pub fn event_to_dto(e: DownloadEvent) -> DownloadEventDto {
         DownloadEvent::Removed { id, .. } => DownloadEventDto::Removed { id: id.to_string() },
     }
 }
+

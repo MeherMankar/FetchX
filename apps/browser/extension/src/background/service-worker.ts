@@ -1,5 +1,5 @@
 /**
- * MyDownloader Extension — Background Service Worker
+ * FetchX Extension — Background Service Worker
  *
  * Features (matches Motrix extension):
  * 1. Context menu on links and page
@@ -79,12 +79,12 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: MENU_LINK,
-      title: "Download link with MyDownloader",
+      title: "Download link with FetchX",
       contexts: ["link"],
     });
     chrome.contextMenus.create({
       id: MENU_PAGE,
-      title: "Download page URL with MyDownloader",
+      title: "Download page URL with FetchX",
       contexts: ["page"],
     });
   });
@@ -98,9 +98,9 @@ chrome.contextMenus.onClicked.addListener((info, _tab) => {
     void settings.then((s) => {
       if (!s.showNotifications) return;
       if (result.ok) {
-        notify("Download added", `"${hostnameOf(url)}" is being downloaded by MyDownloader.`);
+        notify("Download added", `"${hostnameOf(url)}" is being downloaded by FetchX.`);
       } else if (!result.ok) {
-        notify("MyDownloader", result.error.message);
+        notify("FetchX", result.error.message);
       }
     });
   });
@@ -131,14 +131,14 @@ chrome.downloads.onCreated.addListener((item) => {
     const minBytes = settings.minSizeMb * 1024 * 1024;
     if (minBytes > 0 && fileSizeBytes > 0 && fileSizeBytes < minBytes) return;
 
-    // Cancel the browser's own download and hand off to MyDownloader
+    // Cancel the browser's own download and hand off to FetchX
     chrome.downloads.cancel(item.id);
     chrome.downloads.erase({ id: item.id });
 
     const result = await handleAddDownload(item.url);
     if (result.ok && settings.showNotifications) {
       const name = item.filename?.split(/[/\\]/).pop() ?? hostnameOf(item.url);
-      notify("Intercepted", `"${name}" handed to MyDownloader.`);
+      notify("Intercepted", `"${name}" handed to FetchX.`);
     }
   })();
 });
@@ -207,7 +207,7 @@ async function handleAddDownload(url: string): Promise<BrowserResponse> {
     if (resp.ok) void refreshTasks();
     return resp;
   } catch (e) {
-    const msg = e instanceof NativeHostError ? e.message : "Could not reach MyDownloader. Is it running?";
+    const msg = e instanceof NativeHostError ? e.message : "Could not reach FetchX. Is it running?";
     return err("desktop_unavailable", msg);
   }
 }

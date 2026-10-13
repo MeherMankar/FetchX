@@ -1,4 +1,4 @@
-package dev.mydownloader.app.navigation
+package dev.fetchx.app.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -17,14 +17,14 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import dev.mydownloader.bridge.BridgeInitializer
-import dev.mydownloader.browser.BrowserScreen
-import dev.mydownloader.core.download.NoOpDownloadRepository
-import dev.mydownloader.downloads.ui.DownloadsScreen
-import dev.mydownloader.downloads.ui.DownloadsViewModel
+import dev.fetchx.bridge.BridgeInitializer
+import dev.fetchx.browser.BrowserScreen
+import dev.fetchx.core.download.NoOpDownloadRepository
+import dev.fetchx.downloads.ui.DownloadsScreen
+import dev.fetchx.downloads.ui.DownloadsViewModel
 
 /**
- * Root NavHost for the MyDownloader application.
+ * Root NavHost for the FetchX application.
  *
  * A [NavigationBar] at the bottom lets users switch between the Downloads
  * and Browser top-level destinations. The NavController is shared so
@@ -98,3 +98,4 @@ fun AppNavigation() {
         }
     }
 }
+

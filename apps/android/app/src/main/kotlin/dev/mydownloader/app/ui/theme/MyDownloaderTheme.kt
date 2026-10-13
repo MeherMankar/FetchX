@@ -1,4 +1,4 @@
-package dev.mydownloader.app.ui.theme
+package dev.fetchx.app.ui.theme
 
 import android.os.Build
 import androidx.compose.material3.MaterialTheme
@@ -13,11 +13,11 @@ private val DarkColorScheme = darkColorScheme()
 private val LightColorScheme = lightColorScheme()
 
 /**
- * MyDownloader Material 3 theme.
+ * FetchX Material 3 theme.
  * Uses dynamic colour on Android 12+ (API 31), static scheme on older versions.
  */
 @Composable
-fun MyDownloaderTheme(
+fun FetchXTheme(
     darkTheme: Boolean = false,
     content: @Composable () -> Unit
 ) {
@@ -35,3 +35,4 @@ fun MyDownloaderTheme(
         content = content
     )
 }
+

@@ -25,7 +25,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use mydownloader_storage::SqliteConfigRepository;
+use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
 const CURRENT_VERSION: u32 = 1;
@@ -75,7 +75,7 @@ pub struct Aria2Config {
     pub enabled: bool,
     /// Absolute path to the aria2c executable, or `None` to use PATH discovery.
     pub executable_path: Option<PathBuf>,
-    /// RPC listening port (1–65535, default 6800).
+    /// RPC listening port (1—65535, default 6800).
     pub rpc_port: u16,
     /// RPC secret token; `None` means no authentication.
     /// Never returned to the frontend — only exposed as `has_secret`.
@@ -234,7 +234,7 @@ impl ConfigService {
 
 #[cfg(test)]
 mod tests {
-    use mydownloader_storage::Database;
+    use fetchx_storage::Database;
 
     use super::*;
 
@@ -357,3 +357,4 @@ mod tests {
         assert_eq!(cfg.aria2.rpc_port, 6800);
     }
 }
+

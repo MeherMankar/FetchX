@@ -1,5 +1,5 @@
 [package]
-name = "mydownloader-desktop"
+name = "fetchx-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,13 +9,13 @@ build = "build.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-mydownloader-browser-protocol = { path = "../../../crates/browser-protocol" }
-mydownloader-core = { path = "../../../crates/core" }
-mydownloader-downloader = { path = "../../../crates/downloader" }
-mydownloader-models = { path = "../../../crates/models" }
-mydownloader-queue = { path = "../../../crates/queue" }
-mydownloader-scheduler = { path = "../../../crates/scheduler" }
-mydownloader-storage = { path = "../../../crates/storage" }
+fetchx-browser-protocol = { path = "../../../crates/browser-protocol" }
+fetchx-core = { path = "../../../crates/core" }
+fetchx-downloader = { path = "../../../crates/downloader" }
+fetchx-models = { path = "../../../crates/models" }
+fetchx-queue = { path = "../../../crates/queue" }
+fetchx-scheduler = { path = "../../../crates/scheduler" }
+fetchx-storage = { path = "../../../crates/storage" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -31,3 +31,4 @@ workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+

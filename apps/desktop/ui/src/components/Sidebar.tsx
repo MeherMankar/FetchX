@@ -32,7 +32,7 @@ export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
     <nav className="sidebar" aria-label="Download categories">
       <div className="sidebar-brand" aria-hidden="true">
         <span className="brand-mark">↓</span>
-        <span className="brand-name">MyDownloader</span>
+        <span className="brand-name">FetchX</span>
       </div>
 
       <ul className="nav-list" role="list">

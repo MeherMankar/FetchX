@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use mydownloader_browser_protocol::BrowserRequest;
+use fetchx_browser_protocol::BrowserRequest;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -30,7 +30,7 @@ pub struct DesktopIpcRequest {
 
 #[derive(Debug, Error)]
 pub enum StateFileError {
-    #[error("state file not found — is MyDownloader running?")]
+    #[error("state file not found — is FetchX running?")]
     NotFound,
     #[error("state file could not be read: {0}")]
     Io(#[source] std::io::Error),
@@ -48,7 +48,7 @@ pub fn state_file_path() -> Option<PathBuf> {
         // Tauri writes app data to %APPDATA% (Roaming) on Windows.
         std::env::var_os("APPDATA").map(|base| {
             PathBuf::from(base)
-                .join("com.mydownloader.desktop")
+                .join("com.fetchx.desktop")
                 .join("browser-ipc.json")
         })
     }
@@ -60,7 +60,7 @@ pub fn state_file_path() -> Option<PathBuf> {
             .or_else(|| {
                 std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
             })?;
-        Some(base.join("mydownloader").join("browser-ipc.json"))
+        Some(base.join("FetchX").join("browser-ipc.json"))
     }
 }
 
@@ -76,3 +76,4 @@ pub fn read_desktop_state() -> Result<DesktopState, StateFileError> {
     })?;
     serde_json::from_str(&contents).map_err(|_| StateFileError::Invalid)
 }
+

@@ -86,12 +86,12 @@ export function userMessageForCode(code: BrowserErrorCode): string {
     case "unsupported_scheme":
       return "Only HTTP and HTTPS URLs are supported.";
     case "desktop_unavailable":
-      return "MyDownloader is not running. Please start the application first.";
+      return "FetchX is not running. Please start the application first.";
     case "download_rejected":
-      return "MyDownloader rejected the download. Check the application for details.";
+      return "FetchX rejected the download. Check the application for details.";
     case "unsupported_version":
-      return "Please update MyDownloader to use this extension.";
+      return "Please update FetchX to use this extension.";
     default:
-      return "An unexpected error occurred. Check that MyDownloader is running.";
+      return "An unexpected error occurred. Check that FetchX is running.";
   }
 }

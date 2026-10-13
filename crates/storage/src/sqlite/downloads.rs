@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use mydownloader_models::{
+use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
     DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
@@ -624,3 +624,4 @@ mod tests {
         ));
     }
 }
+

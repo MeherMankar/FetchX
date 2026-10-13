@@ -1,4 +1,4 @@
-package dev.mydownloader.core.download
+package dev.fetchx.core.download
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,3 +36,4 @@ class NoOpDownloadRepository : DownloadRepository {
     override suspend fun scheduleDownload(downloadId: String, startAtMillis: Long) = Unit
     override suspend fun getDownload(downloadId: String): DownloadItem? = null
 }
+

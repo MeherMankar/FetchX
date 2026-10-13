@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MyDownloader</string>
+    <string name="app_name">FetchX</string>
     <string name="downloads_tab_active">Active</string>
     <string name="downloads_tab_queued">Queued</string>
     <string name="downloads_tab_completed">Completed</string>
@@ -15,3 +15,4 @@
     <string name="downloads_speed_unit_kbs">KB/s</string>
     <string name="downloads_speed_unit_mbs">MB/s</string>
 </resources>
+
