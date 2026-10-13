@@ -7,146 +7,99 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
-import org.mozilla.geckoview.WebRequestError
+import java.lang.ref.WeakReference
 
 private const val TAG = "BrowserViewModel"
 
 data class BrowserUiState(
-    val currentUrl: String = "https://example.com",
-    val isLoading: Boolean = false,
-    val canGoBack: Boolean = false,
-    val canGoForward: Boolean = false,
-    val errorText: String? = null,
-    val title: String? = null,
-)
+    val tabs: List<TabState> = emptyList(),
+    val activeTabId: String? = null,
+    val urlInput: String = "https://example.com",
+) {
+    val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
+}
 
-/**
- * ViewModel managing the browser state and [GeckoSession] lifecycle.
- *
- * Lifecycle ownership:
- * - [GeckoSession] is owned by this ViewModel and survives configuration changes.
- * - [GeckoView] is an Android View and does NOT survive configuration changes.
- * - [attachView] must be called each time the Compose AndroidView factory runs.
- * - When the ViewModel is cleared, the session is closed.
- *
- * [GeckoRuntime] is owned by [GeckoRuntimeHolder] (process-level singleton).
- */
 class BrowserViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
     val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
 
-    private var session: GeckoSession? = null
-    private var sessionOpened = false
-    private var pendingUrl: String? = null
+    private var tabManager: TabManager? = null
+    private var geckoViewRef: WeakReference<GeckoView>? = null
 
     /**
-     * Attaches the [GeckoView] to the current [GeckoSession], creating a new session
-     * on first call. Safe to call on every AndroidView factory/update.
+     * Called from the AndroidView factory (and on recomposition).
+     * First call: creates the TabManager and the initial tab.
+     * Subsequent calls: re-attaches the active session to the (potentially new) GeckoView.
      */
     fun attachView(view: GeckoView, runtime: GeckoRuntime) {
-        val s = session ?: createSession().also { session = it }
-        view.setSession(s)
-
-        if (!sessionOpened) {
-            s.open(runtime)
-            sessionOpened = true
-            Log.i(TAG, "GeckoSession opened")
-            val url = pendingUrl ?: _uiState.value.currentUrl
-            s.loadUri(url)
-            pendingUrl = null
+        geckoViewRef = WeakReference(view)
+        val tm = tabManager ?: TabManager(runtime).also { newTm ->
+            tabManager = newTm
+            newTm.onStateChanged = ::rebuildState
+            newTm.createTab()
+            Log.i(TAG, "TabManager initialized with first tab")
         }
+        // Always attach the active session to the current view.
+        tm.activeSession()?.let { view.setSession(it) }
+        rebuildState()
     }
 
-    private fun createSession(): GeckoSession {
-        val s = GeckoSession()
-
-        s.contentDelegate = object : GeckoSession.ContentDelegate {
-            override fun onTitleChange(session: GeckoSession, title: String?) {
-                _uiState.update { it.copy(title = title) }
-            }
-        }
-
-        s.navigationDelegate = object : GeckoSession.NavigationDelegate {
-            override fun onLocationChange(
-                session: GeckoSession,
-                url: String?,
-                perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
-                hasUserGesture: Boolean,
-            ) {
-                _uiState.update { it.copy(currentUrl = url ?: "", errorText = null) }
-            }
-
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                _uiState.update { it.copy(canGoBack = canGoBack) }
-            }
-
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                _uiState.update { it.copy(canGoForward = canGoForward) }
-            }
-
-            override fun onLoadError(
-                session: GeckoSession,
-                uri: String?,
-                error: WebRequestError,
-            ): GeckoResult<String?>? {
-                _uiState.update {
-                    it.copy(
-                        errorText = "Could not load page. Check your connection and try again.",
-                        isLoading = false,
-                    )
-                }
-                return null
-            }
-        }
-
-        s.progressDelegate = object : GeckoSession.ProgressDelegate {
-            override fun onPageStart(session: GeckoSession, url: String) {
-                _uiState.update { it.copy(isLoading = true, errorText = null) }
-            }
-
-            override fun onPageStop(session: GeckoSession, success: Boolean) {
-                _uiState.update { it.copy(isLoading = false) }
-            }
-        }
-
-        return s
+    private fun rebuildState() {
+        val tm = tabManager ?: return
+        val activeId = tm.activeTabId()
+        val tabs = tm.allTabStates()
+        val activeUrl = tabs.find { it.id == activeId }?.url ?: "https://example.com"
+        _uiState.update { it.copy(tabs = tabs, activeTabId = activeId, urlInput = activeUrl) }
     }
 
-    /** Navigates to [rawUrl], normalizing bare hostnames to https://. */
+    // ── Tab actions ──────────────────────────────────────────────────────────
+
+    fun newTab(url: String = "https://example.com") {
+        tabManager?.createTab(url)
+        reattachActiveSession()
+    }
+
+    fun closeTab(tabId: String) {
+        tabManager?.closeTab(tabId)
+        reattachActiveSession()
+    }
+
+    fun selectTab(tabId: String) {
+        tabManager?.selectTab(tabId)
+        reattachActiveSession()
+    }
+
+    // ── Navigation ───────────────────────────────────────────────────────────
+
     fun navigate(rawUrl: String) {
-        val url = normalizeUrl(rawUrl)
-        val s = session
-        if (s != null && sessionOpened) {
-            s.loadUri(url)
-        } else {
-            pendingUrl = url
-        }
-        _uiState.update { it.copy(currentUrl = url, errorText = null) }
+        tabManager?.navigate(rawUrl)
     }
 
-    fun goBack() {
-        session?.goBack()
+    fun goBack() { tabManager?.goBack() }
+    fun goForward() { tabManager?.goForward() }
+    fun reload() { tabManager?.reload() }
+
+    // ── URL input sync ────────────────────────────────────────────────────────
+
+    fun onUrlInputChanged(url: String) {
+        _uiState.update { it.copy(urlInput = url) }
     }
 
-    fun goForward() {
-        session?.goForward()
-    }
+    // ── Private ───────────────────────────────────────────────────────────────
 
-    fun reload() {
-        session?.reload()
+    private fun reattachActiveSession() {
+        val view = geckoViewRef?.get() ?: return
+        tabManager?.activeSession()?.let { view.setSession(it) }
     }
 
     override fun onCleared() {
         super.onCleared()
-        session?.close()
-        session = null
-        sessionOpened = false
-        Log.i(TAG, "BrowserViewModel cleared — GeckoSession closed")
+        tabManager?.dispose()
+        tabManager = null
+        Log.i(TAG, "BrowserViewModel cleared")
     }
 
     companion object {
