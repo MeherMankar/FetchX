@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -177,6 +179,15 @@ fun BrowserScreen(
                     },
                     modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
                 )
+                FilterChip(
+                    selected = uiState.privacySettings.fingerprintingProtectionEnabled ||
+                        uiState.privacySettings.cryptominingProtectionEnabled ||
+                        uiState.privacySettings.thirdPartyCookieIsolationEnabled ||
+                        uiState.privacySettings.httpsOnlyEnabled,
+                    onClick = { viewModel.openPrivacySettings() },
+                    label = { Text("Privacy controls") },
+                    modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
+                )
 
                 // Tab bar — horizontal scrollable row of  FilterChips + new-tab button
                 Row(
@@ -339,6 +350,97 @@ fun BrowserScreen(
             onEnabledChange = viewModel::setTrackerBlockingEnabled,
             onDismiss = viewModel::closeTrackerDetails,
         )
+    }
+
+    if (uiState.showPrivacySettings) {
+        PrivacySettingsDialog(
+            settings = uiState.privacySettings,
+            onFingerprintingProtectionChange = viewModel::setFingerprintingProtectionEnabled,
+            onCryptominingProtectionChange = viewModel::setCryptominingProtectionEnabled,
+            onThirdPartyCookieIsolationChange = viewModel::setThirdPartyCookieIsolationEnabled,
+            onHttpsOnlyChange = viewModel::setHttpsOnlyEnabled,
+            onDismiss = viewModel::closePrivacySettings,
+        )
+    }
+}
+
+@Composable
+private fun PrivacySettingsDialog(
+    settings: PrivacySettings,
+    onFingerprintingProtectionChange: (Boolean) -> Unit,
+    onCryptominingProtectionChange: (Boolean) -> Unit,
+    onThirdPartyCookieIsolationChange: (Boolean) -> Unit,
+    onHttpsOnlyChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Privacy controls") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    "These browser-wide settings apply to all tabs. Reload open pages after changing them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                PrivacySwitchRow(
+                    title = "Fingerprinting protection",
+                    description = "Enable GeckoView fingerprinting protections and block known fingerprinting trackers.",
+                    checked = settings.fingerprintingProtectionEnabled,
+                    onCheckedChange = onFingerprintingProtectionChange,
+                )
+                PrivacySwitchRow(
+                    title = "Cryptomining protection",
+                    description = "Block known cryptomining resources identified by GeckoView.",
+                    checked = settings.cryptominingProtectionEnabled,
+                    onCheckedChange = onCryptominingProtectionChange,
+                )
+                PrivacySwitchRow(
+                    title = "Third-party cookie isolation",
+                    description = "Partition third-party cookies by top-level site. Turning this off accepts all cookies and site data.",
+                    checked = settings.thirdPartyCookieIsolationEnabled,
+                    onCheckedChange = onThirdPartyCookieIsolationChange,
+                )
+                PrivacySwitchRow(
+                    title = "HTTPS-only mode",
+                    description = "Use GeckoView HTTPS-Only mode. HTTP-only sites may not load.",
+                    checked = settings.httpsOnlyEnabled,
+                    onCheckedChange = onHttpsOnlyChange,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+@Composable
+private fun PrivacySwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

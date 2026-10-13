@@ -26,6 +26,8 @@ data class BrowserUiState(
     val trackerBlockingEnabled: Boolean = true,
     val activeTabBlockedRequests: Long = 0,
     val activeTabBlockedHosts: List<String> = emptyList(),
+    val showPrivacySettings: Boolean = false,
+    val privacySettings: PrivacySettings = PrivacySettings(),
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
 }
@@ -33,6 +35,7 @@ data class BrowserUiState(
 class BrowserViewModel internal constructor(
     internal val bookmarkController: BookmarkController = BookmarkController(),
     internal val trackerBlockingController: TrackerBlockingController = TrackerBlockingController(),
+    internal val privacyController: PrivacyController = PrivacyController(),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -44,6 +47,8 @@ class BrowserViewModel internal constructor(
 
     init {
         trackerBlockingController.onStateChanged = ::syncTrackerBlockingState
+        privacyController.onSettingsChanged = ::syncPrivacySettings
+        syncPrivacySettings()
     }
 
     /**
@@ -54,7 +59,7 @@ class BrowserViewModel internal constructor(
     fun attachView(view: GeckoView, runtime: GeckoRuntime) {
         geckoViewRef = WeakReference(view)
         this.runtime = runtime
-        GeckoRuntimeHolder.setTrackerBlockingEnabled(trackerBlockingController.state.value.enabled)
+        applyPrivacySettings()
         val tm = tabManager ?: TabManager(runtime, trackerBlockingController).also { newTm ->
             tabManager = newTm
             newTm.onStateChanged = ::rebuildState
@@ -185,8 +190,35 @@ class BrowserViewModel internal constructor(
 
     fun setTrackerBlockingEnabled(enabled: Boolean) {
         trackerBlockingController.setEnabled(enabled)
-        runtime?.let { GeckoRuntimeHolder.setTrackerBlockingEnabled(enabled) }
-        syncTrackerBlockingState()
+        applyPrivacySettings()
+    }
+
+    fun openPrivacySettings() {
+        _uiState.update { it.copy(showPrivacySettings = true) }
+    }
+
+    fun closePrivacySettings() {
+        _uiState.update { it.copy(showPrivacySettings = false) }
+    }
+
+    fun setFingerprintingProtectionEnabled(enabled: Boolean) {
+        privacyController.setFingerprintingProtectionEnabled(enabled)
+        applyPrivacySettings()
+    }
+
+    fun setCryptominingProtectionEnabled(enabled: Boolean) {
+        privacyController.setCryptominingProtectionEnabled(enabled)
+        applyPrivacySettings()
+    }
+
+    fun setThirdPartyCookieIsolationEnabled(enabled: Boolean) {
+        privacyController.setThirdPartyCookieIsolationEnabled(enabled)
+        applyPrivacySettings()
+    }
+
+    fun setHttpsOnlyEnabled(enabled: Boolean) {
+        privacyController.setHttpsOnlyEnabled(enabled)
+        applyPrivacySettings()
     }
 
     /**
@@ -215,6 +247,20 @@ class BrowserViewModel internal constructor(
         }
     }
 
+    private fun syncPrivacySettings() {
+        val settings = privacyController.settings.value
+        _uiState.update { it.copy(privacySettings = settings) }
+    }
+
+    private fun applyPrivacySettings() {
+        if (runtime != null) {
+            GeckoRuntimeHolder.applyPrivacySettings(
+                trackerBlockingEnabled = trackerBlockingController.state.value.enabled,
+                settings = privacyController.settings.value,
+            )
+        }
+    }
+
     // ──URL input sync ─────────────────────────────────────────────────────
 
     fun onUrlInputChanged(url: String) {
@@ -233,6 +279,7 @@ class BrowserViewModel internal constructor(
         tabManager?.dispose()
         tabManager = null
         trackerBlockingController.onStateChanged = null
+        privacyController.onSettingsChanged = null
         runtime = null
         Log.i(TAG, "BrowserViewModel cleared")
     }

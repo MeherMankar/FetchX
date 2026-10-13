@@ -107,11 +107,13 @@
 
     Browser engine decision: After evaluating Android System WebView (Chromium),
     GeckoView (Mozilla), Crosswalk (EOL), and a custom Chromium build, GeckoView
-    was selected. Justification: GeckoView is the only embeddable Android engine
-    with a real WebExtension API (via WebExtensionController), built-in Enhanced
-    Tracking Protection, per-session profile isolation, and native private browsing.
-    The ~37 MB arm64 APK size cost is accepted. Chromium WebView was rejected due
-    to no extension API, no privacy controls, and no profile isolation.
+    was selected. Justification: GeckoView provides a WebExtension API
+    (WebExtensionController), built-in Enhanced Tracking Protection, and engine
+    APIs for session isolation and private browsing. FetchX integrates these
+    capabilities by phase; GeckoView support does not imply that every feature is
+    already exposed by the application. The ~37 MB arm64 APK size cost is accepted.
+    Chromium WebView was rejected because it does not provide the required
+    WebExtension API.
     Full comparison: docs/ANDROID_BROWSER.md
 
     SDK versions:
@@ -642,7 +644,7 @@
       closing it, or attempting to close the final tab; those checks remain
       unverified.
 
-35. Phase 20J — Privacy / fingerprinting controls
+35. Phase 20J — Privacy / fingerprinting controls (implemented in `:browser`; no separate `:privacy` module)
 36. Phase 20K — Extension framework
 37. Phase 20L — Extension permissions
 38. Phase 20M — VPN / Tor integration research

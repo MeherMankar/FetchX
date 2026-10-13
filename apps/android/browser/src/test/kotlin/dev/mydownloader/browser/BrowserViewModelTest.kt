@@ -159,7 +159,38 @@ class BrowserViewModelTest {
         assertFalse(vm.uiState.value.showBookmarks)
     }
 
-    // ── Bookmark list updates ─────────────────────────────────────────────
+    @Test fun `privacy settings are exposed and updated through browser ui state`() {
+        val privacyController = PrivacyController()
+        val vm = BrowserViewModel(privacyController = privacyController)
+
+        assertEquals(PrivacySettings(), vm.uiState.value.privacySettings)
+        vm.setFingerprintingProtectionEnabled(false)
+        vm.setCryptominingProtectionEnabled(false)
+        vm.setThirdPartyCookieIsolationEnabled(false)
+        vm.setHttpsOnlyEnabled(true)
+
+        assertEquals(
+            PrivacySettings(
+                fingerprintingProtectionEnabled = false,
+                cryptominingProtectionEnabled = false,
+                thirdPartyCookieIsolationEnabled = false,
+                httpsOnlyEnabled = true,
+            ),
+            vm.uiState.value.privacySettings,
+        )
+    }
+
+    @Test fun `privacy settings dialog open and close are reflected in ui state`() {
+        val vm = BrowserViewModel()
+
+        vm.openPrivacySettings()
+        assertTrue(vm.uiState.value.showPrivacySettings)
+
+        vm.closePrivacySettings()
+        assertFalse(vm.uiState.value.showPrivacySettings)
+    }
+
+    // ──Bookmark list updates ─────────────────────────────────────────────
 
     @Test fun `bookmarks list updates after add`() {
         val ctrl = controller()

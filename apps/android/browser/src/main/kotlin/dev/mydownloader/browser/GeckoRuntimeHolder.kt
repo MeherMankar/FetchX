@@ -36,28 +36,38 @@ object GeckoRuntimeHolder {
     }
 
     private fun createRuntime(context: Context): GeckoRuntime {
+        val privacy = geckoPrivacyConfiguration(
+            trackerBlockingEnabled = true,
+            settings = PrivacySettings(),
+        )
         val settings = GeckoRuntimeSettings.Builder()
             .consoleOutput(true)
+            .allowInsecureConnections(privacy.allowInsecureConnections)
             .contentBlocking(
                 ContentBlocking.Settings.Builder()
-                    .antiTracking(TRACKER_CATEGORIES)
+                    .antiTracking(privacy.antiTrackingCategories)
+                    .cookieBehavior(privacy.cookieBehavior)
                     .build(),
             )
             .build()
+            .setFingerprintingProtection(privacy.fingerprintingProtectionEnabled)
         return GeckoRuntime.create(context, settings)
     }
 
     /**
-     * Updates native tracker protection without replacing the runtime or sessions.
-     * GeckoView's RuntimeSettings preference commits apply to subsequent requests.
+     * Applies browser-wide privacy settings to the shared runtime without replacing
+     * it or any sessions. Runtime preference commits affect subsequent requests.
      */
-    fun setTrackerBlockingEnabled(enabled: Boolean) {
-        runtime?.settings?.contentBlocking?.setAntiTracking(
-            trackerAntiTrackingCategories(enabled),
-        )
+    fun applyPrivacySettings(trackerBlockingEnabled: Boolean, settings: PrivacySettings) {
+        val currentRuntime = runtime ?: return
+        val privacy = geckoPrivacyConfiguration(trackerBlockingEnabled, settings)
+        currentRuntime.settings.contentBlocking
+            .setAntiTracking(privacy.antiTrackingCategories)
+            .setCookieBehavior(privacy.cookieBehavior)
+        currentRuntime.settings
+            .setFingerprintingProtection(privacy.fingerprintingProtectionEnabled)
+            .setAllowInsecureConnections(privacy.allowInsecureConnections)
     }
-
-    private val TRACKER_CATEGORIES = trackerAntiTrackingCategories(enabled = true)
 }
 
 internal fun trackerAntiTrackingCategories(enabled: Boolean): Int =

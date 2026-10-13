@@ -71,7 +71,7 @@ the Rust downloader.
 - `FetchXTheme` — Material 3 theme with dynamic colour (API 31+).
 
 **Depends on:** `:core`, `:downloads`
-**Will depend on (later phases):** `:browser` (20F), `:privacy` (20J), `:extensions` (20K)
+**Will depend on (later phases):** `:browser` (20F), `:extensions` (20K)
 
 ### :core (apps/android/core)
 
@@ -98,7 +98,7 @@ Phase 20D: Full production UI. See _UI Layer (Phase 20D)_ section below.
 
 **Depends on:** `:core`, Compose, Material 3, lifecycle-viewmodel-compose
 
-### :browser (Phases 20E–20I)
+### :browser (Phases 20E–20J)
 
 **Responsibility:** GeckoView browser shell — address bar, tabs, navigation,
 history, bookmarks, and native tracker protection.
@@ -120,12 +120,15 @@ tab cleanup, and the final-tab invariant remain unverified.
 
 **Depends on:** `:core`, GeckoView AAR (arm64, armeabi-v7a, x86_64)
 
-### :privacy (Phase 20J)
+Phase 20J adds a `PrivacyController` and browser-wide controls in this module for
+GeckoView fingerprinting protection, cryptomining blocking, third-party cookie
+isolation, and HTTPS-Only mode. The controller combines those settings with
+tracker blocking and applies them to the shared runtime, so existing and future
+tabs use the same configuration. Settings are in-memory, not per-site, and are
+not persisted.
 
-**Responsibility:** Enhanced Tracking Protection configuration, content blocking
-settings UI, per-site exception management.
-
-**Depends on:** `:core`, `:browser`
+Private browsing, per-site exceptions, and a separate `:privacy` Android module
+are not implemented by Phase 20J.
 
 ### :extensions (Phase 20K)
 
@@ -230,16 +233,18 @@ and CLI consume events from the existing `DownloadEvent` broadcast bus.
 
 ---
 
-## Multi-Profile Design
+## Browser Session and Storage Scope
 
-| Profile type | Storage | History | Cookies | Session lifetime |
-|---|---|---|---|---|
-| Regular | Persistent (getExternalFilesDir) | Persistent SQLite | Persistent | Survives app restart |
-| Private | In-memory / encrypted ephemeral | Not persisted | Not persisted | Wiped on GeckoSession close |
-| Per-site isolation (Phase 20H+) | GeckoView session storage context | Per-context | Per-context | Per GeckoSession |
+The browser currently has one normal process-wide `GeckoRuntime` shared by all
+tabs. FetchX does not create private sessions or per-site GeckoView contexts.
+Third-party cookie isolation is enabled through GeckoView's
+`ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS` cookie behavior; this is not a private
+browsing profile.
 
-Private browsing uses `GeckoSessionSettings.usePrivateMode(true)`. A private tab's
-GeckoSession is created fresh; when closed, its storage context is discarded.
+Navigation history is in-memory, per tab, and capped at 200 entries. Bookmarks
+are in-memory and shared across tabs. Neither is stored in SQLite by the browser
+module. Closing a tab closes its GeckoSession and removes that tab's history and
+tracker statistics; it does not claim to erase shared runtime/profile data.
 
 ---
 
@@ -438,9 +443,9 @@ checkout; an older binary can fail UniFFI's runtime checksum validation.
 | 20E | :app service | ForegroundService, WorkManager, notifications |
 | 20F | :browser (new) | GeckoView shell, address bar, tabs, navigation |
 | 20G | :browser | Download interception, handoff to DownloadRepository |
-| 20H | :browser | Private tabs, per-session GeckoSession profiles |
-| 20I | :browser | History, bookmarks (SQLite via Rust storage) |
-| 20J | :privacy (new) | ETP configuration, tracker blocking, fingerprinting resistance |
+| 20H | :browser | Private browsing is deferred; no private sessions are implemented |
+| 20I | :browser | In-memory per-tab history, in-memory bookmarks, tracker blocking |
+| 20J | :browser | Runtime-wide fingerprinting, cryptomining, cookie-isolation, and HTTPS-only controls |
 | 20K | :extensions (new) | WebExtensionController, extension install |
 | 20L | :extensions | Extension permission model |
 | 20M | :core, :browser | Tor/VPN research and integration |
