@@ -21,6 +21,8 @@ private const val TAG = "GeckoRuntimeHolder"
 object GeckoRuntimeHolder {
     @Volatile
     private var runtime: GeckoRuntime? = null
+    private var extensionManager: ExtensionManager? = null
+    private var extensionManagerRuntime: GeckoRuntime? = null
 
     /**
      * Returns the existing [GeckoRuntime] or creates it if not yet initialized.
@@ -32,6 +34,31 @@ object GeckoRuntimeHolder {
                 runtime = it
                 Log.i(TAG, "GeckoRuntime created successfully")
             }
+        }
+    }
+
+    /**
+     * Returns the runtime-owned extension service. It deliberately outlives browser tabs and
+     * BrowserViewModel instances because GeckoView persists installed extensions with the runtime.
+     */
+    fun getExtensionManager(forRuntime: GeckoRuntime): ExtensionManager = synchronized(this) {
+        check(runtime === forRuntime) { "Extension manager must use the process GeckoRuntime" }
+        if (extensionManagerRuntime !== forRuntime) {
+            extensionManager?.shutdown()
+            extensionManager = ExtensionManager(
+                GeckoExtensionGatewayImpl(forRuntime.webExtensionController),
+            )
+            extensionManagerRuntime = forRuntime
+        }
+        extensionManager ?: error("Extension manager initialization failed")
+    }
+
+    /** Releases FetchX-owned delegates and references without uninstalling user extensions. */
+    fun shutdownExtensions() {
+        synchronized(this) {
+            extensionManager?.shutdown()
+            extensionManager = null
+            extensionManagerRuntime = null
         }
     }
 

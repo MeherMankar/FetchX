@@ -1,5 +1,7 @@
 package dev.fetchx.browser
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +44,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +75,11 @@ fun BrowserScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val activeTab = uiState.activeTab
+    val extensionPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let(viewModel::installExtension)
+    }
 
     // Sync URL bar whenever the active tab's URL changes (e.g. clicking a link or switching tabs).
     LaunchedEffect(activeTab?.url) {
@@ -186,6 +196,12 @@ fun BrowserScreen(
                         uiState.privacySettings.httpsOnlyEnabled,
                     onClick = { viewModel.openPrivacySettings() },
                     label = { Text("Privacy controls") },
+                    modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
+                )
+                FilterChip(
+                    selected = false,
+                    onClick = { viewModel.openExtensions() },
+                    label = { Text("Extensions") },
                     modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
                 )
 
@@ -361,6 +377,163 @@ fun BrowserScreen(
             onHttpsOnlyChange = viewModel::setHttpsOnlyEnabled,
             onDismiss = viewModel::closePrivacySettings,
         )
+    }
+
+    if (uiState.showExtensions) {
+        ExtensionsDialog(
+            state = uiState.extensionManagerState,
+            isImporting = uiState.isImportingExtension,
+            onDismiss = viewModel::closeExtensions,
+            onRefresh = viewModel::refreshExtensions,
+            onInstall = {
+                extensionPicker.launch(arrayOf("application/x-xpinstall"))
+            },
+            onEnable = viewModel::enableExtension,
+            onDisable = viewModel::disableExtension,
+            onRemove = viewModel::removeExtension,
+        )
+    }
+}
+
+@Composable
+private fun ExtensionsDialog(
+    state: ExtensionManagerState,
+    isImporting: Boolean,
+    onDismiss: () -> Unit,
+    onRefresh: () -> Unit,
+    onInstall: () -> Unit,
+    onEnable: (ExtensionId) -> Unit,
+    onDisable: (ExtensionId) -> Unit,
+    onRemove: (ExtensionId) -> Unit,
+) {
+    var pendingRemoval by remember { mutableStateOf<ExtensionId?>(null) }
+    val isBusy = state.isBusy || isImporting
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Extensions") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    "Install signed .xpi files from local storage. Extensions requesting permissions are not supported until permission review is implemented.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                when {
+                    state.isLoading -> Text("Loading installed extensions…")
+                    state.extensions.isEmpty() -> Text("No installed extensions.")
+                }
+                state.error?.let { error ->
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+                state.extensions.forEach { extension ->
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        Text(
+                            text = extension.metadata.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "Version ${extension.metadata.version} · ${extension.state.name.lowercase()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (extension.requestedPermissions.isNotEmpty()) {
+                            Text(
+                                text = "${extension.requestedPermissions.size} permission request(s) are not granted by FetchX.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(
+                                checked = extension.state == ExtensionState.ENABLED,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) onEnable(extension.id) else onDisable(extension.id)
+                                },
+                                enabled = !isBusy && extension.state in setOf(
+                                    ExtensionState.ENABLED,
+                                    ExtensionState.DISABLED,
+                                    ExtensionState.INSTALLED,
+                                ),
+                            )
+                            Text(if (extension.state == ExtensionState.ENABLED) "Enabled" else "Disabled")
+                            if (extension.source == ExtensionSource.BUILT_IN) {
+                                Text(
+                                    text = " · Built in",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            } else {
+                                TextButton(
+                                    onClick = { pendingRemoval = extension.id },
+                                    enabled = !isBusy,
+                                ) {
+                                    Text("Remove")
+                                }
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onInstall,
+                enabled = !isBusy,
+            ) {
+                Text(
+                    when {
+                        isImporting -> "Reading…"
+                        state.operationState == ExtensionState.INSTALLING -> "Installing…"
+                        else -> "Install from file"
+                    },
+                )
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onRefresh, enabled = !isBusy) { Text("Refresh") }
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        },
+    )
+    pendingRemoval?.let { id ->
+        val extension = state.extensions.find { it.id == id }
+        if (extension != null) {
+            AlertDialog(
+                onDismissRequest = { pendingRemoval = null },
+                title = { Text("Remove ${extension.metadata.name}?") },
+                text = {
+                    Text("GeckoView will uninstall this extension and delete its extension data.")
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingRemoval = null
+                            onRemove(id)
+                        },
+                        enabled = !isBusy,
+                    ) {
+                        Text("Remove")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRemoval = null }) { Text("Cancel") }
+                },
+            )
+        } else {
+            pendingRemoval = null
+        }
     }
 }
 

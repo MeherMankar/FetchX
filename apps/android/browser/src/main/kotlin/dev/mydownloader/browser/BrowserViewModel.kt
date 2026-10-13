@@ -1,15 +1,23 @@
 package dev.fetchx.browser
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoView
+import java.io.IOException
 import java.lang.ref.WeakReference
+import kotlin.coroutines.coroutineContext
 
 private const val TAG = "BrowserViewModel"
 
@@ -28,6 +36,9 @@ data class BrowserUiState(
     val activeTabBlockedHosts: List<String> = emptyList(),
     val showPrivacySettings: Boolean = false,
     val privacySettings: PrivacySettings = PrivacySettings(),
+    val showExtensions: Boolean = false,
+    val extensionManagerState: ExtensionManagerState = ExtensionManagerState(isLoading = true),
+    val isImportingExtension: Boolean = false,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
 }
@@ -44,6 +55,9 @@ class BrowserViewModel internal constructor(
     private var tabManager: TabManager? = null
     private var geckoViewRef: WeakReference<GeckoView>? = null
     private var runtime: GeckoRuntime? = null
+    private var applicationContext: Context? = null
+    private var extensionManager: ExtensionManager? = null
+    private var extensionStateListener: (() -> Unit)? = null
 
     init {
         trackerBlockingController.onStateChanged = ::syncTrackerBlockingState
@@ -59,6 +73,14 @@ class BrowserViewModel internal constructor(
     fun attachView(view: GeckoView, runtime: GeckoRuntime) {
         geckoViewRef = WeakReference(view)
         this.runtime = runtime
+        applicationContext = view.context.applicationContext
+        val manager = extensionManager ?: GeckoRuntimeHolder.getExtensionManager(runtime).also {
+            extensionManager = it
+        }
+        val listener: () -> Unit = ::syncExtensionManagerState
+        extensionStateListener = listener
+        manager.onStateChanged = listener
+        syncExtensionManagerState()
         applyPrivacySettings()
         val tm = tabManager ?: TabManager(runtime, trackerBlockingController).also { newTm ->
             tabManager = newTm
@@ -221,6 +243,69 @@ class BrowserViewModel internal constructor(
         applyPrivacySettings()
     }
 
+    fun openExtensions() {
+        _uiState.update { it.copy(showExtensions = true) }
+    }
+
+    fun closeExtensions() {
+        _uiState.update { it.copy(showExtensions = false) }
+    }
+
+    fun refreshExtensions() {
+        extensionManager?.refresh()
+    }
+
+    fun installExtension(uri: Uri) {
+        val manager = extensionManager
+        val context = applicationContext
+        if (manager == null || context == null) {
+            _uiState.update {
+                it.copy(extensionManagerState = it.extensionManagerState.copy(
+                    error = "The browser extension service is not available.",
+                ))
+            }
+            return
+        }
+        if (_uiState.value.isImportingExtension || manager.state.value.isBusy) return
+
+        _uiState.update {
+            it.copy(isImportingExtension = true, extensionManagerState = it.extensionManagerState.copy(error = null))
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var stagedPackage: StagedExtensionPackage? = null
+            try {
+                val staged = ExtensionPackageImporter(context).stage(uri)
+                stagedPackage = staged
+                coroutineContext.ensureActive()
+                manager.install(staged)
+                stagedPackage = null
+            } catch (error: IOException) {
+                manager.reportImportFailure()
+            } catch (error: SecurityException) {
+                manager.reportImportFailure()
+            } finally {
+                try {
+                    stagedPackage?.close()
+                } catch (error: IOException) {
+                    manager.reportImportFailure(cleanupFailed = true)
+                }
+                _uiState.update { it.copy(isImportingExtension = false) }
+            }
+        }
+    }
+
+    fun enableExtension(id: ExtensionId) {
+        extensionManager?.enable(id)
+    }
+
+    fun disableExtension(id: ExtensionId) {
+        extensionManager?.disable(id)
+    }
+
+    fun removeExtension(id: ExtensionId) {
+        extensionManager?.remove(id)
+    }
+
     /**
      * Pulls the current bookmark state from [bookmarkController] and merges it
      * into [_uiState].  Safe to call when [tabManager] is null (e.g. in tests).
@@ -252,6 +337,11 @@ class BrowserViewModel internal constructor(
         _uiState.update { it.copy(privacySettings = settings) }
     }
 
+    private fun syncExtensionManagerState() {
+        val state = extensionManager?.state?.value ?: return
+        _uiState.update { it.copy(extensionManagerState = state) }
+    }
+
     private fun applyPrivacySettings() {
         if (runtime != null) {
             GeckoRuntimeHolder.applyPrivacySettings(
@@ -278,6 +368,14 @@ class BrowserViewModel internal constructor(
         super.onCleared()
         tabManager?.dispose()
         tabManager = null
+        extensionManager?.let { manager ->
+            if (manager.onStateChanged === extensionStateListener) {
+                manager.onStateChanged = null
+            }
+        }
+        extensionStateListener = null
+        extensionManager = null
+        applicationContext = null
         trackerBlockingController.onStateChanged = null
         privacyController.onSettingsChanged = null
         runtime = null

@@ -155,8 +155,8 @@
       module breakdown, storage strategy, background execution strategy
     - docs/ANDROID_PRIVACY.md — threat model, ETP, cookie isolation, private
       browsing, fingerprinting resistance, WebRTC controls, HTTPS-first
-    - docs/ANDROID_EXTENSIONS.md — GeckoView WebExtensionController, available
-      WebExtension APIs, permission model, security isolation, phase plan
+    - docs/ANDROID_EXTENSIONS.md — verified GeckoView WebExtensionController
+      APIs, permission policy, security boundaries, and phase plan
 
     Rust workspace: unchanged. No Rust crates added or modified in Phase 20A.
 
@@ -645,7 +645,7 @@
       unverified.
 
 35. Phase 20J — Privacy / fingerprinting controls (implemented in `:browser`; no separate `:privacy` module)
-36. Phase 20K — Extension framework
+36. Phase 20K — Extension framework (implemented in `:browser`; permission-requiring installs remain blocked)
 37. Phase 20L — Extension permissions
 38. Phase 20M — VPN / Tor integration research
 39. Phase 20N — Android storage / notifications

@@ -71,7 +71,7 @@ the Rust downloader.
 - `FetchXTheme` — Material 3 theme with dynamic colour (API 31+).
 
 **Depends on:** `:core`, `:downloads`
-**Will depend on (later phases):** `:browser` (20F), `:extensions` (20K)
+**Will depend on (later phases):** `:browser` (20F–20K)
 
 ### :core (apps/android/core)
 
@@ -130,12 +130,19 @@ not persisted.
 Private browsing, per-site exceptions, and a separate `:privacy` Android module
 are not implemented by Phase 20J.
 
-### :extensions (Phase 20K)
+### Browser extensions (Phase 20K)
 
-**Responsibility:** WebExtension install/manage UI backed by
-`GeckoView.WebExtensionController`.
+**Responsibility:** Extension domain models, in-memory registry, runtime-scoped
+lifecycle manager, GeckoView adapter, and the browser's minimal install/manage UI.
+These components currently live in `:browser`; Phase 20K does not add a separate
+Gradle module.
 
-**Depends on:** `:core`, `:browser`
+The manager uses the process-wide `GeckoRuntime.webExtensionController`, loads
+GeckoView's installed-extension list at startup, and owns enable/disable/uninstall
+operations. It outlives individual tabs and BrowserViewModel instances. Local
+`.xpi` installation is staged in bounded app-private cache; GeckoView verifies
+the package signature. Until Phase 20L, extensions requesting API or host
+permissions are denied rather than granted automatically.
 
 ---
 
@@ -446,8 +453,8 @@ checkout; an older binary can fail UniFFI's runtime checksum validation.
 | 20H | :browser | Private browsing is deferred; no private sessions are implemented |
 | 20I | :browser | In-memory per-tab history, in-memory bookmarks, tracker blocking |
 | 20J | :browser | Runtime-wide fingerprinting, cryptomining, cookie-isolation, and HTTPS-only controls |
-| 20K | :extensions (new) | WebExtensionController, extension install |
-| 20L | :extensions | Extension permission model |
+| 20K | :browser | Runtime-scoped WebExtension manager, local package install and lifecycle UI |
+| 20L | :browser | Permission review UI and explicit permission decisions |
 | 20M | :core, :browser | Tor/VPN research and integration |
 | 20N | :app, :downloads | Scoped storage, MediaStore, notification channels |
 | 20O | All | Security/privacy audit |

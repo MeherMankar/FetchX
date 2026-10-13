@@ -60,15 +60,14 @@ Tor Browser for Android, and Mullvad Browser).
   Mullvad Browser for Android.
 - **Maven coordinates:**
   ```
-  org.mozilla.geckoview:geckoview-androidX-arm64-v8a:133.0.20250116035429
-  org.mozilla.geckoview:geckoview-androidX-armeabi-v7a:133.0.20250116035429
-  org.mozilla.geckoview:geckoview-androidX-x86_64:133.0.20250116035429
+  org.mozilla.geckoview:geckoview-arm64-v8a:137.0.20250325171416
   ```
-- **Extension support:** FULL WebExtensions via `WebExtensionController`.  
-  Real browser extension API: content scripts, background scripts, `webRequest`
-  (blocking and modifying), `browserAction`, `pageAction`, `cookies`, `storage`,
-  `tabs`, `windows`, `runtime` messaging. Extensions are installed as `.xpi` files.
-  This is the same API surface as Firefox for Android.
+- **Extension support:** GeckoView 137 exposes `WebExtensionController`
+  lifecycle APIs. FetchX Phase 20K uses its installed-extension list and
+  enable/disable/uninstall APIs, and accepts only user-selected local signed
+  `.xpi` packages that request no permissions. Permission-requiring packages are
+  denied until Phase 20L. FetchX does not claim full Firefox extension API
+  compatibility; see [ANDROID_EXTENSIONS.md](ANDROID_EXTENSIONS.md).
 - **Privacy controls:**  
   Enhanced Tracking Protection (ETP) with strict/standard/custom modes, built-in
   tracker and fingerprinter databases, crypto-miner blocking, social tracker blocking.
@@ -100,7 +99,8 @@ Tor Browser for Android, and Mullvad Browser).
 - **Chromium compatibility:** High — supports modern web standards (CSS Grid, WebGL,
   Web Workers, Service Workers, WebAssembly, etc.). Not Chromium, but compatible with
   the living standards.
-- **Firefox/WebExtension compatibility:** Yes (is the Firefox engine).
+- **Firefox/WebExtension compatibility:** GeckoView is Gecko-based, but
+  extension API compatibility is not assumed by FetchX.
 - **RAM usage:** Higher than WebView — separate Gecko content process, ~50—80 MB
   baseline additional RAM.
 - **minSdk:** 21+ (GeckoView 133.x supports API 21+)
@@ -173,11 +173,10 @@ build for Android (e.g., as Brave, Kiwi, and other browsers do).
 
 Justifications:
 
-1. **Real WebExtension API** — `WebExtensionController` provides the same WebExtension
-   API surface as Firefox for Android. This is not a workaround. This is the
-   critical prerequisite for Phase 20K (extension install) and Phase 20L (extension
-   permissions). No other embeddable engine offers this without becoming a full
-   browser fork.
+1. **Native WebExtension lifecycle API** — GeckoView exposes
+   `WebExtensionController` for extension discovery and lifecycle management.
+   FetchX uses this for its Phase 20K foundation; it does not claim parity with
+   Firefox for Android's complete extension API surface.
 
 2. **Enhanced Tracking Protection built-in** — ETP with strict/standard/custom modes,
    tracker blocking, fingerprinter blocking, crypto-miner blocking, and social tracker
@@ -262,4 +261,3 @@ android {
 | `GeckoSession.NavigationDelegate` | URL interception for download detection | 20G |
 | `GeckoSession.ContentDelegate` | Page load events | 20F |
 | `GeckoSession.ProgressDelegate` | Loading progress | 20F |
-

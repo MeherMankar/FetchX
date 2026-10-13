@@ -3,6 +3,7 @@ package dev.fetchx.app
 import android.app.Application
 import android.util.Log
 import dev.fetchx.bridge.BridgeInitializer
+import dev.fetchx.browser.GeckoRuntimeHolder
 
 private const val TAG = "FetchXApp"
 
@@ -32,8 +33,8 @@ class FetchXApp : Application() {
         // Note: onTerminate() is only called in emulator/test environments.
         // In production, use ProcessLifecycleOwner for clean shutdown.
         // The bridge's own shutdown is idempotent and safe to call here.
+        GeckoRuntimeHolder.shutdownExtensions()
         BridgeInitializer.shutdown()
         super.onTerminate()
     }
 }
-

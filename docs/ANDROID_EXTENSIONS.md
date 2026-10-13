@@ -1,223 +1,133 @@
-# Android Extension Architecture
+# Android WebExtension Framework
 
-> **Phase 20 extension design document.** Describes the WebExtension support
-> architecture for FetchX Android, based on GeckoView's
-> `WebExtensionController` API.
+This document describes the implemented Phase 20K foundation in the Android
+GeckoView browser. The verified dependency is
+`org.mozilla.geckoview:geckoview-arm64-v8a:137.0.20250325171416`.
 
----
+## Architecture
 
-## GeckoView WebExtensionController Capabilities
+Extension framework code lives in the existing `:browser` module; Phase 20K
+does not introduce a separate Android module.
 
-GeckoView exposes the `WebExtensionController` class as part of `GeckoRuntime`.
-It provides the following operations:
-
-| Operation | API method |
-|---|---|
-| Install extension from .xpi URL | `WebExtensionController.install(uri)` |
-| Install built-in (bundled) extension | `WebExtensionController.installBuiltIn(uri)` |
-| Uninstall extension | `WebExtensionController.uninstall(extension)` |
-| Enable extension | `WebExtensionController.enable(extension, source)` |
-| Disable extension | `WebExtensionController.disable(extension, source)` |
-| List installed extensions | `WebExtensionController.list()` |
-| Update extension | `WebExtensionController.update(extension)` |
-| Send message to extension | `WebExtension.sendMessage(name, message)` |
-| Receive message from extension | `WebExtension.MessageDelegate` |
-| Handle browser action clicks | `WebExtension.ActionDelegate` |
-| Handle page action clicks | `WebExtension.ActionDelegate` |
-
-`WebExtensionController` is retrieved from `GeckoRuntime.webExtensionController`.
-
----
-
-## Available WebExtension APIs (GeckoView Surface)
-
-The following WebExtension APIs are available to extensions running in GeckoView,
-consistent with the Firefox for Android extension API surface:
-
-| API | Available | Notes |
-|---|---|---|
-| `content_scripts` | ✅ | Injected into pages per manifest `matches` |
-| `background` scripts | ✅ | Persistent background script via `background.scripts` |
-| `browser.browserAction` | ✅ | Toolbar button; popup UI |
-| `browser.pageAction` | ✅ | Address bar button; popup UI |
-| `browser.webRequest` (blocking) | ✅ | Intercept and modify requests before they reach the network |
-| `browser.webRequest` (observing) | ✅ | Observe completed/failed requests |
-| `browser.cookies` | ✅ | Read/write cookies for accessible origins |
-| `browser.storage.local` | ✅ | Extension local key-value storage |
-| `browser.storage.session` | ✅ (GV 120+) | In-memory session storage |
-| `browser.tabs` | ✅ | Query and manipulate tabs |
-| `browser.windows` | ✅ | Query windows (limited on Android: single window) |
-| `browser.runtime` | ✅ | Extension lifecycle, messaging, version |
-| `browser.i18n` | ✅ | Internationalisation |
-| `browser.alarms` | ✅ | Scheduled callbacks |
-| `browser.notifications` | ✅ | System notifications from extensions |
-| `browser.permissions` | ✅ | Optional permission requests |
-| `browser.theme` | ✅ (limited) | Theme colour hints |
-
----
-
-## What is NOT Available
-
-| Feature | Status | Reason |
-|---|---|---|
-| `chrome.downloads` API | ❌ Not available to extensions | Download interception in FetchX is done at the `GeckoSession.NavigationDelegate` level (app code), not inside an extension. Extensions cannot route a download to FetchX via the WebExtension API. |
-| Native messaging from extension to Rust | ❌ Not available | GeckoView does not expose WebExtension native messaging to the embedding app. Security boundary: extensions run in the Gecko sandbox and cannot call Android JNI or the Rust bridge. |
-| Full `chrome.*` namespace | ⚠️ Partial | GeckoView exposes `browser.*` (WebExtension standard). Some `chrome.*` aliases exist for compat but are not guaranteed. Extensions that rely on Chrome-only APIs will not work. |
-| `browser.devtools` | ❌ Not available on Android | DevTools protocol not exposed in GeckoView mobile |
-| `browser.tabGroups` | ❌ Not available | Chrome-specific API |
-| `browser.sidePanel` | ❌ Not available | Chrome-specific API |
-| `browser.storage.sync` | ⚠️ Limited | Requires Firefox Account (FxA) sync. Not available without FxA integration. `storage.local` is always available. |
-
----
-
-## Extension Installation Flow
-
-```
-User selects .xpi file (file picker or URL)
-    │
-    ▼
-:extensions module validates the .xpi (Phase 20K)
-    │
-    ▼
-WebExtensionController.install(xpiUri): Promise<WebExtension>
-    │
-    ▼
-GeckoView reads manifest.json, validates permissions
-    │
-    ▼
-Phase 20L: PermissionPromptDelegate called with permission list
-    │
-    ▼
-User approves permissions in FetchX permission UI
-    │
-    ▼
-Extension installed; background script starts
-    │
-    ▼
-Extension appears in "Installed Extensions" list (:extensions screen)
+```text
+BrowserScreen
+    -> BrowserViewModel
+        -> ExtensionManager
+            -> ExtensionStore / GeckoExtensionGateway
+                -> GeckoRuntime.webExtensionController
 ```
 
-### Built-in extensions (bundled with the app)
+`ExtensionManager` is obtained from `GeckoRuntimeHolder` and is scoped to the
+process-wide `GeckoRuntime`, not to a tab or BrowserViewModel. On initialization
+it calls `WebExtensionController.list()` and builds an immutable in-memory
+registry. Tab creation, tab switching, and tab closure do not create, remove, or
+otherwise mutate extension instances. BrowserViewModel observes manager state;
+Compose only renders the list and forwards user actions.
 
-FetchX may bundle a content-blocking extension as a built-in extension:
+The domain includes validated extension IDs and metadata, explicit lifecycle
+states, source classification, and bounded API-permission/host-origin metadata.
+`ExtensionStore` rejects duplicate IDs and malformed metadata, returns defensive
+snapshots, and caps the registry at 128 entries. GeckoView remains the source of
+truth for installed extensions; the FetchX store is not persisted.
 
-```kotlin
-// Phase 20K — example
-runtime.webExtensionController.installBuiltIn(
-    "resource://android/assets/extensions/content-blocker/"
-)
-```
+## Verified GeckoView 137 API
 
-Built-in extensions are installed at app startup, are not shown in the user
-extension list, and cannot be uninstalled by the user.
+The exact GeckoView 137 AAR and its matching published source artifact were
+inspected. `GeckoRuntime.getWebExtensionController()` exposes
+`WebExtensionController`, whose relevant methods are asynchronous
+`GeckoResult` operations:
 
----
+- `list(): GeckoResult<List<WebExtension>>`
+- `install(String, String): GeckoResult<WebExtension>`
+- `enable(WebExtension, int): GeckoResult<WebExtension>`
+- `disable(WebExtension, int): GeckoResult<WebExtension>`
+- `uninstall(WebExtension): GeckoResult<Void>`
 
-## Permission Model (Phase 20L)
+The implementation uses `INSTALLATION_METHOD_FROM_FILE` for installation and
+`EnableSource.USER` for user-triggered enable/disable. Extension metadata is
+read from GeckoView's `WebExtension.id`, `isBuiltIn`, and `metaData` fields,
+including `name`, `version`, `description`, `enabled`, `requiredPermissions`,
+and `requiredOrigins`. The UI does not receive GeckoView objects.
 
-GeckoView calls `WebExtensionController.PromptDelegate.onInstallPrompt()` with a
-`WebExtension` object whose `metaData.permissions` and `metaData.origins` fields
-describe what the extension requests.
+The pinned source documents `install(String, String)` as accepting remote HTTPS
+or local `file:` / `resource:` package URIs, and states that ordinary extension
+packages must be Mozilla-signed. The app does not use `installBuiltIn`; GeckoView
+documents built-ins as APK `resource://android` folders and says they can access
+native messaging. No built-in extension is bundled by this phase.
 
-Phase 20L will implement:
+## Installation and permission boundary
 
-1. A `PermissionPromptUI` composable that lists human-readable permission
-   descriptions (mirroring Firefox's permission prompt).
-2. A `PermissionPromptDelegate` that calls the UI and resolves the GeckoView
-   install promise based on user decision.
-3. A `GrantedPermissions` data class persisted per-extension in SQLite.
-4. Revocation UI: users can disable an extension or revoke host permissions
-   post-install (via `WebExtensionController.disable()`).
+Installation is user initiated through Android's document picker. FetchX accepts
+only a `content:` URI from that picker, copies it to a generated file in the
+app-private cache, enforces a 25 MiB size limit, and passes only the resulting
+local `file:` URI to GeckoView. FetchX does not accept extension URLs, arbitrary
+filesystem paths, shell commands, or extension-provided native code. GeckoView
+performs package and signature validation; FetchX does not bypass those checks.
+The staged file is removed when installation completes/fails or the manager is
+shut down.
 
-Permission categories and human-readable descriptions follow the Firefox extension
-permission warning system.
+The GeckoView 137 `PromptDelegate` APIs are
+`onInstallPromptRequest(WebExtension, String[], String[])`,
+`onUpdatePrompt(WebExtension, WebExtension, String[], String[])`, and
+`onOptionalPrompt(WebExtension, String[], String[])`.
 
----
+Until Phase 20L, FetchX applies a deny-by-default policy:
 
-## Security Isolation
+- Installation proceeds only when GeckoView reports **no** requested API
+  permissions and **no** host origins. That empty-permission response never
+  enables private-browsing access.
+- Installation requests containing any permissions or origins are denied.
+- New permissions during updates and optional permission requests are denied.
+- Permission strings returned in installed-extension metadata are stored only
+  as bounded API/host-origin descriptions; malformed values are represented as
+  unsupported. FetchX does not grant or revoke them in Phase 20K.
 
-Extensions installed via `WebExtensionController` run inside the GeckoView sandbox:
+The UI explicitly warns users about this limitation. Permission review,
+per-extension grants/revocation, and persistence are Phase 20L responsibilities.
 
-- Extensions **cannot** call Android JNI.
-- Extensions **cannot** read the download queue or interact with the Rust bridge.
-- Extensions **cannot** access files outside their own `storage.local`.
-- Extensions **cannot** make arbitrary Android API calls.
-- Extensions are subject to GeckoView's same-origin policy and content security.
+## Lifecycle and failure handling
 
-An extension that attempts to exfiltrate data can use `fetch()` / `XMLHttpRequest`
-to send data to a remote server — this is governed by the extension's `host_permissions`
-and the standard `webRequest` blocking (other extensions or built-in rules can block it).
+The manager supports initialization/list refresh, local installation,
+enable/disable, removal, and shutdown. State changes are published only after
+GeckoView's asynchronous operation succeeds. Failed enable/disable/removal
+restores the prior in-memory state. Duplicate, unknown, transient, and built-in
+removal requests fail without issuing an unintended GeckoView operation.
 
-The FetchX built-in content blocker extension will run with elevated trust
-(`installBuiltIn`) and is distributed as part of the signed APK.
+GeckoView documents uninstall as deleting the extension and its data. The UI
+confirms that effect before removal. Built-in extensions are not offered a
+remove action. The runtime-scoped manager survives tab changes and
+BrowserViewModel recreation; its shutdown clears FetchX references and the
+permission delegate without uninstalling extensions. Android does not guarantee
+`Application.onTerminate()` in production, so process termination itself remains
+OS-managed.
 
----
+Errors are surfaced as user-readable state. GeckoView errors are logged by
+exception type only; package URIs, permission values, browsing history, cookies,
+and credentials are not logged or copied into the extension model.
 
-## Content Scripts
+## Security and current limitations
 
-Content scripts are injected per the extension's `content_scripts` manifest field.
-They run in a separate JavaScript context from the page (isolated world), can read
-and modify the DOM, and communicate with the background script via
-`browser.runtime.sendMessage`.
+- No permission is automatically granted to an extension that requests it.
+- No remote installation, marketplace, auto-update, native messaging, or
+  download interception is implemented by FetchX in this phase.
+- No JavaScript injection or custom content-script mechanism is added.
+- Extension code executes under GeckoView's WebExtension model and can use only
+  what GeckoView exposes and the extension's granted permissions allow; this
+  framework does not claim an independent OS-level sandbox or enumerate all
+  JavaScript WebExtension API compatibility.
+- Extension settings/data stored internally by GeckoView are outside FetchX's
+  registry. FetchX does not store browsing history, credentials, or cookies in
+  extension records.
+- The browser continues to use the existing shared GeckoRuntime, HTTPS
+  certificate validation, cleartext policy, tracker blocking, and privacy
+  controls; this phase does not weaken them.
+- Automated JVM tests cover models, store behavior, manager operation and
+  failure paths, permission denial rules, bounded file copying, and shutdown.
+  Physical-device installation of a signed extension is not claimed as verified.
 
-Content scripts are subject to the extension's `host_permissions` — they can only
-be injected into pages whose origin matches the declared host permissions.
-
----
-
-## Background Scripts
-
-GeckoView manages the lifecycle of extension background scripts. A persistent
-background script (`"persistent": true` in `background`) runs continuously while
-GeckoView is running. A non-persistent (event-based) background script is started
-on demand and suspended when idle.
-
-GeckoView exposes background script message handling via
-`WebExtension.setMessageDelegate(delegate, nativeApp)`, where `nativeApp` is the
-application-defined port name for `browser.runtime.connectNative` messages.
-
----
-
-## Extension Storage
-
-| Storage API | Persistence | Notes |
-|---|---|---|
-| `browser.storage.local` | Persistent (SQLite) | Per-extension local storage |
-| `browser.storage.session` | In-memory (GV 120+) | Cleared when GeckoView session ends |
-| `browser.storage.sync` | Requires Firefox Account | Not available without FxA integration — document this limitation to users |
-
-`storage.sync` limitation: extensions that rely on `storage.sync` for cross-device
-synchronisation will fall back to `storage.local` on FetchX Android unless
-FxA integration is added (not planned for Phase 20 scope).
-
----
-
-## Relationship to Desktop Extension (apps/browser/extension/)
-
-The existing `apps/browser/extension/` is an MV3 Chrome/Firefox browser extension
-for the desktop. It communicates with the FetchX desktop app via native
-messaging.
-
-The Android WebExtension architecture is separate:
-
-| Aspect | Desktop extension | Android WebExtension |
-|---|---|---|
-| Host | Chrome / Firefox desktop | GeckoView (FetchX app IS the browser) |
-| Communication | Native messaging (stdin/stdout) | `WebExtensionController.MessageDelegate` (in-process) |
-| Intercept mechanism | `chrome.downloads.onCreated` / `browser.downloads` | `GeckoSession.NavigationDelegate.onNewSession` + download MIME detection |
-| Distribution | Chrome Web Store / Firefox Add-ons | Bundled with app or sideloaded .xpi |
-
-They share design concepts but are separate implementations targeting different
-platforms.
-
----
-
-## Phase Plan
+## Phase plan
 
 | Phase | Deliverable |
 |---|---|
-| 20A (now) | Extension architecture documented; no code yet |
-| 20F | GeckoView initialised with `WebExtensionController`; built-in content blocker installed |
-| 20K | Extension management UI: install, list, enable/disable, uninstall |
-| 20L | Permission prompt UI; per-extension permission revocation; `GrantedPermissions` persistence |
-
+| 20K | Runtime-scoped manager, in-memory registry, local package import, lifecycle UI (implemented) |
+| 20L | Permission review UI, explicit grants/revocation, and any required persistence |
