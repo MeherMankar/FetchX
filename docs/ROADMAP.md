@@ -647,7 +647,15 @@
 35. Phase 20J — Privacy / fingerprinting controls (implemented in `:browser`; no separate `:privacy` module)
 36. Phase 20K — Extension framework (implemented in `:browser`; permission-requiring installs remain blocked)
 37. Phase 20L — Extension permissions
-38. Phase 20M — VPN / Tor integration research
+38. Phase 20M — VPN / Tor integration research (completed)
+
+    Research-only phase; no implementation code added, no new permissions or
+    Gradle dependencies introduced, no Rust changes made.
+    Document created: docs/ANDROID_VPN_TOR_RESEARCH.md (20 sections).
+    GeckoView version checked: 137.0.20250325171416.
+    Recommended architecture: Option C — Per-component SOCKS5 proxy (GeckoView
+    via WebExtension browser.proxy API + reqwest socks feature + aria2
+    --all-proxy + yt-dlp --proxy); no Android VpnService required.
 39. Phase 20N — Android storage / notifications
 40. Phase 20O — Security / privacy audit
 41. Phase 20P — Android release build
