@@ -1073,9 +1073,10 @@ mod tests {
             .await?;
         assert_eq!(download.priority, DownloadPriority::Normal);
 
-        let updated = state
-            .set_priority(DownloadId::parse(&download.id)?, DownloadPriority::High)
-            .await?;
+        let id = DownloadId::parse(&download.id)?;
+        wait_for_status(&state, id, DownloadStatus::Downloading).await?;
+
+        let updated = state.set_priority(id, DownloadPriority::High).await?;
         assert_eq!(updated.priority, DownloadPriority::High);
         assert_eq!(updated.id, download.id);
 
