@@ -235,4 +235,20 @@ class BrowserViewModelTest {
         vm.closeBookmarks()
         assertFalse(vm.uiState.value.showBookmarks)
     }
+
+    @Test fun `tracker protection defaults to enabled and details dialog toggles`() {
+        val vm = BrowserViewModel()
+
+        assertTrue(vm.uiState.value.trackerBlockingEnabled)
+        assertFalse(vm.uiState.value.showTrackerDetails)
+
+        vm.openTrackerDetails()
+        vm.setTrackerBlockingEnabled(false)
+
+        assertTrue(vm.uiState.value.showTrackerDetails)
+        assertFalse(vm.uiState.value.trackerBlockingEnabled)
+
+        vm.closeTrackerDetails()
+        assertFalse(vm.uiState.value.showTrackerDetails)
+    }
 }

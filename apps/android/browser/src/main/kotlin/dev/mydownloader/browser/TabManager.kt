@@ -20,7 +20,10 @@ private const val TAG = "TabManager"
  *
  * Threading: all public methods must be called from the main thread.
  */
-class TabManager(private val runtime: GeckoRuntime) {
+class TabManager(
+    private val runtime: GeckoRuntime,
+    private val trackerBlockingController: TrackerBlockingController,
+) {
 
     private val store = TabStore()
     private val sessions = mutableMapOf<String, GeckoSession>()
@@ -36,6 +39,7 @@ class TabManager(private val runtime: GeckoRuntime) {
         val id = UUID.randomUUID().toString()
         val session = buildSession(id)
         session.open(runtime)
+        trackerBlockingController.registerTab(id)
         sessions[id] = session
         val normalizedUrl = normalizeUrl(initialUrl)
         store.addTab(TabState(id = id, url = normalizedUrl))
@@ -49,6 +53,7 @@ class TabManager(private val runtime: GeckoRuntime) {
     fun closeTab(tabId: String) {
         if (store.findTab(tabId) == null) return
         historyStore.removeTab(tabId)
+        trackerBlockingController.removeTab(tabId)
         sessions[tabId]?.close()
         sessions.remove(tabId)
         store.removeTab(tabId)
@@ -126,6 +131,7 @@ class TabManager(private val runtime: GeckoRuntime) {
     /** Closes all sessions. Call from BrowserViewModel.onCleared. */
     fun dispose() {
         historyStore.clearAll()
+        trackerBlockingController.clearTabs()
         sessions.values.forEach { it.close() }
         sessions.clear()
         store.clear()
@@ -141,6 +147,26 @@ class TabManager(private val runtime: GeckoRuntime) {
 
     private fun buildSession(tabId: String): GeckoSession {
         val s = GeckoSession()
+        s.settings.useTrackingProtection = true
+
+        s.contentBlockingDelegate = object : org.mozilla.geckoview.ContentBlocking.Delegate {
+            override fun onContentBlocked(
+                session: GeckoSession,
+                event: org.mozilla.geckoview.ContentBlocking.BlockEvent,
+            ) {
+                // Diagnostic log — only logs category int and whether it was blocking.
+                // Does NOT log the URI to avoid leaking URLs.
+                Log.i(TAG, "onContentBlocked tab=$tabId isBlocking=${event.isBlocking} category=${event.antiTrackingCategory}")
+                val accepted = recordTrackerBlockedEvent(
+                    controller = trackerBlockingController,
+                    tabId = tabId,
+                    isBlocking = event.isBlocking,
+                    antiTrackingCategory = event.antiTrackingCategory,
+                    requestUri = event.uri,
+                )
+                Log.i(TAG, "onContentBlocked accepted=$accepted tab=$tabId")
+            }
+        }
 
         s.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onTitleChange(session: GeckoSession, title: String?) {

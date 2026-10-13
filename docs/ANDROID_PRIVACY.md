@@ -64,7 +64,12 @@ and the built-in Disconnect.me tracking protection database.
 | Standard | Tracking cookies, cryptominers, fingerprinters, social trackers (tracking content only in private windows) |
 | Custom | User-configurable combination of the above categories |
 
-Default mode for FetchX Android: **Strict** (Phase 20J configurable).
+Phase 20I enables GeckoView's built-in ad, analytics, and social tracking
+categories by default. The categories are selected with
+`ContentBlocking.Settings.Builder.antiTracking(...)`; fingerprinting and
+cryptomining categories are not enabled by this tracker-blocking control.
+The user can toggle these tracker categories for all open sessions without
+recreating tabs. The setting is in-memory and resets to enabled on process restart.
 
 ### ETP categories
 
@@ -74,17 +79,16 @@ Default mode for FetchX Android: **Strict** (Phase 20J configurable).
 - `SOCIAL_TRACKING` — social media tracking pixels and scripts
 - `STRICT_SOCIAL` — stricter social tracking blocking (strict mode)
 
-Configuration via `GeckoRuntimeSettings.Builder()`:
+GeckoView 137 is configured through `GeckoRuntimeSettings.Builder()`:
 
 ```kotlin
-// Phase 20J implementation — shown here for reference
 val settings = GeckoRuntimeSettings.Builder()
     .contentBlocking(
         ContentBlocking.Settings.Builder()
-            .antiTracking(ContentBlocking.AntiTracking.STRICT)
-            .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY)
-            .enhancedTrackingProtectionLevel(
-                ContentBlocking.EtpLevel.STRICT
+            .antiTracking(
+                ContentBlocking.AntiTracking.AD or
+                    ContentBlocking.AntiTracking.ANALYTIC or
+                    ContentBlocking.AntiTracking.SOCIAL
             )
             .build()
     )
@@ -145,18 +149,53 @@ contexts are completely separate within GeckoView's architecture.
 
 ## Tracker Blocking
 
-ETP blocking decisions use Mozilla's Disconnect.me tracking protection lists, which
-are bundled with the GeckoView AAR. These lists are updated when GeckoView itself
-is updated (i.e., when the app is updated) — not via a separate network request.
+Tracker blocking uses GeckoView's native `ContentBlocking` implementation and
+its bundled tracking-protection data. In GeckoView 137, configuring categories on
+the runtime is not sufficient: each session must also set
+`GeckoSessionSettings.useTrackingProtection` to true (its default is false).
+Each session forwards `ContentBlocking.Delegate.onContentBlocked` events to the
+browser's in-memory statistics controller. GeckoView determines tracker
+classification and first-/third-party context; FetchX does not reimplement those
+rules or infer site relationships from host suffixes.
+
+On a V2135 Android 13 device, public HTTPS `https://edition.cnn.com/` produced
+real `isBlocking=true` callbacks in logcat for GeckoView categories 2 (ad) and 4
+(analytics), accepted by the controller. After enabling the missing per-session
+setting, the displayed counter rose from 22 on initial page load to 123 after
+enabled reloads; a reload with protection disabled left the displayed count at
+95. Per-tag INFO logging was temporarily enabled because the device's global
+`log.tag` threshold was `E`. Physical cross-tab isolation, tab cleanup, and the
+minimum-one-tab invariant remain unverified.
+
+The browser records only a per-tab blocked-request count and up to 20 distinct
+normalized hostnames. It discards request paths and query strings immediately and
+does not retain timestamps, cookies, headers, credentials, or page content. Stats
+are removed when a tab closes. No request URLs are logged or sent to a network
+service.
+
+The tracker category toggle is global across sessions, affects subsequent requests,
+and does not destroy or recreate tabs. It is currently in-memory and defaults to
+enabled at each application start.
+
+FetchX does not ship a separate custom tracker-rule list in this phase. GeckoView's
+public native API uses its bundled tracking-protection data rather than accepting
+arbitrary app-provided host/path rules. The bundled list changes only when the
+GeckoView dependency is updated with an app release; tracker blocking does not
+contact an external list service.
+
+The fresh post-fix device run confirmed bridge initialization, GeckoRuntime and
+browser startup, and the enabled indicator. The enable/disable control was
+toggled off and back on in the running browser. A temporary loopback page loaded
+script resources from Google Analytics, Facebook, and Google Publisher Services
+over a validated mobile network, but the displayed blocked count remained zero.
+This did not demonstrate whether GeckoView blocked those requests or delivered
+the callback; a localhost top-level origin is not a deterministic substitute
+for a public-site tracker context. A real end-to-end tracker callback therefore
+remains unverified.
 
 **No telemetry is sent** by the tracker blocking logic itself. GeckoView does not
 report blocking decisions to Mozilla unless the application explicitly enables
-GeckoView telemetry (`GeckoRuntimeSettings.telemetryEnabled`), which FetchX
-does NOT enable.
-
-List update mechanism for Phase 20J: evaluate whether to use GeckoView's built-in
-list (updated with app updates) or subscribe to list updates via the Mozilla Remote
-Settings service. Decision deferred to Phase 20J.
+GeckoView telemetry, which FetchX does NOT enable.
 
 ---
 
@@ -282,4 +321,3 @@ websites that track you by fingerprint rather than cookie.
 Use a VPN (Phase 20M) if you need to hide your IP from destination servers.
 Use Tor (Phase 20M) if you need to hide your IP from your ISP and destination servers
 simultaneously (with the trade-offs Tor involves).
-

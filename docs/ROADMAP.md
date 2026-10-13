@@ -576,7 +576,72 @@
     - Pre-existing Phase 20C UnsatisfiedLinkError for native bridge .so unchanged.
     - Pre-existing cargo fmt trailing-newline differences in ipc.rs/main.rs unchanged.
 
-34. Phase 20I — Tracker blocking
+34. Phase 20I — Tracker blocking (implemented; automated validation complete; native callbacks verified on-device; multi-tab E2E partial)
+
+    - Configured GeckoView 137 native ContentBlocking for ad, analytics,
+      and social tracker categories, using the tracking protection data bundled
+      with GeckoView. No custom WebExtension interceptor, JavaScript injection,
+      remote blocklist, or separate URL matcher was added.
+    - A pure-Kotlin TrackerBlockingController is wired to per-session GeckoView
+      blocking callbacks, exposes reactive global enable state, and
+      maintains per-tab blocked counts plus at most 20 distinct hostnames.
+      Paths, query strings, timestamps, and other request data are discarded.
+    - Final API inspection found GeckoView 137 defaults
+      `GeckoSessionSettings.useTrackingProtection` to false. Runtime categories
+      and delegates had been configured, but each session had not opted in;
+      `TabManager` now enables the session setting before opening it.
+    - BrowserViewModel exposes the global toggle and active-tab statistics.
+      BrowserScreen displays an indicator and a details dialog; toggling updates
+      runtime settings for subsequent requests without recreating tabs.
+    - The setting and statistics are in-memory. Tracker categories default to
+      enabled after each process start; tab counts are removed when tabs close.
+    - GeckoView owns tracker classification and first-/third-party decisions.
+      Its bundled list updates with the GeckoView app dependency; no network
+      blocklist service is contacted.
+    - JVM tests cover default/toggled state, per-tab isolation/cleanup, count and
+      host normalization, bounded host retention, malformed URIs, callback
+      filtering/gating, and native category mapping (17 controller tests).
+      They validate the controller path with test events, not native GeckoView
+      callback delivery.
+    - Stabilization found two committed generated Kotlin bindings declaring the
+      same UniFFI package; one also had stale checksums. The Gradle bridge task now
+      generates a single binding from the current UDL with locked UniFFI 0.29.
+      Fresh Rust libraries were rebuilt for arm64-v8a and x86_64 from that UDL.
+    - After `gradlew clean`, Android `test` passed (300 debug/release test
+      executions), and `:app:assembleDebug` passed with bridge compilation
+      enabled and no exclusions.
+    - UniFFI Kotlin bindings were regenerated from the UDL, and release native
+      libraries were rebuilt for arm64-v8a and x86_64. The APK's packaged
+      arm64 bridge hash matched the rebuilt library; the installed APK hash
+      matched the locally built APK.
+    - A clean test also exposed AAPT2 crashes on the pre-existing 1x1 launcher
+      PNG encodings. Those placeholders were re-encoded without changing their
+      pixel values so clean resource compilation succeeds.
+    - On the V2135 device, fresh post-install logs confirmed JNA and the native
+      library loaded, `Bridge initialized successfully`, GeckoRuntime creation,
+      and first-tab initialization. The installed APK hash matched the local APK.
+      No checksum mismatch appeared after the fresh install; earlier mismatch
+      logs predated it.
+    - Browser checks on-device: `https://example.com/` loaded; the tracker
+      control changed Enabled → Disabled → Enabled; switching between tabs
+      retained each tab's URL; local-page back/forward/reload worked; History
+      showed visited entries; and a temporary bookmark could be added and
+      removed. Closing the disposable tracker-test tab returned to the remaining
+      tab. A final-tab/minimum-one check was interrupted when the device switched
+      away from FetchX, so that invariant was not confirmed on-device.
+    - A temporary loopback fixture loaded real third-party script resources
+      from Google Analytics, Facebook, and Google Publisher Services while the
+      mobile network was validated; that localhost fixture's zero count was
+      inconclusive and did not establish whether resources were blocked.
+    - On a fresh fixed build, a V2135 Android 13 device loaded public HTTPS
+      `edition.cnn.com`. Logcat recorded `isBlocking=true`, category 2 (ad) and
+      category 4 (analytics), followed by `accepted=true`; the UI counter rose
+      from 22 on initial load to 123 after enabled reloads. A disabled reload
+      left the displayed count at 95. A second tab opened with count zero, but
+      the device re-locked before testing it with trackers, switching back,
+      closing it, or attempting to close the final tab; those checks remain
+      unverified.
+
 35. Phase 20J — Privacy / fingerprinting controls
 36. Phase 20K — Extension framework
 37. Phase 20L — Extension permissions
@@ -586,4 +651,3 @@
 41. Phase 20P — Android release build
 42. Phase 21 — Remote/headless mode
 43. Phase 22 — Production packaging and releases
-

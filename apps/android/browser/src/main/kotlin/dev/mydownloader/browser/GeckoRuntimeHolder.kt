@@ -2,6 +2,7 @@ package dev.fetchx.browser
 
 import android.content.Context
 import android.util.Log
+import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
 
@@ -37,8 +38,33 @@ object GeckoRuntimeHolder {
     private fun createRuntime(context: Context): GeckoRuntime {
         val settings = GeckoRuntimeSettings.Builder()
             .consoleOutput(true)
+            .contentBlocking(
+                ContentBlocking.Settings.Builder()
+                    .antiTracking(TRACKER_CATEGORIES)
+                    .build(),
+            )
             .build()
         return GeckoRuntime.create(context, settings)
     }
+
+    /**
+     * Updates native tracker protection without replacing the runtime or sessions.
+     * GeckoView's RuntimeSettings preference commits apply to subsequent requests.
+     */
+    fun setTrackerBlockingEnabled(enabled: Boolean) {
+        runtime?.settings?.contentBlocking?.setAntiTracking(
+            trackerAntiTrackingCategories(enabled),
+        )
+    }
+
+    private val TRACKER_CATEGORIES = trackerAntiTrackingCategories(enabled = true)
 }
 
+internal fun trackerAntiTrackingCategories(enabled: Boolean): Int =
+    if (enabled) {
+        ContentBlocking.AntiTracking.AD or
+            ContentBlocking.AntiTracking.ANALYTIC or
+            ContentBlocking.AntiTracking.SOCIAL
+    } else {
+        ContentBlocking.AntiTracking.NONE
+    }

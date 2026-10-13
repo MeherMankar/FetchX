@@ -98,9 +98,25 @@ Phase 20D: Full production UI. See _UI Layer (Phase 20D)_ section below.
 
 **Depends on:** `:core`, Compose, Material 3, lifecycle-viewmodel-compose
 
-### :browser (Phase 20F)
+### :browser (Phases 20E–20I)
 
-**Responsibility:** GeckoView browser shell — address bar, tabs, navigation.
+**Responsibility:** GeckoView browser shell — address bar, tabs, navigation,
+history, bookmarks, and native tracker protection.
+
+Tracker blocking is configured once on the process-wide GeckoRuntime with its
+built-in ad, analytics, and social tracking categories. GeckoView 137 also
+requires `GeckoSessionSettings.useTrackingProtection`, which defaults to false;
+`TabManager` enables it on each session before opening it. Each session forwards
+`ContentBlocking.Delegate.onContentBlocked` events to a shared pure-Kotlin
+`TrackerBlockingController`. It keeps bounded per-tab counts and host-only
+details in memory; it does not implement a parallel URL rule matcher or persist
+browsing data. The global in-memory toggle updates runtime categories for
+subsequent requests without recreating sessions.
+
+A V2135 Android 13 device test on public HTTPS `edition.cnn.com` observed native
+blocked callbacks in logcat for GeckoView ad and analytics categories. Automated
+tests cover controller filtering and state. Full physical multi-tab isolation,
+tab cleanup, and the final-tab invariant remain unverified.
 
 **Depends on:** `:core`, GeckoView AAR (arm64, armeabi-v7a, x86_64)
 
@@ -340,6 +356,20 @@ Android target so plain `cargo build --target aarch64-linux-android` also works:
   `lib` keeps the rlib for host-side `cargo test`.
 - **Generated filename:** `libfetchx_android_bridge.so`
 
+### UniFFI Kotlin Bindings
+
+The `:bridge:generateUniFfiKotlinBindings` Gradle task generates the Kotlin
+bindings from `crates/android-bridge/uniffi/android_bridge.udl` with the
+workspace-locked UniFFI 0.29 bindgen. It runs before the bridge module's Android
+build and writes the output under `apps/android/bridge/build/generated/`; Gradle
+compiles that output as part of the bridge source set. Generated Kotlin bindings
+are not checked into `src/main/kotlin`, preventing stale copies from being
+compiled alongside one another.
+
+The Rust native library is still built separately with `cargo ndk`. When the UDL
+changes, regenerate/build both the Kotlin bindings and native library from the
+same checkout before packaging the APK so their UniFFI API checksums agree.
+
 ### jniLibs Packaging
 
 The `.so` files are placed in the `:bridge` module's `jniLibs` source directory
@@ -386,23 +416,14 @@ into `apps/android/bridge/src/main/jniLibs/<abi>/`.
 After running this script, a normal `./gradlew assembleDebug` (or `assembleRelease`)
 produces an APK that contains the Rust native libraries.
 
-### Known Remaining Issue (Phase 20C)
+### UniFFI Build Validation History
 
-At the end of Phase 20C, the APK contains the correct `.so` files but the
-JNA-based UniFFI runtime fails to load on device with:
-
-```
-UnsatisfiedLinkError: Native library (com/sun/jna/android-aarch64/libjnidispatch.so)
-not found in resource path (.)
-```
-
-Root cause: the generated `android_bridge.kt` bindings use a JNA-based scaffold.
-JNA requires its own `libjnidispatch.so` (from the `net.java.dev.jna:jna:*@aar`
-Android AAR artifact) to be present in the APK. Either the JNA Android AAR variant
-must be added, or the Kotlin bindings must be regenerated with a uniffi-bindgen
-version that matches the Rust `uniffi 0.29` crate (which should not require JNA at
-all). A secondary `DownloadsViewModel` factory crash is also present. Both issues
-are tracked for resolution in the next phase.
+Phase 20I stabilization found that a project rename had left two committed
+generated Kotlin files in the bridge source tree. Both declared the same
+`dev.fetchx.bridge.uniffi` types, and one contained older API checksums. The
+bridge now generates a single binding from the current UDL during the Gradle
+build. The native `.so` must still be rebuilt with `cargo ndk` from the same
+checkout; an older binary can fail UniFFI's runtime checksum validation.
 
 ---
 
@@ -505,5 +526,3 @@ level). The `AddDownloadDialog` only shows LOW / NORMAL / HIGH. The
   happens in the ViewModel's derived StateFlows.
 - Snackbar errors shown via `LaunchedEffect(uiState.error)` — one snackbar
   per error event, cleared via `viewModel.clearError()` after display.
-
-

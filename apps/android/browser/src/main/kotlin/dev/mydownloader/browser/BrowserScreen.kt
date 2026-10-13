@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -163,7 +164,21 @@ fun BrowserScreen(
                     },
                 )
 
-                // Tab bar — horizontal scrollable row of FilterChips + new-tab button
+                FilterChip(
+                    selected = uiState.trackerBlockingEnabled,
+                    onClick = { viewModel.openTrackerDetails() },
+                    label = {
+                        val status = if (uiState.trackerBlockingEnabled) {
+                            "Tracker blocking on"
+                        } else {
+                            "Tracker blocking off"
+                        }
+                        Text("$status · ${uiState.activeTabBlockedRequests}")
+                    },
+                    modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
+                )
+
+                // Tab bar — horizontal scrollable row of  FilterChips + new-tab button
                 Row(
                     modifier = Modifier
                         .horizontalScroll(rememberScrollState())
@@ -315,6 +330,63 @@ fun BrowserScreen(
             onDelete = { id -> viewModel.removeBookmark(id) },
         )
     }
+
+    if (uiState.showTrackerDetails) {
+        TrackerBlockingDialog(
+            enabled = uiState.trackerBlockingEnabled,
+            blockedRequests = uiState.activeTabBlockedRequests,
+            blockedHosts = uiState.activeTabBlockedHosts,
+            onEnabledChange = viewModel::setTrackerBlockingEnabled,
+            onDismiss = viewModel::closeTrackerDetails,
+        )
+    }
+}
+
+@Composable
+private fun TrackerBlockingDialog(
+    enabled: Boolean,
+    blockedRequests: Long,
+    blockedHosts: List<String>,
+    onEnabledChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tracker blocking") },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (enabled) "Enabled" else "Disabled",
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = enabled, onCheckedChange = onEnabledChange)
+                }
+                Text("Blocked requests in this tab: $blockedRequests")
+                if (blockedHosts.isNotEmpty()) {
+                    Text(
+                        text = "Blocked hosts",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                    )
+                    LazyColumn {
+                        items(blockedHosts) { host ->
+                            Text(
+                                text = host,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(vertical = 2.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
 }
 
 @Composable

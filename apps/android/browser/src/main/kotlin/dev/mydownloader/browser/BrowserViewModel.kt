@@ -22,12 +22,17 @@ data class BrowserUiState(
     val showBookmarks: Boolean = false,
     val bookmarks: List<Bookmark> = emptyList(),
     val isCurrentPageBookmarked: Boolean = false,
+    val showTrackerDetails: Boolean = false,
+    val trackerBlockingEnabled: Boolean = true,
+    val activeTabBlockedRequests: Long = 0,
+    val activeTabBlockedHosts: List<String> = emptyList(),
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
 }
 
 class BrowserViewModel internal constructor(
     internal val bookmarkController: BookmarkController = BookmarkController(),
+    internal val trackerBlockingController: TrackerBlockingController = TrackerBlockingController(),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -35,6 +40,11 @@ class BrowserViewModel internal constructor(
 
     private var tabManager: TabManager? = null
     private var geckoViewRef: WeakReference<GeckoView>? = null
+    private var runtime: GeckoRuntime? = null
+
+    init {
+        trackerBlockingController.onStateChanged = ::syncTrackerBlockingState
+    }
 
     /**
      * Called from the AndroidView factory (and on recomposition).
@@ -43,7 +53,9 @@ class BrowserViewModel internal constructor(
      */
     fun attachView(view: GeckoView, runtime: GeckoRuntime) {
         geckoViewRef = WeakReference(view)
-        val tm = tabManager ?: TabManager(runtime).also { newTm ->
+        this.runtime = runtime
+        GeckoRuntimeHolder.setTrackerBlockingEnabled(trackerBlockingController.state.value.enabled)
+        val tm = tabManager ?: TabManager(runtime, trackerBlockingController).also { newTm ->
             tabManager = newTm
             newTm.onStateChanged = ::rebuildState
             newTm.createTab()
@@ -62,6 +74,8 @@ class BrowserViewModel internal constructor(
         val historyEntries = tm.historyForActiveTab()
         bookmarkController.refreshForUrl(activeUrl)
         val bState = bookmarkController.state.value
+        val trackerState = trackerBlockingController.state.value
+        val trackerStats = trackerState.tabStats[activeId]
         _uiState.update {
             it.copy(
                 tabs = tabs,
@@ -70,6 +84,9 @@ class BrowserViewModel internal constructor(
                 historyEntries = historyEntries,
                 isCurrentPageBookmarked = bState.isCurrentPageBookmarked,
                 bookmarks = bState.bookmarks,
+                trackerBlockingEnabled = trackerState.enabled,
+                activeTabBlockedRequests = trackerStats?.blockedRequests ?: 0,
+                activeTabBlockedHosts = trackerStats?.blockedHosts.orEmpty(),
             )
         }
     }
@@ -158,6 +175,20 @@ class BrowserViewModel internal constructor(
         tabManager?.navigate(url)
     }
 
+    fun openTrackerDetails() {
+        _uiState.update { it.copy(showTrackerDetails = true) }
+    }
+
+    fun closeTrackerDetails() {
+        _uiState.update { it.copy(showTrackerDetails = false) }
+    }
+
+    fun setTrackerBlockingEnabled(enabled: Boolean) {
+        trackerBlockingController.setEnabled(enabled)
+        runtime?.let { GeckoRuntimeHolder.setTrackerBlockingEnabled(enabled) }
+        syncTrackerBlockingState()
+    }
+
     /**
      * Pulls the current bookmark state from [bookmarkController] and merges it
      * into [_uiState].  Safe to call when [tabManager] is null (e.g. in tests).
@@ -168,6 +199,18 @@ class BrowserViewModel internal constructor(
             it.copy(
                 bookmarks = bState.bookmarks,
                 isCurrentPageBookmarked = bState.isCurrentPageBookmarked,
+            )
+        }
+    }
+
+    private fun syncTrackerBlockingState() {
+        val trackerState = trackerBlockingController.state.value
+        _uiState.update {
+            val stats = trackerState.tabStats[it.activeTabId]
+            it.copy(
+                trackerBlockingEnabled = trackerState.enabled,
+                activeTabBlockedRequests = stats?.blockedRequests ?: 0,
+                activeTabBlockedHosts = stats?.blockedHosts.orEmpty(),
             )
         }
     }
@@ -189,6 +232,8 @@ class BrowserViewModel internal constructor(
         super.onCleared()
         tabManager?.dispose()
         tabManager = null
+        trackerBlockingController.onStateChanged = null
+        runtime = null
         Log.i(TAG, "BrowserViewModel cleared")
     }
 
