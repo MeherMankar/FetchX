@@ -135,4 +135,3 @@ mod tests {
         assert_eq!(ids, ["aa-plugin", "zz-plugin"]);
     }
 }
-

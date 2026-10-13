@@ -19,11 +19,16 @@ data class BrowserUiState(
     val urlInput: String = "https://example.com",
     val showHistory: Boolean = false,
     val historyEntries: List<HistoryEntry> = emptyList(),
+    val showBookmarks: Boolean = false,
+    val bookmarks: List<Bookmark> = emptyList(),
+    val isCurrentPageBookmarked: Boolean = false,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
 }
 
-class BrowserViewModel : ViewModel() {
+class BrowserViewModel internal constructor(
+    internal val bookmarkController: BookmarkController = BookmarkController(),
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
     val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
@@ -55,12 +60,16 @@ class BrowserViewModel : ViewModel() {
         val tabs = tm.allTabStates()
         val activeUrl = tabs.find { it.id == activeId }?.url ?: "https://example.com"
         val historyEntries = tm.historyForActiveTab()
+        bookmarkController.refreshForUrl(activeUrl)
+        val bState = bookmarkController.state.value
         _uiState.update {
             it.copy(
                 tabs = tabs,
                 activeTabId = activeId,
                 urlInput = activeUrl,
                 historyEntries = historyEntries,
+                isCurrentPageBookmarked = bState.isCurrentPageBookmarked,
+                bookmarks = bState.bookmarks,
             )
         }
     }
@@ -110,6 +119,57 @@ class BrowserViewModel : ViewModel() {
     fun navigateToHistoryEntry(url: String) {
         closeHistory()
         tabManager?.navigate(url)
+    }
+
+    // ──Bookmarks ──────────────────────────────────────────────────────────
+
+    /**
+     * Toggles the bookmark state of the current active tab's URL.
+     * No-op if the URL is blank, "about:blank", or the tab is still loading.
+     */
+    fun toggleBookmark() {
+        val state = _uiState.value
+        val tab = state.activeTab ?: return
+        bookmarkController.toggleBookmark(tab.url, tab.title ?: "", tab.isLoading)
+        syncBookmarkState()
+    }
+
+    fun openBookmarks() {
+        _uiState.update { it.copy(showBookmarks = true) }
+    }
+
+    fun closeBookmarks() {
+        _uiState.update { it.copy(showBookmarks = false) }
+    }
+
+    fun removeBookmark(id: String) {
+        val currentUrl = _uiState.value.activeTab?.url ?: ""
+        bookmarkController.removeBookmark(id, currentUrl)
+        syncBookmarkState()
+    }
+
+    fun updateBookmark(id: String, newTitle: String) {
+        bookmarkController.updateBookmark(id, newTitle, _uiState.value.activeTab?.url ?: "")
+        syncBookmarkState()
+    }
+
+    fun navigateToBookmark(url: String) {
+        closeBookmarks()
+        tabManager?.navigate(url)
+    }
+
+    /**
+     * Pulls the current bookmark state from [bookmarkController] and merges it
+     * into [_uiState].  Safe to call when [tabManager] is null (e.g. in tests).
+     */
+    private fun syncBookmarkState() {
+        val bState = bookmarkController.state.value
+        _uiState.update {
+            it.copy(
+                bookmarks = bState.bookmarks,
+                isCurrentPageBookmarked = bState.isCurrentPageBookmarked,
+            )
+        }
     }
 
     // ──URL input sync ─────────────────────────────────────────────────────

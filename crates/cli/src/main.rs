@@ -116,4 +116,3 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
         Plugins(opts) => Ok(commands::plugins::run(opts, cli.json).await),
     }
 }
-

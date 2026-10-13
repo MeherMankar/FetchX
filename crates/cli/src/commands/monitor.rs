@@ -113,4 +113,3 @@ async fn print_active(svc: &CoreServices) {
         table.print();
     }
 }
-

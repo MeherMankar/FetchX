@@ -1820,10 +1820,8 @@ mod tests {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let (endpoint, mut requests, server) = start_aria2_mock().await?;
-        let yt_dlp_base = std::env::temp_dir().join(format!(
-            "fetchx-queue-ytdlp-test-{}",
-            DownloadId::new()
-        ));
+        let yt_dlp_base =
+            std::env::temp_dir().join(format!("fetchx-queue-ytdlp-test-{}", DownloadId::new()));
         tokio::fs::create_dir_all(&yt_dlp_base).await?;
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
         let aria2 = Arc::new(Aria2Engine::with_poll_interval(
@@ -2570,4 +2568,3 @@ mod tests {
         assert_eq!(used_connections(&workers), 3);
     }
 }
-

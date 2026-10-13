@@ -357,4 +357,3 @@ mod tests {
         assert_eq!(cfg.aria2.rpc_port, 6800);
     }
 }
-

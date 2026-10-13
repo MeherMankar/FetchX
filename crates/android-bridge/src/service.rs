@@ -612,4 +612,3 @@ mod tests {
         svc.shutdown();
     }
 }
-

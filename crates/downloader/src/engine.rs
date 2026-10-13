@@ -55,4 +55,3 @@ pub trait ManagedDownloadEngine: DownloadEngine {
         async { Ok(()) }
     }
 }
-

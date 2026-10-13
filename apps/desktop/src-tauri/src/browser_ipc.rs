@@ -308,4 +308,3 @@ pub enum BrowserIpcError {
     #[error("browser IPC message exceeds maximum size ({0} bytes)")]
     OversizedMessage(u32),
 }
-

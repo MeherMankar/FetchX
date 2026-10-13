@@ -87,4 +87,3 @@ pub async fn run(svc: &CoreServices, opts: ListOpts, json: bool) -> ExitCode {
 
     exit::SUCCESS
 }
-

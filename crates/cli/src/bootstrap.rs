@@ -75,4 +75,3 @@ pub async fn start() -> Result<CoreServices, CoreServicesError> {
 pub fn plugin_dir() -> Option<std::path::PathBuf> {
     Some(app_data_dir().join("plugins"))
 }
-

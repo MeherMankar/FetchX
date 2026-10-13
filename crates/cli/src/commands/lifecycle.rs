@@ -230,4 +230,3 @@ fn queue_error(json: bool, e: &QueueError) -> ExitCode {
     output::print_error(json, &msg);
     code
 }
-

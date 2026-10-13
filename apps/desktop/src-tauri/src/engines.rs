@@ -393,4 +393,3 @@ mod tests {
         assert!(!dto.available);
     }
 }
-

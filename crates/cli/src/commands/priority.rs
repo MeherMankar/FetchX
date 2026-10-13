@@ -41,4 +41,3 @@ pub async fn run(svc: &CoreServices, opts: PriorityOpts, json: bool) -> ExitCode
         }
     }
 }
-

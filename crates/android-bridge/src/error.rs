@@ -101,4 +101,3 @@ impl From<CoreServicesError> for MobileApiError {
         MobileApiError::Runtime(e.to_string())
     }
 }
-

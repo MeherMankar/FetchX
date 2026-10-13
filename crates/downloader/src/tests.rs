@@ -1641,4 +1641,3 @@ async fn progress_is_persisted_during_transfer_and_final_state_is_complete()
     assert_eq!(tokio::fs::read(destination).await?, body);
     Ok(())
 }
-

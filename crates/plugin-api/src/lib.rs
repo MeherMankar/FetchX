@@ -42,4 +42,3 @@ pub use protocol::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginResponse,
     PluginResponseBody, ProtocolError, parse_plugin_response,
 };
-

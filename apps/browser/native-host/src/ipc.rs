@@ -76,4 +76,3 @@ pub fn read_desktop_state() -> Result<DesktopState, StateFileError> {
     })?;
     serde_json::from_str(&contents).map_err(|_| StateFileError::Invalid)
 }
-

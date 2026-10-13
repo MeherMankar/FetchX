@@ -232,4 +232,3 @@ impl From<io::Error> for DownloadEngineError {
         }
     }
 }
-

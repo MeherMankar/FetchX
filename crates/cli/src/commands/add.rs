@@ -173,4 +173,3 @@ fn filename_for_url(url: &Url) -> String {
         .unwrap_or("download")
         .to_owned()
 }
-

@@ -356,4 +356,3 @@ async fn values_outside_sqlite_integer_range_are_rejected() -> Result<(), Box<dy
     ));
     Ok(())
 }
-

@@ -562,4 +562,3 @@ mod tests {
         assert!(!json.contains("secret"));
     }
 }
-

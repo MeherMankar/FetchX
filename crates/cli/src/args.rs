@@ -159,4 +159,3 @@ pub struct ScheduleOpts {
     #[arg(long, conflicts_with = "at")]
     pub clear: bool,
 }
-

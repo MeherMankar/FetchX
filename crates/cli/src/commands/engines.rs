@@ -66,4 +66,3 @@ fn avail_json(avail: &EngineAvailability) -> serde_json::Value {
         }
     }
 }
-

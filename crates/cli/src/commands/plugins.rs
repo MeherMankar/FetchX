@@ -137,4 +137,3 @@ async fn status(manager: &Arc<PluginManager>, id: &str, json: bool) -> ExitCode 
         }
     }
 }
-

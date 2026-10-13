@@ -1069,6 +1069,203 @@ dependencies = [
 ]
 
 [[package]]
+name = "fetchx"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "fetchx-core-services",
+ "fetchx-downloader",
+ "fetchx-models",
+ "fetchx-plugin-manager",
+ "fetchx-queue",
+ "fetchx-scheduler",
+ "fetchx-storage",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fetchx-android-bridge"
+version = "0.1.0"
+dependencies = [
+ "fetchx-core",
+ "fetchx-core-services",
+ "fetchx-models",
+ "fetchx-queue",
+ "fetchx-scheduler",
+ "fetchx-storage",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uniffi",
+ "uuid",
+]
+
+[[package]]
+name = "fetchx-browser-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "url",
+]
+
+[[package]]
+name = "fetchx-core"
+version = "0.1.0"
+dependencies = [
+ "fetchx-models",
+ "fetchx-storage",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "fetchx-core-services"
+version = "0.1.0"
+dependencies = [
+ "fetchx-downloader",
+ "fetchx-models",
+ "fetchx-queue",
+ "fetchx-scheduler",
+ "fetchx-storage",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fetchx-desktop"
+version = "0.1.0"
+dependencies = [
+ "fetchx-browser-protocol",
+ "fetchx-core",
+ "fetchx-downloader",
+ "fetchx-models",
+ "fetchx-queue",
+ "fetchx-scheduler",
+ "fetchx-storage",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "fetchx-downloader"
+version = "0.1.0"
+dependencies = [
+ "fetchx-core",
+ "fetchx-models",
+ "fetchx-storage",
+ "netstat2",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fetchx-models"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "fetchx-native-host"
+version = "0.1.0"
+dependencies = [
+ "fetchx-browser-protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fetchx-plugin-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "fetchx-plugin-manager"
+version = "0.1.0"
+dependencies = [
+ "fetchx-plugin-api",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fetchx-queue"
+version = "0.1.0"
+dependencies = [
+ "fetchx-core",
+ "fetchx-downloader",
+ "fetchx-models",
+ "fetchx-storage",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fetchx-scheduler"
+version = "0.1.0"
+dependencies = [
+ "fetchx-core",
+ "fetchx-downloader",
+ "fetchx-models",
+ "fetchx-queue",
+ "fetchx-storage",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fetchx-storage"
+version = "0.1.0"
+dependencies = [
+ "fetchx-models",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2293,203 +2490,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mydownloader"
-version = "0.1.0"
-dependencies = [
- "clap",
- "mydownloader-core-services",
- "mydownloader-downloader",
- "mydownloader-models",
- "mydownloader-plugin-manager",
- "mydownloader-queue",
- "mydownloader-scheduler",
- "mydownloader-storage",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "mydownloader-android-bridge"
-version = "0.1.0"
-dependencies = [
- "mydownloader-core",
- "mydownloader-core-services",
- "mydownloader-models",
- "mydownloader-queue",
- "mydownloader-scheduler",
- "mydownloader-storage",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "uniffi",
- "uuid",
-]
-
-[[package]]
-name = "mydownloader-browser-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "url",
-]
-
-[[package]]
-name = "mydownloader-core"
-version = "0.1.0"
-dependencies = [
- "mydownloader-models",
- "mydownloader-storage",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "mydownloader-core-services"
-version = "0.1.0"
-dependencies = [
- "mydownloader-downloader",
- "mydownloader-models",
- "mydownloader-queue",
- "mydownloader-scheduler",
- "mydownloader-storage",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "mydownloader-desktop"
-version = "0.1.0"
-dependencies = [
- "mydownloader-browser-protocol",
- "mydownloader-core",
- "mydownloader-downloader",
- "mydownloader-models",
- "mydownloader-queue",
- "mydownloader-scheduler",
- "mydownloader-storage",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "mydownloader-downloader"
-version = "0.1.0"
-dependencies = [
- "mydownloader-core",
- "mydownloader-models",
- "mydownloader-storage",
- "netstat2",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "mydownloader-models"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "uuid",
-]
-
-[[package]]
-name = "mydownloader-native-host"
-version = "0.1.0"
-dependencies = [
- "mydownloader-browser-protocol",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "mydownloader-plugin-api"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "mydownloader-plugin-manager"
-version = "0.1.0"
-dependencies = [
- "mydownloader-plugin-api",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "mydownloader-queue"
-version = "0.1.0"
-dependencies = [
- "mydownloader-core",
- "mydownloader-downloader",
- "mydownloader-models",
- "mydownloader-storage",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "mydownloader-scheduler"
-version = "0.1.0"
-dependencies = [
- "mydownloader-core",
- "mydownloader-downloader",
- "mydownloader-models",
- "mydownloader-queue",
- "mydownloader-storage",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "mydownloader-storage"
-version = "0.1.0"
-dependencies = [
- "mydownloader-models",
- "sqlx",
- "thiserror 2.0.21",
- "tokio",
 ]
 
 [[package]]

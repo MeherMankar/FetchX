@@ -1134,8 +1134,7 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Result<Self, Box<dyn Error>> {
-            let path =
-                std::env::temp_dir().join(format!("fetchx-test-{}", uuid::Uuid::new_v4()));
+            let path = std::env::temp_dir().join(format!("fetchx-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path)?;
             Ok(Self(path))
         }
@@ -1496,4 +1495,3 @@ mod tests {
         Ok(())
     }
 }
-

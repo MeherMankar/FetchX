@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -98,6 +99,37 @@ fun BrowserScreen(
                         )
                     },
                     actions = {
+                        // Bookmark toggle: filled/primary when bookmarked, muted when not
+                        val canBookmark = activeTab?.url?.let {
+                            it.isNotBlank() && it != "about:blank" &&
+                            (it.startsWith("http://") || it.startsWith("https://"))
+                        } == true && activeTab?.isLoading != true
+                        IconButton(
+                            onClick = { viewModel.toggleBookmark() },
+                            enabled = canBookmark,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = if (uiState.isCurrentPageBookmarked)
+                                    "Remove bookmark" else "Bookmark this page",
+                                tint = if (uiState.isCurrentPageBookmarked)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            )
+                        }
+                        // Bookmarks list opener — uses Star with secondary tint to distinguish
+                        // from the history button (Icons.AutoMirrored.Filled.List).
+                        // Icons.Default.BookmarkBorder / Bookmarks are in material-icons-extended,
+                        // which is not a project dependency; secondary-tinted Star is the closest
+                        // visually distinct alternative available in material-icons-core.
+                        IconButton(onClick = { viewModel.openBookmarks() }) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = "Bookmarks",
+                                tint = MaterialTheme.colorScheme.secondary,
+                            )
+                        }
                         IconButton(onClick = { viewModel.openHistory() }) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.List,
@@ -273,6 +305,78 @@ fun BrowserScreen(
             },
         )
     }
+
+    // Bookmarks dialog — overlays the Scaffold
+    if (uiState.showBookmarks) {
+        BookmarksDialog(
+            bookmarks = uiState.bookmarks,
+            onDismiss = { viewModel.closeBookmarks() },
+            onOpen = { url -> viewModel.navigateToBookmark(url) },
+            onDelete = { id -> viewModel.removeBookmark(id) },
+        )
+    }
+}
+
+@Composable
+private fun BookmarksDialog(
+    bookmarks: List<Bookmark>,
+    onDismiss: () -> Unit,
+    onOpen: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Bookmarks") },
+        text = {
+            Column {
+                if (bookmarks.isEmpty()) {
+                    Text(
+                        text = "No bookmarks yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(bookmarks, key = { it.id }) { bookmark ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onOpen(bookmark.url) }
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = bookmark.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = bookmark.url,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                IconButton(onClick = { onDelete(bookmark.id) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Delete bookmark",
+                                    )
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }
 
 private fun formatHistoryTimestamp(epochMs: Long): String {

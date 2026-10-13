@@ -240,10 +240,8 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
-        let base = std::env::temp_dir().join(format!(
-            "fetchx-dispatcher-test-{}",
-            DownloadId::new()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("fetchx-dispatcher-test-{}", DownloadId::new()));
         tokio::fs::create_dir_all(&base).await?;
         let video = DownloadItem::new(
             DownloadId::new(),
@@ -293,4 +291,3 @@ mod tests {
         Ok(())
     }
 }
-

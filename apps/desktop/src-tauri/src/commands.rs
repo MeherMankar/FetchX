@@ -1272,10 +1272,7 @@ mod tests {
         let req: AddDownloadRequest = serde_json::from_str(
             r#"{"url":"https://example.test/file.zip","engine_kind":"direct_http"}"#,
         )?;
-        assert_eq!(
-            req.engine_kind,
-            Some(fetchx_models::EngineKind::DirectHttp)
-        );
+        assert_eq!(req.engine_kind, Some(fetchx_models::EngineKind::DirectHttp));
         Ok(())
     }
 
@@ -1284,10 +1281,7 @@ mod tests {
         let req: AddDownloadRequest = serde_json::from_str(
             r#"{"url":"https://example.test/file.zip","engine_kind":"aria2"}"#,
         )?;
-        assert_eq!(
-            req.engine_kind,
-            Some(fetchx_models::EngineKind::Aria2)
-        );
+        assert_eq!(req.engine_kind, Some(fetchx_models::EngineKind::Aria2));
         Ok(())
     }
 
@@ -1418,4 +1412,3 @@ mod tests {
         }
     }
 }
-

@@ -12,4 +12,3 @@ pub fn run(json: bool) {
         output::print_human(&format!("FetchX {version}"));
     }
 }
-

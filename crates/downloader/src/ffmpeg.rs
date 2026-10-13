@@ -1760,8 +1760,7 @@ mod tests {
     #[tokio::test]
     async fn configured_executables_are_validated_and_ffprobe_is_selected()
     -> Result<(), Box<dyn Error>> {
-        let base =
-            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&base).await?;
         let executable = std::env::current_exe()?;
         let runner = FakeRunner::default();
@@ -1877,8 +1876,7 @@ mod tests {
     #[tokio::test]
     async fn remux_publishes_without_overwriting_and_cleans_workspace() -> Result<(), Box<dyn Error>>
     {
-        let base =
-            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let runner = FakeRunner::default();
         runner
             .state
@@ -1935,8 +1933,7 @@ mod tests {
     #[tokio::test]
     async fn process_failure_and_cancellation_preserve_input_and_remove_workspace()
     -> Result<(), Box<dyn Error>> {
-        let base =
-            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let runner = FakeRunner::default();
         {
             let mut state = runner.state.lock().expect("fake runner mutex");
@@ -1975,8 +1972,7 @@ mod tests {
 
     #[tokio::test]
     async fn output_larger_than_configured_limit_is_not_published() -> Result<(), Box<dyn Error>> {
-        let base =
-            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         tokio::fs::create_dir_all(&base).await?;
         let runner = FakeRunner::default();
         runner
@@ -2022,8 +2018,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_waits_for_runner_and_cleans_temporary_output()
     -> Result<(), Box<dyn Error>> {
-        let base =
-            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let runner = FakeRunner::default();
         let started = Arc::new(tokio::sync::Notify::new());
         {
@@ -2062,8 +2057,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_input_output_collision_and_pre_cancelled_work() -> Result<(), Box<dyn Error>> {
-        let base =
-            std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-test-{}", Uuid::new_v4()));
         let processor = setup(FakeRunner::default(), &base).await?;
         let input = base.join("source with spaces.mkv");
         tokio::fs::write(&input, b"source").await?;
@@ -2089,4 +2083,3 @@ mod tests {
         Ok(())
     }
 }
-

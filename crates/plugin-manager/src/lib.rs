@@ -509,4 +509,3 @@ pub enum PluginManagerError {
     #[error("I/O error: {0}")]
     Io(#[source] std::io::Error),
 }
-

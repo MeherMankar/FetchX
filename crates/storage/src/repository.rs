@@ -82,4 +82,3 @@ pub trait DownloadRepository: Send + Sync {
     /// Deletes an item and returns whether a row was removed.
     fn delete(&self, id: DownloadId) -> impl Future<Output = Result<bool, StorageError>> + Send;
 }
-

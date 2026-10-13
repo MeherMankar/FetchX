@@ -467,7 +467,115 @@
     - No bookmarks, no private browsing, no download interception.
     - Pre-existing Phase 20C UnsatisfiedLinkError for native bridge .so unchanged.
 
-33. Phase 20H — History / bookmarks
+33. Phase 20H — Bookmarks (completed)
+
+    Status: COMPLETE
+
+    New files:
+    - Bookmark.kt — pure-Kotlin domain model (id: String UUID, url: String,
+      title: String, createdAtMs: Long, updatedAtMs: Long). No Android imports;
+      JVM-testable. Title falls back to URL hostname when blank. Does NOT store:
+      cookies, credentials, session tokens, private browsing metadata.
+    - BookmarkStore.kt — global in-memory bookmark store (NOT per-tab).
+      No Android imports. Rules: non-blank http(s) URLs only; blank/non-http(s)
+      URLs silently rejected; duplicate URLs rejected (same canonical URL → no-op);
+      bookmarks ordered newest-first; title fallback to java.net.URI host;
+      all state in-memory for Phase 20H. Operations: add, removeById, removeByUrl,
+      update (title), all, findByUrl, isBookmarked, clearAll, count.
+    - BookmarkController.kt — pure-JVM bookmark state controller (see above).
+    - BookmarkStoreTest.kt — 24 JVM unit tests covering all BookmarkStore rules:
+      add/remove/update/find/list, blank URL rejection, duplicate rejection,
+      ftp/file/about:blank rejection, http/https acceptance, newest-first ordering,
+      whitespace trimming, title fallback to host, clearAll, count, and explicit
+      independence from HistoryStore (clearing history does not clear bookmarks;
+      removing bookmark does not affect history).
+    - BrowserViewModelTest.kt — 20 JVM unit tests for ViewModel-level bookmark
+      logic (see above).
+
+    New files (updated):
+    - BookmarkController.kt — pure-JVM bookmark state controller extracted from
+      BrowserViewModel. Holds BookmarkStore and a MutableStateFlow<State> with
+      fields: bookmarks, isCurrentPageBookmarked, showBookmarks. Zero Android
+      imports; fully JVM-testable. BrowserViewModel delegates all bookmark
+      operations to this class and merges its state into BrowserUiState.
+      Methods: toggleBookmark(url, title, isLoading), openBookmarks(),
+      closeBookmarks(), removeBookmark(id), updateBookmark(id, newTitle),
+      refreshForUrl(currentUrl). isLoading guard in toggleBookmark() prevents
+      bookmarking a stale URL during navigation (business-logic enforcement,
+      not just UI-layer).
+    - BrowserViewModelTest.kt — 20 JVM unit tests for ViewModel-level bookmark
+      logic (via BookmarkController): toggleBookmark add/remove, isLoading guard,
+      blank/about:blank rejection, isCurrentPageBookmarked state transitions,
+      openBookmarks/closeBookmarks dialog flag, bookmark list updates after add/
+      remove/update, newest-first ordering, history/bookmark independence,
+      navigateToBookmark close-then-navigate flow simulation.
+
+    Modified files:
+    - BookmarkController.kt (new): see above.
+    - BrowserViewModel.kt: BrowserUiState gains showBookmarks: Boolean,
+      bookmarks: List<Bookmark>, and isCurrentPageBookmarked: Boolean fields.
+      Added internal bookmarkController: BookmarkController field (global, not
+      per-tab). rebuildState() calls bookmarkController.refreshForUrl() and merges
+      resulting state. New operations: toggleBookmark(), openBookmarks(),
+      closeBookmarks(), removeBookmark(id), updateBookmark(id, newTitle),
+      navigateToBookmark(url). syncBookmarkState() private helper merges bookmark
+      state into _uiState without requiring tabManager (safe in JVM tests).
+      clearHistory() is unchanged — it does NOT touch bookmarks.
+    - BrowserScreen.kt: Added Icons.Default.Star import. TopAppBar gains two new
+      action buttons — a bookmark toggle (Star icon, primary tint when bookmarked,
+      muted onSurfaceVariant when not, disabled on about:blank/blank/loading) and a
+      bookmarks list opener (List icon, tertiary tint to distinguish from history).
+      Added BookmarksDialog private composable (AlertDialog with LazyColumn of
+      bookmarks, empty-state text "No bookmarks yet.", tap-to-navigate, delete
+      button per item, Close action). BookmarksDialog call added after HistoryDialog
+      block.
+
+    Architecture:
+    - Bookmarks are global browser data, NOT per-tab. A single BookmarkController
+      (wrapping a single BookmarkStore) lives in BrowserViewModel.
+    - UI does not directly manipulate BookmarkStore. All operations route through
+      BrowserViewModel → BookmarkController.
+    - about:blank, empty URLs, and URLs with non-http(s) schemes cannot be
+      bookmarked (guarded in toggleBookmark() at both UI and business-logic layer).
+    - isLoading guard in BookmarkController.toggleBookmark() prevents any caller
+      (UI or programmatic) from bookmarking a stale URL during navigation.
+    - Clearing history does NOT clear bookmarks. Removing a bookmark does NOT
+      affect history. The two stores are fully independent.
+    - BookmarkController/BookmarkStore are designed to support future
+      private-browsing enforcement (caller's responsibility to skip add() for
+      private pages).
+    - No SQLite persistence in Phase 20H (in-memory only, consistent with
+      Phase 20G history).
+    - No URL logging or title logging anywhere in bookmark code.
+
+    Tests: 24 new BookmarkStoreTest + 21 new BrowserViewModelTest + 36 existing
+    = 81 tests total, all pass. assembleDebug: BUILD SUCCESSFUL.
+
+    Review findings fixed (iteration 2):
+    - stale-isCurrentPageBookmarked (blocking): BrowserViewModel.removeBookmark()
+      now calls bookmarkController.refreshForUrl(activeTab?.url ?: "") before
+      syncBookmarkState(), so the star icon correctly updates when the bookmarked
+      page is still open and the bookmark is deleted from the dialog.
+    - identical-toolbar-icons (minor): The bookmarks list opener now uses
+      Icons.Default.Star with secondary tint (distinct from the history button's
+      Icons.AutoMirrored.Filled.List). Icons.Default.BookmarkBorder/Bookmarks are
+      in material-icons-extended which is not a project dependency; secondary-tinted
+      Star is the closest visually distinct alternative in material-icons-core.
+    - missing-removeBookmark-state-test (minor): Added
+      `isCurrentPageBookmarked becomes false after removeBookmark by id` test in
+      BrowserViewModelTest covering the explicit delete path via BookmarkController.
+
+    Known limitations:
+    - Bookmarks are in-memory only; cleared on app restart (no SQLite persistence).
+    - Bookmark title editing: updateBookmark(id, newTitle) exists in the ViewModel
+      but no dedicated title-edit UI dialog is provided (not practical within the
+      existing architecture without a third dialog; the API is available for future use).
+    - BrowserViewModel cannot be directly instantiated in JVM unit tests (extends
+      android.lifecycle.ViewModel and imports android.util.Log). Bookmark logic is
+      tested via BookmarkController, which contains 100% of the business logic.
+    - Pre-existing Phase 20C UnsatisfiedLinkError for native bridge .so unchanged.
+    - Pre-existing cargo fmt trailing-newline differences in ipc.rs/main.rs unchanged.
+
 34. Phase 20I — Tracker blocking
 35. Phase 20J — Privacy / fingerprinting controls
 36. Phase 20K — Extension framework

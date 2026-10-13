@@ -16,4 +16,3 @@ use fetchx_models::{DownloadId, DownloadIdParseError};
 pub fn parse_id(s: &str) -> Result<DownloadId, DownloadIdParseError> {
     DownloadId::parse(s)
 }
-

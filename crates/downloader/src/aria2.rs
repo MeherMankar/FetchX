@@ -1688,8 +1688,8 @@ mod tests {
 
     impl TestDirectory {
         fn new(id: DownloadId) -> Result<Self, std::io::Error> {
-            let path = std::env::temp_dir()
-                .join(format!("fetchx-aria2-{}-{id}", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("fetchx-aria2-{}-{id}", std::process::id()));
             std::fs::create_dir(&path)?;
             Ok(Self(path))
         }
@@ -1926,4 +1926,3 @@ mod tests {
         Ok(())
     }
 }
-

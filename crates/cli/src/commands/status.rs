@@ -116,4 +116,3 @@ fn chrono_fmt(ms: u64) -> String {
         )
     }
 }
-
