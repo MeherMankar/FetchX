@@ -365,8 +365,47 @@
     3. Open-file action for completed downloads is not implemented — no filesystem
        behaviour was invented; only Remove is offered.
 
-30. Phase 20E — Background downloads
-30. Phase 20E — WebView browser shell
+30. Phase 20E — Android GeckoView Browser Foundation (completed)
+
+    Implemented a minimal GeckoView-based browser foundation integrated with
+    the existing MyDownloader Android application.
+
+    Browser module (:browser):
+    - GeckoRuntimeHolder: process-level singleton ensuring GeckoRuntime is
+      created exactly once per process (double-checked locking).
+    - BrowserViewModel: owns GeckoSession lifecycle across configuration
+      changes; uses sessionOpened flag (not isOpen) for safety.
+    - BrowserScreen: Compose UI with TopAppBar URL bar, back/forward/reload
+      controls, loading indicator, error surface, and GeckoView via AndroidView.
+    - normalizeUrl(): bare hostnames prefixed with https://.
+    - 8 unit tests for normalizeUrl() — all pass.
+
+    Navigation:
+    - Screen.Browser destination added to sealed class.
+    - AppNavigation updated with Material3 NavigationBar (Downloads + Browser tabs).
+    - Downloads screen and Phase 20D functionality unchanged.
+
+    GeckoView version: 137.0.20250325171416 (arm64-v8a artifact).
+    Originally attempted 158.0.20261007201254 but that version requires
+    kotlin-stdlib:2.4.20 → media3:1.11.1 → compileSdk 36 → AGP 9.0+;
+    fell back to 137 per user instruction.
+    Mozilla Maven repository: already declared in settings.gradle.kts.
+
+    Security:
+    - INTERNET permission: already present from Phase 20A.
+    - network_security_config.xml: cleartext blocked by default, unchanged.
+    - No unsafe SSL, no trust-all, no WebView fallback.
+
+    Icon note: Icons.Default.Language unavailable in material-icons-core;
+    replaced with Icons.Default.Search for the Browser nav item.
+    Icons.AutoMirrored.Filled.List used for Downloads nav item.
+
+    Known limitations:
+    1. The Phase 20C JNA/libjnidispatch issue remains (bridge falls back to NoOp).
+    2. ABI-split uses arm64-v8a only for debug builds — release builds will need
+       the fat geckoview-androidX artifact or all ABI variants.
+    3. No tab management, history, bookmarks, or download interception (Phase 20F+).
+
 31. Phase 20F — Download interception
 32. Phase 20G — Tabs / private tabs
 33. Phase 20H — History / bookmarks

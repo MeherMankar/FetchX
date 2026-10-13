@@ -25,3 +25,4 @@
 
 # Agent task artefacts — keep plan/report docs, exclude JSON state files
 /.agents/tasks/**/*.json
+/.agents/
