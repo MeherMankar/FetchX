@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -148,3 +148,4 @@ class TabStoreTest {
         assertNull(store.activeTabId())
     }
 }
+

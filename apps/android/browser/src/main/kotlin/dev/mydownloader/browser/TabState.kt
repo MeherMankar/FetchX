@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 /**
  * Immutable snapshot of a single browser tab's observable state.
@@ -13,3 +13,4 @@ data class TabState(
     val canGoForward: Boolean = false,
     val errorText: String? = null,
 )
+

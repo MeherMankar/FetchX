@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 import android.util.Log
 import org.mozilla.geckoview.GeckoResult
@@ -24,11 +24,12 @@ class TabManager(private val runtime: GeckoRuntime) {
 
     private val store = TabStore()
     private val sessions = mutableMapOf<String, GeckoSession>()
+    private val historyStore = HistoryStore()
 
     /** Callback to notify observers of state changes. */
     var onStateChanged: (() -> Unit)? = null
 
-    // ── Public API ──────────────────────────────────────────────────────────
+    // ──Public API ─────────────────────────────────────────────────────────
 
     /** Creates a new tab, makes it active, and returns its ID. */
     fun createTab(initialUrl: String = "https://example.com"): String {
@@ -47,6 +48,7 @@ class TabManager(private val runtime: GeckoRuntime) {
     /** Closes the tab with [tabId]. If it was the active tab, selects an adjacent tab. */
     fun closeTab(tabId: String) {
         if (store.findTab(tabId) == null) return
+        historyStore.removeTab(tabId)
         sessions[tabId]?.close()
         sessions.remove(tabId)
         store.removeTab(tabId)
@@ -81,7 +83,7 @@ class TabManager(private val runtime: GeckoRuntime) {
     /** Count of open tabs. */
     fun tabCount(): Int = store.tabCount()
 
-    // ── Navigation on active tab ────────────────────────────────────────────
+    // ──Navigation on active tab ───────────────────────────────────────────
 
     fun navigate(rawUrl: String) {
         val url = normalizeUrl(rawUrl)
@@ -95,17 +97,42 @@ class TabManager(private val runtime: GeckoRuntime) {
     fun goForward() { activeSession()?.goForward() }
     fun reload() { activeSession()?.reload() }
 
-    // ── Cleanup ─────────────────────────────────────────────────────────────
+    // ──History API ────────────────────────────────────────────────────────
+
+    /** Returns history entries for the active tab, newest first. */
+    fun historyForActiveTab(): List<HistoryEntry> {
+        val activeId = store.activeTabId() ?: return emptyList()
+        return historyStore.entriesForTab(activeId)
+    }
+
+    /** Returns all history entries across all tabs, newest first by timestamp. */
+    fun allHistory(): List<HistoryEntry> = historyStore.allEntries()
+
+    /** Clears all history across all tabs and notifies observers. */
+    fun clearAllHistory() {
+        historyStore.clearAll()
+        onStateChanged?.invoke()
+    }
+
+    /** Clears history for the active tab only and notifies observers. */
+    fun clearTabHistory() {
+        val activeId = store.activeTabId() ?: return
+        historyStore.clearTab(activeId)
+        onStateChanged?.invoke()
+    }
+
+    // ──Cleanup ────────────────────────────────────────────────────────────
 
     /** Closes all sessions. Call from BrowserViewModel.onCleared. */
     fun dispose() {
+        historyStore.clearAll()
         sessions.values.forEach { it.close() }
         sessions.clear()
         store.clear()
         Log.i(TAG, "TabManager disposed")
     }
 
-    // ── Internal helpers ────────────────────────────────────────────────────
+    // ──Internal helpers ───────────────────────────────────────────────────
 
     private fun updateTabState(tabId: String, update: (TabState) -> TabState) {
         store.updateTab(tabId, update)
@@ -117,6 +144,8 @@ class TabManager(private val runtime: GeckoRuntime) {
 
         s.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onTitleChange(session: GeckoSession, title: String?) {
+                val currentUrl = store.findTab(tabId)?.url ?: ""
+                historyStore.updateTitle(tabId, currentUrl, title)
                 updateTabState(tabId) { it.copy(title = title) }
             }
         }
@@ -160,6 +189,13 @@ class TabManager(private val runtime: GeckoRuntime) {
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
+                if (success) {
+                    // Record navigation ONLY on successful page load.
+                    val currentUrl = store.findTab(tabId)?.url ?: ""
+                    if (currentUrl.isNotBlank() && currentUrl != "about:blank") {
+                        historyStore.recordNavigation(tabId, currentUrl, System.currentTimeMillis())
+                    }
+                }
                 updateTabState(tabId) { it.copy(isLoading = false) }
             }
         }

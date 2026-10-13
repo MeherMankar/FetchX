@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -17,6 +17,8 @@ data class BrowserUiState(
     val tabs: List<TabState> = emptyList(),
     val activeTabId: String? = null,
     val urlInput: String = "https://example.com",
+    val showHistory: Boolean = false,
+    val historyEntries: List<HistoryEntry> = emptyList(),
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
 }
@@ -52,10 +54,18 @@ class BrowserViewModel : ViewModel() {
         val activeId = tm.activeTabId()
         val tabs = tm.allTabStates()
         val activeUrl = tabs.find { it.id == activeId }?.url ?: "https://example.com"
-        _uiState.update { it.copy(tabs = tabs, activeTabId = activeId, urlInput = activeUrl) }
+        val historyEntries = tm.historyForActiveTab()
+        _uiState.update {
+            it.copy(
+                tabs = tabs,
+                activeTabId = activeId,
+                urlInput = activeUrl,
+                historyEntries = historyEntries,
+            )
+        }
     }
 
-    // ── Tab actions ──────────────────────────────────────────────────────────
+    // ──Tab actions ────────────────────────────────────────────────────────
 
     fun newTab(url: String = "https://example.com") {
         tabManager?.createTab(url)
@@ -72,7 +82,7 @@ class BrowserViewModel : ViewModel() {
         reattachActiveSession()
     }
 
-    // ── Navigation ───────────────────────────────────────────────────────────
+    // ──Navigation ─────────────────────────────────────────────────────────
 
     fun navigate(rawUrl: String) {
         tabManager?.navigate(rawUrl)
@@ -82,13 +92,33 @@ class BrowserViewModel : ViewModel() {
     fun goForward() { tabManager?.goForward() }
     fun reload() { tabManager?.reload() }
 
-    // ── URL input sync ────────────────────────────────────────────────────────
+    // ──History ────────────────────────────────────────────────────────────
+
+    fun openHistory() {
+        _uiState.update { it.copy(showHistory = true) }
+    }
+
+    fun closeHistory() {
+        _uiState.update { it.copy(showHistory = false) }
+    }
+
+    fun clearHistory() {
+        tabManager?.clearAllHistory()
+        _uiState.update { it.copy(historyEntries = emptyList(), showHistory = false) }
+    }
+
+    fun navigateToHistoryEntry(url: String) {
+        closeHistory()
+        tabManager?.navigate(url)
+    }
+
+    // ──URL input sync ─────────────────────────────────────────────────────
 
     fun onUrlInputChanged(url: String) {
         _uiState.update { it.copy(urlInput = url) }
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
+    // ──Private ────────────────────────────────────────────────────────────
 
     private fun reattachActiveSession() {
         val view = geckoViewRef?.get() ?: return

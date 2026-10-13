@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 /**
  * Pure-Kotlin tab state store, testable without Android.
@@ -48,3 +48,4 @@ class TabStore {
         _activeTabId = null
     }
 }
+

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mydownloader.browser"
+    namespace = "dev.fetchx.browser"
     compileSdk = 35
 
     defaultConfig {
@@ -42,3 +42,4 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
 }
+

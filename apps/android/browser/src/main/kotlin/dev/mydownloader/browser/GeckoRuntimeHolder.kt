@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 import android.content.Context
 import android.util.Log
@@ -41,3 +41,4 @@ object GeckoRuntimeHolder {
         return GeckoRuntime.create(context, settings)
     }
 }
+

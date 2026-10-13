@@ -93,7 +93,7 @@
 
     Capabilities defined: engine, post_processor, url_resolver, metadata.
 
-    CLI extension: `mydownloader plugins [list|info|status]` with --json.
+    CLI extension: `FetchX plugins [list|info|status]` with --json.
 
     Known limitations:
     1. Built-in engines (DirectHttp, aria2, yt-dlp) are NOT converted to
@@ -120,7 +120,7 @@
     - compileSdk = 35
 
     Android module structure created at apps/android/:
-    - :app — MainActivity, MyDownloaderApp, AppNavigation, MyDownloaderTheme,
+    - :app — MainActivity, FetchXApp, AppNavigation, FetchXTheme,
       Screen sealed class. Single-Activity architecture with Compose NavHost.
     - :core — Domain models: DownloadItem, DownloadState, DownloadEvent,
       DownloadPriority, DownloadRepository (interface), NetworkRoute.
@@ -208,7 +208,7 @@
 
     Wiring:
     - :app and :downloads both depend on :bridge.
-    - MyDownloaderApp.onCreate() initializes the bridge.
+    - FetchXApp.onCreate() initializes the bridge.
     - DownloadsViewModel now accepts a real DownloadRepository and
       exposes reactive StateFlow + action methods (pause/resume/cancel/
       remove/retry/setPriority).
@@ -253,8 +253,8 @@
 
     Native build:
     - crates/android-bridge built as cdylib (+ lib for host tests).
-    - arm64-v8a library: libmydownloader_android_bridge.so (~12.6 MB, unstripped debug)
-    - x86_64 library: libmydownloader_android_bridge.so (~12.3 MB, unstripped debug)
+    - arm64-v8a library: libfetchx_android_bridge.so (~12.6 MB, unstripped debug)
+    - x86_64 library: libfetchx_android_bridge.so (~12.3 MB, unstripped debug)
     - Build script: scripts/build-android-native.ps1 -Release
     - Both .so files packaged into APK via apps/android/bridge/src/main/jniLibs/.
     - .so files excluded from git (.gitignore); .gitkeep placeholders preserve dirs.
@@ -368,7 +368,7 @@
 30. Phase 20E — Android GeckoView Browser Foundation (completed)
 
     Implemented a minimal GeckoView-based browser foundation integrated with
-    the existing MyDownloader Android application.
+    the existing FetchX Android application.
 
     Browser module (:browser):
     - GeckoRuntimeHolder: process-level singleton ensuring GeckoRuntime is
@@ -406,8 +406,67 @@
        the fat geckoview-androidX artifact or all ABI variants.
     3. No tab management, history, bookmarks, or download interception (Phase 20F+).
 
-31. Phase 20F — Download interception
-32. Phase 20G — Tabs / private tabs
+31. Phase 20F — Multi-tab browser session management (completed)
+
+    Implemented in commit 6f060f4. See detailed description above (Phase 20E section
+    covers browser foundation; Phase 20F added the full tab architecture on top).
+
+    New files: TabState.kt, TabStore.kt, TabManager.kt (browser module).
+    Modified: BrowserViewModel.kt, BrowserScreen.kt, GeckoRuntimeHolder.kt.
+
+    Features: one GeckoSession per tab, tab creation/closing/switching, back/forward/
+    reload per tab, URL and title tracking per tab, navigation-state isolation between
+    tabs, minimum-one-tab policy, 22 JVM unit tests (NormalizeUrlTest + TabStoreTest).
+
+32. Phase 20G — Browser history and navigation state (completed)
+
+    Status: COMPLETE
+
+    New files:
+    - HistoryEntry.kt — pure-Kotlin domain model (id, url, title, timestampMs).
+      No Android imports; JVM-testable.
+    - HistoryStore.kt — per-tab in-memory history store. No Android imports.
+      Rules: records on onPageStop(success=true) only; about:blank and blank URLs
+      excluded; consecutive duplicate URLs skipped; title updated (not re-added)
+      via updateTitle(); max 200 entries per tab; O(1) tab removal on close.
+    - HistoryStoreTest.kt — 14 JVM unit tests covering all HistoryStore rules.
+
+    Modified files:
+    - TabManager.kt: added HistoryStore field; onPageStop(success=true) records
+      navigation; onTitleChange updates history title; closeTab() calls
+      historyStore.removeTab() before session close; dispose() clears all history;
+      new public API: historyForActiveTab(), allHistory(), clearAllHistory(),
+      clearTabHistory().
+    - BrowserViewModel.kt: BrowserUiState gains showHistory: Boolean and
+      historyEntries: List<HistoryEntry>; rebuildState() fetches active-tab history;
+      new operations: openHistory(), closeHistory(), clearHistory(),
+      navigateToHistoryEntry(url).
+    - BrowserScreen.kt: history IconButton (Icons.AutoMirrored.Filled.List) added
+      to TopAppBar actions; Material3 AlertDialog with LazyColumn shows history
+      entries (title/URL/timestamp); tap navigates active tab; Clear/Close actions.
+
+    GeckoSession integration:
+    - History recorded on onPageStop(success=true) only — not on PageStart or
+      LocationChange, so load errors never create history entries.
+    - Title updated on onTitleChange without creating duplicate entries.
+    - Navigation state (canGoBack/canGoForward) already derived from GeckoSession
+      NavigationDelegate — unchanged from Phase 20F.
+
+    History model: in-memory only (no SQLite persistence in this phase).
+    Per-tab isolation: switching tabs exposes that tab's own history, URL,
+    title, and back/forward state. No global shared navigation stack.
+
+    History UI: Material3 AlertDialog with LazyColumn, HH:mm timestamp,
+    tap-to-navigate active tab, Clear and Close actions.
+
+    Tests: 14 new HistoryStoreTest cases + 22 existing tests (NormalizeUrlTest,
+    TabStoreTest) — all 36 pass. assembleDebug: BUILD SUCCESSFUL.
+
+    Known limitations:
+    - History is in-memory only; cleared on app restart (no SQLite persistence).
+    - No bookmarks, no private browsing, no download interception.
+    - Pre-existing Phase 20C UnsatisfiedLinkError for native bridge .so unchanged.
+
 33. Phase 20H — History / bookmarks
 34. Phase 20I — Tracker blocking
 35. Phase 20J — Privacy / fingerprinting controls
@@ -419,3 +478,4 @@
 41. Phase 20P — Android release build
 42. Phase 21 — Remote/headless mode
 43. Phase 22 — Production packaging and releases
+

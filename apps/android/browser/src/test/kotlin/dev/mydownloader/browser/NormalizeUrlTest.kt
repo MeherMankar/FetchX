@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -37,3 +37,4 @@ class NormalizeUrlTest {
     fun ipAddressGetsPrefixed() =
         assertEquals("https://192.168.1.1", normalizeUrl("192.168.1.1"))
 }
+
