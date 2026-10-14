@@ -3,6 +3,7 @@ package dev.fetchx.downloads.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -45,7 +46,7 @@ fun DownloadItemRow(
             Text(
                 text = item.fileName,
                 style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
 
@@ -101,7 +102,7 @@ fun DownloadItemRow(
 
                     Spacer(modifier = Modifier.height(2.dp))
 
-                    // Speed and ETA
+                    // Keep transfer details separate from actions on narrow screens.
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = formatSpeed(state.speedBytesPerSec),
@@ -114,7 +115,12 @@ fun DownloadItemRow(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Spacer(modifier = Modifier.weight(1f))
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                         TextButton(onClick = onPause) { Text("Pause") }
                         TextButton(onClick = onCancel) { Text("Cancel") }
                     }
@@ -122,13 +128,15 @@ fun DownloadItemRow(
 
                 is DownloadState.Queued -> {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row {
-                        Text(
-                            text = "Queued",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "Queued",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                         TextButton(onClick = onCancel) { Text("Cancel") }
                     }
                 }
@@ -138,13 +146,15 @@ fun DownloadItemRow(
                     // DownloadState.Paused carries no byte-progress fields — the domain model
                     // does not propagate progress into the paused state. Extending this requires
                     // changes to the Rust models crate and the Android bridge (Phase 20E+).
-                    Row {
-                        Text(
-                            text = "Paused",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "Paused",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                         TextButton(onClick = onResume) { Text("Resume") }
                         TextButton(onClick = onCancel) { Text("Cancel") }
                     }
@@ -169,28 +179,34 @@ fun DownloadItemRow(
                         Spacer(modifier = Modifier.height(2.dp))
                     }
 
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = "Completed \u00b7 ${formatBytes(state.totalBytes)}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                         TextButton(onClick = onRemove) { Text("Remove") }
                     }
                 }
 
                 is DownloadState.Failed -> {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row {
-                        Text(
-                            text = "Failed: ${sanitizeFailureReason(state.reason)}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
+                    Text(
+                        text = "Failed: ${sanitizeFailureReason(state.reason)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                         if (state.retryable) {
                             TextButton(onClick = onRetry) { Text("Retry") }
                         }
@@ -200,13 +216,15 @@ fun DownloadItemRow(
 
                 is DownloadState.Cancelled -> {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row {
-                        Text(
-                            text = "Cancelled",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "Cancelled",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
                         TextButton(onClick = onRemove) { Text("Remove") }
                     }
                 }
@@ -311,4 +329,3 @@ internal fun sanitizeFailureReason(reason: String): String {
         else -> "Download failed. Please try again."
     }
 }
-

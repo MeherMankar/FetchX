@@ -21,10 +21,41 @@ import kotlin.coroutines.coroutineContext
 
 private const val TAG = "BrowserViewModel"
 
+data class BrowserProfile(
+    val id: String,
+    val name: String,
+    val accent: String,
+    val description: String,
+)
+
+data class SearchSuggestion(
+    val title: String,
+    val url: String,
+    val category: String,
+)
+
+enum class SearchEngine(
+    val displayName: String,
+    val searchUrl: String,     // use %s for query placeholder
+    val homepage: String,
+    val isPrivate: Boolean = false,
+) {
+    GOOGLE("Google", "https://www.google.com/search?q=%s", "https://www.google.com"),
+    BING("Bing", "https://www.bing.com/search?q=%s", "https://www.bing.com"),
+    DUCKDUCKGO("DuckDuckGo", "https://duckduckgo.com/?q=%s", "https://duckduckgo.com", isPrivate = true),
+    BRAVE("Brave Search", "https://search.brave.com/search?q=%s", "https://search.brave.com", isPrivate = true),
+    STARTPAGE("Startpage", "https://www.startpage.com/search?q=%s", "https://www.startpage.com", isPrivate = true),
+    ECOSIA("Ecosia", "https://www.ecosia.org/search?q=%s", "https://www.ecosia.org"),
+    KAGI("Kagi", "https://kagi.com/search?q=%s", "https://kagi.com", isPrivate = true),
+    MOJEEK("Mojeek", "https://www.mojeek.com/search?q=%s", "https://www.mojeek.com", isPrivate = true),
+    WIKIPEDIA("Wikipedia", "https://en.wikipedia.org/w/index.php?search=%s", "https://en.wikipedia.org"),
+    YOUTUBE("YouTube", "https://www.youtube.com/results?search_query=%s", "https://www.youtube.com"),
+}
+
 data class BrowserUiState(
     val tabs: List<TabState> = emptyList(),
     val activeTabId: String? = null,
-    val urlInput: String = "https://example.com",
+    val urlInput: String = "about:blank",
     val showHistory: Boolean = false,
     val historyEntries: List<HistoryEntry> = emptyList(),
     val showBookmarks: Boolean = false,
@@ -39,14 +70,37 @@ data class BrowserUiState(
     val showExtensions: Boolean = false,
     val extensionManagerState: ExtensionManagerState = ExtensionManagerState(isLoading = true),
     val isImportingExtension: Boolean = false,
+    val showTabOverview: Boolean = false,
+    val showBrowserSettings: Boolean = false,
+    val showProfileSwitcher: Boolean = false,
+    val readerModeAvailable: Boolean = false,
+    val readerModeActive: Boolean = false,
+    val profiles: List<BrowserProfile> = listOf(
+        BrowserProfile("default", "Default", "#4F8EF7", "Daily browsing"),
+        BrowserProfile("work", "Work", "#7C6AF2", "Productivity"),
+        BrowserProfile("research", "Research", "#3AAE7A", "Study and reading"),
+    ),
+    val selectedProfileId: String = "default",
+    val searchSuggestions: List<SearchSuggestion> = emptyList(),
+    val selectedSearchEngine: SearchEngine = SearchEngine.DUCKDUCKGO,
+    val showSearchEngineSelector: Boolean = false,
+    // ── Zenium features ───────────────────────────────────────────────────
+    val showSpaceSwitcher: Boolean = false,
+    val showEssentials: Boolean = false,
+    val essentials: List<Essential> = emptyList(),
+    val showThemePicker: Boolean = false,
+    val themeSeedColor: Long = 0xFF4F8EF7L,
+    val compactMode: Boolean = false,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
+    val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
 }
 
 class BrowserViewModel internal constructor(
     internal val bookmarkController: BookmarkController = BookmarkController(),
     internal val trackerBlockingController: TrackerBlockingController = TrackerBlockingController(),
     internal val privacyController: PrivacyController = PrivacyController(),
+    internal val essentialsStore: EssentialsStore = EssentialsStore(),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(BrowserUiState())
@@ -97,30 +151,37 @@ class BrowserViewModel internal constructor(
         val tm = tabManager ?: return
         val activeId = tm.activeTabId()
         val tabs = tm.allTabStates()
-        val activeUrl = tabs.find { it.id == activeId }?.url ?: "https://example.com"
+        val activeUrl = tabs.find { it.id == activeId }?.url ?: "about:blank"
         val historyEntries = tm.historyForActiveTab()
         bookmarkController.refreshForUrl(activeUrl)
         val bState = bookmarkController.state.value
         val trackerState = trackerBlockingController.state.value
         val trackerStats = trackerState.tabStats[activeId]
+        val readerModeActive = activeUrl.startsWith("about:reader?url=")
+        val readerModeAvailable = activeUrl.startsWith("http://") || activeUrl.startsWith("https://")
+        val showEssentials = activeUrl == "about:blank" || activeUrl.isEmpty()
         _uiState.update {
             it.copy(
                 tabs = tabs,
                 activeTabId = activeId,
-                urlInput = activeUrl,
+                urlInput = activeUrl.takeUnless { it == "about:blank" }.orEmpty(),
                 historyEntries = historyEntries,
                 isCurrentPageBookmarked = bState.isCurrentPageBookmarked,
                 bookmarks = bState.bookmarks,
                 trackerBlockingEnabled = trackerState.enabled,
                 activeTabBlockedRequests = trackerStats?.blockedRequests ?: 0,
                 activeTabBlockedHosts = trackerStats?.blockedHosts.orEmpty(),
+                readerModeActive = readerModeActive,
+                readerModeAvailable = readerModeAvailable && !readerModeActive,
+                showEssentials = showEssentials,
+                essentials = essentialsStore.mostVisited(tm.allHistory()),
             )
         }
     }
 
     // ──Tab actions ────────────────────────────────────────────────────────
 
-    fun newTab(url: String = "https://example.com") {
+    fun newTab(url: String = "about:blank") {
         tabManager?.createTab(url)
         reattachActiveSession()
     }
@@ -138,7 +199,7 @@ class BrowserViewModel internal constructor(
     // ──Navigation ─────────────────────────────────────────────────────────
 
     fun navigate(rawUrl: String) {
-        tabManager?.navigate(rawUrl)
+        tabManager?.navigate(rawUrl, _uiState.value.selectedSearchEngine)
     }
 
     fun goBack() { tabManager?.goBack() }
@@ -202,12 +263,83 @@ class BrowserViewModel internal constructor(
         tabManager?.navigate(url)
     }
 
+    fun toggleReaderMode() {
+        val session = tabManager?.activeSession() ?: return
+        val active = !_uiState.value.readerModeActive
+        _uiState.update { it.copy(readerModeActive = active) }
+        if (active) {
+            session.loadUri("about:reader?url=${_uiState.value.activeTab?.url?.let { java.net.URLEncoder.encode(it, "UTF-8") }}")
+        } else {
+            // Navigate back to the original URL from the reader URL
+            val current = _uiState.value.activeTab?.url ?: return
+            val original = if (current.startsWith("about:reader?url=")) {
+                try { java.net.URLDecoder.decode(current.removePrefix("about:reader?url="), "UTF-8") }
+                catch (_: Exception) { null }
+            } else null
+            if (original != null) session.loadUri(original)
+        }
+    }
+
+    // ──Zenium features ────────────────────────────────────────────────────
+
+    // Spaces
+    fun openSpaceSwitcher() { _uiState.update { it.copy(showSpaceSwitcher = true) } }
+    fun closeSpaceSwitcher() { _uiState.update { it.copy(showSpaceSwitcher = false) } }
+
+    fun newTabInCurrentSpace(url: String = "about:blank") {
+        val spaceId = _uiState.value.selectedProfileId
+        tabManager?.createTab(url, spaceId)
+        reattachActiveSession()
+    }
+
+    // Essentials
+    fun navigateToEssential(url: String) { tabManager?.navigate(url) }
+    // Theme color picker
+    fun openThemePicker() { _uiState.update { it.copy(showThemePicker = true) } }
+    fun closeThemePicker() { _uiState.update { it.copy(showThemePicker = false) } }
+    fun setThemeSeedColor(colorLong: Long) {
+        _uiState.update { it.copy(themeSeedColor = colorLong, showThemePicker = false) }
+    }
+
+    // Compact mode
+    fun toggleCompactMode() { _uiState.update { it.copy(compactMode = !it.compactMode) } }
+
     fun openTrackerDetails() {
         _uiState.update { it.copy(showTrackerDetails = true) }
     }
 
     fun closeTrackerDetails() {
         _uiState.update { it.copy(showTrackerDetails = false) }
+    }
+
+    fun openTabOverview() {
+        _uiState.update { it.copy(showTabOverview = true) }
+    }
+
+    fun closeTabOverview() {
+        _uiState.update { it.copy(showTabOverview = false) }
+    }
+
+    fun openBrowserSettings() {
+        _uiState.update { it.copy(showBrowserSettings = true) }
+    }
+
+    fun closeBrowserSettings() {
+        _uiState.update { it.copy(showBrowserSettings = false) }
+    }
+
+    fun openProfileSwitcher() {
+        _uiState.update { it.copy(showProfileSwitcher = true) }
+    }
+
+    fun closeProfileSwitcher() {
+        _uiState.update { it.copy(showProfileSwitcher = false) }
+    }
+
+    fun switchProfile(profileId: String) {
+        if (_uiState.value.profiles.none { it.id == profileId }) return
+        _uiState.update { it.copy(selectedProfileId = profileId, showProfileSwitcher = false, showSpaceSwitcher = false) }
+        reattachActiveSession()
     }
 
     fun setTrackerBlockingEnabled(enabled: Boolean) {
@@ -351,13 +483,86 @@ class BrowserViewModel internal constructor(
         }
     }
 
+    // ──Search engine ──────────────────────────────────────────────────────
+
+    fun openSearchEngineSelector() {
+        _uiState.update { it.copy(showSearchEngineSelector = true) }
+    }
+
+    fun closeSearchEngineSelector() {
+        _uiState.update { it.copy(showSearchEngineSelector = false) }
+    }
+
+    fun selectSearchEngine(engine: SearchEngine) {
+        _uiState.update { it.copy(selectedSearchEngine = engine, showSearchEngineSelector = false) }
+    }
+
     // ──URL input sync ─────────────────────────────────────────────────────
 
     fun onUrlInputChanged(url: String) {
-        _uiState.update { it.copy(urlInput = url) }
+        val trimmed = url.trim()
+        val suggestions = buildSuggestions(trimmed)
+        _uiState.update { it.copy(urlInput = url, searchSuggestions = suggestions) }
+    }
+
+    fun syncUrlInput(url: String) {
+        _uiState.update { it.copy(urlInput = url, searchSuggestions = emptyList()) }
+    }
+
+    fun applySuggestion(url: String) {
+        val normalized = url.trim()
+        if (normalized.isEmpty()) return
+        _uiState.update { it.copy(urlInput = normalized, searchSuggestions = emptyList()) }
+        tabManager?.navigate(normalized)
     }
 
     // ──Private ────────────────────────────────────────────────────────────
+
+    private fun buildSuggestions(rawQuery: String): List<SearchSuggestion> {
+        val query = rawQuery.trim().lowercase()
+        val engine = _uiState.value.selectedSearchEngine
+        if (query.isEmpty()) {
+            return listOf(
+                SearchSuggestion("Search with ${engine.displayName}", engine.homepage, "quick action"),
+            )
+        }
+
+        val bookmarks = bookmarkController.state.value.bookmarks
+        val history = tabManager?.allHistory() ?: emptyList()
+        val results = mutableListOf<SearchSuggestion>()
+
+        bookmarks.filter { it.title.contains(query, ignoreCase = true) || it.url.contains(query, ignoreCase = true) }
+            .take(3)
+            .forEach { results += SearchSuggestion(it.title, it.url, "bookmark") }
+
+        history.filter { it.title?.contains(query, ignoreCase = true) == true || it.url.contains(query, ignoreCase = true) }
+            .take(3)
+            .forEach {
+                val host = try {
+                    java.net.URI(it.url).host
+                } catch (_: java.net.URISyntaxException) {
+                    null
+                }
+                val title = it.title?.takeIf(String::isNotBlank) ?: host?.removePrefix("www.") ?: "Visited site"
+                results += SearchSuggestion(title, it.url, "history")
+            }
+
+        val encodedQuery = java.net.URLEncoder.encode(rawQuery.trim(), "UTF-8")
+        if (query.length > 1) {
+            val isAddress = looksLikeWebAddress(rawQuery)
+            if (isAddress) {
+                results += SearchSuggestion("Open website", normalizeUrl(rawQuery, engine), "website")
+            } else {
+                results += SearchSuggestion(
+                    "Search “${rawQuery.trim()}” with ${engine.displayName}",
+                    engine.searchUrl.replace("%s", encodedQuery),
+                    "search · ${engine.displayName}",
+                )
+            }
+        }
+
+        return results.distinctBy { it.url }.take(5)
+    }
 
     private fun reattachActiveSession() {
         val view = geckoViewRef?.get() ?: return
@@ -392,19 +597,36 @@ class BrowserViewModel internal constructor(
 }
 
 /**
- * Normalizes a user-entered URL string to an absolute HTTPS URL.
+ * Normalizes address-bar input, using the new-tab page for blank input.
  *
  * Examples:
  * - `example.com` → `https://example.com`
  * - `http://example.com` → unchanged
  * - `https://example.com` → unchanged
- * - blank → `https://example.com`
+ * - blank or `about:blank` → `about:blank`
  *
  * Exposed as `internal` for unit testing.
  */
-internal fun normalizeUrl(input: String): String {
+internal fun normalizeUrl(
+    input: String,
+    searchEngine: SearchEngine = SearchEngine.DUCKDUCKGO,
+): String {
     val trimmed = input.trim()
-    if (trimmed.isBlank()) return "https://example.com"
+    if (trimmed.isBlank() || trimmed == "about:blank") return "about:blank"
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
-    return "https://$trimmed"
+    if (looksLikeWebAddress(trimmed)) return "https://$trimmed"
+
+    val encodedQuery = java.net.URLEncoder.encode(trimmed, "UTF-8")
+    return searchEngine.searchUrl.replace("%s", encodedQuery)
+}
+
+internal fun looksLikeWebAddress(input: String): Boolean {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty() || trimmed.any(Char::isWhitespace)) return false
+    val host = try {
+        java.net.URI("https://$trimmed").host
+    } catch (_: java.net.URISyntaxException) {
+        null
+    }
+    return host != null && (trimmed.contains('.') || host == "localhost")
 }

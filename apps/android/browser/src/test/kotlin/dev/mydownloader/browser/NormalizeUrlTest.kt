@@ -6,12 +6,16 @@ import kotlin.test.assertEquals
 class NormalizeUrlTest {
 
     @Test
-    fun blankInputFallsBackToExample() =
-        assertEquals("https://example.com", normalizeUrl(""))
+    fun blankInputOpensNewTabPage() =
+        assertEquals("about:blank", normalizeUrl(""))
 
     @Test
-    fun whitespaceInputFallsBackToExample() =
-        assertEquals("https://example.com", normalizeUrl("   "))
+    fun whitespaceInputOpensNewTabPage() =
+        assertEquals("about:blank", normalizeUrl("   "))
+
+    @Test
+    fun aboutBlankPassesThrough() =
+        assertEquals("about:blank", normalizeUrl("about:blank"))
 
     @Test
     fun httpsUrlPassesThrough() =
@@ -36,5 +40,18 @@ class NormalizeUrlTest {
     @Test
     fun ipAddressGetsPrefixed() =
         assertEquals("https://192.168.1.1", normalizeUrl("192.168.1.1"))
-}
 
+    @Test
+    fun plainSiteNameUsesSelectedSearchEngine() =
+        assertEquals(
+            "https://search.brave.com/search?q=instagram",
+            normalizeUrl("instagram", SearchEngine.BRAVE),
+        )
+
+    @Test
+    fun plainTextUsesSelectedSearchEngine() =
+        assertEquals(
+            "https://www.google.com/search?q=how+to+code",
+            normalizeUrl("how to code", SearchEngine.GOOGLE),
+        )
+}

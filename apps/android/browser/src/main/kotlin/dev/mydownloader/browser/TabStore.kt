@@ -10,6 +10,7 @@ class TabStore {
     private var _activeTabId: String? = null
 
     fun allTabs(): List<TabState> = _tabs.toList()
+    fun allTabsForSpace(spaceId: String): List<TabState> = _tabs.filter { it.spaceId == spaceId }
     fun activeTabId(): String? = _activeTabId
     fun activeTab(): TabState? = _tabs.find { it.id == _activeTabId }
     fun tabCount(): Int = _tabs.size

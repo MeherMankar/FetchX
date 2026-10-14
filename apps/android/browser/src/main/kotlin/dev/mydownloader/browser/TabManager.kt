@@ -34,15 +34,15 @@ class TabManager(
 
     // ──Public API ─────────────────────────────────────────────────────────
 
-    /** Creates a new tab, makes it active, and returns its ID. */
-    fun createTab(initialUrl: String = "https://example.com"): String {
+    /** Creates a new tab in the given space, makes it active, and returns its ID. */
+    fun createTab(initialUrl: String = "about:blank", spaceId: String = "default"): String {
         val id = UUID.randomUUID().toString()
         val session = buildSession(id)
         session.open(runtime)
         trackerBlockingController.registerTab(id)
         sessions[id] = session
         val normalizedUrl = normalizeUrl(initialUrl)
-        store.addTab(TabState(id = id, url = normalizedUrl))
+        store.addTab(TabState(id = id, url = normalizedUrl, spaceId = spaceId))
         session.loadUri(normalizedUrl)
         Log.i(TAG, "Created tab $id")
         onStateChanged?.invoke()
@@ -90,8 +90,11 @@ class TabManager(
 
     // ──Navigation on active tab ───────────────────────────────────────────
 
-    fun navigate(rawUrl: String) {
-        val url = normalizeUrl(rawUrl)
+    fun navigate(
+        rawUrl: String,
+        searchEngine: SearchEngine = SearchEngine.DUCKDUCKGO,
+    ) {
+        val url = normalizeUrl(rawUrl, searchEngine)
         val tabId = store.activeTabId() ?: return
         sessions[tabId]?.loadUri(url)
         store.updateTab(tabId) { it.copy(url = url, errorText = null) }

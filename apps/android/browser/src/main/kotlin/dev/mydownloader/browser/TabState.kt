@@ -5,12 +5,13 @@ package dev.fetchx.browser
  * The GeckoSession is NOT part of this data class — it is managed by TabManager.
  */
 data class TabState(
-    val id: String,           // stable UUID, never changes for the lifetime of this tab
-    val url: String = "https://example.com",
+    val id: String,
+    val url: String = "about:blank",
     val title: String? = null,
     val isLoading: Boolean = false,
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
     val errorText: String? = null,
+    /** The Space (profile) this tab belongs to. */
+    val spaceId: String = "default",
 )
-
