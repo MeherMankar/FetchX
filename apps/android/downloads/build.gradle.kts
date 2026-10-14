@@ -31,6 +31,7 @@ dependencies {
     implementation(project(":bridge"))
 
     implementation(platform(libs.compose.bom))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)

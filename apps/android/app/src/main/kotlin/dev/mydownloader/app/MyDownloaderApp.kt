@@ -1,7 +1,10 @@
 package dev.fetchx.app
 
 import android.app.Application
+import android.content.Intent
+import android.os.Build
 import android.util.Log
+import dev.fetchx.app.service.DownloadForegroundService
 import dev.fetchx.bridge.BridgeInitializer
 import dev.fetchx.browser.GeckoRuntimeHolder
 
@@ -26,6 +29,16 @@ class FetchXApp : Application() {
             BridgeInitializer.initialize(this)
         } catch (it: Throwable) {
             Log.e(TAG, "Bridge initialization failed — app will degrade gracefully: $it", it)
+        }
+        startDownloadServiceIfNeeded()
+    }
+
+    fun startDownloadServiceIfNeeded() {
+        val intent = Intent(this, DownloadForegroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 

@@ -29,6 +29,11 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name="dev.fetchx.app.service.DownloadForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
     </application>
 
 </manifest>

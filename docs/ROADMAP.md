@@ -656,7 +656,81 @@
     Recommended architecture: Option C — Per-component SOCKS5 proxy (GeckoView
     via WebExtension browser.proxy API + reqwest socks feature + aria2
     --all-proxy + yt-dlp --proxy); no Android VpnService required.
-39. Phase 20N — Android storage / notifications
+39. Phase 20N — Android storage / notifications (completed)
+
+    Implemented `StorageManager`, `DownloadNotificationManager`, and
+    `DownloadForegroundService` for background download support on Android.
+
+    New files:
+    - `apps/android/downloads/src/.../downloads/storage/StorageManager.kt`
+      Manages the download storage location. Default: app-specific external
+      Downloads directory (no dangerous permissions). Custom: SAF directory with
+      persisted URI permission. Sanitizes all remote-supplied filenames (path
+      traversal, null bytes, reserved characters, length capping, leading-dot strip,
+      `..` sequence removal). Produces non-colliding filenames via `uniqueFileName`.
+    - `apps/android/downloads/src/.../downloads/notification/NotificationFormatting.kt`
+      Pure-Kotlin formatting helpers: `formatDownloadSpeed`, `formatEta`,
+      `formatBytes`. No Android imports; JVM-testable.
+    - `apps/android/downloads/src/.../downloads/notification/DownloadNotificationManager.kt`
+      Creates three notification channels (active/LOW, complete/DEFAULT,
+      failed/DEFAULT). Posts per-download progress, queued, paused, completion,
+      and failure notifications. Builds the foreground summary notification.
+      Privacy: only filenames shown; URLs/credentials never included. Uses
+      `safeNotify` to handle missing POST_NOTIFICATIONS permission gracefully.
+    - `apps/android/app/src/.../app/service/DownloadForegroundService.kt`
+      Foreground service in `:app` module. Observes `observeDownloads()` from
+      the existing bridge repository; dispatches notifications via
+      `DownloadNotificationManager`; stops itself when no active/queued downloads
+      remain. Owns no download logic. Uses FOREGROUND_SERVICE_TYPE_DATA_SYNC.
+      Handles `stopForeground` API differences between Android 13+ and older.
+
+    Modified files:
+    - `AndroidManifest.xml`: added `<service>` declaration for
+      `DownloadForegroundService` with `foregroundServiceType="dataSync"` and
+      `exported="false"`.
+    - `downloads/build.gradle.kts`: added `implementation(libs.androidx.core.ktx)`
+      (required by `NotificationCompat` and `NotificationManagerCompat`).
+    - `MyDownloaderApp.kt (FetchXApp)`: added `startDownloadServiceIfNeeded()` call
+      in `onCreate()` after bridge initialization; added helper that uses
+      `startForegroundService` on API 26+ or `startService` below.
+
+    New unit tests:
+    - `StorageManagerSanitizeTest` (7 tests): blank input, path traversal,
+      normal filename, null bytes, reserved chars, length truncation, leading dots.
+    - `NotificationFormattingTest` (7 tests): speed in B/s, KB/s, MB/s; ETA in
+      seconds, minutes, hours; byte formatting for B/KB/MB/GB.
+
+    Permission model: no MANAGE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, or
+    WRITE_EXTERNAL_STORAGE declared. All storage access via app-specific external
+    directory or SAF URI with persisted permission.
+
+    Module placement:
+    - `StorageManager` and `DownloadNotificationManager`: `:downloads` module.
+    - `DownloadForegroundService`: `:app` module (to avoid circular dependency;
+      requires both `:bridge` and `:downloads`).
+
+    Validation:
+    - cargo fmt --check: pass. cargo check --workspace: pass.
+    - `./gradlew :downloads:test`: 23/23 tests pass (14 existing + 7 storage +
+      7 notification + existing UtilsTest). BUILD SUCCESSFUL.
+    - `./gradlew assembleDebug`: BUILD SUCCESSFUL.
+    - APK installed successfully on physical device (V2135 Android 13).
+      Device disconnected before logcat capture could be completed.
+
+    New documentation:
+    - docs/ANDROID_STORAGE_NOTIFICATIONS.md — storage architecture, default
+      directory, SAF selection, permission model, filename sanitization,
+      notification channels, background architecture, foreground service decision,
+      security considerations, known limitations.
+
+    Known limitations:
+    1. No notification throttle for high-frequency Rust core updates.
+    2. Service started unconditionally on app launch (stops immediately if
+       bridge unavailable).
+    3. No open-file action on completion notifications (requires FileProvider,
+       Phase 20P or later).
+    4. Pre-existing Phase 20C UnsatisfiedLinkError for native bridge unchanged.
+
 40. Phase 20O — Security / privacy audit
 41. Phase 20P — Android release build
 42. Phase 21 — Remote/headless mode
