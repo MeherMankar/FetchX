@@ -101,6 +101,16 @@ class ExtensionFrameworkTest {
     }
 
     @Test
+    fun `local extension trust state is explicit and separate from permissions`() {
+        val store = ExtensionStore()
+        val trusted = extension(trust = ExtensionTrustState.TRUSTED_BY_USER)
+        assertTrue(store.register(trusted).isSuccess)
+        assertEquals(ExtensionTrustState.TRUSTED_BY_USER, store.find(trusted.id)?.trust)
+        assertTrue(store.setTrust(trusted.id, ExtensionTrustState.REJECTED))
+        assertEquals(ExtensionTrustState.REJECTED, store.find(trusted.id)?.trust)
+    }
+
+    @Test
     fun `store list and extension capacity remain bounded`() {
         val store = ExtensionStore()
         val tooMany = (0..128).map { extension("addon$it@example.org") }
@@ -275,6 +285,7 @@ class ExtensionFrameworkTest {
         state: ExtensionState = ExtensionState.ENABLED,
         source: ExtensionSource = ExtensionSource.LOCAL_PACKAGE,
         requestedPermissions: Set<ExtensionPermission> = emptySet(),
+        trust: ExtensionTrustState = ExtensionTrustState.UNVERIFIED,
     ): Extension {
         val metadata = ExtensionMetadata(
             id = extensionId(id),
@@ -282,7 +293,7 @@ class ExtensionFrameworkTest {
             version = version,
             description = "A test extension",
         )
-        return Extension(metadata, state, source, requestedPermissions)
+        return Extension(metadata, state, source, requestedPermissions, trust)
     }
 
     private fun extensionId(value: String = "fetchx-addon@example.org"): ExtensionId =

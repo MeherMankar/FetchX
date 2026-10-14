@@ -19,7 +19,13 @@ import dev.fetchx.core.download.DownloadState
  * Privacy: filenames are shown; URLs, credentials, and tokens are never included.
  * Throttling: callers are responsible for not calling notifyProgress on every byte.
  */
-class DownloadNotificationManager(private val context: Context) {
+internal fun notificationTitle(fileName: String, showFilename: Boolean, fallback: String): String =
+    if (showFilename) fileName else fallback
+
+class DownloadNotificationManager(
+    private val context: Context,
+    private val privacySettings: DownloadNotificationPrivacySettings = DownloadNotificationPrivacySettings(context),
+) {
 
     companion object {
         const val CHANNEL_ACTIVE   = "fetchx_downloads_active"
@@ -61,7 +67,7 @@ class DownloadNotificationManager(private val context: Context) {
 
         val b = NotificationCompat.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(item.fileName)
+            .setContentTitle(notificationTitle(item, "Download in progress"))
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -74,7 +80,7 @@ class DownloadNotificationManager(private val context: Context) {
     fun notifyQueued(item: DownloadItem) {
         val b = NotificationCompat.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle(item.fileName)
+            .setContentTitle(notificationTitle(item, "Download queued"))
             .setContentText("Queued")
             .setOngoing(true).setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -84,7 +90,7 @@ class DownloadNotificationManager(private val context: Context) {
     fun notifyPaused(item: DownloadItem) {
         val b = NotificationCompat.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle(item.fileName)
+            .setContentTitle(notificationTitle(item, "Download paused"))
             .setContentText("Paused")
             .setOngoing(false).setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -94,10 +100,11 @@ class DownloadNotificationManager(private val context: Context) {
     fun notifyCompleted(item: DownloadItem) {
         cancel(item.id)
         val size = (item.state as? DownloadState.Completed)?.let { " · ${formatBytes(it.totalBytes)}" } ?: ""
+        val genericTitle = "Download completed"
         val b = NotificationCompat.Builder(context, CHANNEL_COMPLETE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle(item.fileName)
-            .setContentText("Download complete$size")
+            .setContentTitle(notificationTitle(item, genericTitle))
+            .setContentText(if (privacySettings.showDownloadFilenamesInNotifications()) "Download complete$size" else "Download completed")
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         safeNotify(stableId(item.id), b.build())
@@ -108,8 +115,8 @@ class DownloadNotificationManager(private val context: Context) {
         val reason = (item.state as? DownloadState.Failed)?.reason?.take(80) ?: "Unknown error"
         val b = NotificationCompat.Builder(context, CHANNEL_FAILED)
             .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setContentTitle(item.fileName)
-            .setContentText("Download failed: $reason")
+            .setContentTitle(notificationTitle(item, "Download failed"))
+            .setContentText(if (privacySettings.showDownloadFilenamesInNotifications()) "Download failed: $reason" else "Download failed")
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         safeNotify(stableId(item.id), b.build())
@@ -131,7 +138,28 @@ class DownloadNotificationManager(private val context: Context) {
 
     internal fun stableId(downloadId: String): Int = downloadId.hashCode()
 
+    private fun notificationTitle(item: DownloadItem, fallback: String): String =
+        notificationTitle(item.fileName, privacySettings.showDownloadFilenamesInNotifications(), fallback)
+
     private fun safeNotify(id: Int, n: Notification) {
         try { nm.notify(id, n) } catch (_: SecurityException) { /* POST_NOTIFICATIONS not granted */ }
+    }
+}
+
+class DownloadNotificationPrivacySettings(
+    private val context: Context,
+) {
+    companion object {
+        private const val PREFS_NAME = "fetchx_notification_privacy"
+        private const val KEY_SHOW_DOWNLOAD_FILENAMES = "show_download_filenames_in_notifications"
+    }
+
+    private val prefs by lazy { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+
+    fun showDownloadFilenamesInNotifications(): Boolean =
+        prefs.getBoolean(KEY_SHOW_DOWNLOAD_FILENAMES, true)
+
+    fun setShowDownloadFilenamesInNotifications(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SHOW_DOWNLOAD_FILENAMES, enabled).apply()
     }
 }

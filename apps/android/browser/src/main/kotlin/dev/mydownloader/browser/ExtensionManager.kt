@@ -133,6 +133,14 @@ class ExtensionManager internal constructor(
 
     fun disable(id: ExtensionId): Boolean = changeEnabledState(id, enabling = false)
 
+    fun setTrust(id: ExtensionId, trust: ExtensionTrustState): Boolean {
+        if (!store.setTrust(id, trust)) {
+            return reject("Extension is no longer installed.")
+        }
+        publishStoreState()
+        return true
+    }
+
     fun remove(id: ExtensionId): Boolean {
         val extension = store.find(id) ?: return reject("Extension is no longer installed.")
         if (extension.source == ExtensionSource.BUILT_IN) {

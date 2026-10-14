@@ -58,6 +58,20 @@ enum class ExtensionSource {
     BUILT_IN,
 }
 
+/**
+ * Explicit local trust state for imported extensions.
+ *
+ * This project does not claim a package is cryptographically verified unless a
+ * GeckoView API provides a reliable, authoritative signer/trust check. Without
+ * such an API, the app must keep the state as an explicit local decision instead
+ * of pretending the package is trusted.
+ */
+enum class ExtensionTrustState {
+    UNVERIFIED,
+    TRUSTED_BY_USER,
+    REJECTED,
+}
+
 enum class ExtensionPermissionKind {
     API,
     HOST_ORIGIN,
@@ -122,7 +136,8 @@ data class Extension(
     val metadata: ExtensionMetadata,
     val state: ExtensionState,
     val source: ExtensionSource,
-    val requestedPermissions: Set<ExtensionPermission>,
+    val requestedPermissions: Set<ExtensionPermission> = emptySet(),
+    val trust: ExtensionTrustState = ExtensionTrustState.UNVERIFIED,
 ) {
     val id: ExtensionId get() = metadata.id
 }

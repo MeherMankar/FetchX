@@ -30,6 +30,12 @@ class NotificationFormattingTest {
         assertTrue(formatEta(7200).contains("h"))
     }
 
+    @Test fun `notification privacy hides file names behind generic labels`() {
+        assertEquals("archive.zip", notificationTitle("archive.zip", true, "Download in progress"))
+        assertEquals("Download in progress", notificationTitle("archive.zip", false, "Download in progress"))
+        assertEquals("Download completed", notificationTitle("archive.zip", false, "Download completed"))
+    }
+
     @Test fun `format bytes`() {
         assertEquals("512 B", formatBytes(512))
         assertTrue(formatBytes(1024).contains("KB"))

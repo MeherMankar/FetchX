@@ -43,9 +43,6 @@ class DownloadForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Promote to foreground immediately to satisfy Android 14+ requirements.
-        startForegroundCompat(0)
-
         val repo = BridgeInitializer.repositoryOrNull()
         if (repo == null) {
             Log.w(TAG, "Bridge unavailable — stopping service")
@@ -55,25 +52,22 @@ class DownloadForegroundService : Service() {
 
         repo.observeDownloads()
             .onEach { items ->
-                val activeCount  = items.count { it.state is DownloadState.Active }
-                val queuedCount  = items.count { it.state is DownloadState.Queued }
+                val activeCount = items.count { it.state is DownloadState.Active }
+                val queuedCount = items.count { it.state is DownloadState.Queued }
                 val runningCount = activeCount + queuedCount
 
-                // Update per-download notifications
                 items.forEach { item ->
                     when (item.state) {
-                        is DownloadState.Active    -> notificationManager.notifyProgress(item)
-                        is DownloadState.Queued    -> notificationManager.notifyQueued(item)
-                        is DownloadState.Paused    -> notificationManager.notifyPaused(item)
+                        is DownloadState.Active -> notificationManager.notifyProgress(item)
+                        is DownloadState.Queued -> notificationManager.notifyQueued(item)
+                        is DownloadState.Paused -> notificationManager.notifyPaused(item)
                         is DownloadState.Completed -> notificationManager.notifyCompleted(item)
-                        is DownloadState.Failed    -> notificationManager.notifyFailed(item)
+                        is DownloadState.Failed -> notificationManager.notifyFailed(item)
                         is DownloadState.Cancelled -> notificationManager.notifyCancelled(item)
                     }
                 }
 
-                if (runningCount > 0) {
-                    startForegroundCompat(activeCount)
-                } else {
+                if (runningCount == 0) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         stopForeground(STOP_FOREGROUND_DETACH)
                     } else {
@@ -81,8 +75,11 @@ class DownloadForegroundService : Service() {
                         stopForeground(true)
                     }
                     stopSelf(startId)
-                    Log.i(TAG, "No active downloads — stopping service")
+                    Log.i(TAG, "No active or queued downloads — stopping service")
+                    return@onEach
                 }
+
+                startForegroundCompat(activeCount)
             }
             .launchIn(scope)
 

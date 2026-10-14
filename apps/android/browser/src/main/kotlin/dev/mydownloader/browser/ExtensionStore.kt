@@ -63,6 +63,11 @@ class ExtensionStore {
         extensions.clear()
     }
 
+    fun setTrust(id: ExtensionId, trust: ExtensionTrustState): Boolean = synchronized(lock) {
+        val extension = extensions[id] ?: return@synchronized false
+        replaceLocked(extension.copy(trust = trust))
+    }
+
     internal fun replace(extension: Extension): Boolean = synchronized(lock) {
         if (!extensions.containsKey(extension.id) || extension.validationError() != null) {
             return@synchronized false

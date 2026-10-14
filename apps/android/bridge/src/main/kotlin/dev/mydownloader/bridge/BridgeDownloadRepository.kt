@@ -125,6 +125,12 @@ class BridgeDownloadRepository(
             service.getDownload(downloadId)?.let(::mapItem)
         }
 
+    suspend fun hasRelevantDownloads(): Boolean = withContext(Dispatchers.IO) {
+        service.listDownloads().map(::mapItem).any { item ->
+            item.state is DownloadState.Active || item.state is DownloadState.Queued
+        }
+    }
+
     // ── Mapping helpers ───────────────────────────────────────────────────
 
     /**

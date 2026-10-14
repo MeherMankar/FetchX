@@ -7,6 +7,10 @@ import android.util.Log
 import dev.fetchx.app.service.DownloadForegroundService
 import dev.fetchx.bridge.BridgeInitializer
 import dev.fetchx.browser.GeckoRuntimeHolder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "FetchXApp"
 
@@ -21,6 +25,8 @@ private const val TAG = "FetchXApp"
  */
 class FetchXApp : Application() {
 
+    private val appScope = CoroutineScope(Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         // Initialize the Rust bridge. This starts the Tokio runtime and CoreServices.
@@ -34,11 +40,19 @@ class FetchXApp : Application() {
     }
 
     fun startDownloadServiceIfNeeded() {
-        val intent = Intent(this, DownloadForegroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+        val repo = BridgeInitializer.repositoryOrNull() ?: return
+        appScope.launch {
+            val shouldStart = withContext(Dispatchers.IO) { repo.hasRelevantDownloads() }
+            if (!shouldStart) {
+                Log.i(TAG, "No active or queued downloads — skipping foreground service start")
+                return@launch
+            }
+            val intent = Intent(this@FetchXApp, DownloadForegroundService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
         }
     }
 
