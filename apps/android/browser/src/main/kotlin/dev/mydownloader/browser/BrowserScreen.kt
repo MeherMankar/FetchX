@@ -555,6 +555,7 @@ fun BrowserScreen(
     if (uiState.showPrivacySettings) {
         PrivacySettingsDialog(
             settings = uiState.privacySettings,
+            onAdBlockingChange = viewModel::setAdBlockingEnabled,
             onFingerprintingProtectionChange = viewModel::setFingerprintingProtectionEnabled,
             onCryptominingProtectionChange = viewModel::setCryptominingProtectionEnabled,
             onThirdPartyCookieIsolationChange = viewModel::setThirdPartyCookieIsolationEnabled,
@@ -1637,6 +1638,7 @@ private fun SettingToggleRow(
 @Composable
 private fun PrivacySettingsDialog(
     settings: PrivacySettings,
+    onAdBlockingChange: (Boolean) -> Unit,
     onFingerprintingProtectionChange: (Boolean) -> Unit,
     onCryptominingProtectionChange: (Boolean) -> Unit,
     onThirdPartyCookieIsolationChange: (Boolean) -> Unit,
@@ -1656,6 +1658,12 @@ private fun PrivacySettingsDialog(
                     "These browser-wide settings apply to all tabs. Reload open pages after changing them.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 8.dp),
+                )
+                PrivacySwitchRow(
+                    title = "Block ads",
+                    description = "Block known ad requests using GeckoView's built-in protection list. Some ads may still appear.",
+                    checked = settings.adBlockingEnabled,
+                    onCheckedChange = onAdBlockingChange,
                 )
                 PrivacySwitchRow(
                     title = "Fingerprinting protection",

@@ -355,6 +355,11 @@ class BrowserViewModel internal constructor(
         _uiState.update { it.copy(showPrivacySettings = false) }
     }
 
+    fun setAdBlockingEnabled(enabled: Boolean) {
+        privacyController.setAdBlockingEnabled(enabled)
+        applyPrivacySettings()
+    }
+
     fun setFingerprintingProtectionEnabled(enabled: Boolean) {
         privacyController.setFingerprintingProtectionEnabled(enabled)
         applyPrivacySettings()

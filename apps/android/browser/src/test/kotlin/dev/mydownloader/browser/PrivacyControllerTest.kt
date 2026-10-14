@@ -15,6 +15,7 @@ class PrivacyControllerTest {
 
         assertEquals(
             PrivacySettings(
+                adBlockingEnabled = true,
                 fingerprintingProtectionEnabled = true,
                 cryptominingProtectionEnabled = true,
                 thirdPartyCookieIsolationEnabled = true,
@@ -30,12 +31,15 @@ class PrivacyControllerTest {
         var changes = 0
         controller.onSettingsChanged = { changes += 1 }
 
+        controller.setAdBlockingEnabled(false)
+        controller.setAdBlockingEnabled(false)
         controller.setFingerprintingProtectionEnabled(false)
         controller.setFingerprintingProtectionEnabled(false)
         controller.setHttpsOnlyEnabled(true)
 
         assertEquals(
             PrivacySettings(
+                adBlockingEnabled = false,
                 fingerprintingProtectionEnabled = false,
                 cryptominingProtectionEnabled = true,
                 thirdPartyCookieIsolationEnabled = true,
@@ -43,7 +47,7 @@ class PrivacyControllerTest {
             ),
             controller.settings.value,
         )
-        assertEquals(2, changes)
+        assertEquals(3, changes)
     }
 
     @Test
@@ -72,7 +76,8 @@ class PrivacyControllerTest {
         )
 
         assertEquals(
-            ContentBlocking.AntiTracking.FINGERPRINTING or
+            ContentBlocking.AntiTracking.AD or
+                ContentBlocking.AntiTracking.FINGERPRINTING or
                 ContentBlocking.AntiTracking.CRYPTOMINING,
             configuration.antiTrackingCategories,
         )
@@ -83,6 +88,7 @@ class PrivacyControllerTest {
         val configuration = geckoPrivacyConfiguration(
             trackerBlockingEnabled = false,
             settings = PrivacySettings(
+                adBlockingEnabled = false,
                 fingerprintingProtectionEnabled = false,
                 cryptominingProtectionEnabled = false,
                 thirdPartyCookieIsolationEnabled = false,
@@ -118,6 +124,49 @@ class PrivacyControllerTest {
         assertEquals(
             GeckoRuntimeSettings.HTTPS_ONLY,
             configuration.allowInsecureConnections,
+        )
+    }
+
+    @Test
+    fun `ad blocking can be enabled independently from tracker protection`() {
+        val configuration = geckoPrivacyConfiguration(
+            trackerBlockingEnabled = false,
+            settings = PrivacySettings(
+                fingerprintingProtectionEnabled = false,
+                cryptominingProtectionEnabled = false,
+            ),
+        )
+
+        assertEquals(ContentBlocking.AntiTracking.AD, configuration.antiTrackingCategories)
+
+        val disabledConfiguration = geckoPrivacyConfiguration(
+            trackerBlockingEnabled = false,
+            settings = PrivacySettings(
+                adBlockingEnabled = false,
+                fingerprintingProtectionEnabled = false,
+                cryptominingProtectionEnabled = false,
+            ),
+        )
+        assertEquals(
+            ContentBlocking.AntiTracking.NONE,
+            disabledConfiguration.antiTrackingCategories,
+        )
+    }
+
+    @Test
+    fun `disabling ad blocking preserves enabled tracker protection`() {
+        val configuration = geckoPrivacyConfiguration(
+            trackerBlockingEnabled = true,
+            settings = PrivacySettings(
+                adBlockingEnabled = false,
+                fingerprintingProtectionEnabled = false,
+                cryptominingProtectionEnabled = false,
+            ),
+        )
+
+        assertEquals(
+            ContentBlocking.AntiTracking.ANALYTIC or ContentBlocking.AntiTracking.SOCIAL,
+            configuration.antiTrackingCategories,
         )
     }
 

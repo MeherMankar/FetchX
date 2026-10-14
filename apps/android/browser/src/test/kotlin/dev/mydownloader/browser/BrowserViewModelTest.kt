@@ -168,9 +168,11 @@ class BrowserViewModelTest {
         vm.setCryptominingProtectionEnabled(false)
         vm.setThirdPartyCookieIsolationEnabled(false)
         vm.setHttpsOnlyEnabled(true)
+        vm.setAdBlockingEnabled(false)
 
         assertEquals(
             PrivacySettings(
+                adBlockingEnabled = false,
                 fingerprintingProtectionEnabled = false,
                 cryptominingProtectionEnabled = false,
                 thirdPartyCookieIsolationEnabled = false,

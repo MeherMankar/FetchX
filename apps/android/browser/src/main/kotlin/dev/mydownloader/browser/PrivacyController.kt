@@ -7,6 +7,7 @@ import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntimeSettings
 
 data class PrivacySettings(
+    val adBlockingEnabled: Boolean = true,
     val fingerprintingProtectionEnabled: Boolean = true,
     val cryptominingProtectionEnabled: Boolean = true,
     val thirdPartyCookieIsolationEnabled: Boolean = true,
@@ -21,6 +22,9 @@ class PrivacyController(initialSettings: PrivacySettings = PrivacySettings()) {
 
     @Volatile
     var onSettingsChanged: (() -> Unit)? = null
+
+    fun setAdBlockingEnabled(enabled: Boolean) =
+        update { it.copy(adBlockingEnabled = enabled) }
 
     fun setFingerprintingProtectionEnabled(enabled: Boolean) =
         update { it.copy(fingerprintingProtectionEnabled = enabled) }
@@ -60,6 +64,11 @@ internal fun geckoPrivacyConfiguration(
     settings: PrivacySettings,
 ): GeckoPrivacyConfiguration {
     var categories = trackerAntiTrackingCategories(trackerBlockingEnabled)
+    categories = if (settings.adBlockingEnabled) {
+        categories or ContentBlocking.AntiTracking.AD
+    } else {
+        categories and ContentBlocking.AntiTracking.AD.inv()
+    }
     if (settings.fingerprintingProtectionEnabled) {
         categories = categories or ContentBlocking.AntiTracking.FINGERPRINTING
     }
