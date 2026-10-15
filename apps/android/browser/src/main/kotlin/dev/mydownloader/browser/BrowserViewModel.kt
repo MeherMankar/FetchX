@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoView
 import java.io.IOException
@@ -70,6 +71,7 @@ data class BrowserUiState(
     val showExtensions: Boolean = false,
     val extensionManagerState: ExtensionManagerState = ExtensionManagerState(isLoading = true),
     val isImportingExtension: Boolean = false,
+    val firefoxAddonsCatalogState: FirefoxAddonsCatalogState = FirefoxAddonsCatalogState(),
     val showTabOverview: Boolean = false,
     val showBrowserSettings: Boolean = false,
     val showProfileSwitcher: Boolean = false,
@@ -114,6 +116,8 @@ class BrowserViewModel internal constructor(
     private var applicationContext: Context? = null
     private var extensionManager: ExtensionManager? = null
     private var extensionStateListener: (() -> Unit)? = null
+    private val firefoxAddonsCatalog = FirefoxAddonsCatalog()
+    private var firefoxAddonsSearchGeneration = 0
 
     init {
         trackerBlockingController.onStateChanged = ::syncTrackerBlockingState

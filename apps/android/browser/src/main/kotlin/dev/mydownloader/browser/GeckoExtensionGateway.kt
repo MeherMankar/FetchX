@@ -5,6 +5,7 @@ import org.mozilla.geckoview.AllowOrDeny
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "GeckoExtensions"
 private const val UBLOCK_PACKAGE_URI = "resource://android/assets/ublock.xpi"
@@ -16,6 +17,13 @@ internal class GeckoExtensionGatewayImpl(
     private val handles = LinkedHashMap<ExtensionId, WebExtension>()
     private var isShutdown = false
     private var activeInstall: GeckoResult<WebExtension>? = null
+    private var isFirefoxAddonsInstallActive = false
+
+    @Volatile
+    override var onInstallPermissionPrompt: ((
+        ExtensionInstallPermissionRequest,
+        (Boolean) -> Unit,
+    ) -> Unit)? = null
 
     init {
         controller.setPromptDelegate(object : WebExtensionController.PromptDelegate {
@@ -24,14 +32,46 @@ internal class GeckoExtensionGatewayImpl(
                 permissions: Array<String>,
                 origins: Array<String>,
             ): GeckoResult<WebExtension.PermissionPromptResponse> {
-                val canGrantPermissions = canGrantExtensionInstallPermissions(
-                    extensionId = extension.id,
-                    apiPermissions = permissions,
-                    origins = origins,
+                val marketplaceInstall = isMarketplaceInstallActive()
+                val canGrantPermissions = if (marketplaceInstall) {
+                    canInstallWithoutPermissionGrant(permissions, origins)
+                } else {
+                    canGrantExtensionInstallPermissions(
+                        extensionId = extension.id,
+                        apiPermissions = permissions,
+                        origins = origins,
+                    )
+                }
+                if (canGrantPermissions) {
+                    return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(true, false))
+                }
+                if (!marketplaceInstall || !canPresentPermissionRequest(permissions, origins)) {
+                    return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(false, false))
+                }
+
+                val result = GeckoResult<WebExtension.PermissionPromptResponse>()
+                val completed = AtomicBoolean(false)
+                val request = ExtensionInstallPermissionRequest(
+                    extensionId = extension.id.take(MAX_PROMPT_TEXT_LENGTH),
+                    name = extension.metaData.name.orEmpty()
+                        .map { if (it.isISOControl()) ' ' else it }
+                        .joinToString("")
+                        .trim()
+                        .take(MAX_PROMPT_TEXT_LENGTH),
+                    permissions = permissions.distinct(),
+                    origins = origins.distinct(),
                 )
-                return GeckoResult.fromValue(
-                    WebExtension.PermissionPromptResponse(canGrantPermissions, false),
-                )
+                val handler = onInstallPermissionPrompt
+                if (handler == null) {
+                    result.complete(WebExtension.PermissionPromptResponse(false, false))
+                } else {
+                    handler(request) { allow ->
+                        if (completed.compareAndSet(false, true)) {
+                            result.complete(WebExtension.PermissionPromptResponse(allow, false))
+                        }
+                    }
+                }
+                return result
             }
 
             override fun onUpdatePrompt(
@@ -182,6 +222,71 @@ internal class GeckoExtensionGatewayImpl(
         )
     }
 
+    override fun installFromFirefoxAddons(addon: FirefoxAddon, callback: (Result<Extension>) -> Unit) {
+        if (!isFirefoxAddonsDownloadUrl(addon.downloadUrl)) {
+            callback(Result.failure(IllegalArgumentException("Invalid Firefox Add-ons package URL")))
+            return
+        }
+        val operation = synchronized(lock) {
+            if (isShutdown || activeInstall != null) {
+                null
+            } else {
+                isFirefoxAddonsInstallActive = true
+                controller.install(
+                    addon.downloadUrl,
+                    WebExtensionController.INSTALLATION_METHOD_MANAGER,
+                ).also { activeInstall = it }
+            }
+        }
+        if (operation == null) {
+            callback(Result.failure(IllegalStateException("An extension operation is already active")))
+            return
+        }
+        operation.accept(
+            { extension ->
+                synchronized(lock) {
+                    if (activeInstall === operation) {
+                        activeInstall = null
+                        isFirefoxAddonsInstallActive = false
+                    }
+                }
+                if (extension == null) {
+                    callback(Result.failure(IllegalStateException("GeckoView returned no installed extension")))
+                    return@accept
+                }
+                val result = extension.toDomain()
+                result.fold(
+                    onSuccess = { domain ->
+                        if (domain.id.value != addon.id) {
+                            discardMalformedInstall(
+                                extension,
+                                IllegalStateException("The installed extension did not match the selected add-on."),
+                                callback,
+                            )
+                        } else {
+                            synchronized(lock) {
+                                if (!isShutdown) handles[domain.id] = extension
+                            }
+                            callback(Result.success(domain))
+                        }
+                    },
+                    onFailure = { conversionError ->
+                        discardMalformedInstall(extension, conversionError, callback)
+                    },
+                )
+            },
+            { error ->
+                synchronized(lock) {
+                    if (activeInstall === operation) {
+                        activeInstall = null
+                        isFirefoxAddonsInstallActive = false
+                    }
+                }
+                fail("install Firefox Add-ons extension", error, callback)
+            },
+        )
+    }
+
     override fun update(id: ExtensionId, callback: (Result<Extension?>) -> Unit) {
         val extension = synchronized(lock) { handles[id] }
         if (extension == null) {
@@ -300,6 +405,23 @@ internal class GeckoExtensionGatewayImpl(
         val cause = error ?: IllegalStateException("GeckoView returned an empty error")
         Log.e(TAG, "GeckoView could not $operation extension (${cause.javaClass.simpleName})")
         callback(Result.failure(cause))
+    }
+
+    private fun isMarketplaceInstallActive(): Boolean = synchronized(lock) {
+        !isShutdown && isFirefoxAddonsInstallActive
+    }
+
+    private companion object {
+        const val MAX_PROMPT_TEXT_LENGTH = 512
+        const val MAX_PROMPT_ITEM_COUNT = 128
+
+        fun canPresentPermissionRequest(permissions: Array<String>, origins: Array<String>): Boolean =
+            permissions.size + origins.size <= MAX_PROMPT_ITEM_COUNT &&
+                (permissions + origins).all {
+                    it.isNotBlank() &&
+                        it.length <= MAX_PROMPT_TEXT_LENGTH &&
+                        it.none(Char::isISOControl)
+                }
     }
 }
 

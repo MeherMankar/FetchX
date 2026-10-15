@@ -11,12 +11,18 @@ data class ExtensionManagerState(
     val isBusy: Boolean = false,
     val operationState: ExtensionState? = null,
     val error: String? = null,
+    val permissionRequest: ExtensionInstallPermissionRequest? = null,
     val isShutdown: Boolean = false,
 )
 
 internal interface GeckoExtensionGateway {
+    var onInstallPermissionPrompt: ((
+        ExtensionInstallPermissionRequest,
+        (Boolean) -> Unit,
+    ) -> Unit)?
     fun list(callback: (Result<List<Extension>>) -> Unit)
     fun install(packageUri: String, callback: (Result<Extension>) -> Unit)
+    fun installFromFirefoxAddons(addon: FirefoxAddon, callback: (Result<Extension>) -> Unit)
     fun update(id: ExtensionId, callback: (Result<Extension?>) -> Unit)
     fun enable(id: ExtensionId, callback: (Result<Extension>) -> Unit)
     fun disable(id: ExtensionId, callback: (Result<Extension>) -> Unit)
@@ -30,6 +36,7 @@ class ExtensionManager internal constructor(
 ) {
     private val lock = Any()
     private val stagedPackages = LinkedHashSet<StagedExtensionPackage>()
+    private var pendingPermissionResolution: ((Boolean) -> Unit)? = null
     private val _state = MutableStateFlow(ExtensionManagerState(isLoading = true))
     val state: StateFlow<ExtensionManagerState> = _state.asStateFlow()
 
@@ -37,6 +44,7 @@ class ExtensionManager internal constructor(
     var onStateChanged: (() -> Unit)? = null
 
     init {
+        gateway.onInstallPermissionPrompt = ::requestInstallPermission
         refresh()
     }
 
@@ -153,9 +161,7 @@ class ExtensionManager internal constructor(
                         }
                     },
                     onFailure = {
-                        setError(
-                            "Installation failed. Check the package signature and ensure it requests no permissions; permission review is not available yet.",
-                        )
+                        setError("Installation failed. Check the package signature; local XPI installs must not request permissions.")
                     },
                 )
                 if (!packageCleaned) {
@@ -163,6 +169,61 @@ class ExtensionManager internal constructor(
                 }
             }
         }
+        return true
+    }
+
+    fun installFromFirefoxAddons(addon: FirefoxAddon): Boolean {
+        if (!isFirefoxAddonsDownloadUrl(addon.downloadUrl)) {
+            return reject("The Firefox Add-ons package URL is not valid.")
+        }
+        val extensionId = ExtensionId.parse(addon.id).getOrNull()
+            ?: return reject("The Firefox Add-ons listing has an invalid extension ID.")
+        if (store.contains(extensionId)) {
+            return reject("This extension is already installed.")
+        }
+        if (!beginOperation(operationState = ExtensionState.INSTALLING)) return false
+        if (store.list().size >= MAX_EXTENSION_COUNT) {
+            finishWithError("The extension limit has been reached.")
+            return false
+        }
+        gateway.installFromFirefoxAddons(addon) { result ->
+            complete {
+                result.fold(
+                    onSuccess = { extension ->
+                        val existing = store.find(extension.id)
+                        val stored = if (existing == null) {
+                            store.register(extension).isSuccess
+                        } else {
+                            existing.source == extension.source && store.replace(extension)
+                        }
+                        if (stored) {
+                            clearError()
+                        } else {
+                            setError("The installed extension returned conflicting metadata.")
+                        }
+                    },
+                    onFailure = {
+                        setError(firefoxAddonsInstallErrorMessage(it))
+                    },
+                )
+            }
+        }
+        return true
+    }
+
+    fun resolveInstallPermissionRequest(allow: Boolean): Boolean {
+        val resolution = synchronized(lock) {
+            if (_state.value.isShutdown || _state.value.permissionRequest == null) {
+                null
+            } else {
+                val pending = pendingPermissionResolution
+                pendingPermissionResolution = null
+                _state.value = _state.value.copy(permissionRequest = null)
+                pending
+            }
+        } ?: return false
+        resolution(allow)
+        publish()
         return true
     }
 
@@ -224,14 +285,17 @@ class ExtensionManager internal constructor(
     }
 
     fun shutdown() {
-        val packages = synchronized(lock) {
+        val (packages, permissionResolution) = synchronized(lock) {
             if (_state.value.isShutdown) return
             val pending = stagedPackages.toList()
             stagedPackages.clear()
+            val permission = pendingPermissionResolution
+            pendingPermissionResolution = null
             store.clear()
             _state.value = ExtensionManagerState(isShutdown = true)
-            pending
+            pending to permission
         }
+        permissionResolution?.invoke(false)
         gateway.shutdown()
         val cleanupFailed = packages.any { !closePackage(it) }
         if (cleanupFailed) {
@@ -314,16 +378,21 @@ class ExtensionManager internal constructor(
     }
 
     private fun complete(update: () -> Unit) {
+        var unansweredPermission: ((Boolean) -> Unit)? = null
         synchronized(lock) {
             if (_state.value.isShutdown) return
+            unansweredPermission = pendingPermissionResolution
+            pendingPermissionResolution = null
             update()
             _state.value = _state.value.copy(
                 extensions = store.list(),
                 isLoading = false,
                 isBusy = false,
                 operationState = null,
+                permissionRequest = null,
             )
         }
+        unansweredPermission?.invoke(false)
         publish()
     }
 
@@ -335,6 +404,52 @@ class ExtensionManager internal constructor(
         publish()
         return false
     }
+
+    private fun requestInstallPermission(
+        request: ExtensionInstallPermissionRequest,
+        resolution: (Boolean) -> Unit,
+    ) {
+        val accepted = synchronized(lock) {
+            if (_state.value.isShutdown || !_state.value.isBusy ||
+                _state.value.operationState != ExtensionState.INSTALLING ||
+                pendingPermissionResolution != null
+            ) {
+                false
+            } else {
+                pendingPermissionResolution = resolution
+                _state.value = _state.value.copy(permissionRequest = request)
+                true
+            }
+
+        }
+        if (accepted) {
+            publish()
+        } else {
+            resolution(false)
+        }
+    }
+
+    private fun firefoxAddonsInstallErrorMessage(error: Throwable): String =
+        when (error) {
+            is org.mozilla.geckoview.WebExtension.InstallException -> when (error.code) {
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_NETWORK_FAILURE ->
+                    "Firefox Add-ons download failed. Check the device's internet connection and try again."
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_SIGNEDSTATE_REQUIRED ->
+                    "Mozilla did not accept this package as signed. Choose another Firefox Add-ons release."
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_INCORRECT_HASH,
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_CORRUPT_FILE ->
+                    "Mozilla's extension package could not be verified. Try again later."
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_INCORRECT_ID ->
+                    "The downloaded add-on did not match the selected listing."
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_INCOMPATIBLE,
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_UNSUPPORTED_ADDON_TYPE ->
+                    "This extension is not compatible with FetchX's GeckoView version."
+                org.mozilla.geckoview.WebExtension.InstallException.ErrorCodes.ERROR_USER_CANCELED ->
+                    "Extension installation was cancelled."
+                else -> "Firefox Add-ons installation failed (GeckoView error ${error.code})."
+            }
+            else -> "Firefox Add-ons installation failed (${error.javaClass.simpleName})."
+        }
 
     private fun finishWithError(message: String) {
         synchronized(lock) {

@@ -1379,10 +1379,87 @@ private fun ExtensionsDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    "FetchX checks installed extensions for updates when the browser starts and when you refresh this list. Updates requesting new permissions are denied. uBlock Origin is bundled and enabled by default.",
+                    "Search Mozilla's Firefox Add-ons catalog to install signed extensions, or install an XPI file. FetchX asks before granting requested permissions; private-browsing access is never granted. uBlock Origin is bundled and enabled by default.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
+                Text(
+                    "Firefox Add-ons",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = firefoxAddonsQuery,
+                        onValueChange = { firefoxAddonsQuery = it },
+                        label = { Text("Search add-ons") },
+                        singleLine = true,
+                        enabled = !isBusy && !firefoxAddonsState.isLoading,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { onSearchFirefoxAddons(firefoxAddonsQuery) },
+                        enabled = !isBusy && !firefoxAddonsState.isLoading,
+                    ) {
+                        Text(if (firefoxAddonsState.isLoading) "Searching..." else "Search")
+                    }
+                }
+                firefoxAddonsState.error?.let { error ->
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                    )
+                }
+                if (
+                    !firefoxAddonsState.isLoading &&
+                    firefoxAddonsState.error == null &&
+                    firefoxAddonsState.query.isNotBlank() &&
+                    firefoxAddonsState.results.isEmpty()
+                ) {
+                    Text("No compatible add-ons found.", style = MaterialTheme.typography.bodySmall)
+                }
+                firefoxAddonsState.results.forEach { addon ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = addon.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "Version ${addon.version}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (addon.summary.isNotBlank()) {
+                                Text(
+                                    text = addon.summary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = { onInstallFirefoxAddon(addon) },
+                            enabled = !isBusy &&
+                                !firefoxAddonsState.isLoading &&
+                                state.extensions.none { it.id.value == addon.id },
+                        ) {
+                            Text(if (state.extensions.any { it.id.value == addon.id }) "Installed" else "Install")
+                        }
+                    }
+                    HorizontalDivider()
+                }
                 when {
                     state.isLoading -> Text("Loading installed extensionsâ€¦")
                     state.extensions.isEmpty() -> Text("No installed extensions.")
@@ -1507,6 +1584,41 @@ private fun ExtensionsDialog(
             pendingRemoval = null
         }
     }
+}
+
+@Composable
+private fun ExtensionPermissionDialog(
+    request: ExtensionInstallPermissionRequest,
+    onResolve: (Boolean) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { onResolve(false) },
+        title = { Text("Review extension permissions") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text("${request.name} (${request.extensionId}) wants access to:")
+                (request.permissions.map { "Permission: $it" } +
+                    request.origins.map { "Site access: $it" }).forEach { item ->
+                    Text("- $item", style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    "Approving grants these requested permissions. Access to private browsing remains off.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onResolve(true) }) { Text("Approve & install") }
+        },
+        dismissButton = {
+            TextButton(onClick = { onResolve(false) }) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

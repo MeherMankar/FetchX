@@ -46,7 +46,10 @@ inspected. `GeckoRuntime.getWebExtensionController()` exposes
   is available.
 
 The implementation uses `INSTALLATION_METHOD_FROM_FILE` for local package
-installation and `EnableSource.USER` for user-triggered enable/disable. Extension metadata is
+installation, the remote `install(String)` overload for Firefox Add-ons packages,
+and `EnableSource.USER` for user-triggered enable/disable. The remote overload
+lets GeckoView fetch the HTTPS package and perform its signature validation.
+Extension metadata is
 read from GeckoView's `WebExtension.id`, `isBuiltIn`, and `metaData` fields,
 including `name`, `version`, `description`, `enabled`, `requiredPermissions`,
 and `requiredOrigins`. The UI does not receive GeckoView objects.
@@ -59,41 +62,40 @@ native messaging. No built-in extension is bundled by this phase.
 
 ## Installation and permission boundary
 
-Installation is user initiated through Android's document picker. FetchX accepts
-only a `content:` URI from that picker, copies it to a generated file in the
-app-private cache, enforces a 25 MiB size limit, and passes only the resulting
-local `file:` URI to GeckoView. FetchX does not accept extension URLs, arbitrary
-filesystem paths, shell commands, or extension-provided native code. GeckoView
-performs package and signature validation; FetchX does not bypass those checks.
-The staged file is removed when installation completes/fails or the manager is
-shut down.
+Installation is user initiated either through Android's document picker or the
+integrated Firefox Add-ons catalog. Local packages are accepted only as a
+`content:` URI from the picker, copied to a generated file in the app-private
+cache, limited to 25 MiB, and passed to GeckoView as a local `file:` URI.
+Marketplace results come from Mozilla's Add-ons API, and FetchX accepts package
+URLs only on `https://addons.mozilla.org/firefox/downloads/file/`; GeckoView
+downloads and validates the signed package. FetchX does not accept arbitrary
+remote URLs, filesystem paths, shell commands, or extension-provided native
+code. The staged file is removed when local installation completes/fails or
+the manager is shut down.
 
 The GeckoView 137 `PromptDelegate` APIs are
 `onInstallPromptRequest(WebExtension, String[], String[])`,
 `onUpdatePrompt(WebExtension, WebExtension, String[], String[])`, and
 `onOptionalPrompt(WebExtension, String[], String[])`.
 
-Until Phase 20L, FetchX applies a deny-by-default policy, with one narrowly
-scoped exception for the bundled official uBlock Origin release:
+FetchX applies different, explicit policies to local packages and marketplace
+installs:
 
-- Installation proceeds only when GeckoView reports **no** requested API
-  permissions and **no** host origins. That empty-permission response never
-  enables private-browsing access.
-- The bundled Mozilla-signed uBlock Origin 1.75.0 package is installed from the
-  app's packaged assets when it is missing. Its permissions are accepted only
-  for the official `uBlock0@raymondhill.net` add-on ID; its private-browsing
-  access remains disabled. GeckoView still validates the signed package. The
-  corresponding GPL-3.0 license is included as `ublock-LICENSE.txt` beside the
-  package asset. The package SHA-256 is
-  `5b74415860456370644bd80f16125e865b0e6c356bb5dfcfb84069967eaa5287`.
-- Installation requests containing any permissions or origins are denied.
+- Local XPI installation proceeds only when GeckoView reports no requested API
+  permissions and no host origins, except for the packaged official uBlock
+  Origin 1.75.0. Its permissions are accepted only for the
+  `uBlock0@raymondhill.net` ID; private-browsing access remains disabled.
+- Firefox Add-ons catalog installs show GeckoView's requested API permissions
+  and host origins in a confirmation dialog. Only explicit approval grants
+  those requested permissions, and private-browsing access remains disabled.
+  Requests too large or malformed to display safely are denied.
 - New permissions during updates and optional permission requests are denied.
 - Permission strings returned in installed-extension metadata are stored only
   as bounded API/host-origin descriptions; malformed values are represented as
-  unsupported. FetchX does not grant or revoke them in Phase 20K.
+  unsupported.
 
-The UI explicitly warns users about this limitation. Permission review,
-per-extension grants/revocation, and persistence are Phase 20L responsibilities.
+Marketplace approval is per installation only; FetchX does not yet provide
+separate permission revocation controls or persist user permission decisions.
 
 ## Lifecycle and failure handling
 
@@ -124,17 +126,17 @@ and credentials are not logged or copied into the extension model.
 
 ## Security and current limitations
 
-- No permission is automatically granted to a user-imported extension that
-  requests it. The permission exception above is limited to the official
-  uBlock Origin ID;
+- Local XPI imports cannot request permissions. The local-package exception
+  above is limited to the official uBlock Origin ID;
   the bundled signed release is pinned to 1.75.0 and should be updated with
   FetchX releases. Its GPL-3.0 license and corresponding source are available
   from [uBlock Origin](https://github.com/gorhill/uBlock/tree/1.75.0).
-- No remote installation, marketplace, periodic background update scheduler,
-  native messaging, or download interception is implemented by FetchX in this
-  phase. Update checks run when the extension manager initializes and when the
-  user refreshes its list; an extension can only update if GeckoView can resolve
-  an update from its configured source.
+- Marketplace search and install are limited to the Firefox Add-ons API and
+  Mozilla's XPI download host; arbitrary remote installation is not exposed.
+  Update checks run when the extension manager initializes and when the user
+  refreshes its list; an extension can only update if GeckoView can resolve an
+  update from its configured source. There is no periodic update scheduler,
+  native messaging, or extension download interception.
 - No JavaScript injection or custom content-script mechanism is added.
 - Extension code executes under GeckoView's WebExtension model and can use only
   what GeckoView exposes and the extension's granted permissions allow; this

@@ -88,6 +88,19 @@ class ExtensionFrameworkTest {
     }
 
     @Test
+    fun `Firefox Add-ons installs accept only HTTPS package URLs hosted by AMO`() {
+        assertTrue(
+            isFirefoxAddonsDownloadUrl(
+                "https://addons.mozilla.org/firefox/downloads/file/1234/addon.xpi",
+            ),
+        )
+        assertFalse(isFirefoxAddonsDownloadUrl("http://addons.mozilla.org/firefox/downloads/file/1234/addon.xpi"))
+        assertFalse(isFirefoxAddonsDownloadUrl("https://evil.example/firefox/downloads/file/1234/addon.xpi"))
+        assertFalse(isFirefoxAddonsDownloadUrl("https://addons.mozilla.org.evil.example/firefox/downloads/file/1234/addon.xpi"))
+        assertFalse(isFirefoxAddonsDownloadUrl("https://addons.mozilla.org/en-US/firefox/addon/example/"))
+    }
+
+    @Test
     fun `bundled uBlock Origin is classified as non-removable built-in`() {
         assertEquals(
             ExtensionSource.BUILT_IN,
@@ -189,6 +202,42 @@ class ExtensionFrameworkTest {
         assertEquals(ExtensionState.DISABLED, manager.state.value.extensions.single().state)
         assertEquals(1, gateway.enableCalls)
         assertEquals(1, gateway.disableCalls)
+    }
+
+    @Test
+    fun `marketplace permission approval is explicit and never enables private browsing`() {
+        val gateway = FakeGateway()
+        val manager = ExtensionManager(gateway)
+        gateway.deferInstall = true
+        assertTrue(
+            manager.installFromFirefoxAddons(
+                FirefoxAddon(
+                    id = "addon@example.org",
+                    name = "Example Add-on",
+                    version = "1.0",
+                    summary = "",
+                    downloadUrl = "https://addons.mozilla.org/firefox/downloads/file/1234/addon.xpi",
+                ),
+            ),
+        )
+        var approved: Boolean? = null
+        gateway.onInstallPermissionPrompt?.invoke(
+            ExtensionInstallPermissionRequest(
+                extensionId = "addon@example.org",
+                name = "Example Add-on",
+                permissions = listOf("tabs"),
+                origins = listOf("https://example.org/*"),
+            ),
+        ) { allowed ->
+            approved = allowed
+        }
+
+        assertEquals("addon@example.org", manager.state.value.permissionRequest?.extensionId)
+        assertTrue(manager.resolveInstallPermissionRequest(allow = true))
+        assertEquals(true, approved)
+        assertNull(manager.state.value.permissionRequest)
+        gateway.completeInstall()
+        manager.shutdown()
     }
 
     @Test
@@ -394,6 +443,10 @@ class ExtensionFrameworkTest {
     private inner class FakeGateway(
         installed: List<Extension> = emptyList(),
     ) : GeckoExtensionGateway {
+        override var onInstallPermissionPrompt: ((
+            ExtensionInstallPermissionRequest,
+            (Boolean) -> Unit,
+        ) -> Unit)? = null
         var listResult: Result<List<Extension>> = Result.success(installed)
         var installResult: Result<Extension> = Result.success(extension())
         var enableResult: Result<Extension> = Result.success(extension(state = ExtensionState.ENABLED))
@@ -415,6 +468,10 @@ class ExtensionFrameworkTest {
         }
 
         override fun install(packageUri: String, callback: (Result<Extension>) -> Unit) {
+            if (deferInstall) pendingInstall = callback else callback(installResult)
+        }
+
+        override fun installFromFirefoxAddons(addon: FirefoxAddon, callback: (Result<Extension>) -> Unit) {
             if (deferInstall) pendingInstall = callback else callback(installResult)
         }
 
