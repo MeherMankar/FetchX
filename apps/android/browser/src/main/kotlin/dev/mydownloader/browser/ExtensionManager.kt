@@ -17,6 +17,7 @@ data class ExtensionManagerState(
 internal interface GeckoExtensionGateway {
     fun list(callback: (Result<List<Extension>>) -> Unit)
     fun install(packageUri: String, callback: (Result<Extension>) -> Unit)
+    fun update(id: ExtensionId, callback: (Result<Extension?>) -> Unit)
     fun enable(id: ExtensionId, callback: (Result<Extension>) -> Unit)
     fun disable(id: ExtensionId, callback: (Result<Extension>) -> Unit)
     fun uninstall(id: ExtensionId, callback: (Result<Unit>) -> Unit)
@@ -42,22 +43,58 @@ class ExtensionManager internal constructor(
     fun refresh(): Boolean {
         if (!beginOperation(loading = true)) return false
         gateway.list { result ->
-            complete {
-                result.fold(
-                    onSuccess = { extensions ->
-                        val sorted = extensions.sortedBy { it.id.value }
-                        val replacement = store.replaceAll(sorted)
-                        if (replacement.isSuccess) {
-                            clearError()
-                        } else {
-                            setError("The installed extension list contained invalid metadata.")
-                        }
-                    },
-                    onFailure = { setError("Could not read installed extensions.") },
-                )
-            }
+            result.fold(
+                onSuccess = ::updateInstalledExtensions,
+                onFailure = {
+                    complete { setError("Could not read installed extensions.") }
+                },
+            )
         }
         return true
+    }
+
+    private fun updateInstalledExtensions(extensions: List<Extension>) {
+        val updatedExtensions = extensions.toMutableList()
+        var failedUpdates = 0
+
+        fun updateAt(index: Int) {
+            if (_state.value.isShutdown) return
+            if (index == extensions.size) {
+                complete {
+                    val sorted = updatedExtensions.sortedBy { it.id.value }
+                    val replacement = store.replaceAll(sorted)
+                    if (replacement.isFailure) {
+                        setError("The installed extension list contained invalid metadata.")
+                    } else if (failedUpdates > 0) {
+                        setError("Could not check for updates for $failedUpdates extension(s).")
+                    } else {
+                        clearError()
+                    }
+                }
+                return
+            }
+
+            val installed = extensions[index]
+            gateway.update(installed.id) { result ->
+                result.fold(
+                    onSuccess = { updated ->
+                        if (updated == null) {
+                            Unit
+                        } else if (updated.id == installed.id) {
+                            updatedExtensions[index] = updated
+                        } else {
+                            failedUpdates += 1
+                        }
+                    },
+                    onFailure = {
+                        failedUpdates += 1
+                    },
+                )
+                updateAt(index + 1)
+            }
+        }
+
+        updateAt(0)
     }
 
     internal fun install(packageFile: StagedExtensionPackage): Boolean {

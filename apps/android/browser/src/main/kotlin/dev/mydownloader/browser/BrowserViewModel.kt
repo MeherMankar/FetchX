@@ -411,6 +411,7 @@ class BrowserViewModel internal constructor(
     fun setAdBlockingEnabled(enabled: Boolean) {
         privacyController.setAdBlockingEnabled(enabled)
         applyPrivacySettings()
+        syncUBlockWithAdBlockingSetting()
     }
 
     fun setFingerprintingProtectionEnabled(enabled: Boolean) {
@@ -528,8 +529,31 @@ class BrowserViewModel internal constructor(
     }
 
     private fun syncExtensionManagerState() {
-        val state = extensionManager?.state?.value ?: return
+        val manager = extensionManager ?: return
+        val state = manager.state.value
         _uiState.update { it.copy(extensionManagerState = state) }
+        syncUBlockWithAdBlockingSetting()
+    }
+
+    private fun syncUBlockWithAdBlockingSetting() {
+        val manager = extensionManager ?: return
+        val managerState = manager.state.value
+        if (managerState.isLoading || managerState.isBusy || managerState.isShutdown) return
+
+        val uBlock = managerState.extensions.firstOrNull {
+            it.id.value == UBLOCK_ORIGIN_EXTENSION_ID
+        } ?: return
+        if (uBlockNeedsStateChange(
+                extensionState = uBlock.state,
+                adBlockingEnabled = privacyController.settings.value.adBlockingEnabled,
+            )
+        ) {
+            if (privacyController.settings.value.adBlockingEnabled) {
+                manager.enable(uBlock.id)
+            } else {
+                manager.disable(uBlock.id)
+            }
+        }
     }
 
     private fun applyPrivacySettings() {

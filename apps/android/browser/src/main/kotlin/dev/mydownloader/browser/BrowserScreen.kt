@@ -1302,7 +1302,7 @@ private fun ExtensionsDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    "Install signed .xpi files from local storage. Extensions requesting permissions are not supported until permission review is implemented.",
+                    "FetchX checks installed extensions for updates when the browser starts and when you refresh this list. Updates requesting new permissions are denied. uBlock Origin is bundled and enabled by default.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
@@ -1333,7 +1333,17 @@ private fun ExtensionsDialog(
                         )
                         if (extension.requestedPermissions.isNotEmpty()) {
                             Text(
-                                text = "${extension.requestedPermissions.size} permission request(s) are not granted by FetchX.",
+                                text = if (extension.id.value == UBLOCK_ORIGIN_EXTENSION_ID) {
+                                    "Permissions approved for the bundled official ad blocker."
+                                } else {
+                                    "${extension.requestedPermissions.size} permission request(s) are not granted by FetchX."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        if (extension.id.value == UBLOCK_ORIGIN_EXTENSION_ID) {
+                            Text(
+                                "Turn ad blocking on or off in Privacy controls.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -1343,11 +1353,12 @@ private fun ExtensionsDialog(
                                 onCheckedChange = { enabled ->
                                     if (enabled) onEnable(extension.id) else onDisable(extension.id)
                                 },
-                                enabled = !isBusy && extension.state in setOf(
-                                    ExtensionState.ENABLED,
-                                    ExtensionState.DISABLED,
-                                    ExtensionState.INSTALLED,
-                                ),
+                                enabled = extension.id.value != UBLOCK_ORIGIN_EXTENSION_ID &&
+                                    !isBusy && extension.state in setOf(
+                                        ExtensionState.ENABLED,
+                                        ExtensionState.DISABLED,
+                                        ExtensionState.INSTALLED,
+                                    ),
                             )
                             Text(if (extension.state == ExtensionState.ENABLED) "Enabled" else "Disabled")
                             if (extension.source == ExtensionSource.BUILT_IN) {

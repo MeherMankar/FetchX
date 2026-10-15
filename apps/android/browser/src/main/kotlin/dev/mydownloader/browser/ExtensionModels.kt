@@ -3,6 +3,8 @@ package dev.fetchx.browser
 import java.util.Collections
 import java.util.Locale
 
+internal const val UBLOCK_ORIGIN_EXTENSION_ID = "uBlock0@raymondhill.net"
+
 @JvmInline
 value class ExtensionId private constructor(val value: String) {
     companion object {
@@ -146,3 +148,31 @@ internal fun canInstallWithoutPermissionGrant(
     apiPermissions: Array<String>,
     origins: Array<String>,
 ): Boolean = apiPermissions.isEmpty() && origins.isEmpty()
+
+internal fun canGrantExtensionInstallPermissions(
+    extensionId: String,
+    apiPermissions: Array<String>,
+    origins: Array<String>,
+): Boolean = canInstallWithoutPermissionGrant(apiPermissions, origins) ||
+    extensionId == UBLOCK_ORIGIN_EXTENSION_ID
+
+internal fun canAcceptExtensionUpdatePermissions(
+    newPermissions: Array<String>,
+    newOrigins: Array<String>,
+): Boolean = newPermissions.isEmpty() && newOrigins.isEmpty()
+
+internal fun extensionSource(extensionId: String, isBuiltIn: Boolean): ExtensionSource =
+    if (isBuiltIn || extensionId == UBLOCK_ORIGIN_EXTENSION_ID) {
+        ExtensionSource.BUILT_IN
+    } else {
+        ExtensionSource.LOCAL_PACKAGE
+    }
+
+internal fun uBlockNeedsStateChange(
+    extensionState: ExtensionState,
+    adBlockingEnabled: Boolean,
+): Boolean = when (extensionState) {
+    ExtensionState.ENABLED -> !adBlockingEnabled
+    ExtensionState.DISABLED, ExtensionState.INSTALLED -> adBlockingEnabled
+    else -> false
+}

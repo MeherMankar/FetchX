@@ -42,9 +42,11 @@ inspected. `GeckoRuntime.getWebExtensionController()` exposes
 - `enable(WebExtension, int): GeckoResult<WebExtension>`
 - `disable(WebExtension, int): GeckoResult<WebExtension>`
 - `uninstall(WebExtension): GeckoResult<Void>`
+- `update(WebExtension): GeckoResult<WebExtension>`; returns `null` when no update
+  is available.
 
-The implementation uses `INSTALLATION_METHOD_FROM_FILE` for installation and
-`EnableSource.USER` for user-triggered enable/disable. Extension metadata is
+The implementation uses `INSTALLATION_METHOD_FROM_FILE` for local package
+installation and `EnableSource.USER` for user-triggered enable/disable. Extension metadata is
 read from GeckoView's `WebExtension.id`, `isBuiltIn`, and `metaData` fields,
 including `name`, `version`, `description`, `enabled`, `requiredPermissions`,
 and `requiredOrigins`. The UI does not receive GeckoView objects.
@@ -71,11 +73,19 @@ The GeckoView 137 `PromptDelegate` APIs are
 `onUpdatePrompt(WebExtension, WebExtension, String[], String[])`, and
 `onOptionalPrompt(WebExtension, String[], String[])`.
 
-Until Phase 20L, FetchX applies a deny-by-default policy:
+Until Phase 20L, FetchX applies a deny-by-default policy, with one narrowly
+scoped exception for the bundled official uBlock Origin release:
 
 - Installation proceeds only when GeckoView reports **no** requested API
   permissions and **no** host origins. That empty-permission response never
   enables private-browsing access.
+- The bundled Mozilla-signed uBlock Origin 1.75.0 package is installed from the
+  app's packaged assets when it is missing. Its permissions are accepted only
+  for the official `uBlock0@raymondhill.net` add-on ID; its private-browsing
+  access remains disabled. GeckoView still validates the signed package. The
+  corresponding GPL-3.0 license is included as `ublock-LICENSE.txt` beside the
+  package asset. The package SHA-256 is
+  `5b74415860456370644bd80f16125e865b0e6c356bb5dfcfb84069967eaa5287`.
 - Installation requests containing any permissions or origins are denied.
 - New permissions during updates and optional permission requests are denied.
 - Permission strings returned in installed-extension metadata are stored only
@@ -87,8 +97,15 @@ per-extension grants/revocation, and persistence are Phase 20L responsibilities.
 
 ## Lifecycle and failure handling
 
+The manager checks each installed non-built-in extension for an available update
+when it initializes or the user refreshes the extension list. GeckoView resolves
+updates using each extension's own update source and verifies the package. Updates
+that request any new API permissions or host origins are denied; an update-check
+failure leaves the installed extension in place and is surfaced in the extension
+manager.
+
 The manager supports initialization/list refresh, local installation,
-enable/disable, removal, and shutdown. State changes are published only after
+update checks, enable/disable, removal, and shutdown. State changes are published only after
 GeckoView's asynchronous operation succeeds. Failed enable/disable/removal
 restores the prior in-memory state. Duplicate, unknown, transient, and built-in
 removal requests fail without issuing an unintended GeckoView operation.
@@ -107,9 +124,17 @@ and credentials are not logged or copied into the extension model.
 
 ## Security and current limitations
 
-- No permission is automatically granted to an extension that requests it.
-- No remote installation, marketplace, auto-update, native messaging, or
-  download interception is implemented by FetchX in this phase.
+- No permission is automatically granted to a user-imported extension that
+  requests it. The permission exception above is limited to the official
+  uBlock Origin ID;
+  the bundled signed release is pinned to 1.75.0 and should be updated with
+  FetchX releases. Its GPL-3.0 license and corresponding source are available
+  from [uBlock Origin](https://github.com/gorhill/uBlock/tree/1.75.0).
+- No remote installation, marketplace, periodic background update scheduler,
+  native messaging, or download interception is implemented by FetchX in this
+  phase. Update checks run when the extension manager initializes and when the
+  user refreshes its list; an extension can only update if GeckoView can resolve
+  an update from its configured source.
 - No JavaScript injection or custom content-script mechanism is added.
 - Extension code executes under GeckoView's WebExtension model and can use only
   what GeckoView exposes and the extension's granted permissions allow; this

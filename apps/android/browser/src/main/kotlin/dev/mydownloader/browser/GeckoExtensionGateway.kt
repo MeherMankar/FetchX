@@ -7,6 +7,7 @@ import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
 
 private const val TAG = "GeckoExtensions"
+private const val UBLOCK_PACKAGE_URI = "resource://android/assets/ublock.xpi"
 
 internal class GeckoExtensionGatewayImpl(
     private val controller: WebExtensionController,
@@ -23,9 +24,13 @@ internal class GeckoExtensionGatewayImpl(
                 permissions: Array<String>,
                 origins: Array<String>,
             ): GeckoResult<WebExtension.PermissionPromptResponse> {
-                val canInstallWithoutPermissions = canInstallWithoutPermissionGrant(permissions, origins)
+                val canGrantPermissions = canGrantExtensionInstallPermissions(
+                    extensionId = extension.id,
+                    apiPermissions = permissions,
+                    origins = origins,
+                )
                 return GeckoResult.fromValue(
-                    WebExtension.PermissionPromptResponse(canInstallWithoutPermissions, false),
+                    WebExtension.PermissionPromptResponse(canGrantPermissions, false),
                 )
             }
 
@@ -34,7 +39,13 @@ internal class GeckoExtensionGatewayImpl(
                 updatedExtension: WebExtension,
                 newPermissions: Array<String>,
                 newOrigins: Array<String>,
-            ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.DENY)
+            ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(
+                if (canAcceptExtensionUpdatePermissions(newPermissions, newOrigins)) {
+                    AllowOrDeny.ALLOW
+                } else {
+                    AllowOrDeny.DENY
+                },
+            )
 
             override fun onOptionalPrompt(
                 extension: WebExtension,
@@ -51,30 +62,78 @@ internal class GeckoExtensionGatewayImpl(
                     callback(Result.failure(IllegalStateException("GeckoView returned no extension list")))
                     return@accept
                 }
-                val convertedResults = installed.map { it.toDomain() }
-                val conversionError = convertedResults.firstNotNullOfOrNull { it.exceptionOrNull() }
-                if (conversionError != null) {
-                    Log.e(TAG, "GeckoView returned malformed extension metadata")
-                    callback(Result.failure(conversionError))
-                    return@accept
+                if (installed.none { it.id == UBLOCK_ORIGIN_EXTENSION_ID }) {
+                    installBundledUBlock(installed, callback)
+                } else {
+                    publishInstalled(installed, callback)
                 }
-                val converted = convertedResults.mapNotNull { it.getOrNull() }
-                synchronized(lock) {
-                    if (!isShutdown) {
-                        handles.clear()
-                        installed.forEach { extension ->
-                            ExtensionId.parse(extension.id).getOrNull()?.let { id ->
-                                handles[id] = extension
-                            }
-                        }
-                    }
-                }
-                callback(Result.success(converted))
             },
             { error ->
                 fail("list", error, callback)
             },
         )
+    }
+
+    private fun installBundledUBlock(
+        installed: List<WebExtension>,
+        callback: (Result<List<Extension>>) -> Unit,
+    ) {
+        val canInstall = synchronized(lock) { !isShutdown }
+        if (!canInstall) {
+            callback(Result.failure(IllegalStateException("Extension manager is shut down")))
+            return
+        }
+        controller.install(UBLOCK_PACKAGE_URI, WebExtensionController.INSTALLATION_METHOD_FROM_FILE).accept(
+            { extension ->
+                if (extension == null) {
+                    callback(Result.failure(IllegalStateException("GeckoView returned no installed uBlock Origin extension")))
+                    return@accept
+                }
+                val conversion = extension.toDomain()
+                val conversionError = conversion.exceptionOrNull()
+                if (conversionError != null) {
+                    discardMalformedInstall(extension, conversionError) { result ->
+                        callback(
+                            Result.failure(
+                                result.exceptionOrNull()
+                                    ?: conversionError,
+                            ),
+                        )
+                    }
+                    return@accept
+                }
+                Log.i(TAG, "Bundled uBlock Origin installed")
+                publishInstalled(installed + extension, callback)
+            },
+            { error ->
+                fail("install bundled uBlock Origin", error, callback)
+            },
+        )
+    }
+
+    private fun publishInstalled(
+        installed: List<WebExtension>,
+        callback: (Result<List<Extension>>) -> Unit,
+    ) {
+        val convertedResults = installed.map { it.toDomain() }
+        val conversionError = convertedResults.firstNotNullOfOrNull { it.exceptionOrNull() }
+        if (conversionError != null) {
+            Log.e(TAG, "GeckoView returned malformed extension metadata")
+            callback(Result.failure(conversionError))
+            return
+        }
+        val converted = convertedResults.mapNotNull { it.getOrNull() }
+        synchronized(lock) {
+            if (!isShutdown) {
+                handles.clear()
+                installed.forEach { extension ->
+                    ExtensionId.parse(extension.id).getOrNull()?.let { id ->
+                        handles[id] = extension
+                    }
+                }
+            }
+        }
+        callback(Result.success(converted))
     }
 
     override fun install(packageUri: String, callback: (Result<Extension>) -> Unit) {
@@ -120,6 +179,30 @@ internal class GeckoExtensionGatewayImpl(
                 }
                 fail("install", error, callback)
             },
+        )
+    }
+
+    override fun update(id: ExtensionId, callback: (Result<Extension?>) -> Unit) {
+        val extension = synchronized(lock) { handles[id] }
+        if (extension == null) {
+            callback(Result.failure(IllegalStateException("Extension handle is unavailable")))
+            return
+        }
+        if (extension.isBuiltIn) {
+            callback(Result.success(null))
+            return
+        }
+        controller.update(extension).accept(
+            { updated ->
+                if (updated == null) {
+                    callback(Result.success(null))
+                } else {
+                    updateHandle(updated) { result ->
+                        callback(result.map { it })
+                    }
+                }
+            },
+            { error -> fail("update", error, callback) },
         )
     }
 
@@ -240,7 +323,7 @@ private fun WebExtension.toDomain(): Result<Extension> = try {
             Extension(
                 metadata = metadata,
                 state = if (metaData.enabled) ExtensionState.ENABLED else ExtensionState.DISABLED,
-                source = if (isBuiltIn) ExtensionSource.BUILT_IN else ExtensionSource.LOCAL_PACKAGE,
+                source = extensionSource(id, isBuiltIn),
                 requestedPermissions = permissions,
             ),
         )

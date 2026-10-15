@@ -56,6 +56,64 @@ class ExtensionFrameworkTest {
     }
 
     @Test
+    fun `only the official uBlock Origin ID may receive bundled extension permissions`() {
+        assertTrue(
+            canGrantExtensionInstallPermissions(
+                extensionId = UBLOCK_ORIGIN_EXTENSION_ID,
+                apiPermissions = arrayOf("webRequest", "webRequestBlocking"),
+                origins = arrayOf("<all_urls>"),
+            ),
+        )
+        assertFalse(
+            canGrantExtensionInstallPermissions(
+                extensionId = "other-addon@example.org",
+                apiPermissions = arrayOf("webRequest"),
+                origins = arrayOf("<all_urls>"),
+            ),
+        )
+        assertTrue(
+            canGrantExtensionInstallPermissions(
+                extensionId = "permission-free@example.org",
+                apiPermissions = emptyArray(),
+                origins = emptyArray(),
+            ),
+        )
+    }
+
+    @Test
+    fun `extension updates are accepted only when they request no new permissions`() {
+        assertTrue(canAcceptExtensionUpdatePermissions(emptyArray(), emptyArray()))
+        assertFalse(canAcceptExtensionUpdatePermissions(arrayOf("tabs"), emptyArray()))
+        assertFalse(canAcceptExtensionUpdatePermissions(emptyArray(), arrayOf("https://example.com/*")))
+    }
+
+    @Test
+    fun `bundled uBlock Origin is classified as non-removable built-in`() {
+        assertEquals(
+            ExtensionSource.BUILT_IN,
+            extensionSource(UBLOCK_ORIGIN_EXTENSION_ID, isBuiltIn = false),
+        )
+        assertEquals(
+            ExtensionSource.LOCAL_PACKAGE,
+            extensionSource("local-addon@example.org", isBuiltIn = false),
+        )
+        assertEquals(
+            ExtensionSource.BUILT_IN,
+            extensionSource("other-builtin@example.org", isBuiltIn = true),
+        )
+    }
+
+    @Test
+    fun `uBlock enabled state follows the ad blocking setting`() {
+        assertTrue(uBlockNeedsStateChange(ExtensionState.DISABLED, adBlockingEnabled = true))
+        assertTrue(uBlockNeedsStateChange(ExtensionState.ENABLED, adBlockingEnabled = false))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.ENABLED, adBlockingEnabled = true))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLED, adBlockingEnabled = false))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.ENABLING, adBlockingEnabled = false))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLING, adBlockingEnabled = true))
+    }
+
+    @Test
     fun `store registers searches and returns immutable snapshots`() {
         val store = ExtensionStore()
         val permissions = mutableSetOf(
@@ -131,6 +189,34 @@ class ExtensionFrameworkTest {
         assertEquals(ExtensionState.DISABLED, manager.state.value.extensions.single().state)
         assertEquals(1, gateway.enableCalls)
         assertEquals(1, gateway.disableCalls)
+    }
+
+    @Test
+    fun `manager checks installed extensions for updates during refresh`() {
+        val installed = extension(version = "1.0")
+        val updated = extension(version = "2.0")
+        val gateway = FakeGateway(installed = listOf(installed)).apply {
+            updateResults[installed.id] = Result.success(updated)
+        }
+
+        val manager = ExtensionManager(gateway)
+
+        assertEquals(listOf(installed.id), gateway.updateCalls)
+        assertEquals("2.0", manager.state.value.extensions.single().metadata.version)
+        assertNull(manager.state.value.error)
+    }
+
+    @Test
+    fun `failed automatic update keeps installed extension and surfaces an error`() {
+        val installed = extension(version = "1.0")
+        val gateway = FakeGateway(installed = listOf(installed)).apply {
+            updateResults[installed.id] = Result.failure(IOException("network unavailable"))
+        }
+
+        val manager = ExtensionManager(gateway)
+
+        assertEquals(listOf(installed), manager.state.value.extensions)
+        assertNotNull(manager.state.value.error)
     }
 
     @Test
@@ -313,11 +399,13 @@ class ExtensionFrameworkTest {
         var enableResult: Result<Extension> = Result.success(extension(state = ExtensionState.ENABLED))
         var disableResult: Result<Extension> = Result.success(extension(state = ExtensionState.DISABLED))
         var uninstallResult: Result<Unit> = Result.success(Unit)
+        val updateResults = mutableMapOf<ExtensionId, Result<Extension?>>()
         var deferEnable = false
         var deferInstall = false
         var enableCalls = 0
         var disableCalls = 0
         var uninstallCalls = 0
+        val updateCalls = mutableListOf<ExtensionId>()
         var shutdownCalls = 0
         private var pendingEnable: ((Result<Extension>) -> Unit)? = null
         private var pendingInstall: ((Result<Extension>) -> Unit)? = null
@@ -328,6 +416,11 @@ class ExtensionFrameworkTest {
 
         override fun install(packageUri: String, callback: (Result<Extension>) -> Unit) {
             if (deferInstall) pendingInstall = callback else callback(installResult)
+        }
+
+        override fun update(id: ExtensionId, callback: (Result<Extension?>) -> Unit) {
+            updateCalls += id
+            callback(updateResults[id] ?: Result.success(null))
         }
 
         override fun enable(id: ExtensionId, callback: (Result<Extension>) -> Unit) {
