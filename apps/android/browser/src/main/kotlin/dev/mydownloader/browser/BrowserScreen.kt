@@ -201,7 +201,12 @@ fun BrowserScreen(
         }
     }
 
-    val onNavigate = { viewModel.navigate(uiState.urlInput) }
+    val onNavigate = {
+        val intent = viewModel.submitSearch(urlFieldValue.text)
+        if (intent !is SearchIntent.LocalSearch && intent != SearchIntent.Empty) {
+            isUrlBarExpanded = false
+        }
+    }
     val spaceAccentColor = remember(uiState.selectedProfileId) {
         val hex = uiState.profiles.find { it.id == uiState.selectedProfileId }?.accent ?: "#4F8EF7"
         try { android.graphics.Color.parseColor(hex).let { androidx.compose.ui.graphics.Color(it) } }
@@ -330,21 +335,48 @@ fun BrowserScreen(
                 if (uiState.activeTab?.isLoading == true) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
-                if (isUrlBarExpanded && uiState.searchSuggestions.isNotEmpty()) {
+                if (
+                    isUrlBarExpanded &&
+                    (
+                        uiState.searchSuggestions.isNotEmpty() ||
+                            uiState.isLoadingSearchSuggestions ||
+                            uiState.searchSuggestionError != null ||
+                            uiState.showLocalSearchEmpty
+                        )
+                ) {
                     Surface(
                         tonalElevation = 3.dp,
                         shape = MaterialTheme.shapes.medium,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                     ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            uiState.searchSuggestions.take(4).forEach { suggestion ->
+                            if (uiState.isLoadingSearchSuggestions) {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                            uiState.searchSuggestionError?.let { error ->
+                                Text(
+                                    text = error,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
+                            if (uiState.showLocalSearchEmpty) {
+                                Text(
+                                    text = "No matching bookmarks, history, or open tabs",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
+                            uiState.searchSuggestions.take(8).forEach { suggestion ->
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
+                                            viewModel.applySuggestion(suggestion)
                                             isUrlBarExpanded = false
-                                            viewModel.applySuggestion(suggestion.url)
                                         }
                                         .padding(horizontal = 12.dp, vertical = 8.dp),
                                 ) {
@@ -816,7 +848,11 @@ fun BrowserScreen(
     }
 
     if (uiState.showBrowserSettings) {
-        BrowserSettingsDialog(onDismiss = viewModel::closeBrowserSettings)
+        BrowserSettingsDialog(
+            searchSuggestionsEnabled = uiState.browserSuggestionsEnabled,
+            onSearchSuggestionsChanged = viewModel::setBrowserSuggestionsEnabled,
+            onDismiss = viewModel::closeBrowserSettings,
+        )
     }
 
     if (showBrowserUpdates) {
@@ -1872,9 +1908,10 @@ private fun ProfileSwitcherDialog(
 
 @Composable
 private fun BrowserSettingsDialog(
+    searchSuggestionsEnabled: Boolean,
+    onSearchSuggestionsChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var searchSuggestions by remember { mutableStateOf(true) }
     var compactTabs by remember { mutableStateOf(false) }
     var openLinksInBackground by remember { mutableStateOf(true) }
 
@@ -1894,8 +1931,8 @@ private fun BrowserSettingsDialog(
                 )
                 SettingToggleRow(
                     title = "Search suggestions",
-                    checked = searchSuggestions,
-                    onCheckedChange = { searchSuggestions = it },
+                    checked = searchSuggestionsEnabled,
+                    onCheckedChange = onSearchSuggestionsChanged,
                 )
                 SettingToggleRow(
                     title = "Compact tab strip",

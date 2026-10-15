@@ -1,6 +1,7 @@
 package dev.fetchx.browser
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -8,6 +9,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +38,7 @@ data class SearchSuggestion(
     val title: String,
     val url: String,
     val category: String,
+    val tabId: String? = null,
 )
 
 enum class SearchEngine(
@@ -86,6 +90,11 @@ data class BrowserUiState(
     ),
     val selectedProfileId: String = "default",
     val searchSuggestions: List<SearchSuggestion> = emptyList(),
+    val isLoadingSearchSuggestions: Boolean = false,
+    val searchSuggestionError: String? = null,
+    val isLocalSearch: Boolean = false,
+    val showLocalSearchEmpty: Boolean = false,
+    val browserSuggestionsEnabled: Boolean = true,
     val selectedSearchEngine: SearchEngine = SearchEngine.DUCKDUCKGO,
     val showSearchEngineSelector: Boolean = false,
     // ── Zenium features ───────────────────────────────────────────────────
@@ -120,6 +129,8 @@ class BrowserViewModel internal constructor(
     private var geckoViewRef: WeakReference<GeckoView>? = null
     private var runtime: GeckoRuntime? = null
     private var applicationContext: Context? = null
+    private var searchPreferences: SharedPreferences? = null
+    private var searchSuggestionJob: Job? = null
     private var extensionManager: ExtensionManager? = null
     private var extensionStateListener: (() -> Unit)? = null
     private val firefoxAddonsCatalog = FirefoxAddonsCatalog()
@@ -140,6 +151,7 @@ class BrowserViewModel internal constructor(
         geckoViewRef = WeakReference(view)
         this.runtime = runtime
         applicationContext = view.context.applicationContext
+        loadSearchSettings(view.context.applicationContext)
         val manager = extensionManager ?: GeckoRuntimeHolder.getExtensionManager(runtime).also {
             extensionManager = it
         }
@@ -733,73 +745,219 @@ class BrowserViewModel internal constructor(
 
     fun selectSearchEngine(engine: SearchEngine) {
         _uiState.update { it.copy(selectedSearchEngine = engine, showSearchEngineSelector = false) }
+        searchPreferences?.edit()?.putString(SEARCH_ENGINE_KEY, engine.name)?.apply()
+        onUrlInputChanged(_uiState.value.urlInput)
+    }
+
+    fun setBrowserSuggestionsEnabled(enabled: Boolean) {
+        _uiState.update {
+            it.copy(
+                browserSuggestionsEnabled = enabled,
+                searchSuggestions = emptyList(),
+                isLoadingSearchSuggestions = false,
+                searchSuggestionError = null,
+            )
+        }
+        searchPreferences?.edit()?.putBoolean(LOCAL_SUGGESTIONS_KEY, enabled)?.apply()
+        searchSuggestionJob?.cancel()
+        searchSuggestionJob = null
     }
 
     // ──URL input sync ─────────────────────────────────────────────────────
 
     fun onUrlInputChanged(url: String) {
-        val trimmed = url.trim()
-        val suggestions = buildSuggestions(trimmed)
-        _uiState.update { it.copy(urlInput = url, searchSuggestions = suggestions) }
+        searchSuggestionJob?.cancel()
+        _uiState.update {
+            it.copy(
+                urlInput = url,
+                searchSuggestions = emptyList(),
+                isLoadingSearchSuggestions = it.browserSuggestionsEnabled && url.isNotBlank(),
+                searchSuggestionError = null,
+                isLocalSearch = false,
+                showLocalSearchEmpty = false,
+            )
+        }
+        if (!_uiState.value.browserSuggestionsEnabled || url.isBlank()) return
+
+        val bookmarks = bookmarkController.state.value.bookmarks
+        val history = tabManager?.allHistory().orEmpty()
+        val tabs = tabManager?.allTabStates().orEmpty()
+        searchSuggestionJob = viewModelScope.launch {
+            delay(SEARCH_SUGGESTION_DEBOUNCE_MS)
+            try {
+                val suggestions = withContext(Dispatchers.Default) {
+                    buildSuggestions(url, bookmarks, history, tabs, _uiState.value.selectedSearchEngine)
+                }
+                _uiState.update { state ->
+                    if (state.urlInput == url) {
+                        state.copy(
+                            searchSuggestions = suggestions,
+                            isLoadingSearchSuggestions = false,
+                        )
+                    } else {
+                        state
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not prepare browser search suggestions", error)
+                _uiState.update { state ->
+                    if (state.urlInput == url) {
+                        state.copy(
+                            isLoadingSearchSuggestions = false,
+                            searchSuggestionError = "Browser suggestions could not be loaded.",
+                        )
+                    } else {
+                        state
+                    }
+                }
+            }
+        }
     }
 
     fun syncUrlInput(url: String) {
-        _uiState.update { it.copy(urlInput = url, searchSuggestions = emptyList()) }
+        searchSuggestionJob?.cancel()
+        _uiState.update {
+            it.copy(
+                urlInput = url,
+                searchSuggestions = emptyList(),
+                isLoadingSearchSuggestions = false,
+                searchSuggestionError = null,
+                isLocalSearch = false,
+                showLocalSearchEmpty = false,
+            )
+        }
     }
 
-    fun applySuggestion(url: String) {
-        val normalized = url.trim()
+    fun submitSearch(rawInput: String): SearchIntent {
+        val query = rawInput.trim()
+        val results = localResults(query)
+        val engine = _uiState.value.selectedSearchEngine
+        val intent = SearchIntentClassifier.classify(
+            query,
+            results,
+            UrlTemplateSearchProvider(engine.searchUrl),
+        )
+        searchSuggestionJob?.cancel()
+        when (intent) {
+            SearchIntent.Empty -> {
+                _uiState.update { it.copy(isLocalSearch = false, showLocalSearchEmpty = false) }
+            }
+            is SearchIntent.NavigateUrl -> {
+                tabManager?.navigate(intent.url)
+                _uiState.update { it.copy(searchSuggestions = emptyList(), isLocalSearch = false) }
+            }
+            is SearchIntent.WebSearch -> {
+                tabManager?.navigate(intent.url)
+                _uiState.update { it.copy(searchSuggestions = emptyList(), isLocalSearch = false) }
+            }
+            is SearchIntent.LocalSearch -> {
+                val suggestions = results.map(::suggestionFor).toMutableList()
+                suggestions += SearchSuggestion(
+                    title = "Search the web for \"$query\"",
+                    url = UrlTemplateSearchProvider(engine.searchUrl).searchUrl(query),
+                    category = "Web search · ${engine.displayName}",
+                )
+                _uiState.update {
+                    it.copy(
+                        urlInput = query,
+                        searchSuggestions = suggestions,
+                        isLoadingSearchSuggestions = false,
+                        searchSuggestionError = null,
+                        isLocalSearch = true,
+                        showLocalSearchEmpty = results.isEmpty(),
+                    )
+                }
+            }
+        }
+        return intent
+    }
+
+    fun applySuggestion(suggestion: SearchSuggestion) {
+        val normalized = suggestion.url.trim()
         if (normalized.isEmpty()) return
-        _uiState.update { it.copy(urlInput = normalized, searchSuggestions = emptyList()) }
-        tabManager?.navigate(normalized)
+        searchSuggestionJob?.cancel()
+        _uiState.update {
+            it.copy(urlInput = normalized, searchSuggestions = emptyList(), isLocalSearch = false)
+        }
+        if (suggestion.tabId != null) {
+            selectTab(suggestion.tabId)
+        } else {
+            tabManager?.navigate(normalized)
+        }
     }
 
     // ──Private ────────────────────────────────────────────────────────────
 
-    private fun buildSuggestions(rawQuery: String): List<SearchSuggestion> {
-        val query = rawQuery.trim().lowercase()
-        val engine = _uiState.value.selectedSearchEngine
-        if (query.isEmpty()) {
-            return listOf(
-                SearchSuggestion("Search with ${engine.displayName}", engine.homepage, "quick action"),
+    private fun buildSuggestions(
+        rawQuery: String,
+        bookmarks: List<Bookmark>,
+        history: List<HistoryEntry>,
+        tabs: List<TabState>,
+        engine: SearchEngine,
+    ): List<SearchSuggestion> {
+        val query = rawQuery.trim()
+        val results = BrowserLocalSearch.search(query, bookmarks, history, tabs)
+        val intent = SearchIntentClassifier.classify(
+            query,
+            results,
+            UrlTemplateSearchProvider(engine.searchUrl),
+        )
+        val suggestions = results.map(::suggestionFor).toMutableList()
+        when (intent) {
+            SearchIntent.Empty -> suggestions += SearchSuggestion(
+                "Search with ${engine.displayName}",
+                engine.homepage,
+                "Web search provider",
+            )
+            is SearchIntent.NavigateUrl -> suggestions.add(
+                0,
+                SearchSuggestion("Open website", intent.url, "Address"),
+            )
+            is SearchIntent.WebSearch -> suggestions += SearchSuggestion(
+                "Search the web for \"${intent.query}\"",
+                intent.url,
+                "Web search · ${engine.displayName}",
+            )
+            is SearchIntent.LocalSearch -> suggestions += SearchSuggestion(
+                "Search the web for \"${intent.query}\"",
+                UrlTemplateSearchProvider(engine.searchUrl).searchUrl(intent.query),
+                "Web search · ${engine.displayName}",
             )
         }
+        return suggestions.distinctBy { it.tabId ?: it.url }.take(8)
+    }
 
-        val bookmarks = bookmarkController.state.value.bookmarks
-        val history = tabManager?.allHistory() ?: emptyList()
-        val results = mutableListOf<SearchSuggestion>()
+    private fun localResults(query: String): List<BrowserSearchResult> =
+        BrowserLocalSearch.search(
+            query = query,
+            bookmarks = bookmarkController.state.value.bookmarks,
+            history = tabManager?.allHistory().orEmpty(),
+            tabs = tabManager?.allTabStates().orEmpty(),
+        )
 
-        bookmarks.filter { it.title.contains(query, ignoreCase = true) || it.url.contains(query, ignoreCase = true) }
-            .take(3)
-            .forEach { results += SearchSuggestion(it.title, it.url, "bookmark") }
+    private fun suggestionFor(result: BrowserSearchResult) = SearchSuggestion(
+        title = result.title,
+        url = result.url,
+        category = result.type.label,
+        tabId = result.tabId,
+    )
 
-        history.filter { it.title?.contains(query, ignoreCase = true) == true || it.url.contains(query, ignoreCase = true) }
-            .take(3)
-            .forEach {
-                val host = try {
-                    java.net.URI(it.url).host
-                } catch (_: java.net.URISyntaxException) {
-                    null
-                }
-                val title = it.title?.takeIf(String::isNotBlank) ?: host?.removePrefix("www.") ?: "Visited site"
-                results += SearchSuggestion(title, it.url, "history")
-            }
-
-        val encodedQuery = java.net.URLEncoder.encode(rawQuery.trim(), "UTF-8")
-        if (query.length > 1) {
-            val isAddress = looksLikeWebAddress(rawQuery)
-            if (isAddress) {
-                results += SearchSuggestion("Open website", normalizeUrl(rawQuery, engine), "website")
-            } else {
-                results += SearchSuggestion(
-                    "Search “${rawQuery.trim()}” with ${engine.displayName}",
-                    engine.searchUrl.replace("%s", encodedQuery),
-                    "search · ${engine.displayName}",
-                )
-            }
+    private fun loadSearchSettings(context: Context) {
+        val preferences = searchPreferences ?: context.getSharedPreferences(
+            SEARCH_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        ).also { searchPreferences = it }
+        val engine = preferences.getString(SEARCH_ENGINE_KEY, null)
+            ?.let { stored -> SearchEngine.entries.firstOrNull { it.name == stored } }
+            ?: SearchEngine.DUCKDUCKGO
+        _uiState.update {
+            it.copy(
+                selectedSearchEngine = engine,
+                browserSuggestionsEnabled = preferences.getBoolean(LOCAL_SUGGESTIONS_KEY, true),
+            )
         }
-
-        return results.distinctBy { it.url }.take(5)
     }
 
     private fun reattachActiveSession() {
@@ -809,6 +967,8 @@ class BrowserViewModel internal constructor(
 
     override fun onCleared() {
         super.onCleared()
+        searchSuggestionJob?.cancel()
+        searchSuggestionJob = null
         tabManager?.dispose()
         tabManager = null
         extensionManager?.let { manager ->
@@ -827,6 +987,11 @@ class BrowserViewModel internal constructor(
     }
 
     companion object {
+        private const val SEARCH_PREFERENCES_FILE = "fetchx_browser_search"
+        private const val SEARCH_ENGINE_KEY = "search_engine"
+        private const val LOCAL_SUGGESTIONS_KEY = "browser_suggestions_enabled"
+        const val SEARCH_SUGGESTION_DEBOUNCE_MS = 300L
+
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -852,32 +1017,10 @@ internal fun normalizeUrl(
 ): String {
     val trimmed = input.trim()
     if (trimmed.isBlank() || trimmed == "about:blank") return "about:blank"
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
-    if (looksLikeWebAddress(trimmed)) {
-        // Proactively add www. for bare domains (e.g. pornhub.com → www.pornhub.com)
-        // Many sites redirect bare domain → www, but some fail SSL on bare domain first.
-        val withScheme = "https://$trimmed"
-        return try {
-            val host = java.net.URI(withScheme).host ?: return withScheme
-            val dots = host.count { it == '.' }
-            // Only add www. to simple bare domains (exactly one dot, no existing subdomain)
-            if (dots == 1 && !host.startsWith("www.")) "https://www.$trimmed" else withScheme
-        } catch (_: Exception) {
-            withScheme
-        }
-    }
-
-    val encodedQuery = java.net.URLEncoder.encode(trimmed, "UTF-8")
-    return searchEngine.searchUrl.replace("%s", encodedQuery)
+    SearchIntentClassifier.normalizeBrowserUrl(trimmed)?.let { return it }
+    return UrlTemplateSearchProvider(searchEngine.searchUrl).searchUrl(trimmed)
 }
 
 internal fun looksLikeWebAddress(input: String): Boolean {
-    val trimmed = input.trim()
-    if (trimmed.isEmpty() || trimmed.any(Char::isWhitespace)) return false
-    val host = try {
-        java.net.URI("https://$trimmed").host
-    } catch (_: java.net.URISyntaxException) {
-        null
-    }
-    return host != null && (trimmed.contains('.') || host == "localhost")
+    return SearchIntentClassifier.normalizeBrowserUrl(input) != null
 }
