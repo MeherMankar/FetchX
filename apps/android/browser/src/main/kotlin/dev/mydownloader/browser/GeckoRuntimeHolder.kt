@@ -1,6 +1,8 @@
 package dev.fetchx.browser
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import org.json.JSONObject
 import org.mozilla.geckoview.ContentBlocking
@@ -83,28 +85,33 @@ object GeckoRuntimeHolder {
                         Log.e(TAG, "ensureBuiltIn returned null extension")
                         return@accept
                     }
-                    val delegate = object : WebExtension.MessageDelegate {
-                        override fun onMessage(
-                            nativeApp: String,
-                            message: Any,
-                            sender: WebExtension.MessageSender,
-                        ): org.mozilla.geckoview.GeckoResult<Any>? {
-                            if (message is JSONObject) {
-                                val url = message.optString("url", "")
-                                if (url.isNotBlank()) {
-                                    VideoInterceptor.detect(
-                                        tabId = "",
-                                        url = url,
-                                        mimeType = null,
-                                        contentLength = null,
-                                    )?.let { onVideoDetectedFromExtension?.invoke(it) }
+                    // Dispatch to main thread: GeckoView does not guarantee the accept
+                    // callback runs on the main thread, and setMessageDelegate must be
+                    // called from the main thread to avoid racing with session setup.
+                    Handler(Looper.getMainLooper()).post {
+                        val delegate = object : WebExtension.MessageDelegate {
+                            override fun onMessage(
+                                nativeApp: String,
+                                message: Any,
+                                sender: WebExtension.MessageSender,
+                            ): org.mozilla.geckoview.GeckoResult<Any>? {
+                                if (message is JSONObject) {
+                                    val url = message.optString("url", "")
+                                    if (url.isNotBlank()) {
+                                        VideoInterceptor.detect(
+                                            tabId = "",
+                                            url = url,
+                                            mimeType = null,
+                                            contentLength = null,
+                                        )?.let { onVideoDetectedFromExtension?.invoke(it) }
+                                    }
                                 }
+                                return null
                             }
-                            return null
                         }
+                        extension.setMessageDelegate(delegate, "browser")
+                        Log.i(TAG, "Video interceptor extension registered")
                     }
-                    extension.setMessageDelegate(delegate, "browser")
-                    Log.i(TAG, "Video interceptor extension registered")
                 },
                 { error ->
                     Log.e(TAG, "Failed to register video interceptor extension", error)
