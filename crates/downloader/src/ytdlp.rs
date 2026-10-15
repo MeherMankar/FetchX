@@ -14,6 +14,7 @@ use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
 };
 use fetchx_storage::DownloadRepository;
+use serde::Deserialize;
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
@@ -32,6 +33,9 @@ use crate::{
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
+const MAX_FORMAT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_DISCOVERED_FORMATS: usize = 100;
+const FORMAT_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
@@ -86,6 +90,14 @@ pub struct YtDlpProgress {
     pub estimated_remaining_seconds: Option<u64>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, serde::Serialize)]
+pub struct YtDlpFormat {
+    pub format_id: String,
+    pub label: String,
+    pub extension: Option<String>,
+    pub file_size_bytes: Option<u64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum YtDlpRunnerEvent {
     ProgressLine(String),
@@ -134,6 +146,14 @@ pub enum YtDlpError {
     PauseUnsupported,
     #[error("yt-dlp process runner failed")]
     ProcessRunner,
+    #[error("yt-dlp format discovery is not supported by this runtime")]
+    FormatDiscoveryUnsupported,
+    #[error("yt-dlp format discovery timed out")]
+    FormatDiscoveryTimeout,
+    #[error("yt-dlp format discovery output exceeded its size limit")]
+    FormatOutputTooLarge,
+    #[error("yt-dlp format discovery returned invalid data")]
+    InvalidFormatOutput,
 }
 
 pub trait YtDlpProcessRunner: Send + Sync {
@@ -150,6 +170,15 @@ pub trait YtDlpProcessRunner: Send + Sync {
         stop: watch::Receiver<bool>,
         events: mpsc::Sender<YtDlpRunnerEvent>,
     ) -> YtDlpRunnerFuture<'a, Result<YtDlpProcessExit, YtDlpError>>;
+
+    fn discover_formats<'a>(
+        &'a self,
+        _executable: &'a Path,
+        _url: &'a str,
+        _timeout: Duration,
+    ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
+        Box::pin(async { Err(YtDlpError::FormatDiscoveryUnsupported) })
+    }
 }
 
 pub struct YtDlpEngine<R> {
@@ -208,6 +237,17 @@ where
 
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    pub async fn discover_formats(&self, url: &str) -> Result<Vec<YtDlpFormat>, YtDlpError> {
+        let url = validate_source_url(url)?;
+        timeout(
+            FORMAT_DISCOVERY_TIMEOUT,
+            self.runner
+                .discover_formats(&self.executable, url.as_str(), FORMAT_DISCOVERY_TIMEOUT),
+        )
+        .await
+        .map_err(|_| YtDlpError::FormatDiscoveryTimeout)?
     }
 
     async fn download_controlled(
@@ -280,7 +320,7 @@ where
         }
         let workspace = workspace_path(item.destination(), id);
         prepare_workspace(&workspace).await?;
-        let arguments = build_arguments(&workspace, url.as_str());
+        let arguments = build_arguments(&workspace, url.as_str(), item.source().yt_dlp_format());
         report_resource_demand(control, id, 1, 0).await?;
 
         if item.status() == DownloadStatus::Preparing {
@@ -655,7 +695,8 @@ fn is_unknown(value: &str) -> bool {
     value.is_empty() || matches!(value, "NA" | "None" | "none" | "N/A")
 }
 
-fn build_arguments(workspace: &Path, url: &str) -> Vec<OsString> {
+fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -> Vec<OsString> {
+    let selected_format = selected_format.unwrap_or("best[ext=mp4]/best");
     let mut arguments = vec![
         "--ignore-config".into(),
         "--no-plugin-dirs".into(),
@@ -664,8 +705,12 @@ fn build_arguments(workspace: &Path, url: &str) -> Vec<OsString> {
         "--no-overwrites".into(),
         "--continue".into(),
         "--no-cache-dir".into(),
+        "--no-write-thumbnail".into(),
+        "--no-write-info-json".into(),
+        "--no-write-annotations".into(),
+        "--no-write-comments".into(),
         "--format".into(),
-        "best".into(),
+        selected_format.into(),
         "--concurrent-fragments".into(),
         "1".into(),
         "--newline".into(),
@@ -685,6 +730,112 @@ fn build_arguments(workspace: &Path, url: &str) -> Vec<OsString> {
         url.into(),
     ]);
     arguments
+}
+
+pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError> {
+    if bytes.len() > MAX_FORMAT_OUTPUT_BYTES {
+        return Err(YtDlpError::FormatOutputTooLarge);
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|_| YtDlpError::InvalidFormatOutput)?;
+    let formats = value
+        .get("formats")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(YtDlpError::InvalidFormatOutput)?;
+
+    let mut discovered = Vec::new();
+    for format in formats {
+        if format.get("has_drm").and_then(serde_json::Value::as_bool) == Some(true)
+            || !codec_is_present(format.get("vcodec"))
+            || !codec_is_present(format.get("acodec"))
+        {
+            continue;
+        }
+        let Some(format_id) = format.get("format_id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !is_valid_ytdlp_format_id(format_id) {
+            continue;
+        }
+
+        let extension = format
+            .get("ext")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let resolution = format
+            .get("resolution")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty() && *value != "unknown")
+            .map(str::to_owned)
+            .or_else(|| {
+                let width = format.get("width").and_then(serde_json::Value::as_u64)?;
+                let height = format.get("height").and_then(serde_json::Value::as_u64)?;
+                Some(format!("{width}x{height}"))
+            });
+        let note = format
+            .get("format_note")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty());
+        let file_size_bytes = format
+            .get("filesize")
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| {
+                format
+                    .get("filesize_approx")
+                    .and_then(serde_json::Value::as_u64)
+            });
+        let mut label = resolution
+            .or_else(|| note.map(str::to_owned))
+            .unwrap_or_else(|| "Video".to_owned());
+        if let Some(extension) = &extension {
+            label.push_str(" - ");
+            label.push_str(extension);
+        }
+        if let Some(size) = file_size_bytes {
+            label.push_str(" - ");
+            label.push_str(&format_file_size(size));
+        }
+        discovered.push(YtDlpFormat {
+            format_id: format_id.to_owned(),
+            label,
+            extension,
+            file_size_bytes,
+        });
+        if discovered.len() == MAX_DISCOVERED_FORMATS {
+            break;
+        }
+    }
+    Ok(discovered)
+}
+
+fn codec_is_present(value: Option<&serde_json::Value>) -> bool {
+    value
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|codec| !codec.is_empty() && codec != "none")
+}
+
+fn is_valid_ytdlp_format_id(format_id: &str) -> bool {
+    !format_id.is_empty()
+        && format_id.len() <= 128
+        && format_id
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && format_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+fn format_file_size(size: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = size as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }
 
 fn validate_source_url(source: &str) -> Result<reqwest::Url, YtDlpError> {
@@ -798,13 +949,31 @@ async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
         .await
         .map_err(|_| YtDlpError::OutputUnavailable)?
     {
-        let metadata = tokio::fs::symlink_metadata(entry.path())
+        let path = entry.path();
+        let metadata = tokio::fs::symlink_metadata(&path)
             .await
             .map_err(|_| YtDlpError::OutputUnavailable)?;
-        if !metadata.file_type().is_file() || output.is_some() {
+        if !metadata.file_type().is_file() {
             return Err(YtDlpError::OutputUnavailable);
         }
-        output = Some(entry.path());
+        // Skip yt-dlp temporary/metadata files — these are left in the workspace
+        // during and after HLS/DASH downloads:
+        //   .part          — the partial download being assembled
+        //   .part-FragN.part — individual HLS/DASH fragment in progress
+        //   .ytdl          — yt-dlp resume/metadata sidecar
+        //   .json          — --write-info-json output (should not appear given our flags)
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.ends_with(".part")
+            || name.contains(".part-Frag")
+            || name.ends_with(".ytdl")
+            || name.ends_with(".json")
+        {
+            continue;
+        }
+        if output.is_some() {
+            return Err(YtDlpError::OutputUnavailable);
+        }
+        output = Some(path);
     }
     output.ok_or(YtDlpError::OutputUnavailable)
 }
@@ -952,6 +1121,64 @@ impl YtDlpProcessRunner for TokioYtDlpRunner {
                 success: exit.success(),
                 code: exit.code(),
             })
+        })
+    }
+
+    fn discover_formats<'a>(
+        &'a self,
+        executable: &'a Path,
+        url: &'a str,
+        command_timeout: Duration,
+    ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
+        Box::pin(async move {
+            let mut command = Command::new(executable);
+            command
+                .args([
+                    "--ignore-config",
+                    "--no-plugin-dirs",
+                    "--no-warnings",
+                    "--quiet",
+                    "--skip-download",
+                    "--no-playlist",
+                    "--dump-single-json",
+                    "--extractor-args",
+                    "youtube:player_client=android,web",
+                    "--",
+                    url,
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
+            let result = timeout(command_timeout, async {
+                let stdout = child.stdout.take().ok_or(YtDlpError::ProcessRunner)?;
+                let mut bytes = Vec::new();
+                stdout
+                    .take((MAX_FORMAT_OUTPUT_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)
+                    .await
+                    .map_err(|_| YtDlpError::ProcessRunner)?;
+                if bytes.len() > MAX_FORMAT_OUTPUT_BYTES {
+                    terminate_child(&mut child).await?;
+                    return Err(YtDlpError::FormatOutputTooLarge);
+                }
+                let status = child.wait().await.map_err(|_| YtDlpError::ProcessRunner)?;
+                if !status.success() {
+                    return Err(YtDlpError::ProcessFailure {
+                        code: status.code(),
+                    });
+                }
+                parse_format_output(&bytes)
+            })
+            .await;
+            match result {
+                Ok(result) => result,
+                Err(_) => {
+                    terminate_child(&mut child).await?;
+                    Err(YtDlpError::FormatDiscoveryTimeout)
+                }
+            }
         })
     }
 }
@@ -1228,6 +1455,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn discovers_only_safe_combined_video_formats() {
+        let output = br#"{
+            "formats": [
+                {"format_id":"18","ext":"mp4","width":640,"height":360,
+                 "vcodec":"avc1","acodec":"mp4a","filesize":1048576},
+                {"format_id":"140","ext":"m4a","vcodec":"none","acodec":"mp4a"},
+                {"format_id":"137","ext":"mp4","vcodec":"avc1","acodec":"none"},
+                {"format_id":"unsafe+format","ext":"mp4","vcodec":"avc1","acodec":"mp4a"},
+                {"format_id":"drm","ext":"mp4","vcodec":"avc1","acodec":"mp4a","has_drm":true}
+            ]
+        }"#;
+        let formats = parse_format_output(output).expect("valid format output");
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].format_id, "18");
+        assert_eq!(formats[0].label, "640x360 - mp4 - 1.0 MB");
+        assert_eq!(formats[0].file_size_bytes, Some(1_048_576));
+    }
+
+    #[test]
+    fn rejects_invalid_or_oversized_format_output() {
+        assert!(matches!(
+            parse_format_output(b"not json"),
+            Err(YtDlpError::InvalidFormatOutput)
+        ));
+        assert!(matches!(
+            parse_format_output(&vec![b' '; MAX_FORMAT_OUTPUT_BYTES + 1]),
+            Err(YtDlpError::FormatOutputTooLarge)
+        ));
+    }
+
+    #[test]
+    fn selected_format_is_passed_as_a_distinct_ytdlp_argument() {
+        let args = build_arguments(
+            Path::new("workspace"),
+            "https://example.test/video",
+            Some("137"),
+        );
+        let format_index = args
+            .iter()
+            .position(|argument| argument == OsStr::new("--format"))
+            .expect("format option is present");
+        assert_eq!(args[format_index + 1], OsStr::new("137"));
+    }
+
     #[tokio::test]
     async fn runs_with_structured_arguments_and_publishes_one_output() -> Result<(), Box<dyn Error>>
     {
@@ -1251,11 +1523,7 @@ mod tests {
                     .arguments
                     .contains(&"--concurrent-fragments".to_owned())
             );
-            assert!(
-                state
-                    .arguments
-                    .contains(&"--extractor-args".to_owned())
-            );
+            assert!(state.arguments.contains(&"--extractor-args".to_owned()));
             let delimiter = state
                 .arguments
                 .iter()

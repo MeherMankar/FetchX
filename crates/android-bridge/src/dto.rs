@@ -57,6 +57,12 @@ pub struct DownloadInfoDto {
     pub error_message: Option<String>,
 }
 
+pub struct YtDlpFormatDto {
+    pub format_id: String,
+    pub label: String,
+    pub extension: Option<String>,
+}
+
 /// Event emitted by the Rust backend, forwarded to Kotlin listeners.
 /// Maps to the `[Enum] interface DownloadEventDto` in android_bridge.udl.
 pub enum DownloadEventDto {

@@ -31,16 +31,17 @@ impl DownloadRepository for SqliteDownloadRepository {
 
         sqlx::query(
             "INSERT INTO downloads (
-                id, source_url, engine_kind, filename, destination, status, priority,
+                id, source_url, engine_kind, yt_dlp_format, filename, destination, status, priority,
                 downloaded_bytes, total_bytes, speed_bytes_per_second,
                 estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
                 queue_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM downloads))",
         )
         .bind(item.id().to_string())
         .bind(item.source().url())
         .bind(engine_to_str(item.source().engine()))
+        .bind(item.source().yt_dlp_format())
         .bind(item.filename().as_str())
         .bind(destination)
         .bind(status_to_str(item.status()))
@@ -79,7 +80,7 @@ impl DownloadRepository for SqliteDownloadRepository {
 
     async fn get(&self, id: DownloadId) -> Result<Option<DownloadItem>, StorageError> {
         let row = sqlx::query(
-            "SELECT id, source_url, engine_kind, filename, destination, status, priority,
+            "SELECT id, source_url, engine_kind, yt_dlp_format, filename, destination, status, priority,
                     downloaded_bytes, total_bytes, speed_bytes_per_second,
                     estimated_remaining_seconds, created_at, updated_at, error_code, error_message
              FROM downloads
@@ -94,7 +95,7 @@ impl DownloadRepository for SqliteDownloadRepository {
 
     async fn list(&self) -> Result<Vec<DownloadItem>, StorageError> {
         let rows = sqlx::query(
-            "SELECT id, source_url, engine_kind, filename, destination, status, priority,
+            "SELECT id, source_url, engine_kind, yt_dlp_format, filename, destination, status, priority,
                     downloaded_bytes, total_bytes, speed_bytes_per_second,
                     estimated_remaining_seconds, created_at, updated_at, error_code, error_message
              FROM downloads
@@ -204,7 +205,7 @@ impl DownloadRepository for SqliteDownloadRepository {
 
         let result = sqlx::query(
             "UPDATE downloads SET
-                source_url = ?, engine_kind = ?, filename = ?, destination = ?, status = ?,
+                source_url = ?, engine_kind = ?, yt_dlp_format = ?, filename = ?, destination = ?, status = ?,
                 priority = ?, downloaded_bytes = ?, total_bytes = ?,
                 speed_bytes_per_second = ?, estimated_remaining_seconds = ?,
                 created_at = ?, updated_at = ?, error_code = ?, error_message = ?
@@ -212,6 +213,7 @@ impl DownloadRepository for SqliteDownloadRepository {
         )
         .bind(item.source().url())
         .bind(engine_to_str(item.source().engine()))
+        .bind(item.source().yt_dlp_format())
         .bind(item.filename().as_str())
         .bind(destination)
         .bind(status_to_str(item.status()))
@@ -297,7 +299,7 @@ async fn conditional_update(
         .transpose()?;
     let result = sqlx::query(
         "UPDATE downloads SET
-            source_url = ?, engine_kind = ?, filename = ?, destination = ?, status = ?,
+            source_url = ?, engine_kind = ?, yt_dlp_format = ?, filename = ?, destination = ?, status = ?,
             priority = ?, downloaded_bytes = ?, total_bytes = ?,
             speed_bytes_per_second = ?, estimated_remaining_seconds = ?,
             created_at = ?, updated_at = ?, error_code = ?, error_message = ?
@@ -305,6 +307,7 @@ async fn conditional_update(
     )
     .bind(item.source().url())
     .bind(engine_to_str(item.source().engine()))
+    .bind(item.source().yt_dlp_format())
     .bind(item.filename().as_str())
     .bind(destination)
     .bind(status_to_str(item.status()))
@@ -359,7 +362,12 @@ fn row_to_item(row: SqliteRow) -> Result<DownloadItem, StorageError> {
     let source_url: String = row.try_get("source_url")?;
     let engine_text: String = row.try_get("engine_kind")?;
     let engine = engine_from_str(&engine_text)?;
+    let yt_dlp_format: Option<String> = row.try_get("yt_dlp_format")?;
     let source = DownloadSource::new(source_url, engine)
+        .and_then(|source| match yt_dlp_format {
+            Some(format_id) => source.with_yt_dlp_format(format_id),
+            None => Ok(source),
+        })
         .map_err(|error| StorageError::invalid_data("source_url", error.to_string()))?;
 
     let filename_text: String = row.try_get("filename")?;

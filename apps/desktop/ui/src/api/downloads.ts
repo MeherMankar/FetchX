@@ -11,6 +11,7 @@ import type {
   QueueSnapshot,
   ScheduleDownloadRequest,
   SetPriorityRequest,
+  YtDlpFormat,
 } from "./types";
 import type { DownloadPriority } from "./types";
 
@@ -20,6 +21,22 @@ export function listDownloads(): Promise<Download[]> {
 
 export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
+}
+
+export function addMediaDownload(
+  url: string,
+  formatId?: string,
+  extension?: string | null,
+): Promise<Download> {
+  return invoke<Download>("add_media_download", {
+    url,
+    format_id: formatId ?? null,
+    extension: extension ?? null,
+  });
+}
+
+export function discoverYtDlpFormats(url: string): Promise<YtDlpFormat[]> {
+  return invoke<YtDlpFormat[]>("discover_ytdlp_formats", { url });
 }
 
 export function pauseDownload(downloadId: string): Promise<Download> {

@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import dev.fetchx.core.download.YtDlpFormat
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoView
 import java.io.IOException
@@ -95,6 +97,10 @@ data class BrowserUiState(
     val compactMode: Boolean = false,
     val detectedVideos: List<DetectedVideo> = emptyList(),
     val showVideoDownloadBar: Boolean = false,
+    val pendingMediaVideo: DetectedVideo? = null,
+    val mediaFormats: List<YtDlpFormat> = emptyList(),
+    val isDiscoveringMediaFormats: Boolean = false,
+    val mediaFormatError: String? = null,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
     val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
@@ -333,31 +339,104 @@ class BrowserViewModel internal constructor(
         _uiState.update { it.copy(detectedVideos = emptyList(), showVideoDownloadBar = false) }
     }
 
-    fun downloadDetectedVideo(video: DetectedVideo) {
+    fun requestMediaFormats(video: DetectedVideo) {
+        val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
+            _uiState.update {
+                it.copy(
+                    pendingMediaVideo = video,
+                    mediaFormatError = "The download service is not ready.",
+                )
+            }
+            return
+        }
+        val pageUrl = _uiState.value.activeTab?.url
+            ?.takeIf { it.startsWith("http") }
+        val downloadUrl = pageUrl ?: video.url
+        _uiState.update {
+            it.copy(
+                pendingMediaVideo = video,
+                mediaFormats = emptyList(),
+                isDiscoveringMediaFormats = true,
+                mediaFormatError = null,
+            )
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val formats = repo.discoverMediaFormats(downloadUrl)
+                _uiState.update {
+                    it.copy(mediaFormats = formats, isDiscoveringMediaFormats = false)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to discover media formats", error)
+                _uiState.update {
+                    it.copy(
+                        isDiscoveringMediaFormats = false,
+                        mediaFormatError = error.message ?: "Format discovery failed.",
+                    )
+                }
+            }
+        }
+    }
+
+    fun closeMediaFormatPicker() {
+        _uiState.update {
+            it.copy(
+                pendingMediaVideo = null,
+                mediaFormats = emptyList(),
+                isDiscoveringMediaFormats = false,
+                mediaFormatError = null,
+            )
+        }
+    }
+
+    fun downloadDetectedVideo(
+        video: DetectedVideo,
+        formatId: String? = null,
+        extension: String? = null,
+    ) {
         val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
             Log.w(TAG, "downloadDetectedVideo: bridge not initialized")
+            closeMediaFormatPicker()
             return
         }
         val destDir = android.os.Environment.getExternalStoragePublicDirectory(
             android.os.Environment.DIRECTORY_DOWNLOADS,
         )
-        val destPath = java.io.File(destDir, video.suggestedFilename).absolutePath
+        val pageUrl = _uiState.value.activeTab?.url
+            ?.takeIf { it.startsWith("http") }
+        val downloadUrl = pageUrl ?: video.url
+        val baseName = video.suggestedFilename
+            .substringBefore(".m3u8")
+            .substringBefore(".mpd")
+            .substringBeforeLast(".")
+            .ifBlank { "video" }
+        val safeExtension = extension
+            ?.takeIf {
+                it.length in 1..10 && it.all { character ->
+                    character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9'
+                }
+            }
+            ?: "mp4"
+        val fileName = "$baseName.$safeExtension"
+        val destPath = java.io.File(destDir, fileName).absolutePath
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                repo.addDownload(
-                    url = video.url,
-                    fileName = video.suggestedFilename,
+                // addMediaDownload routes through yt-dlp which handles HLS/DASH properly
+                repo.addMediaDownload(
+                    url = downloadUrl,
+                    fileName = fileName,
                     destinationPath = destPath,
                     priority = dev.fetchx.core.download.DownloadPriority.NORMAL,
-                    mimeType = video.mimeType,
-                    totalBytes = video.contentLength,
-                    referrer = null,
+                    formatId = formatId,
                 )
-                Log.i(TAG, "Queued video download: ${video.suggestedFilename}")
+                Log.i(TAG, "Queued media download via yt-dlp: $fileName from $downloadUrl")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to queue video download", e)
             }
         }
+        closeMediaFormatPicker()
         dismissVideoBar()
     }
 
@@ -487,6 +566,79 @@ class BrowserViewModel internal constructor(
                 _uiState.update { it.copy(isImportingExtension = false) }
             }
         }
+    }
+
+    fun searchFirefoxAddons(query: String) {
+        val generation = ++firefoxAddonsSearchGeneration
+        _uiState.update {
+            it.copy(
+                firefoxAddonsCatalogState = it.firefoxAddonsCatalogState.copy(
+                    query = query,
+                    results = emptyList(),
+                    isLoading = true,
+                    error = null,
+                ),
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val results = withContext(Dispatchers.IO) {
+                    firefoxAddonsCatalog.search(query)
+                }
+                if (generation == firefoxAddonsSearchGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            firefoxAddonsCatalogState = it.firefoxAddonsCatalogState.copy(
+                                results = results,
+                                isLoading = false,
+                                error = null,
+                            ),
+                        )
+                    }
+                }
+            } catch (error: IOException) {
+                if (generation == firefoxAddonsSearchGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            firefoxAddonsCatalogState = it.firefoxAddonsCatalogState.copy(
+                                results = emptyList(),
+                                isLoading = false,
+                                error = error.message ?: "Firefox Add-ons search failed.",
+                            ),
+                        )
+                    }
+                }
+            } catch (error: IllegalArgumentException) {
+                if (generation == firefoxAddonsSearchGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            firefoxAddonsCatalogState = it.firefoxAddonsCatalogState.copy(
+                                results = emptyList(),
+                                isLoading = false,
+                                error = error.message ?: "Enter an add-on name to search.",
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun installFirefoxAddon(addon: FirefoxAddon) {
+        val manager = extensionManager
+        if (manager == null) {
+            _uiState.update {
+                it.copy(extensionManagerState = it.extensionManagerState.copy(
+                    error = "The browser extension service is not available.",
+                ))
+            }
+            return
+        }
+        manager.installFromFirefoxAddons(addon)
+    }
+
+    fun resolveExtensionPermissionRequest(allow: Boolean) {
+        extensionManager?.resolveInstallPermissionRequest(allow)
     }
 
     fun enableExtension(id: ExtensionId) {

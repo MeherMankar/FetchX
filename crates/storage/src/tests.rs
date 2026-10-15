@@ -48,7 +48,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(database.pool())
             .await?;
-    assert_eq!(migration_count, 4);
+    assert_eq!(migration_count, 5);
 
     Ok(())
 }
@@ -126,6 +126,45 @@ async fn repository_round_trips_and_performs_crud() -> Result<(), Box<dyn Error>
     assert_eq!(repository.get(second.id()).await?, None);
     assert_eq!(repository.list().await?.len(), 1);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn repository_persists_selected_ytdlp_format() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let id = DownloadId::new();
+    let mut download = DownloadItem::new(
+        id,
+        DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?
+            .with_yt_dlp_format("137")?,
+        FileName::new("video.mp4")?,
+        PathBuf::from("downloads/video.mp4"),
+        Timestamp::now()?,
+    );
+    repository.create(&download).await?;
+    assert_eq!(
+        repository
+            .get(id)
+            .await?
+            .ok_or("selected-format download was not found")?
+            .source()
+            .yt_dlp_format(),
+        Some("137")
+    );
+
+    let now = Timestamp::now()?;
+    download.set_priority_at(DownloadPriority::High, now)?;
+    repository.update(&download).await?;
+    assert_eq!(
+        repository
+            .get(id)
+            .await?
+            .ok_or("updated selected-format download was not found")?
+            .source()
+            .yt_dlp_format(),
+        Some("137")
+    );
     Ok(())
 }
 

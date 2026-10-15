@@ -31,8 +31,8 @@ pub use supervisor::{
     Aria2SupervisorState, ProcessExit, SupervisedProcess,
 };
 pub use ytdlp::{
-    YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpProgress,
-    YtDlpRunnerEvent, YtDlpRunnerFuture,
+    YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner,
+    YtDlpProgress, YtDlpRunnerEvent, YtDlpRunnerFuture, parse_format_output,
 };
 
 #[cfg(test)]

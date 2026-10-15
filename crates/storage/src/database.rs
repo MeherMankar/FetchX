@@ -44,6 +44,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             )),
             false,
         ),
+        Migration::new(
+            5,
+            Cow::Borrowed("add_ytdlp_format"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0005_add_ytdlp_format.sql"
+            )),
+            false,
+        ),
     ]),
     ..Migrator::DEFAULT
 });

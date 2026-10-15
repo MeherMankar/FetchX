@@ -129,6 +129,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_app_info,
             commands::list_downloads,
             commands::add_download,
+            commands::add_media_download,
+            commands::discover_ytdlp_formats,
             commands::pause_download,
             commands::resume_download,
             commands::cancel_download,

@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::{
     Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
-    ManagedDownloadEngine, YtDlpEngine,
+    ManagedDownloadEngine, YtDlpEngine, YtDlpFormat,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -37,6 +37,18 @@ where
     pub fn with_yt_dlp(mut self, engine: Arc<YtDlpEngine<R>>) -> Self {
         self.yt_dlp = Some(engine);
         self
+    }
+
+    pub async fn discover_ytdlp_formats(
+        &self,
+        url: &str,
+    ) -> Result<Vec<YtDlpFormat>, DownloadEngineError> {
+        self.yt_dlp
+            .as_ref()
+            .ok_or(DownloadEngineError::EngineNotAvailable)?
+            .discover_formats(url)
+            .await
+            .map_err(Into::into)
     }
 
     async fn engine_for(&self, id: DownloadId) -> Result<EngineKind, DownloadEngineError> {

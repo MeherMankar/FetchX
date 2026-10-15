@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "FetchX Video Interceptor",
-  "version": "1.0",
-  "description": "Intercepts video stream requests and reports them to the FetchX native app.",
+  "version": "1.1",
+  "description": "Intercepts video stream requests and extracts all quality levels for FetchX downloader.",
   "browser_specific_settings": {
     "gecko": {
       "id": "video-interceptor@fetchx.dev"
@@ -14,6 +14,8 @@
   "permissions": [
     "webRequest",
     "webRequestBlocking",
+    "webNavigation",
+    "tabs",
     "nativeMessaging",
     "geckoViewAddons",
     "<all_urls>"

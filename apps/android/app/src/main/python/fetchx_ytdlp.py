@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import sys
 import traceback
@@ -84,3 +85,40 @@ def run(arguments, progress_path, cancel_path):
     except Exception as error:
         tb = traceback.format_exc()
         return f"{type(error).__name__}: {error}\nTraceback:\n{tb}"
+
+
+def discover_formats(url):
+    _ensure_streams()
+    try:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+            "ignoreconfig": True,
+            "no_color": True,
+        }
+        with YoutubeDL(options) as downloader:
+            info = downloader.extract_info(url, download=False)
+        formats = []
+        for item in (info or {}).get("formats") or []:
+            if item.get("has_drm"):
+                continue
+            formats.append({
+                "format_id": item.get("format_id"),
+                "ext": item.get("ext"),
+                "resolution": item.get("resolution"),
+                "width": item.get("width"),
+                "height": item.get("height"),
+                "format_note": item.get("format_note"),
+                "filesize": item.get("filesize"),
+                "filesize_approx": item.get("filesize_approx"),
+                "vcodec": item.get("vcodec"),
+                "acodec": item.get("acodec"),
+                "has_drm": item.get("has_drm"),
+            })
+            if len(formats) >= 100:
+                break
+        return json.dumps({"formats": formats}, separators=(",", ":"))
+    except Exception as error:
+        return f"ERROR:{type(error).__name__}: {error}"

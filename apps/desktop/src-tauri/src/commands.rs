@@ -4,7 +4,7 @@ use std::{
 };
 
 use fetchx_core::StateMachineError;
-use fetchx_downloader::validate_http_source_url;
+use fetchx_downloader::{YtDlpFormat, validate_http_source_url};
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
     EngineKind, FileName, Timestamp,
@@ -68,10 +68,32 @@ impl AppState {
     }
 
     async fn add(&self, request: AddDownloadRequest) -> Result<DownloadDto, IpcError> {
+        self.add_with_ytdlp_format(request, None, None).await
+    }
+
+    async fn add_with_ytdlp_format(
+        &self,
+        request: AddDownloadRequest,
+        format_id: Option<String>,
+        extension: Option<String>,
+    ) -> Result<DownloadDto, IpcError> {
         let canonical_url =
             validate_http_source_url(&request.url).map_err(|_| IpcError::invalid_request())?;
         let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
+        if extension.is_some() && (format_id.is_none() || !extension_is_safe(extension.as_deref()))
+        {
+            return Err(IpcError::invalid_request());
+        }
         let filename = filename_for_url(&parsed_url);
+        let filename = match extension.as_deref() {
+            Some(extension) => Path::new(&filename)
+                .with_extension(extension)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(IpcError::invalid_request)?
+                .to_owned(),
+            None => filename,
+        };
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
         let destination = self.downloads_dir.join(filename.as_str());
         let id = DownloadId::new();
@@ -86,6 +108,10 @@ impl AppState {
         }
 
         let source = DownloadSource::new(canonical_url, engine_kind)
+            .and_then(|source| match format_id {
+                Some(format_id) => source.with_yt_dlp_format(format_id),
+                None => Ok(source),
+            })
             .map_err(|_| IpcError::invalid_request())?;
         let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
         let item = DownloadItem::new(id, source, filename, destination, created_at);
@@ -95,6 +121,19 @@ impl AppState {
             .await
             .map_err(IpcError::from_queue)?;
         self.get(id).await
+    }
+
+    async fn discover_ytdlp_formats(&self, source_url: &str) -> Result<Vec<YtDlpFormat>, IpcError> {
+        let canonical_url =
+            validate_http_source_url(source_url).map_err(|_| IpcError::invalid_request())?;
+        if !self.engine_runtime.is_available(EngineKind::YtDlp) {
+            return Err(IpcError::engine_unavailable(EngineKind::YtDlp));
+        }
+        self.engine_runtime
+            .dispatcher
+            .discover_ytdlp_formats(&canonical_url)
+            .await
+            .map_err(|_| IpcError::internal())
     }
 
     /// Adds a download from the browser integration IPC path.
@@ -552,6 +591,50 @@ pub async fn add_download(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn add_media_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    format_id: Option<String>,
+    extension: Option<String>,
+) -> Result<DownloadDto, IpcError> {
+    let download = state
+        .add_with_ytdlp_format(
+            AddDownloadRequest {
+                url,
+                engine_kind: Some(EngineKind::YtDlp),
+            },
+            format_id,
+            extension,
+        )
+        .await?;
+    emit_event(
+        &app,
+        DOWNLOAD_UPDATED,
+        &DownloadUpdatedEvent {
+            download: download.clone(),
+        },
+    );
+    Ok(download)
+}
+
+fn extension_is_safe(extension: Option<&str>) -> bool {
+    extension.is_some_and(|value| {
+        !value.is_empty()
+            && value.len() <= 10
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn discover_ytdlp_formats(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<Vec<YtDlpFormat>, IpcError> {
+    state.discover_ytdlp_formats(&url).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn pause_download(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -741,8 +824,8 @@ mod tests {
     use tokio::{sync::watch, time::timeout};
 
     use super::{
-        AddDownloadRequest, AppState, DownloadDto, IpcError, IpcErrorCode, filename_for_url,
-        parse_download_id, validate_http_source_url,
+        AddDownloadRequest, AppState, DownloadDto, IpcError, IpcErrorCode, extension_is_safe,
+        filename_for_url, parse_download_id, validate_http_source_url,
     };
     use crate::config::ConfigService;
     use crate::engines::EngineRuntime;
@@ -900,6 +983,16 @@ mod tests {
             "download"
         );
         Ok(())
+    }
+
+    #[test]
+    fn selected_media_extension_is_safe_for_a_destination_name() {
+        assert!(extension_is_safe(Some("webm")));
+        assert!(extension_is_safe(Some("m4a")));
+        assert!(!extension_is_safe(None));
+        assert!(!extension_is_safe(Some("../mp4")));
+        assert!(!extension_is_safe(Some(".mp4")));
+        assert!(!extension_is_safe(Some("x".repeat(11).as_str())));
     }
 
     #[tokio::test]

@@ -11,7 +11,8 @@ use std::{
 
 use fetchx_core_services::{CoreServices, CoreServicesConfig};
 use fetchx_downloader::{
-    YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent, YtDlpRunnerFuture,
+    YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
+    YtDlpRunnerFuture, parse_format_output,
 };
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
@@ -25,7 +26,8 @@ use tokio::{
 use tracing::warn;
 
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, event_to_dto, item_to_dto, priority_from_dto,
+    CoreConfig, DownloadInfoDto, DownloadPriorityDto, YtDlpFormatDto, event_to_dto, item_to_dto,
+    priority_from_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -153,7 +155,14 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
-        self.add_download_for_engine(url, filename, destination, priority, EngineKind::DirectHttp)
+        self.add_download_for_engine(
+            url,
+            filename,
+            destination,
+            priority,
+            EngineKind::DirectHttp,
+            None,
+        )
     }
 
     pub fn add_media_download(
@@ -162,8 +171,43 @@ impl DownloadService {
         filename: String,
         destination: String,
         priority: DownloadPriorityDto,
+        format_id: Option<String>,
     ) -> Result<String, MobileApiError> {
-        self.add_download_for_engine(url, filename, destination, priority, EngineKind::YtDlp)
+        self.add_download_for_engine(
+            url,
+            filename,
+            destination,
+            priority,
+            EngineKind::YtDlp,
+            format_id,
+        )
+    }
+
+    pub fn discover_media_formats(
+        &self,
+        url: String,
+    ) -> Result<Vec<YtDlpFormatDto>, MobileApiError> {
+        if url.trim().is_empty() {
+            return Err(MobileApiError::Validation(
+                "URL must not be empty".to_string(),
+            ));
+        }
+        self.with_inner(|inner| {
+            if !inner.core.engine_runtime.is_available(EngineKind::YtDlp) {
+                return Err(MobileApiError::UnavailableEngine("YtDlp".to_string()));
+            }
+            let formats = inner
+                .runtime
+                .block_on(
+                    inner
+                        .core
+                        .engine_runtime
+                        .dispatcher
+                        .discover_ytdlp_formats(&url),
+                )
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
+            Ok(formats.into_iter().map(format_to_dto).collect())
+        })
     }
 
     fn add_download_for_engine(
@@ -173,6 +217,7 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
         engine: EngineKind,
+        format_id: Option<String>,
     ) -> Result<String, MobileApiError> {
         // Validate inputs before locking the inner service.
         if url.trim().is_empty() {
@@ -183,6 +228,10 @@ impl DownloadService {
         let fname =
             FileName::new(&filename).map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let source = DownloadSource::new(&url, engine)
+            .and_then(|source| match format_id {
+                Some(format_id) => source.with_yt_dlp_format(format_id),
+                None => Ok(source),
+            })
             .map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let dest = PathBuf::from(&destination);
         let rust_priority = priority_from_dto(priority);
@@ -544,6 +593,37 @@ impl YtDlpProcessRunner for AndroidYtDlpProcessRunner {
             })
         })
     }
+
+    fn discover_formats<'a>(
+        &'a self,
+        _executable: &'a Path,
+        url: &'a str,
+        timeout: Duration,
+    ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
+        let runtime = Arc::clone(&self.runtime);
+        let url = url.to_owned();
+        Box::pin(async move {
+            let output = tokio::time::timeout(
+                timeout,
+                tokio::task::spawn_blocking(move || runtime.discover_formats(url)),
+            )
+            .await
+            .map_err(|_| YtDlpError::FormatDiscoveryTimeout)?
+            .map_err(|_| YtDlpError::ProcessRunner)?;
+            if output.starts_with("ERROR:") {
+                return Err(YtDlpError::InvalidFormatOutput);
+            }
+            parse_format_output(output.as_bytes())
+        })
+    }
+}
+
+fn format_to_dto(format: YtDlpFormat) -> YtDlpFormatDto {
+    YtDlpFormatDto {
+        format_id: format.format_id,
+        label: format.label,
+        extension: format.extension,
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────
@@ -621,6 +701,7 @@ mod tests {
             "video".to_string(),
             "/tmp/downloads".to_string(),
             DownloadPriorityDto::Normal,
+            None,
         );
         assert!(matches!(result, Err(MobileApiError::UnavailableEngine(_))));
         svc.shutdown();

@@ -47,7 +47,7 @@ import java.io.File
  * Downloads while preserving the shared navigation back stack.
  */
 @Composable
-fun AppNavigation() {
+fun AppNavigation(initialUrl: String? = null) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -56,6 +56,8 @@ fun AppNavigation() {
     var searchRequest by remember { mutableLongStateOf(0L) }
     var tabsRequest by remember { mutableLongStateOf(0L) }
     var showBrowserMenu by remember { mutableStateOf(false) }
+    // URL to navigate to on startup (from ACTION_VIEW intent)
+    var pendingUrl by remember { mutableStateOf(initialUrl) }
 
     // Browser theme seed — updated by BrowserScreen when user picks a color
     var browserThemeSeed by remember { mutableLongStateOf(0xFF4F8EF7L) }
@@ -155,6 +157,7 @@ fun AppNavigation() {
                         onBrowserMenuDismiss = { showBrowserMenu = false },
                         onOpenBrowserMenu = { showBrowserMenu = true },
                         browserVersionName = browserVersionName,
+                        initialNavigateUrl = pendingUrl.also { pendingUrl = null },
                         onDownloadCurrentPage = { url, title ->
                             if (!bridgeAvailable) {
                                 Toast.makeText(context, "Download service is unavailable", Toast.LENGTH_LONG).show()

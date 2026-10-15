@@ -52,6 +52,13 @@ export interface AddDownloadRequest {
   engine_kind?: EngineKind;
 }
 
+export interface YtDlpFormat {
+  format_id: string;
+  label: string;
+  extension: string | null;
+  file_size_bytes: number | null;
+}
+
 export interface SetPriorityRequest {
   priority: DownloadPriority;
 }

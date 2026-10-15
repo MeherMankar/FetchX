@@ -48,10 +48,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -125,6 +127,7 @@ fun BrowserScreen(
     onOpenBrowserMenu: () -> Unit = {},
     onDownloadCurrentPage: (url: String, title: String) -> Unit = { _, _ -> },
     browserVersionName: String = "unknown",
+    initialNavigateUrl: String? = null,
     viewModel: BrowserViewModel = composeViewModel(factory = BrowserViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -188,6 +191,13 @@ fun BrowserScreen(
             // Select-all when bar opens so typing replaces the current URL
             val text = uiState.urlInput.takeUnless { it == "about:blank" }.orEmpty()
             urlFieldValue = TextFieldValue(text, selection = TextRange(0, text.length))
+        }
+    }
+
+    // Navigate to a URL passed in from an external intent (e.g. adb shell am start -d "https://...")
+    LaunchedEffect(initialNavigateUrl) {
+        if (!initialNavigateUrl.isNullOrBlank()) {
+            viewModel.navigate(initialNavigateUrl)
         }
     }
 
@@ -521,24 +531,183 @@ fun BrowserScreen(
                 )
             }
 
-            // ── Video download banner ──────────────────────────────────────────
+            // ── Video detected pill (tap to open picker) ──────────────────────
             AnimatedVisibility(
                 visible = uiState.showVideoDownloadBar && uiState.detectedVideos.isNotEmpty(),
                 enter = slideInVertically(initialOffsetY = { it }),
                 exit = slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier.align(Alignment.BottomCenter),
             ) {
-                val topVideo = uiState.detectedVideos.lastOrNull()
-                if (topVideo != null) {
-                    VideoDownloadBanner(
-                        video = topVideo,
-                        extraCount = (uiState.detectedVideos.size - 1).coerceAtLeast(0),
-                        onDownload = { viewModel.downloadDetectedVideo(topVideo) },
-                        onDismiss = viewModel::dismissVideoBar,
-                    )
+                var showPicker by remember { mutableStateOf(false) }
+                val count = uiState.detectedVideos.size
+
+                Surface(
+                    tonalElevation = 6.dp,
+                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clickable { showPicker = true }
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (count == 1) "1 video detected — tap to download"
+                            else "$count videos detected — tap to choose",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(
+                            onClick = viewModel::dismissVideoBar,
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                "Dismiss",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                    }
+                }
+
+                // ── Video picker bottom sheet ──────────────────────────────────
+                if (showPicker) {
+                    ModalBottomSheet(onDismissRequest = { showPicker = false }) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 32.dp),
+                        ) {
+                            Text(
+                                "Choose video to download",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                            HorizontalDivider()
+                            uiState.detectedVideos.forEach { video ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showPicker = false
+                                            viewModel.requestMediaFormats(video)
+                                        }
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.OndemandVideo,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp),
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            video.suggestedFilename,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            video.mimeType?.substringBefore(";") ?: video.url.let {
+                                                val ext = it.substringBefore("?").substringAfterLast(".", "")
+                                                if (ext.isNotEmpty()) ext.uppercase() else "Video"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        Text(
+                                            video.url.substringBefore("?").take(60),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Icon(
+                                        Icons.Default.Download,
+                                        contentDescription = "Download",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                HorizontalDivider(modifier = Modifier.padding(start = 52.dp))
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    uiState.pendingMediaVideo?.let { video ->
+        AlertDialog(
+            onDismissRequest = viewModel::closeMediaFormatPicker,
+            title = { Text("Choose video format") },
+            text = {
+                when {
+                    uiState.isDiscoveringMediaFormats -> Text("Discovering available formats…")
+                    uiState.mediaFormatError != null -> Column {
+                        Text(uiState.mediaFormatError.orEmpty())
+                        TextButton(onClick = { viewModel.requestMediaFormats(video) }) {
+                            Text("Retry")
+                        }
+                    }
+                    else -> Column(
+                        modifier = Modifier
+                            .heightIn(max = 400.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        TextButton(
+                            onClick = { viewModel.downloadDetectedVideo(video) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("Automatic best quality")
+                        }
+                        uiState.mediaFormats.forEach { format ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.downloadDetectedVideo(
+                                        video,
+                                        format.formatId,
+                                        format.extension,
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(format.label)
+                            }
+                        }
+                        if (uiState.mediaFormats.isEmpty()) {
+                            Text(
+                                "No selectable formats were found. Automatic quality selection is still available.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::closeMediaFormatPicker) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 
     // â”€â”€ Dialogs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -705,12 +874,21 @@ fun BrowserScreen(
         ExtensionsDialog(
             state = uiState.extensionManagerState,
             isImporting = uiState.isImportingExtension,
+            firefoxAddonsState = uiState.firefoxAddonsCatalogState,
             onDismiss = viewModel::closeExtensions,
             onRefresh = viewModel::refreshExtensions,
             onInstall = { extensionPicker.launch(arrayOf("application/x-xpinstall")) },
+            onSearchFirefoxAddons = viewModel::searchFirefoxAddons,
+            onInstallFirefoxAddon = viewModel::installFirefoxAddon,
             onEnable = viewModel::enableExtension,
             onDisable = viewModel::disableExtension,
             onRemove = viewModel::removeExtension,
+        )
+    }
+    uiState.extensionManagerState.permissionRequest?.let { request ->
+        ExtensionPermissionDialog(
+            request = request,
+            onResolve = viewModel::resolveExtensionPermissionRequest,
         )
     }
 }
@@ -1360,14 +1538,18 @@ private fun TabGridSheet(
 private fun ExtensionsDialog(
     state: ExtensionManagerState,
     isImporting: Boolean,
+    firefoxAddonsState: FirefoxAddonsCatalogState,
     onDismiss: () -> Unit,
     onRefresh: () -> Unit,
     onInstall: () -> Unit,
+    onSearchFirefoxAddons: (String) -> Unit,
+    onInstallFirefoxAddon: (FirefoxAddon) -> Unit,
     onEnable: (ExtensionId) -> Unit,
     onDisable: (ExtensionId) -> Unit,
     onRemove: (ExtensionId) -> Unit,
 ) {
     var pendingRemoval by remember { mutableStateOf<ExtensionId?>(null) }
+    var firefoxAddonsQuery by rememberSaveable { mutableStateOf("") }
     val isBusy = state.isBusy || isImporting
     AlertDialog(
         onDismissRequest = onDismiss,

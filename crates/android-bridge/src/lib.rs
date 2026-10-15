@@ -7,7 +7,7 @@ pub mod error;
 // Re-export DTO types at the crate root so the UniFFI scaffolding can find them.
 pub use dto::{
     CoreConfig, DownloadEventDto, DownloadInfoDto, DownloadPriorityDto, DownloadProgressDto,
-    DownloadStatusDto,
+    DownloadStatusDto, YtDlpFormatDto,
 };
 pub use error::MobileApiError;
 
@@ -21,6 +21,7 @@ pub trait DownloadEventListener: Send + Sync {
 pub trait YtDlpRuntime: Send + Sync {
     fn validate_version(&self) -> String;
     fn run(&self, arguments: Vec<String>, progress_path: String, cancel_path: String) -> String;
+    fn discover_formats(&self, url: String) -> String;
 }
 
 // The scaffolding must come after the trait definition above so that the

@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { getEngineStatus } from "../api/engine";
-import { addDownload, scheduleDownload, setDownloadPriority } from "../api/downloads";
-import type { DownloadPriority, EngineKind, EngineStatus } from "../api/types";
+import {
+  addDownload,
+  addMediaDownload,
+  discoverYtDlpFormats,
+  scheduleDownload,
+  setDownloadPriority,
+} from "../api/downloads";
+import type { DownloadPriority, EngineKind, EngineStatus, YtDlpFormat } from "../api/types";
 import { errorMessage, msToDatetimeLocal } from "../lib/format";
 
 interface AddDialogProps {
@@ -58,6 +64,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     msToDatetimeLocal(Math.ceil(Date.now() / 60000) * 60000 + 3_600_000),
   );
   const [busy, setBusy] = useState(false);
+  const [formats, setFormats] = useState<YtDlpFormat[] | null>(null);
+  const [selectedFormatId, setSelectedFormatId] = useState("");
+  const [formatsLoading, setFormatsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,10 +107,16 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       // Pass the selected engine to the backend.
       // The backend re-validates availability — the frontend cannot bypass this check.
       // Omit engine_kind when Direct HTTP is selected to use the backend default.
-      const download = await addDownload({
-        url,
-        engine_kind: engineKind === "direct_http" ? undefined : engineKind,
-      });
+      const download = engineKind === "yt_dlp"
+        ? await addMediaDownload(
+            url,
+            selectedFormatId || undefined,
+            formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+          )
+        : await addDownload({
+            url,
+            engine_kind: engineKind === "direct_http" ? undefined : engineKind,
+          });
 
       if (priority !== "normal") {
         await setDownloadPriority(download.id, priority);
@@ -116,6 +131,19 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     } catch (cause) {
       setError(errorMessage(cause));
       setBusy(false);
+    }
+  };
+
+  const loadFormats = async () => {
+    setError(null);
+    setFormatsLoading(true);
+    try {
+      setFormats(await discoverYtDlpFormats(url));
+      setSelectedFormatId("");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setFormatsLoading(false);
     }
   };
 
@@ -159,9 +187,13 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               className="field-input"
               placeholder="https://example.com/file.zip"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setFormats(null);
+                setSelectedFormatId("");
+              }}
               required
-              disabled={busy}
+              disabled={busy || formatsLoading}
               autoFocus
             />
             <p className="field-hint">
@@ -180,8 +212,12 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 id="add-engine"
                 className="field-select"
                 value={engineKind}
-                onChange={(e) => setEngineKind(e.target.value as EngineKind)}
-                disabled={busy}
+                onChange={(e) => {
+                  setEngineKind(e.target.value as EngineKind);
+                  setFormats(null);
+                  setSelectedFormatId("");
+                }}
+                disabled={busy || formatsLoading}
                 aria-describedby="add-engine-hint"
               >
                 {ENGINE_OPTIONS.map(({ kind, label }) => {
@@ -199,6 +235,46 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               Only available engines are selectable. Configure engines in Settings.
             </p>
           </div>
+
+          {engineKind === "yt_dlp" && (
+            <div className="field">
+              <label htmlFor="add-format" className="field-label">
+                Video format
+              </label>
+              {formats === null ? (
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => void loadFormats()}
+                  disabled={!url || busy || formatsLoading}
+                >
+                  {formatsLoading ? "Loading formats…" : "Load available formats"}
+                </button>
+              ) : (
+                <select
+                  id="add-format"
+                  className="field-select"
+                  value={selectedFormatId}
+                  onChange={(e) => setSelectedFormatId(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="">Automatic best quality</option>
+                  {formats.map((format) => (
+                    <option key={format.format_id} value={format.format_id}>
+                      {format.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="field-hint">
+                {formats === null
+                  ? "Discover formats before selecting a specific quality."
+                  : formats.length === 0
+                    ? "No selectable video formats were found; automatic selection remains available."
+                    : "Choose a discovered format, or keep automatic best quality."}
+              </p>
+            </div>
+          )}
 
           <div className="field">
             <label htmlFor="add-priority" className="field-label">
@@ -260,7 +336,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               <button
                 type="submit"
                 className="button button-primary"
-                disabled={busy || !url || engineStatusLoading}
+                disabled={busy || formatsLoading || !url || engineStatusLoading}
               >
                 {busy ? "Adding…" : "Add download"}
               </button>

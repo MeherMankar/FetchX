@@ -97,13 +97,18 @@ object GeckoRuntimeHolder {
                             ): org.mozilla.geckoview.GeckoResult<Any>? {
                                 if (message is JSONObject) {
                                     val url = message.optString("url", "")
+                                    val filename = message.optString("filename", "").takeIf { it.isNotBlank() }
                                     if (url.isNotBlank()) {
-                                        VideoInterceptor.detect(
+                                        val detected = VideoInterceptor.detect(
                                             tabId = "",
                                             url = url,
                                             mimeType = null,
                                             contentLength = null,
-                                        )?.let { onVideoDetectedFromExtension?.invoke(it) }
+                                        )?.let { d ->
+                                            // Use filename from JS (has quality label e.g. "720p.m3u8")
+                                            if (filename != null) d.copy(suggestedFilename = filename) else d
+                                        }
+                                        detected?.let { onVideoDetectedFromExtension?.invoke(it) }
                                     }
                                 }
                                 return null

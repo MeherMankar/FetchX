@@ -21,6 +21,13 @@ dictionary CoreConfig {
 callback interface YtDlpRuntime {
     string validate_version();
     string run(sequence<string> arguments, string progress_path, string cancel_path);
+    string discover_formats(string url);
+};
+
+dictionary YtDlpFormatDto {
+    string format_id;
+    string label;
+    string? extension;
 };
 
 enum DownloadStatusDto {
@@ -94,8 +101,12 @@ interface DownloadService {
         string url,
         string filename,
         string destination,
-        DownloadPriorityDto priority
+        DownloadPriorityDto priority,
+        string? format_id
     );
+
+    [Throws=MobileApiError]
+    sequence<YtDlpFormatDto> discover_media_formats(string url);
 
     [Throws=MobileApiError]
     void pause_download(string id);

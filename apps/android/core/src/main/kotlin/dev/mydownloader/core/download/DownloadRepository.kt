@@ -2,6 +2,12 @@ package dev.fetchx.core.download
 
 import kotlinx.coroutines.flow.Flow
 
+data class YtDlpFormat(
+    val formatId: String,
+    val label: String,
+    val extension: String?,
+)
+
 /**
  * Repository interface for download operations.
  *
@@ -36,7 +42,17 @@ interface DownloadRepository {
         fileName: String,
         destinationPath: String,
         priority: DownloadPriority = DownloadPriority.DEFAULT,
-    ): String = addDownload(url, fileName, destinationPath, priority)
+        formatId: String? = null,
+    ): String {
+        if (formatId != null) {
+            throw UnsupportedOperationException("This repository cannot apply a yt-dlp format")
+        }
+        return addDownload(url, fileName, destinationPath, priority)
+    }
+
+    /** Retrieve selectable video formats from the configured yt-dlp runtime. */
+    suspend fun discoverMediaFormats(url: String): List<YtDlpFormat> =
+        throw UnsupportedOperationException("Media format discovery is unavailable")
 
     /** Pause an active download. */
     suspend fun pauseDownload(downloadId: String)

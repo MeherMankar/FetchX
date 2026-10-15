@@ -29,6 +29,14 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         return result
     }
 
+    override fun discoverFormats(url: String): String {
+        val result = module.callAttr("discover_formats", url).toString()
+        if (result.startsWith("ERROR:")) {
+            Log.e("FetchXYtDlp", "yt-dlp format discovery failed")
+        }
+        return result
+    }
+
     companion object {
         fun start(context: Context): AndroidYtDlpRuntime {
             if (!Python.isStarted()) {

@@ -11,6 +11,8 @@ use crate::{DownloadError, DownloadId, DownloadPriority, DownloadProgress, Engin
 pub struct DownloadSource {
     url: String,
     engine: EngineKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    yt_dlp_format: Option<String>,
 }
 
 impl DownloadSource {
@@ -20,7 +22,33 @@ impl DownloadSource {
             return Err(DownloadSourceError::EmptyUrl);
         }
 
-        Ok(Self { url, engine })
+        Ok(Self {
+            url,
+            engine,
+            yt_dlp_format: None,
+        })
+    }
+
+    pub fn with_yt_dlp_format(
+        mut self,
+        format_id: impl Into<String>,
+    ) -> Result<Self, DownloadSourceError> {
+        let format_id = format_id.into();
+        if self.engine != EngineKind::YtDlp
+            || format_id.is_empty()
+            || format_id.len() > 128
+            || !format_id
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            || !format_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+        {
+            return Err(DownloadSourceError::InvalidYtDlpFormat);
+        }
+        self.yt_dlp_format = Some(format_id);
+        Ok(self)
     }
 
     #[must_use]
@@ -32,25 +60,38 @@ impl DownloadSource {
     pub const fn engine(&self) -> EngineKind {
         self.engine
     }
+
+    #[must_use]
+    pub fn yt_dlp_format(&self) -> Option<&str> {
+        self.yt_dlp_format.as_deref()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum DownloadSourceError {
     #[error("download source URL must not be empty")]
     EmptyUrl,
+    #[error("yt-dlp format must be a valid format ID for a yt-dlp source")]
+    InvalidYtDlpFormat,
 }
 
 #[derive(Deserialize)]
 struct DownloadSourceRepr {
     url: String,
     engine: EngineKind,
+    #[serde(default)]
+    yt_dlp_format: Option<String>,
 }
 
 impl TryFrom<DownloadSourceRepr> for DownloadSource {
     type Error = DownloadSourceError;
 
     fn try_from(value: DownloadSourceRepr) -> Result<Self, Self::Error> {
-        Self::new(value.url, value.engine)
+        let source = Self::new(value.url, value.engine)?;
+        match value.yt_dlp_format {
+            Some(format_id) => source.with_yt_dlp_format(format_id),
+            None => Ok(source),
+        }
     }
 }
 
@@ -375,6 +416,28 @@ mod tests {
             serde_json::from_str::<DownloadSource>(r#"{"url":" ","engine":"direct_http"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn source_validates_and_round_trips_yt_dlp_format() -> Result<(), Box<dyn std::error::Error>> {
+        let source = DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+            .with_yt_dlp_format("137")?;
+        let json = serde_json::to_string(&source)?;
+        let restored: DownloadSource = serde_json::from_str(&json)?;
+        assert_eq!(restored, source);
+        assert_eq!(restored.yt_dlp_format(), Some("137"));
+
+        assert!(
+            DownloadSource::new("https://example.com/video", EngineKind::DirectHttp)?
+                .with_yt_dlp_format("137")
+                .is_err()
+        );
+        assert!(
+            DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+                .with_yt_dlp_format("--exec")
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

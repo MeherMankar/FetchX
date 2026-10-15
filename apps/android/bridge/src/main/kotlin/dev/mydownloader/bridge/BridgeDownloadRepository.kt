@@ -11,6 +11,7 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.YtDlpFormat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -94,7 +95,7 @@ class BridgeDownloadRepository(
     ): String = withContext(Dispatchers.IO) {
         if (isMediaUrl(url)) {
             val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) destinationPath else "$destinationPath.mp4"
-            service.addMediaDownload(url, fileName, safeDestination, mapPriorityToDto(priority))
+            service.addMediaDownload(url, fileName, safeDestination, mapPriorityToDto(priority), null)
         } else {
             service.addDownload(url, fileName, destinationPath, mapPriorityToDto(priority))
         }
@@ -105,8 +106,22 @@ class BridgeDownloadRepository(
         fileName: String,
         destinationPath: String,
         priority: DownloadPriority,
+        formatId: String?,
     ): String = withContext(Dispatchers.IO) {
-        service.addMediaDownload(url, fileName, destinationPath, mapPriorityToDto(priority))
+        service.addMediaDownload(
+            url,
+            fileName,
+            destinationPath,
+            mapPriorityToDto(priority),
+            formatId,
+        )
+    }
+
+    override suspend fun discoverMediaFormats(url: String): List<YtDlpFormat> =
+        withContext(Dispatchers.IO) {
+            service.discoverMediaFormats(url).map { format ->
+                YtDlpFormat(format.formatId, format.label, format.extension)
+            }
     }
 
     override suspend fun pauseDownload(downloadId: String) =
