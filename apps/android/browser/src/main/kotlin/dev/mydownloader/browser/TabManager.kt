@@ -1,5 +1,6 @@
 package dev.fetchx.browser
 
+import android.os.Build
 import android.util.Log
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -178,11 +179,10 @@ class TabManager(
     private fun buildSession(tabId: String): GeckoSession {
         val s = GeckoSession()
         s.settings.useTrackingProtection = true
-        // Use a standard Firefox for Android User-Agent. GeckoView's default UA
-        // exposes the embedder and gets ERROR_NET_RESET from CDNs/WAFs (Cloudflare etc.)
-        // that reject non-Firefox GeckoView embedders. Firefox 137 on Android 13.
+        // Match the Firefox version to the embedded GeckoView release so sites do
+        // not see an obsolete browser version or the GeckoView embedder token.
         s.settings.userAgentOverride =
-            "Mozilla/5.0 (Android 13; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0"
+            "Mozilla/5.0 (Android ${Build.VERSION.RELEASE}; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0"
 
         s.contentBlockingDelegate = object : org.mozilla.geckoview.ContentBlocking.Delegate {
             override fun onContentBlocked(
