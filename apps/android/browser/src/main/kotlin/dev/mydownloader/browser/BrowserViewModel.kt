@@ -91,6 +91,8 @@ data class BrowserUiState(
     val showThemePicker: Boolean = false,
     val themeSeedColor: Long = 0xFF4F8EF7L,
     val compactMode: Boolean = false,
+    val detectedVideos: List<DetectedVideo> = emptyList(),
+    val showVideoDownloadBar: Boolean = false,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
     val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
@@ -131,6 +133,7 @@ class BrowserViewModel internal constructor(
         val manager = extensionManager ?: GeckoRuntimeHolder.getExtensionManager(runtime).also {
             extensionManager = it
         }
+        GeckoRuntimeHolder.onVideoDetectedFromExtension = ::onVideoDetected
         val listener: () -> Unit = ::syncExtensionManagerState
         extensionStateListener = listener
         manager.onStateChanged = listener
@@ -139,6 +142,7 @@ class BrowserViewModel internal constructor(
         val tm = tabManager ?: TabManager(runtime, trackerBlockingController).also { newTm ->
             tabManager = newTm
             newTm.onStateChanged = ::rebuildState
+            newTm.onVideoDetected = ::onVideoDetected
             newTm.createTab()
             Log.i(TAG, "TabManager initialized with first tab")
         }
@@ -199,6 +203,7 @@ class BrowserViewModel internal constructor(
     // ──Navigation ─────────────────────────────────────────────────────────
 
     fun navigate(rawUrl: String) {
+        clearDetectedVideos()
         tabManager?.navigate(rawUrl, _uiState.value.selectedSearchEngine)
     }
 
@@ -303,6 +308,54 @@ class BrowserViewModel internal constructor(
 
     // Compact mode
     fun toggleCompactMode() { _uiState.update { it.copy(compactMode = !it.compactMode) } }
+
+    // ── Video detection ───────────────────────────────────────────────────
+
+    fun onVideoDetected(video: DetectedVideo) {
+        _uiState.update { state ->
+            if (state.detectedVideos.any { it.url == video.url }) return@update state
+            state.copy(
+                detectedVideos = state.detectedVideos + video,
+                showVideoDownloadBar = true,
+            )
+        }
+    }
+
+    fun dismissVideoBar() {
+        _uiState.update { it.copy(showVideoDownloadBar = false) }
+    }
+
+    fun clearDetectedVideos() {
+        _uiState.update { it.copy(detectedVideos = emptyList(), showVideoDownloadBar = false) }
+    }
+
+    fun downloadDetectedVideo(video: DetectedVideo) {
+        val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
+            Log.w(TAG, "downloadDetectedVideo: bridge not initialized")
+            return
+        }
+        val destDir = android.os.Environment.getExternalStoragePublicDirectory(
+            android.os.Environment.DIRECTORY_DOWNLOADS,
+        )
+        val destPath = java.io.File(destDir, video.suggestedFilename).absolutePath
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repo.addDownload(
+                    url = video.url,
+                    fileName = video.suggestedFilename,
+                    destinationPath = destPath,
+                    priority = dev.fetchx.core.download.DownloadPriority.NORMAL,
+                    mimeType = video.mimeType,
+                    totalBytes = video.contentLength,
+                    referrer = null,
+                )
+                Log.i(TAG, "Queued video download: ${video.suggestedFilename}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to queue video download", e)
+            }
+        }
+        dismissVideoBar()
+    }
 
     fun openTrackerDetails() {
         _uiState.update { it.copy(showTrackerDetails = true) }
@@ -588,6 +641,7 @@ class BrowserViewModel internal constructor(
         applicationContext = null
         trackerBlockingController.onStateChanged = null
         privacyController.onSettingsChanged = null
+        GeckoRuntimeHolder.onVideoDetectedFromExtension = null
         runtime = null
         Log.i(TAG, "BrowserViewModel cleared")
     }
@@ -619,7 +673,19 @@ internal fun normalizeUrl(
     val trimmed = input.trim()
     if (trimmed.isBlank() || trimmed == "about:blank") return "about:blank"
     if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed
-    if (looksLikeWebAddress(trimmed)) return "https://$trimmed"
+    if (looksLikeWebAddress(trimmed)) {
+        // Proactively add www. for bare domains (e.g. pornhub.com → www.pornhub.com)
+        // Many sites redirect bare domain → www, but some fail SSL on bare domain first.
+        val withScheme = "https://$trimmed"
+        return try {
+            val host = java.net.URI(withScheme).host ?: return withScheme
+            val dots = host.count { it == '.' }
+            // Only add www. to simple bare domains (exactly one dot, no existing subdomain)
+            if (dots == 1 && !host.startsWith("www.")) "https://www.$trimmed" else withScheme
+        } catch (_: Exception) {
+            withScheme
+        }
+    }
 
     val encodedQuery = java.net.URLEncoder.encode(trimmed, "UTF-8")
     return searchEngine.searchUrl.replace("%s", encodedQuery)

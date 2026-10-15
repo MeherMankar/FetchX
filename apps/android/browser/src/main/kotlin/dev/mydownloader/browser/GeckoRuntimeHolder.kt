@@ -2,9 +2,11 @@ package dev.fetchx.browser
 
 import android.content.Context
 import android.util.Log
+import org.json.JSONObject
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
+import org.mozilla.geckoview.WebExtension
 
 private const val TAG = "GeckoRuntimeHolder"
 
@@ -23,6 +25,13 @@ object GeckoRuntimeHolder {
     private var runtime: GeckoRuntime? = null
     private var extensionManager: ExtensionManager? = null
     private var extensionManagerRuntime: GeckoRuntime? = null
+
+    /**
+     * Callback invoked when the background WebExtension detects a video URL.
+     * Set by BrowserViewModel; cleared in onCleared.
+     */
+    @Volatile
+    var onVideoDetectedFromExtension: ((DetectedVideo) -> Unit)? = null
 
     /**
      * Returns the existing [GeckoRuntime] or creates it if not yet initialized.
@@ -49,6 +58,7 @@ object GeckoRuntimeHolder {
                 GeckoExtensionGatewayImpl(forRuntime.webExtensionController),
             )
             extensionManagerRuntime = forRuntime
+            installVideoInterceptorExtension(forRuntime)
         }
         extensionManager ?: error("Extension manager initialization failed")
     }
@@ -60,6 +70,46 @@ object GeckoRuntimeHolder {
             extensionManager = null
             extensionManagerRuntime = null
         }
+    }
+
+    private fun installVideoInterceptorExtension(rt: GeckoRuntime) {
+        val extUri = "resource://android/assets/video_interceptor_ext/"
+        val extId = "video-interceptor@fetchx.dev"
+        rt.webExtensionController
+            .ensureBuiltIn(extUri, extId)
+            .accept(
+                { extension ->
+                    if (extension == null) {
+                        Log.e(TAG, "ensureBuiltIn returned null extension")
+                        return@accept
+                    }
+                    val delegate = object : WebExtension.MessageDelegate {
+                        override fun onMessage(
+                            nativeApp: String,
+                            message: Any,
+                            sender: WebExtension.MessageSender,
+                        ): org.mozilla.geckoview.GeckoResult<Any>? {
+                            if (message is JSONObject) {
+                                val url = message.optString("url", "")
+                                if (url.isNotBlank()) {
+                                    VideoInterceptor.detect(
+                                        tabId = "",
+                                        url = url,
+                                        mimeType = null,
+                                        contentLength = null,
+                                    )?.let { onVideoDetectedFromExtension?.invoke(it) }
+                                }
+                            }
+                            return null
+                        }
+                    }
+                    extension.setMessageDelegate(delegate, "browser")
+                    Log.i(TAG, "Video interceptor extension registered")
+                },
+                { error ->
+                    Log.e(TAG, "Failed to register video interceptor extension", error)
+                },
+            )
     }
 
     private fun createRuntime(context: Context): GeckoRuntime {
