@@ -92,7 +92,21 @@ class BridgeDownloadRepository(
         totalBytes: Long?,
         referrer: String?,
     ): String = withContext(Dispatchers.IO) {
-        service.addDownload(url, fileName, destinationPath, mapPriorityToDto(priority))
+        if (isMediaUrl(url)) {
+            val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) destinationPath else "$destinationPath.mp4"
+            service.addMediaDownload(url, fileName, safeDestination, mapPriorityToDto(priority))
+        } else {
+            service.addDownload(url, fileName, destinationPath, mapPriorityToDto(priority))
+        }
+    }
+
+    override suspend fun addMediaDownload(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+    ): String = withContext(Dispatchers.IO) {
+        service.addMediaDownload(url, fileName, destinationPath, mapPriorityToDto(priority))
     }
 
     override suspend fun pauseDownload(downloadId: String) =
@@ -227,7 +241,15 @@ class BridgeDownloadRepository(
                 else -> null
             }
         }
-        is DownloadEventDto.Removed -> null  // No matching Kotlin DownloadEvent variant
+        is DownloadEventDto.Removed -> null
     }
 }
 
+internal fun isMediaUrl(url: String): Boolean {
+    val host = try {
+        java.net.URI(url).host?.lowercase() ?: ""
+    } catch (_: Exception) {
+        ""
+    }
+    return host.contains("youtube.com") || host == "youtu.be"
+}

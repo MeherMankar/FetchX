@@ -14,6 +14,13 @@ dictionary CoreConfig {
     string database_path;
     string downloads_dir;
     string runtime_dir;
+    string? yt_dlp_executable_path;
+    string? aria2_executable_path;
+};
+
+callback interface YtDlpRuntime {
+    string validate_version();
+    string run(sequence<string> arguments, string progress_path, string cancel_path);
 };
 
 enum DownloadStatusDto {
@@ -66,7 +73,7 @@ callback interface DownloadEventListener {
 
 interface DownloadService {
     [Throws=MobileApiError]
-    constructor(CoreConfig config);
+    constructor(CoreConfig config, YtDlpRuntime? yt_dlp_runtime);
 
     [Throws=MobileApiError]
     sequence<DownloadInfoDto> list_downloads();
@@ -76,6 +83,14 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     string add_download(
+        string url,
+        string filename,
+        string destination,
+        DownloadPriorityDto priority
+    );
+
+    [Throws=MobileApiError]
+    string add_media_download(
         string url,
         string filename,
         string destination,

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import dev.fetchx.bridge.uniffi.CoreConfig
 import dev.fetchx.bridge.uniffi.DownloadService
+import dev.fetchx.bridge.uniffi.YtDlpRuntime
 import java.io.File
 
 private const val TAG = "FetchXBridge"
@@ -41,7 +42,7 @@ object BridgeInitializer {
      * Initializes the Rust bridge and returns the [BridgeDownloadRepository]
      * that wraps it. Idempotent — subsequent calls return the existing instance.
      */
-    fun initialize(context: Context): BridgeDownloadRepository {
+    fun initialize(context: Context, ytDlpRuntime: YtDlpRuntime? = null): BridgeDownloadRepository {
         repository?.let { return it }
         synchronized(this) {
             repository?.let { return it }
@@ -80,10 +81,12 @@ object BridgeInitializer {
                 databasePath = File(dataDir, "fetchx.db").absolutePath,
                 downloadsDir = dlDir.absolutePath,
                 runtimeDir = runtimeDir.absolutePath,
+                ytDlpExecutablePath = null,
+                aria2ExecutablePath = null,
             )
 
             try {
-                val svc = DownloadService(config)
+                val svc = DownloadService(config, ytDlpRuntime)
                 service = svc
 
                 val repo = BridgeDownloadRepository(svc)
@@ -121,4 +124,3 @@ object BridgeInitializer {
         }
     }
 }
-

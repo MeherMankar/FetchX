@@ -30,6 +30,7 @@ use std::{path::PathBuf, sync::Arc};
 use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
     DirectHttpEngine, EngineDispatcher, YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine,
+    YtDlpProcessRunner,
 };
 use fetchx_models::EngineKind;
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueConfig, QueueManager};
@@ -88,6 +89,25 @@ impl CoreServices {
     /// Optional engines that fail to start are marked `Unavailable`; the
     /// function only fails for unrecoverable errors (e.g. database I/O).
     pub async fn start(cfg: CoreServicesConfig) -> Result<Self, CoreServicesError> {
+        Self::start_with_engine_config(cfg, None).await
+    }
+
+    /// Initializes services with a per-process engine configuration override.
+    ///
+    /// This is used by Android, where executable paths are private to the app
+    /// installation and must not be persisted as desktop engine settings.
+    pub async fn start_with_engine_config(
+        cfg: CoreServicesConfig,
+        engine_config_override: Option<EngineConfig>,
+    ) -> Result<Self, CoreServicesError> {
+        Self::start_with_engine_config_and_ytdlp_runner(cfg, engine_config_override, None).await
+    }
+
+    pub async fn start_with_engine_config_and_ytdlp_runner(
+        cfg: CoreServicesConfig,
+        engine_config_override: Option<EngineConfig>,
+        ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
+    ) -> Result<Self, CoreServicesError> {
         // Ensure directories exist.
         if let Some(parent) = cfg.database_path.parent() {
             fs::create_dir_all(parent)
@@ -111,11 +131,19 @@ impl CoreServices {
 
         // Engine configuration
         let config_service = ConfigService::new(database.config());
-        let engine_config = config_service.load().await.unwrap_or_default();
+        let engine_config = match engine_config_override {
+            Some(config) => config,
+            None => config_service.load().await.unwrap_or_default(),
+        };
 
         // Engine runtime
-        let engine_runtime =
-            EngineRuntime::initialize(repository.clone(), &engine_config, &cfg.runtime_dir).await?;
+        let engine_runtime = EngineRuntime::initialize_with_ytdlp_runner(
+            repository.clone(),
+            &engine_config,
+            &cfg.runtime_dir,
+            ytdlp_runner,
+        )
+        .await?;
 
         // Queue + Scheduler
         let scheduler = Scheduler::start(
@@ -186,6 +214,15 @@ impl EngineRuntime {
         config: &EngineConfig,
         runtime_dir: &std::path::Path,
     ) -> Result<Self, CoreServicesError> {
+        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None).await
+    }
+
+    async fn initialize_with_ytdlp_runner(
+        repository: CoreRepository,
+        config: &EngineConfig,
+        runtime_dir: &std::path::Path,
+        ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
+    ) -> Result<Self, CoreServicesError> {
         let direct_http = Arc::new(
             DirectHttpEngine::new(repository.clone())
                 .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
@@ -193,7 +230,8 @@ impl EngineRuntime {
 
         let (aria2_engine, aria2_supervisor, aria2_avail) =
             init_aria2(repository.clone(), config, runtime_dir).await;
-        let (yt_dlp_engine, ytdlp_avail) = init_ytdlp(repository.clone(), config).await;
+        let (yt_dlp_engine, ytdlp_avail) =
+            init_ytdlp(repository.clone(), config, ytdlp_runner).await;
 
         log_avail("aria2", &aria2_avail);
         log_avail("yt-dlp", &ytdlp_avail);
@@ -316,6 +354,7 @@ fn stub_aria2(repository: CoreRepository) -> Arc<Aria2Engine<CoreRepository>> {
 async fn init_ytdlp(
     repository: CoreRepository,
     config: &EngineConfig,
+    runner: Option<Arc<dyn YtDlpProcessRunner>>,
 ) -> (Option<Arc<YtDlpEngine<CoreRepository>>>, EngineAvailability) {
     if !config.yt_dlp.enabled {
         return (None, EngineAvailability::Disabled);
@@ -324,7 +363,18 @@ async fn init_ytdlp(
     if let Some(p) = &config.yt_dlp.executable_path {
         ytdlp_cfg = ytdlp_cfg.with_executable(p.clone());
     }
-    match YtDlpEngine::initialize(repository, ytdlp_cfg).await {
+    let initialized = if let Some(runner) = runner {
+        YtDlpEngine::initialize_with_runner_and_executable(
+            repository,
+            ytdlp_cfg,
+            "fetchx-embedded-yt-dlp",
+            runner,
+        )
+        .await
+    } else {
+        YtDlpEngine::initialize(repository, ytdlp_cfg).await
+    };
+    match initialized {
         Ok(engine) => {
             let version = engine.version().to_owned();
             (

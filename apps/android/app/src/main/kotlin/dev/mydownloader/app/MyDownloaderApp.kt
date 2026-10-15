@@ -31,8 +31,14 @@ class FetchXApp : Application() {
         super.onCreate()
         // Initialize the Rust bridge. This starts the Tokio runtime and CoreServices.
         // The returned repository is the single source of truth for download data.
+        val ytDlpRuntime = try {
+            AndroidYtDlpRuntime.start(this)
+        } catch (it: Throwable) {
+            Log.e(TAG, "Embedded yt-dlp runtime unavailable: $it", it)
+            null
+        }
         try {
-            BridgeInitializer.initialize(this)
+            BridgeInitializer.initialize(this, ytDlpRuntime)
         } catch (it: Throwable) {
             Log.e(TAG, "Bridge initialization failed — app will degrade gracefully: $it", it)
         }

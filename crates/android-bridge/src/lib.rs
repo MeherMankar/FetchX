@@ -1,7 +1,6 @@
 // SAFETY: This crate allows unsafe_code solely for the UniFFI scaffolding generated below.
 // The workspace lint (`unsafe_code = "forbid"`) is not inherited here — see
 // Cargo.toml [lints] for the crate-local override policy.
-
 pub mod dto;
 pub mod error;
 
@@ -17,6 +16,11 @@ pub use error::MobileApiError;
 // The trait MUST be defined before `uniffi::include_scaffolding!` is called.
 pub trait DownloadEventListener: Send + Sync {
     fn on_event(&self, event: DownloadEventDto);
+}
+
+pub trait YtDlpRuntime: Send + Sync {
+    fn validate_version(&self) -> String;
+    fn run(&self, arguments: Vec<String>, progress_path: String, cancel_path: String) -> String;
 }
 
 // The scaffolding must come after the trait definition above so that the

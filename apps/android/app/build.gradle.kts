@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.chaquopy)
 }
 
 android {
@@ -14,6 +15,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-20A"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -45,6 +49,15 @@ android {
     }
 }
 
+chaquopy {
+    defaultConfig {
+        version = "3.14"
+        pip {
+            install("yt-dlp==2026.8.19")
+        }
+    }
+}
+
 dependencies {
     implementation(project(":core"))
     implementation(project(":downloads"))
@@ -64,4 +77,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     debugImplementation(libs.compose.ui.tooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlin.test)
 }

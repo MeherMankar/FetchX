@@ -89,6 +89,7 @@ pub struct YtDlpProgress {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum YtDlpRunnerEvent {
     ProgressLine(String),
+    ProcessFailed(String),
     ProgressOutputTooLarge,
     OutputReadFailed,
 }
@@ -117,6 +118,8 @@ pub enum YtDlpError {
     ProgressOutputTooLarge,
     #[error("yt-dlp progress output could not be read")]
     ProgressOutputRead,
+    #[error("yt-dlp runtime failed: {0}")]
+    RuntimeFailure(String),
     #[error("yt-dlp progress regressed below persisted progress")]
     ProgressRegression,
     #[error("yt-dlp produced no unambiguous regular output file")]
@@ -170,10 +173,20 @@ where
         config: YtDlpConfig,
         runner: Arc<dyn YtDlpProcessRunner>,
     ) -> Result<Self, YtDlpError> {
+        let executable = resolve_executable(config.executable.as_deref()).await?;
+        Self::initialize_with_runner_and_executable(repository, config, executable, runner).await
+    }
+
+    pub async fn initialize_with_runner_and_executable(
+        repository: R,
+        config: YtDlpConfig,
+        executable: impl Into<PathBuf>,
+        runner: Arc<dyn YtDlpProcessRunner>,
+    ) -> Result<Self, YtDlpError> {
         if config.version_timeout.is_zero() {
             return Err(YtDlpError::InvalidVersion);
         }
-        let executable = resolve_executable(config.executable.as_deref()).await?;
+        let executable = executable.into();
         let version = runner
             .validate_version(&executable, config.version_timeout)
             .await?;
@@ -377,15 +390,7 @@ where
         if *control.cancellation.borrow_and_update() {
             return Err(DownloadEngineError::Cancelled);
         }
-        tokio::fs::hard_link(&output, item.destination())
-            .await
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::AlreadyExists {
-                    YtDlpError::DestinationExists.into()
-                } else {
-                    DownloadEngineError::Io(error)
-                }
-            })?;
+        promote_output_to_destination(&output, item.destination()).await?;
         *item = self
             .state_machine
             .transition(id, DownloadStatus::Completed)
@@ -448,6 +453,9 @@ where
     ) -> Result<(), DownloadEngineError> {
         let update = match event {
             YtDlpRunnerEvent::ProgressLine(line) => parse_progress_line(&line)?,
+            YtDlpRunnerEvent::ProcessFailed(message) => {
+                return Err(YtDlpError::RuntimeFailure(message).into());
+            }
             YtDlpRunnerEvent::ProgressOutputTooLarge => {
                 return Err(YtDlpError::ProgressOutputTooLarge.into());
             }
@@ -573,10 +581,10 @@ where
 }
 
 pub fn parse_progress_line(line: &str) -> Result<YtDlpProgress, YtDlpError> {
-    let mut fields = line.split('|');
-    if fields.next() != Some(PROGRESS_PREFIX.trim_end_matches('|')) {
-        return Err(YtDlpError::MalformedProgress);
-    }
+    let body = line
+        .strip_prefix(PROGRESS_PREFIX)
+        .ok_or(YtDlpError::MalformedProgress)?;
+    let mut fields = body.split('|');
     let percentage = fields.next().ok_or(YtDlpError::MalformedProgress)?;
     let downloaded = fields.next().ok_or(YtDlpError::MalformedProgress)?;
     let total = fields.next().ok_or(YtDlpError::MalformedProgress)?;
@@ -633,10 +641,14 @@ fn parse_optional_float(value: &str) -> Result<Option<u64>, YtDlpError> {
     let value = value
         .parse::<f64>()
         .map_err(|_| YtDlpError::MalformedProgress)?;
-    if !value.is_finite() || value < 0.0 || value > u64::MAX as f64 {
+    // Use a conservative upper bound: u64::MAX is not exactly representable as f64,
+    // so subtract a margin to avoid undefined cast behaviour near the boundary.
+    if !value.is_finite() || value < 0.0 || value > (u64::MAX - 1024) as f64 {
         return Err(YtDlpError::MalformedProgress);
     }
-    Ok(Some(value.round() as u64))
+    // floor() rather than round() so sub-1-byte/s speeds truncate to 0 rather than
+    // rounding up, which is a more honest representation.
+    Ok(Some(value.floor() as u64))
 }
 
 fn is_unknown(value: &str) -> bool {
@@ -659,6 +671,8 @@ fn build_arguments(workspace: &Path, url: &str) -> Vec<OsString> {
         "--newline".into(),
         "--progress-template".into(),
         PROGRESS_TEMPLATE.into(),
+        "--extractor-args".into(),
+        "youtube:player_client=android,web".into(),
         "--paths".into(),
     ];
     let mut home_path = OsString::from("home:");
@@ -793,6 +807,33 @@ async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
         output = Some(entry.path());
     }
     output.ok_or(YtDlpError::OutputUnavailable)
+}
+
+async fn promote_output_to_destination(
+    output: &Path,
+    destination: &Path,
+) -> Result<(), DownloadEngineError> {
+    match tokio::fs::hard_link(output, destination).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            Err(YtDlpError::DestinationExists.into())
+        }
+        Err(_) => {
+            if tokio::fs::symlink_metadata(destination).await.is_ok() {
+                return Err(YtDlpError::DestinationExists.into());
+            }
+            match tokio::fs::rename(output, destination).await {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    tokio::fs::copy(output, destination)
+                        .await
+                        .map_err(DownloadEngineError::Io)?;
+                    let _ = tokio::fs::remove_file(output).await;
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 async fn report_resource_demand(
@@ -1209,6 +1250,11 @@ mod tests {
                 state
                     .arguments
                     .contains(&"--concurrent-fragments".to_owned())
+            );
+            assert!(
+                state
+                    .arguments
+                    .contains(&"--extractor-args".to_owned())
             );
             let delimiter = state
                 .arguments

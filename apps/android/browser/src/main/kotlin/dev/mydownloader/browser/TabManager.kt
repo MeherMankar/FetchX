@@ -5,6 +5,7 @@ import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.WebRequestError
+import org.mozilla.geckoview.AllowOrDeny
 import java.util.UUID
 
 private const val TAG = "TabManager"
@@ -31,6 +32,9 @@ class TabManager(
 
     /** Callback to notify observers of state changes. */
     var onStateChanged: (() -> Unit)? = null
+
+    /** Callback invoked on the main thread when a video URL/response is detected. */
+    var onVideoDetected: ((DetectedVideo) -> Unit)? = null
 
     // ──Public API ─────────────────────────────────────────────────────────
 
@@ -96,7 +100,9 @@ class TabManager(
     ) {
         val url = normalizeUrl(rawUrl, searchEngine)
         val tabId = store.activeTabId() ?: return
-        sessions[tabId]?.loadUri(url)
+        val session = sessions[tabId]
+        Log.i(TAG, "navigate raw='$rawUrl' → url='$url' tabId=$tabId sessionOpen=${session != null} isOpen=${session?.isOpen}")
+        session?.loadUri(url)
         store.updateTab(tabId) { it.copy(url = url, errorText = null) }
         onStateChanged?.invoke()
     }
@@ -148,9 +154,35 @@ class TabManager(
         onStateChanged?.invoke()
     }
 
+    /**
+     * If [uri] is a bare domain (no www. prefix), returns the same URL with www. added.
+     * Returns null if the URL already has www., has a subdomain, or isn't a simple https domain.
+     * Example: https://pornhub.com/ → https://www.pornhub.com/
+     */
+    private fun tryAddWww(uri: String): String? {
+        return try {
+            val parsed = java.net.URI(uri)
+            val host = parsed.host ?: return null
+            // Only retry for https, only if host is bare (exactly one dot, no subdomain)
+            if (parsed.scheme != "https") return null
+            if (host.startsWith("www.")) return null
+            val dots = host.count { it == '.' }
+            if (dots != 1) return null // skip subdomains like cdn.example.com
+            val newHost = "www.$host"
+            java.net.URI(parsed.scheme, parsed.userInfo, newHost, parsed.port, parsed.path, parsed.query, parsed.fragment).toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun buildSession(tabId: String): GeckoSession {
         val s = GeckoSession()
         s.settings.useTrackingProtection = true
+        // Use a standard Firefox for Android User-Agent. GeckoView's default UA
+        // exposes the embedder and gets ERROR_NET_RESET from CDNs/WAFs (Cloudflare etc.)
+        // that reject non-Firefox GeckoView embedders. Firefox 137 on Android 13.
+        s.settings.userAgentOverride =
+            "Mozilla/5.0 (Android 13; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0"
 
         s.contentBlockingDelegate = object : org.mozilla.geckoview.ContentBlocking.Delegate {
             override fun onContentBlocked(
@@ -180,12 +212,25 @@ class TabManager(
         }
 
         s.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onLoadRequest(
+                session: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest,
+            ): GeckoResult<AllowOrDeny>? {
+                val url = request.uri
+                if (VideoInterceptor.isVideoUrl(url)) {
+                    VideoInterceptor.detect(tabId, url, null, null)
+                        ?.let { onVideoDetected?.invoke(it) }
+                }
+                return null  // never block — always allow
+            }
+
             override fun onLocationChange(
                 session: GeckoSession,
                 url: String?,
                 perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean,
             ) {
+                Log.i(TAG, "onLocationChange tab=$tabId url=$url")
                 updateTabState(tabId) { it.copy(url = url ?: "", errorText = null) }
             }
 
@@ -202,6 +247,18 @@ class TabManager(
                 uri: String?,
                 error: WebRequestError,
             ): GeckoResult<String?>? {
+                Log.e(TAG, "onLoadError tab=$tabId uri=$uri category=${error.category} code=${error.code}")
+                // Auto-retry with www. prefix for bare domains (e.g. https://pornhub.com → https://www.pornhub.com)
+                if (uri != null && error.category == WebRequestError.ERROR_CATEGORY_NETWORK) {
+                    val wwwUrl = tryAddWww(uri)
+                    if (wwwUrl != null) {
+                        Log.i(TAG, "Retrying with www: $wwwUrl")
+                        session.loadUri(wwwUrl)
+                        store.updateTab(tabId) { it.copy(url = wwwUrl, errorText = null) }
+                        onStateChanged?.invoke()
+                        return null
+                    }
+                }
                 updateTabState(tabId) {
                     it.copy(
                         errorText = "Could not load page. Check your connection.",
@@ -214,6 +271,7 @@ class TabManager(
 
         s.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
+                Log.i(TAG, "onPageStart tab=$tabId url=$url")
                 updateTabState(tabId) { it.copy(isLoading = true, errorText = null) }
             }
 

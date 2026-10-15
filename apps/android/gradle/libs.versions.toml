@@ -8,6 +8,7 @@ activityCompose = "1.9.3"
 navigationCompose = "2.8.5"
 coroutines = "1.9.0"
 geckoview = "137.0.20250325171416"
+chaquopy = "17.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,3 +36,4 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+chaquopy = { id = "com.chaquo.python", version.ref = "chaquopy" }

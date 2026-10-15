@@ -4,6 +4,8 @@ pub struct CoreConfig {
     pub database_path: String,
     pub downloads_dir: String,
     pub runtime_dir: String,
+    pub yt_dlp_executable_path: Option<String>,
+    pub aria2_executable_path: Option<String>,
 }
 
 /// Mirrors `DownloadStatus` across the FFI boundary.

@@ -1,8 +1,16 @@
 pluginManagement {
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id == "com.chaquo.python") {
+                useModule("com.chaquo.python:gradle:${requested.version}")
+            }
+        }
+    }
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
+        maven("https://chaquo.com/maven")
     }
 }
 dependencyResolutionManagement {
@@ -21,4 +29,3 @@ include(":core")
 include(":downloads")
 include(":bridge")
 include(":browser")
-

@@ -1,5 +1,8 @@
 ﻿package dev.fetchx.browser
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -89,7 +92,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -118,6 +123,8 @@ fun BrowserScreen(
     showBrowserMenu: Boolean = false,
     onBrowserMenuDismiss: () -> Unit = {},
     onOpenBrowserMenu: () -> Unit = {},
+    onDownloadCurrentPage: (url: String, title: String) -> Unit = { _, _ -> },
+    browserVersionName: String = "unknown",
     viewModel: BrowserViewModel = composeViewModel(factory = BrowserViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -128,6 +135,7 @@ fun BrowserScreen(
     val urlFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var isUrlBarExpanded by rememberSaveable { mutableStateOf(false) }
+    var showBrowserUpdates by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(activeTab?.url) {
         viewModel.syncUrlInput(activeTab?.url?.takeUnless { it == "about:blank" }.orEmpty())
@@ -162,6 +170,24 @@ fun BrowserScreen(
             delay(100)
             urlFocusRequester.requestFocus()
             keyboardController?.show()
+        }
+    }
+
+    // TextFieldValue lets us control the cursor/selection.
+    // When the URL bar expands, select-all so the user can type immediately
+    // without the old URL getting in the way (and so ADB input text replaces it).
+    var urlFieldValue by remember { mutableStateOf(TextFieldValue("")) }
+    LaunchedEffect(uiState.urlInput) {
+        // Sync string state → TextFieldValue without disturbing an active selection
+        if (urlFieldValue.text != uiState.urlInput) {
+            urlFieldValue = TextFieldValue(uiState.urlInput)
+        }
+    }
+    LaunchedEffect(isUrlBarExpanded) {
+        if (isUrlBarExpanded) {
+            // Select-all when bar opens so typing replaces the current URL
+            val text = uiState.urlInput.takeUnless { it == "about:blank" }.orEmpty()
+            urlFieldValue = TextFieldValue(text, selection = TextRange(0, text.length))
         }
     }
 
@@ -215,8 +241,11 @@ fun BrowserScreen(
                     ) {
                         if (isUrlBarExpanded) {
                             OutlinedTextField(
-                                value = uiState.urlInput.takeUnless { it == "about:blank" }.orEmpty(),
-                                onValueChange = viewModel::onUrlInputChanged,
+                                value = urlFieldValue,
+                                onValueChange = { tfv ->
+                                    urlFieldValue = tfv
+                                    viewModel.onUrlInputChanged(tfv.text)
+                                },
                                 singleLine = true,
                                 placeholder = { Text("Search or enter URL") },
                                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
@@ -375,6 +404,18 @@ fun BrowserScreen(
                             onClick = { onBrowserMenuDismiss(); viewModel.openBookmarks() },
                         )
                         DropdownMenuItem(
+                            text = { Text("Download media") },
+                            enabled = activeTab?.url?.startsWith("http://") == true ||
+                                activeTab?.url?.startsWith("https://") == true,
+                            onClick = {
+                                val tab = activeTab
+                                if (tab != null) {
+                                    onBrowserMenuDismiss()
+                                    onDownloadCurrentPage(tab.url, tab.title.orEmpty())
+                                }
+                            },
+                        )
+                        DropdownMenuItem(
                             text = { Text("Tracking protection · ${uiState.activeTabBlockedRequests} blocked") },
                             onClick = { onBrowserMenuDismiss(); viewModel.openTrackerDetails() },
                         )
@@ -408,6 +449,13 @@ fun BrowserScreen(
                         DropdownMenuItem(
                             text = { Text("Settings") },
                             onClick = { onBrowserMenuDismiss(); viewModel.openBrowserSettings() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Browser updates") },
+                            onClick = {
+                                onBrowserMenuDismiss()
+                                showBrowserUpdates = true
+                            },
                         )
                         DropdownMenuItem(
                             text = { Text("Theme") },
@@ -471,6 +519,24 @@ fun BrowserScreen(
                     onNavigate = { viewModel.navigateToEssential(it) },
                     modifier = Modifier.fillMaxSize(),
                 )
+            }
+
+            // ── Video download banner ──────────────────────────────────────────
+            AnimatedVisibility(
+                visible = uiState.showVideoDownloadBar && uiState.detectedVideos.isNotEmpty(),
+                enter = slideInVertically(initialOffsetY = { it }),
+                exit = slideOutVertically(targetOffsetY = { it }),
+                modifier = Modifier.align(Alignment.BottomCenter),
+            ) {
+                val topVideo = uiState.detectedVideos.lastOrNull()
+                if (topVideo != null) {
+                    VideoDownloadBanner(
+                        video = topVideo,
+                        extraCount = (uiState.detectedVideos.size - 1).coerceAtLeast(0),
+                        onDownload = { viewModel.downloadDetectedVideo(topVideo) },
+                        onDismiss = viewModel::dismissVideoBar,
+                    )
+                }
             }
         }
     }
@@ -582,6 +648,17 @@ fun BrowserScreen(
 
     if (uiState.showBrowserSettings) {
         BrowserSettingsDialog(onDismiss = viewModel::closeBrowserSettings)
+    }
+
+    if (showBrowserUpdates) {
+        BrowserUpdatesDialog(
+            versionName = browserVersionName,
+            onDismiss = { showBrowserUpdates = false },
+            onCheckForUpdates = {
+                showBrowserUpdates = false
+                viewModel.navigate("https://github.com/MeherMankar/FetchX/releases/latest")
+            },
+        )
     }
 
     // ── Space switcher (Feature 2) ──────────────────────────────────────────
@@ -1544,6 +1621,34 @@ private fun BrowserSettingsDialog(
     )
 }
 
+@Composable
+private fun BrowserUpdatesDialog(
+    versionName: String,
+    onDismiss: () -> Unit,
+    onCheckForUpdates: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Browser updates") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("FetchX version $versionName")
+                Text(
+                    "yt-dlp, FFmpeg, and aria2 are delivered with FetchX. " +
+                        "Engine bundle updates are installed as browser updates.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onCheckForUpdates) { Text("Check for updates") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TabOverviewDialog(
@@ -1858,6 +1963,63 @@ private fun BookmarksDialog(
             TextButton(onClick = onDismiss) { Text("Close") }
         },
     )
+}
+
+@Composable
+private fun VideoDownloadBanner(
+    video: DetectedVideo,
+    extraCount: Int,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        tonalElevation = 6.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                Icons.Default.Language,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Video detected",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    video.suggestedFilename,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                if (extraCount > 0) {
+                    Text(
+                        "+$extraCount more",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onDownload) {
+                Text("Download", style = MaterialTheme.typography.labelMedium)
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Close, "Dismiss", modifier = Modifier.size(16.dp))
+            }
+        }
+    }
 }
 
 private fun formatHistoryTimestamp(epochMs: Long): String {

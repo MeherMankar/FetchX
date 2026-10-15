@@ -30,6 +30,14 @@ interface DownloadRepository {
         referrer: String? = null
     ): String
 
+    /** Add a webpage URL to the media extractor instead of the direct-file engine. */
+    suspend fun addMediaDownload(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority = DownloadPriority.DEFAULT,
+    ): String = addDownload(url, fileName, destinationPath, priority)
+
     /** Pause an active download. */
     suspend fun pauseDownload(downloadId: String)
 
@@ -54,4 +62,3 @@ interface DownloadRepository {
     /** Retrieve a single download by ID, or null if not found. */
     suspend fun getDownload(downloadId: String): DownloadItem?
 }
-

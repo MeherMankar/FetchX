@@ -1,19 +1,36 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::{
+    ffi::OsString,
+    path::Path,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use fetchx_core_services::{CoreServices, CoreServicesConfig};
+use fetchx_downloader::{
+    YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent, YtDlpRunnerFuture,
+};
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadSource, DownloadStatus, FileName, Timestamp,
+    DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
 use fetchx_storage::DownloadRepository as _;
-use tokio::sync::broadcast;
+use tokio::{
+    fs,
+    sync::{broadcast, mpsc, watch},
+    time::sleep,
+};
 use tracing::warn;
 
-use crate::DownloadEventListener;
 use crate::dto::{
     CoreConfig, DownloadInfoDto, DownloadPriorityDto, event_to_dto, item_to_dto, priority_from_dto,
 };
 use crate::error::MobileApiError;
+use crate::{DownloadEventListener, YtDlpRuntime};
+
+const MAX_ANDROID_PROGRESS_LINE_BYTES: usize = 1024;
 
 // ── Inner state that lives only while the service is running ──────────────
 
@@ -35,20 +52,49 @@ impl DownloadService {
     /// Creates the service, starts the Tokio runtime, and initialises CoreServices.
     ///
     /// This is the UniFFI constructor; called from Kotlin as `DownloadService(config)`.
-    pub fn new(config: CoreConfig) -> Result<Self, MobileApiError> {
+    pub fn new(
+        config: CoreConfig,
+        yt_dlp_runtime: Option<Box<dyn YtDlpRuntime>>,
+    ) -> Result<Self, MobileApiError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| MobileApiError::Runtime(format!("failed to build Tokio runtime: {e}")))?;
 
+        let runtime_dir = PathBuf::from(&config.runtime_dir);
         let core_config = CoreServicesConfig {
             database_path: PathBuf::from(&config.database_path),
             downloads_dir: PathBuf::from(&config.downloads_dir),
             runtime_dir: PathBuf::from(&config.runtime_dir),
         };
+        let ytdlp_runner = yt_dlp_runtime.map(|runtime| {
+            Arc::new(AndroidYtDlpProcessRunner {
+                runtime: Arc::from(runtime),
+                runtime_dir: runtime_dir.clone(),
+            }) as Arc<dyn YtDlpProcessRunner>
+        });
+        let engine_config = {
+            let mut engine_config = fetchx_core_services::EngineConfig::default();
+            if let Some(path) = config.yt_dlp_executable_path {
+                engine_config.yt_dlp.enabled = true;
+                engine_config.yt_dlp.executable_path = Some(PathBuf::from(path));
+            }
+            if ytdlp_runner.is_some() {
+                engine_config.yt_dlp.enabled = true;
+            }
+            if let Some(path) = config.aria2_executable_path {
+                engine_config.aria2.enabled = true;
+                engine_config.aria2.executable_path = Some(PathBuf::from(path));
+            }
+            engine_config
+        };
 
         let core = runtime
-            .block_on(CoreServices::start(core_config))
+            .block_on(CoreServices::start_with_engine_config_and_ytdlp_runner(
+                core_config,
+                Some(engine_config),
+                ytdlp_runner,
+            ))
             .map_err(MobileApiError::from)?;
 
         Ok(Self {
@@ -107,6 +153,27 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
+        self.add_download_for_engine(url, filename, destination, priority, EngineKind::DirectHttp)
+    }
+
+    pub fn add_media_download(
+        &self,
+        url: String,
+        filename: String,
+        destination: String,
+        priority: DownloadPriorityDto,
+    ) -> Result<String, MobileApiError> {
+        self.add_download_for_engine(url, filename, destination, priority, EngineKind::YtDlp)
+    }
+
+    fn add_download_for_engine(
+        &self,
+        url: String,
+        filename: String,
+        destination: String,
+        priority: DownloadPriorityDto,
+        engine: EngineKind,
+    ) -> Result<String, MobileApiError> {
         // Validate inputs before locking the inner service.
         if url.trim().is_empty() {
             return Err(MobileApiError::Validation(
@@ -115,12 +182,15 @@ impl DownloadService {
         }
         let fname =
             FileName::new(&filename).map_err(|e| MobileApiError::Validation(e.to_string()))?;
-        let source = DownloadSource::new(&url, fetchx_models::EngineKind::DirectHttp)
+        let source = DownloadSource::new(&url, engine)
             .map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let dest = PathBuf::from(&destination);
         let rust_priority = priority_from_dto(priority);
 
         self.with_inner(|inner| {
+            if engine != EngineKind::DirectHttp && !inner.core.engine_runtime.is_available(engine) {
+                return Err(MobileApiError::UnavailableEngine(format!("{engine:?}")));
+            }
             let created_at =
                 Timestamp::now().map_err(|e| MobileApiError::Runtime(e.to_string()))?;
             let new_id = DownloadId::new();
@@ -346,6 +416,136 @@ impl DownloadService {
     }
 }
 
+struct AndroidYtDlpProcessRunner {
+    runtime: Arc<dyn YtDlpRuntime>,
+    runtime_dir: PathBuf,
+}
+
+static NEXT_YTDLP_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
+impl YtDlpProcessRunner for AndroidYtDlpProcessRunner {
+    fn validate_version<'a>(
+        &'a self,
+        _executable: &'a Path,
+        _timeout: Duration,
+    ) -> YtDlpRunnerFuture<'a, Result<String, YtDlpError>> {
+        Box::pin(async move {
+            let runtime = Arc::clone(&self.runtime);
+            tokio::task::spawn_blocking(move || runtime.validate_version())
+                .await
+                .map_err(|_| YtDlpError::ProcessRunner)
+        })
+    }
+
+    fn run<'a>(
+        &'a self,
+        _executable: &'a Path,
+        arguments: &'a [OsString],
+        stop: watch::Receiver<bool>,
+        events: mpsc::Sender<YtDlpRunnerEvent>,
+    ) -> YtDlpRunnerFuture<'a, Result<YtDlpProcessExit, YtDlpError>> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let runtime = Arc::clone(&self.runtime);
+        let runtime_dir = self.runtime_dir.clone();
+        Box::pin(async move {
+            let run_id = NEXT_YTDLP_RUN_ID.fetch_add(1, Ordering::Relaxed);
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| YtDlpError::ProcessRunner)?
+                .as_nanos();
+            let run_dir = runtime_dir.join(format!("ytdlp-run-{timestamp}-{run_id}"));
+            fs::create_dir(&run_dir)
+                .await
+                .map_err(|_| YtDlpError::WorkspaceUnavailable)?;
+            let progress_path = run_dir.join("progress");
+            let cancel_path = run_dir.join("cancel");
+            let progress_for_worker = progress_path.to_string_lossy().into_owned();
+            let cancel_for_worker = cancel_path.to_string_lossy().into_owned();
+            let mut worker = tokio::task::spawn_blocking(move || {
+                runtime.run(arguments, progress_for_worker, cancel_for_worker)
+            });
+            let mut last_progress = String::new();
+            let mut cancellation_requested = false;
+
+            let result = loop {
+                tokio::select! {
+                    joined = &mut worker => {
+                        break joined.map_err(|_| YtDlpError::ProcessRunner)?;
+                    }
+                    _ = sleep(Duration::from_millis(150)) => {
+                        if *stop.borrow() && !cancellation_requested {
+                            fs::write(&cancel_path, b"cancel")
+                                .await
+                                .map_err(|_| YtDlpError::WorkspaceUnavailable)?;
+                            cancellation_requested = true;
+                        }
+
+                        match fs::read_to_string(&progress_path).await {
+                            Ok(contents) if contents.ends_with('\n') => {
+                                let line = contents.trim_end_matches(['\r', '\n']);
+                                if line.len() > MAX_ANDROID_PROGRESS_LINE_BYTES {
+                                    fs::write(&cancel_path, b"cancel")
+                                        .await
+                                        .map_err(|_| YtDlpError::WorkspaceUnavailable)?;
+                                    worker.await.map_err(|_| YtDlpError::ProcessRunner)?;
+                                    if let Err(error) = fs::remove_dir_all(&run_dir).await {
+                                        warn!(%error, "yt-dlp control workspace cleanup failed");
+                                    }
+                                    return Err(YtDlpError::ProgressOutputTooLarge);
+                                }
+                                if !line.is_empty() && line != last_progress {
+                                    if events.send(YtDlpRunnerEvent::ProgressLine(line.to_owned())).await.is_err() {
+                                        fs::write(&cancel_path, b"cancel")
+                                            .await
+                                            .map_err(|_| YtDlpError::WorkspaceUnavailable)?;
+                                        cancellation_requested = true;
+                                    }
+                                    last_progress = line.to_owned();
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(_) => {
+                                fs::write(&cancel_path, b"cancel")
+                                    .await
+                                    .map_err(|_| YtDlpError::WorkspaceUnavailable)?;
+                                worker.await.map_err(|_| YtDlpError::ProcessRunner)?;
+                                if let Err(cleanup_error) = fs::remove_dir_all(&run_dir).await {
+                                    warn!(%cleanup_error, "yt-dlp control workspace cleanup failed");
+                                }
+                                return Err(YtDlpError::ProgressOutputRead);
+                            }
+                        }
+                    }
+                }
+            };
+            if let Err(error) = fs::remove_dir_all(&run_dir).await {
+                warn!(%error, "yt-dlp control workspace cleanup failed");
+            }
+            if cancellation_requested || *stop.borrow() {
+                return Ok(YtDlpProcessExit {
+                    success: false,
+                    code: Some(130),
+                });
+            }
+            let exit_code = if result.is_empty() { 0 } else { 1 };
+            if !result.is_empty() {
+                events
+                    .send(YtDlpRunnerEvent::ProcessFailed(result))
+                    .await
+                    .map_err(|_| YtDlpError::ProgressOutputRead)?;
+            }
+            Ok(YtDlpProcessExit {
+                success: exit_code == 0,
+                code: Some(exit_code),
+            })
+        })
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -365,6 +565,8 @@ mod tests {
             database_path: dir.path().join("test.db").to_string_lossy().into_owned(),
             downloads_dir: dir.path().join("downloads").to_string_lossy().into_owned(),
             runtime_dir: dir.path().join("runtime").to_string_lossy().into_owned(),
+            yt_dlp_executable_path: None,
+            aria2_executable_path: None,
         };
         (config, dir)
     }
@@ -372,14 +574,14 @@ mod tests {
     #[test]
     fn init_and_shutdown() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         svc.shutdown();
     }
 
     #[test]
     fn double_shutdown_is_safe() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         svc.shutdown();
         svc.shutdown(); // second call must not panic
     }
@@ -387,7 +589,7 @@ mod tests {
     #[test]
     fn list_downloads_empty_initially() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let items = svc.list_downloads().expect("list failed");
         assert!(items.is_empty());
         svc.shutdown();
@@ -396,7 +598,7 @@ mod tests {
     #[test]
     fn add_download_returns_uuid() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let id = svc
             .add_download(
                 "https://example.com/file.zip".to_string(),
@@ -411,9 +613,23 @@ mod tests {
     }
 
     #[test]
+    fn add_media_download_requires_an_available_ytdlp_engine() {
+        let (config, _dir) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+        let result = svc.add_media_download(
+            "https://www.youtube.com/watch?v=example".to_string(),
+            "video".to_string(),
+            "/tmp/downloads".to_string(),
+            DownloadPriorityDto::Normal,
+        );
+        assert!(matches!(result, Err(MobileApiError::UnavailableEngine(_))));
+        svc.shutdown();
+    }
+
+    #[test]
     fn get_download_not_found() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let unknown_id = uuid::Uuid::new_v4().to_string();
         let result = svc.get_download(unknown_id).expect("get_download failed");
         assert!(result.is_none());
@@ -423,7 +639,7 @@ mod tests {
     #[test]
     fn add_and_list_two_downloads() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         svc.add_download(
             "https://example.com/a.zip".to_string(),
             "a.zip".to_string(),
@@ -446,7 +662,7 @@ mod tests {
     #[test]
     fn invalid_url_returns_validation_error() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let result = svc.add_download(
             "   ".to_string(),
             "file.zip".to_string(),
@@ -463,7 +679,7 @@ mod tests {
     #[test]
     fn pause_nonexistent_returns_not_found() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let id = uuid::Uuid::new_v4().to_string();
         let result = svc.pause_download(id);
         assert!(
@@ -476,7 +692,7 @@ mod tests {
     #[test]
     fn cancel_nonexistent_returns_not_found() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let id = uuid::Uuid::new_v4().to_string();
         let result = svc.cancel_download(id);
         assert!(
@@ -489,7 +705,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_returns_not_found() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let id = uuid::Uuid::new_v4().to_string();
         let result = svc.remove_download(id);
         assert!(
@@ -502,7 +718,7 @@ mod tests {
     #[test]
     fn priority_change_roundtrip() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let id = svc
             .add_download(
                 "https://example.com/file.zip".to_string(),
@@ -529,7 +745,7 @@ mod tests {
     #[test]
     fn retry_non_failed_returns_invalid_state_error() {
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
         let id = svc
             .add_download(
                 "https://example.com/file.zip".to_string(),
@@ -551,7 +767,7 @@ mod tests {
     #[test]
     fn concurrent_list_calls() {
         let (config, _dir) = make_config();
-        let svc = Arc::new(DownloadService::new(config).expect("service creation failed"));
+        let svc = Arc::new(DownloadService::new(config, None).expect("service creation failed"));
 
         let handles: Vec<_> = (0..4)
             .map(|_| {
@@ -574,7 +790,7 @@ mod tests {
         use std::time::Duration;
 
         let (config, _dir) = make_config();
-        let svc = DownloadService::new(config).expect("service creation failed");
+        let svc = DownloadService::new(config, None).expect("service creation failed");
 
         let received = Arc::new(AtomicBool::new(false));
         let received_clone = Arc::clone(&received);

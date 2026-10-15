@@ -183,7 +183,7 @@ impl AdaptiveController {
             self.regression_observations = self.regression_observations.saturating_add(1);
             if self.regression_observations >= self.config.observations_to_increase {
                 self.baseline_bytes_per_second = Some(smoothed);
-                self.regression_observations = 0;
+                self.regression_observations = 0; // reset so cooldown period doesn't immediately re-trigger
                 self.healthy_observations = 0;
                 self.probe_blocked = true;
                 self.cooldown_remaining = self.config.cooldown_windows;

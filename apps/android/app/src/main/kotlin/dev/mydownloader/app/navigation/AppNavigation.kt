@@ -19,6 +19,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.runtime.rememberCoroutineScope
 import dev.fetchx.app.ui.theme.FetchXTheme
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -27,11 +30,15 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavHostController
+import dev.fetchx.downloads.storage.StorageManager
 import dev.fetchx.bridge.BridgeInitializer
 import dev.fetchx.browser.BrowserScreen
 import dev.fetchx.core.download.NoOpDownloadRepository
 import dev.fetchx.downloads.ui.DownloadsScreen
 import dev.fetchx.downloads.ui.DownloadsViewModel
+import dev.fetchx.core.download.DownloadPriority
+import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * Root NavHost for the FetchX application.
@@ -62,6 +69,10 @@ fun AppNavigation() {
     }
 
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val browserVersionName = remember(context) {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
+    }
     val downloadsDir: String = context.getExternalFilesDir(null)?.absolutePath
         ?: "${context.filesDir.absolutePath}/downloads"
 
@@ -143,12 +154,90 @@ fun AppNavigation() {
                         showBrowserMenu = showBrowserMenu,
                         onBrowserMenuDismiss = { showBrowserMenu = false },
                         onOpenBrowserMenu = { showBrowserMenu = true },
+                        browserVersionName = browserVersionName,
+                        onDownloadCurrentPage = { url, title ->
+                            if (!bridgeAvailable) {
+                                Toast.makeText(context, "Download service is unavailable", Toast.LENGTH_LONG).show()
+                            } else {
+                                coroutineScope.launch {
+                                    try {
+                                        repository.addMediaDownload(
+                                            url = canonicalizeMediaUrl(url),
+                                            fileName = title.ifBlank { "Media download" },
+                                            destinationPath = mediaDownloadDestination(
+                                                downloadsDir,
+                                                title,
+                                                context,
+                                            ),
+                                            priority = DownloadPriority.DEFAULT,
+                                        )
+                                        Toast.makeText(context, "Media download added", Toast.LENGTH_SHORT).show()
+                                        navController.navigate(Screen.Downloads.route) {
+                                            launchSingleTop = true
+                                        }
+                                    } catch (error: Exception) {
+                                        Toast.makeText(
+                                            context,
+                                            error.message ?: "Could not add media download",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                }
+                            }
+                        },
                         onThemeColorChange = { newSeed -> browserThemeSeed = newSeed },
                     )
                 }
             }
         }
     }
+}
+
+internal fun sanitizeMediaFileName(title: String): String =
+    title.ifBlank { "Media download" }
+        // Strip characters that are illegal in file names or enable path traversal.
+        .replace(Regex("[/\\\\:*?\"<>|]"), "_")
+        .trimStart('.')
+        .ifBlank { "Media download" }
+        .let { if (it.endsWith(".mp4", ignoreCase = true)) it else "$it.mp4" }
+
+internal fun mediaDownloadDestination(
+    downloadsDir: String,
+    title: String,
+    context: android.content.Context,
+): String {
+    val directory = File(downloadsDir)
+    val baseName = sanitizeMediaFileName(title)
+    val safeName = StorageManager(context).uniqueFileName(directory, baseName)
+    return File(directory, safeName).absolutePath
+}
+
+internal fun canonicalizeMediaUrl(url: String): String {
+    val uri = try {
+        java.net.URI(url)
+    } catch (_: Exception) {
+        return url
+    }
+    val host = uri.host ?: return url
+    if (!host.equals("m.youtube.com", ignoreCase = true)) return url
+
+    if (uri.path == "/watch") {
+        val query = uri.query ?: return url
+        val videoId = query.split('&')
+            .map { it.split('=', limit = 2) }
+            .firstOrNull { it.first() == "v" && it.size == 2 }
+            ?.get(1) ?: return url
+        return "https://www.youtube.com/watch?v=$videoId"
+    }
+    return java.net.URI(
+        uri.scheme ?: "https",
+        null, // Do not forward any embedded credentials from the source URI.
+        "www.youtube.com",
+        uri.port,
+        uri.path,
+        uri.query,
+        uri.fragment,
+    ).toASCIIString()
 }
 
 private fun navigateToBrowser(navController: NavHostController) {

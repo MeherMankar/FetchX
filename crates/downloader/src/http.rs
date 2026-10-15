@@ -232,9 +232,6 @@ where
                     false
                 }
                 status => {
-                    self.state_machine
-                        .transition(id, DownloadStatus::Preparing)
-                        .await?;
                     return Err(DownloadEngineError::StateMachine(
                         StateMachineError::InvalidTransition {
                             from: status,
@@ -1390,7 +1387,6 @@ async fn open_partial_file(
         }
 
         let mut file = OpenOptions::new()
-            .read(append)
             .write(true)
             .truncate(!append)
             .open(path)
@@ -1652,6 +1648,20 @@ async fn publish_without_replacement(
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(DownloadEngineError::DestinationExists)
         }
-        Err(error) => Err(DownloadEngineError::Io(error)),
+        Err(_) => {
+            if fs::symlink_metadata(destination).await.is_ok() {
+                return Err(DownloadEngineError::DestinationExists);
+            }
+            match fs::rename(temporary, destination).await {
+                Ok(()) => Ok(()),
+                Err(_) => {
+                    fs::copy(temporary, destination)
+                        .await
+                        .map_err(DownloadEngineError::Io)?;
+                    let _ = fs::remove_file(temporary).await;
+                    Ok(())
+                }
+            }
+        }
     }
 }

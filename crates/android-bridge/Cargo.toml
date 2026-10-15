@@ -18,6 +18,7 @@ uniffi-cli = ["uniffi/cli"]
 [dependencies]
 fetchx-core-services = { path = "../core-services" }
 fetchx-core          = { path = "../core" }
+fetchx-downloader    = { path = "../downloader" }
 fetchx-models        = { path = "../models" }
 fetchx-queue         = { path = "../queue" }
 fetchx-scheduler     = { path = "../scheduler" }
@@ -44,4 +45,3 @@ unsafe_code = "allow"
 
 [lints.clippy]
 all = "warn"
-
