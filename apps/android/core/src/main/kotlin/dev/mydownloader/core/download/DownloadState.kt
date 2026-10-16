@@ -18,7 +18,10 @@ sealed class DownloadState {
     ) : DownloadState()
 
     /** Paused by the user or scheduler. */
-    data object Paused : DownloadState()
+    data class Paused(
+        val downloadedBytes: Long = 0L,
+        val totalBytes: Long? = null,
+    ) : DownloadState()
 
     /** Download finished successfully. */
     data class Completed(
@@ -35,4 +38,3 @@ sealed class DownloadState {
     /** Cancelled by the user. */
     data object Cancelled : DownloadState()
 }
-

@@ -1,6 +1,7 @@
 package dev.fetchx.browser
 
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
@@ -111,6 +112,8 @@ data class BrowserUiState(
     val mediaFormats: List<YtDlpFormat> = emptyList(),
     val isDiscoveringMediaFormats: Boolean = false,
     val mediaFormatError: String? = null,
+    val mediaQueueError: String? = null,
+    val isQueueingMedia: Boolean = false,
     val pendingDownload: PendingDownload? = null,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
@@ -140,6 +143,8 @@ class BrowserViewModel internal constructor(
     private var searchPreferences: SharedPreferences? = null
     private var browserDataPreferences: SharedPreferences? = null
     private var searchSuggestionJob: Job? = null
+    private var mediaFormatJob: Job? = null
+    private var mediaFormatGeneration = 0
     private var extensionManager: ExtensionManager? = null
     private var extensionStateListener: (() -> Unit)? = null
     private val firefoxAddonsCatalog = FirefoxAddonsCatalog()
@@ -186,6 +191,7 @@ class BrowserViewModel internal constructor(
             newTm.onExternalUriRequested = ::openExternalUri
             val restoredTabs = loadSavedTabs()
             val restoredActiveId = loadSavedActiveTabId()
+            newTm.restoreHistory(loadSavedHistory())
             if (restoredTabs.isNotEmpty()) {
                 newTm.restoreTabs(restoredTabs, restoredActiveId)
             } else {
@@ -234,6 +240,7 @@ class BrowserViewModel internal constructor(
         }
         saveCurrentTabs(tabs, activeId)
         saveBookmarks(bState.bookmarks)
+        saveHistory(tm.allHistory())
     }
 
     private fun updateNavigationState(tabId: String, tab: TabState) {
@@ -401,10 +408,15 @@ class BrowserViewModel internal constructor(
     }
 
     fun requestMediaFormats(video: DetectedVideo) {
+        mediaFormatGeneration += 1
+        val generation = mediaFormatGeneration
+        mediaFormatJob?.cancel()
         val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
             _uiState.update {
                 it.copy(
                     pendingMediaVideo = video,
+                    isDiscoveringMediaFormats = false,
+                    mediaFormats = emptyList(),
                     mediaFormatError = "The download service is not ready.",
                 )
             }
@@ -420,7 +432,7 @@ class BrowserViewModel internal constructor(
                 mediaFormatError = null,
             )
         }
-        viewModelScope.launch(Dispatchers.IO) {
+        mediaFormatJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 var formats: List<dev.fetchx.core.download.YtDlpFormat> = emptyList()
                 var discoveryError: Exception? = null
@@ -428,6 +440,8 @@ class BrowserViewModel internal constructor(
                 if (pageUrl != null) {
                     try {
                         formats = repo.discoverMediaFormats(pageUrl)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (e: Exception) {
                         discoveryError = e
                         Log.w(TAG, "Format discovery on pageUrl failed, falling back to stream url", e)
@@ -437,16 +451,19 @@ class BrowserViewModel internal constructor(
                 if (formats.isEmpty() && video.url.isNotBlank() && video.url != pageUrl) {
                     try {
                         formats = repo.discoverMediaFormats(video.url)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (e: Exception) {
                         if (discoveryError == null) discoveryError = e
                         Log.w(TAG, "Format discovery on video.url failed", e)
                     }
                 }
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    if (generation != mediaFormatGeneration) return@update state
+                    state.copy(
                         mediaFormats = formats,
                         isDiscoveringMediaFormats = false,
-                        mediaFormatError = if (formats.isEmpty() && discoveryError != null && video.url.isBlank())
+                        mediaFormatError = if (formats.isEmpty() && discoveryError != null)
                             discoveryError.message ?: "Format discovery failed."
                         else null,
                     )
@@ -455,8 +472,9 @@ class BrowserViewModel internal constructor(
                 throw cancelled
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to discover media formats", error)
-                _uiState.update {
-                    it.copy(
+                _uiState.update { state ->
+                    if (generation != mediaFormatGeneration) return@update state
+                    state.copy(
                         isDiscoveringMediaFormats = false,
                         mediaFormatError = error.message ?: "Format discovery failed.",
                     )
@@ -466,12 +484,17 @@ class BrowserViewModel internal constructor(
     }
 
     fun closeMediaFormatPicker() {
+        mediaFormatGeneration += 1
+        mediaFormatJob?.cancel()
+        mediaFormatJob = null
         _uiState.update {
             it.copy(
                 pendingMediaVideo = null,
                 mediaFormats = emptyList(),
                 isDiscoveringMediaFormats = false,
                 mediaFormatError = null,
+                mediaQueueError = null,
+                isQueueingMedia = false,
             )
         }
     }
@@ -486,7 +509,7 @@ class BrowserViewModel internal constructor(
     ) {
         val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
             Log.w(TAG, "downloadDetectedVideo: bridge not initialized")
-            closeMediaFormatPicker()
+            _uiState.update { it.copy(mediaQueueError = "The download service is not ready.") }
             return
         }
         val destDir = applicationContext?.getExternalFilesDir(
@@ -525,6 +548,7 @@ class BrowserViewModel internal constructor(
         )
         val fileName = generateUniqueFileName(destDir, desiredName)
         val destPath = java.io.File(destDir, fileName).absolutePath
+        _uiState.update { it.copy(isQueueingMedia = true, mediaQueueError = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 // addMediaDownload routes through yt-dlp which handles HLS/DASH properly
@@ -535,12 +559,20 @@ class BrowserViewModel internal constructor(
                     priority = dev.fetchx.core.download.DownloadPriority.NORMAL,
                     formatId = formatId,
                 )
-                Log.i(TAG, "Queued media download via yt-dlp: $fileName from $downloadUrl")
+                Log.i(TAG, "Queued media download via yt-dlp: $fileName")
+                withContext(Dispatchers.Main) { closeMediaFormatPicker() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to queue video download", e)
+                _uiState.update {
+                    it.copy(
+                        isQueueingMedia = false,
+                        mediaQueueError = e.message ?: "Could not queue video download.",
+                    )
+                }
             }
         }
-        closeMediaFormatPicker()
         dismissVideoBar()
     }
 
@@ -1065,8 +1097,10 @@ class BrowserViewModel internal constructor(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            android.widget.Toast.makeText(context, "No app can open this link", android.widget.Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            Log.e(TAG, "Could not open external app for URI: $uriString", e)
+            Log.e(TAG, "Could not open external app", e)
         }
     }
 
@@ -1077,17 +1111,7 @@ class BrowserViewModel internal constructor(
         )?.also { browserDataPreferences = it } ?: return emptyList()
 
         val raw = prefs.getString(SAVED_TABS_KEY, null) ?: return emptyList()
-        return raw.split("\n").mapNotNull { line ->
-            val parts = line.split("\t\t")
-            if (parts.size >= 4) {
-                TabState(
-                    id = parts[0],
-                    url = parts[1],
-                    title = parts[2].takeIf { it.isNotBlank() },
-                    spaceId = parts[3],
-                )
-            } else null
-        }
+        return BrowserDataCodec.decodeTabs(raw)
     }
 
     private fun loadSavedActiveTabId(): String? {
@@ -1104,9 +1128,7 @@ class BrowserViewModel internal constructor(
             Context.MODE_PRIVATE,
         )?.also { browserDataPreferences = it } ?: return
 
-        val encoded = tabs.joinToString("\n") { tab ->
-            "${tab.id}\t\t${tab.url}\t\t${tab.title.orEmpty()}\t\t${tab.spaceId}"
-        }
+        val encoded = BrowserDataCodec.encodeTabs(tabs)
         prefs.edit()
             .putString(SAVED_TABS_KEY, encoded)
             .putString(SAVED_ACTIVE_TAB_ID_KEY, activeId.orEmpty())
@@ -1120,18 +1142,7 @@ class BrowserViewModel internal constructor(
         )?.also { browserDataPreferences = it } ?: return emptyList()
 
         val raw = prefs.getString(SAVED_BOOKMARKS_KEY, null) ?: return emptyList()
-        return raw.split("\n").mapNotNull { line ->
-            val parts = line.split("\t\t")
-            if (parts.size >= 5) {
-                Bookmark(
-                    id = parts[0],
-                    url = parts[1],
-                    title = parts[2],
-                    createdAtMs = parts[3].toLongOrNull() ?: 0L,
-                    updatedAtMs = parts[4].toLongOrNull() ?: 0L,
-                )
-            } else null
-        }
+        return BrowserDataCodec.decodeBookmarks(raw)
     }
 
     private fun saveBookmarks(bookmarks: List<Bookmark>) {
@@ -1140,10 +1151,24 @@ class BrowserViewModel internal constructor(
             Context.MODE_PRIVATE,
         )?.also { browserDataPreferences = it } ?: return
 
-        val encoded = bookmarks.joinToString("\n") { b ->
-            "${b.id}\t\t${b.url}\t\t${b.title}\t\t${b.createdAtMs}\t\t${b.updatedAtMs}"
-        }
+        val encoded = BrowserDataCodec.encodeBookmarks(bookmarks)
         prefs.edit().putString(SAVED_BOOKMARKS_KEY, encoded).apply()
+    }
+
+    private fun loadSavedHistory(): List<HistoryEntry> {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return emptyList()
+        return BrowserDataCodec.decodeHistory(prefs.getString(SAVED_HISTORY_KEY, null).orEmpty())
+    }
+
+    private fun saveHistory(entries: List<HistoryEntry>) {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return
+        prefs.edit().putString(SAVED_HISTORY_KEY, BrowserDataCodec.encodeHistory(entries)).apply()
     }
 
     private fun loadSavedPrivacySettings() {
@@ -1187,6 +1212,8 @@ class BrowserViewModel internal constructor(
         super.onCleared()
         searchSuggestionJob?.cancel()
         searchSuggestionJob = null
+        mediaFormatJob?.cancel()
+        mediaFormatJob = null
         tabManager?.dispose()
         tabManager = null
         extensionManager?.let { manager ->
@@ -1231,6 +1258,7 @@ class BrowserViewModel internal constructor(
         private const val SAVED_TABS_KEY = "saved_browser_tabs"
         private const val SAVED_ACTIVE_TAB_ID_KEY = "saved_active_tab_id"
         private const val SAVED_BOOKMARKS_KEY = "saved_bookmarks"
+        private const val SAVED_HISTORY_KEY = "saved_browser_history"
         private const val PRIVACY_AD_BLOCKING_KEY = "privacy_ad_blocking"
         private const val PRIVACY_FINGERPRINT_KEY = "privacy_fingerprint"
         private const val PRIVACY_CRYPTOMINING_KEY = "privacy_cryptomining"

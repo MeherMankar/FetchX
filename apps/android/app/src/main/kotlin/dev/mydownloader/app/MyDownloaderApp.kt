@@ -9,8 +9,10 @@ import dev.fetchx.bridge.BridgeInitializer
 import dev.fetchx.browser.GeckoRuntimeHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import dev.fetchx.core.download.DownloadState
+import kotlinx.coroutines.flow.collect
 
 private const val TAG = "FetchXApp"
 
@@ -48,16 +50,29 @@ class FetchXApp : Application() {
     fun startDownloadServiceIfNeeded() {
         val repo = BridgeInitializer.repositoryOrNull() ?: return
         appScope.launch {
-            val shouldStart = withContext(Dispatchers.IO) { repo.hasRelevantDownloads() }
-            if (!shouldStart) {
-                Log.i(TAG, "No active or queued downloads — skipping foreground service start")
-                return@launch
-            }
-            val intent = Intent(this@FetchXApp, DownloadForegroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
+            try {
+                repo.awaitInitialSnapshot()
+                repo.observeDownloads().collect { downloads ->
+                    val shouldStart = downloads.any {
+                        it.state is DownloadState.Active || it.state is DownloadState.Queued
+                    }
+                    if (shouldStart) {
+                        val intent = Intent(this@FetchXApp, DownloadForegroundService::class.java)
+                        try {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                        } catch (error: RuntimeException) {
+                            Log.e(TAG, "Could not start download foreground service", error)
+                        }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not observe downloads for foreground service startup", error)
             }
         }
     }

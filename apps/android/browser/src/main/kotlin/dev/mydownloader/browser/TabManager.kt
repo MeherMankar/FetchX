@@ -29,6 +29,7 @@ class TabManager(
 
     private val store = TabStore()
     private val sessions = mutableMapOf<String, GeckoSession>()
+    private val loadedTabIds = mutableSetOf<String>()
     private val historyStore = HistoryStore()
 
     /** Callback to notify observers of state changes. */
@@ -53,21 +54,20 @@ class TabManager(
         if (savedTabs.isEmpty()) return
         sessions.values.forEach { it.close() }
         sessions.clear()
+        loadedTabIds.clear()
         store.clear()
 
+        val restoredActiveId = activeId?.takeIf { saved -> savedTabs.any { it.id == saved } }
+            ?: savedTabs.last().id
         for (tab in savedTabs) {
             val session = buildSession(tab.id)
             session.open(runtime)
             trackerBlockingController.registerTab(tab.id)
             sessions[tab.id] = session
             store.addTab(tab)
-            if (tab.url.isNotBlank() && tab.url != "about:blank") {
-                session.loadUri(tab.url)
-            }
         }
-        if (activeId != null && store.findTab(activeId) != null) {
-            store.setActive(activeId)
-        }
+        store.setActive(restoredActiveId)
+        loadRestoredTab(restoredActiveId)
         onStateChanged?.invoke()
     }
 
@@ -78,6 +78,7 @@ class TabManager(
         session.open(runtime)
         trackerBlockingController.registerTab(id)
         sessions[id] = session
+        loadedTabIds.add(id)
         val normalizedUrl = normalizeUrl(initialUrl)
         store.addTab(TabState(id = id, url = normalizedUrl, spaceId = spaceId))
         session.loadUri(normalizedUrl)
@@ -92,6 +93,7 @@ class TabManager(
         historyStore.removeTab(tabId)
         trackerBlockingController.removeTab(tabId)
         sessions.remove(tabId)?.close()
+        loadedTabIds.remove(tabId)
         store.removeTab(tabId)
         Log.i(TAG, "Closed tab $tabId, remaining: ${store.tabCount()}")
         // Ensure at least one tab always exists.
@@ -109,6 +111,7 @@ class TabManager(
             historyStore.removeTab(tab.id)
             trackerBlockingController.removeTab(tab.id)
             sessions.remove(tab.id)?.close()
+            loadedTabIds.remove(tab.id)
             store.removeTab(tab.id)
         }
         if (store.tabCount() == 0) {
@@ -121,6 +124,7 @@ class TabManager(
     /** Switches the active tab to [tabId]. */
     fun selectTab(tabId: String) {
         if (!store.setActive(tabId)) return
+        loadRestoredTab(tabId)
         Log.i(TAG, "Selected tab $tabId")
         onStateChanged?.invoke()
     }
@@ -149,7 +153,7 @@ class TabManager(
         val url = normalizeUrl(rawUrl, searchEngine)
         val tabId = store.activeTabId() ?: return
         val session = sessions[tabId]
-        Log.i(TAG, "navigate raw='$rawUrl' → url='$url' tabId=$tabId sessionOpen=${session != null} isOpen=${session?.isOpen}")
+        Log.i(TAG, "Navigating tab $tabId")
         session?.loadUri(url)
         store.updateTab(tabId) { it.copy(url = url, errorText = null) }
         onStateChanged?.invoke()
@@ -182,6 +186,10 @@ class TabManager(
     /** Returns all history entries across all tabs, newest first by timestamp. */
     fun allHistory(): List<HistoryEntry> = historyStore.allEntries()
 
+    fun restoreHistory(entries: List<HistoryEntry>) {
+        historyStore.restoreGlobalHistory(entries)
+    }
+
     /** Clears all history across all tabs and notifies observers. */
     fun clearAllHistory() {
         historyStore.clearAll()
@@ -203,9 +211,18 @@ class TabManager(
         trackerBlockingController.clearTabs()
         val openSessions = sessions.values.toList()
         sessions.clear()
+        loadedTabIds.clear()
         openSessions.forEach { it.close() }
         store.clear()
         Log.i(TAG, "TabManager disposed")
+    }
+
+    private fun loadRestoredTab(tabId: String) {
+        if (!loadedTabIds.add(tabId)) return
+        val url = store.findTab(tabId)?.url ?: return
+        if (url.isNotBlank() && url != "about:blank") {
+            sessions[tabId]?.loadUri(url)
+        }
     }
 
     // ──Internal helpers ───────────────────────────────────────────────────
@@ -282,7 +299,7 @@ class TabManager(
             }
 
             override fun onExternalResponse(session: GeckoSession, response: org.mozilla.geckoview.WebResponse) {
-                Log.i(TAG, "onExternalResponse uri=${response.uri}")
+                Log.i(TAG, "External download response received")
                 val disposition = response.headers["content-disposition"] ?: response.headers["Content-Disposition"]
                 val filename = disposition?.substringAfter("filename=", "")?.trim('"', ' ', ';')?.takeIf { it.isNotBlank() }
                 onDownloadRequested?.invoke(response.uri, filename)
@@ -297,7 +314,7 @@ class TabManager(
             ): GeckoResult<AllowOrDeny>? {
                 val url = request.uri
                 if (isExternalScheme(url)) {
-                    Log.i(TAG, "Handling external scheme: $url")
+                    Log.i(TAG, "Handling external URI scheme")
                     onExternalUriRequested?.invoke(url)
                     return GeckoResult.fromValue(AllowOrDeny.DENY)
                 }
@@ -312,7 +329,7 @@ class TabManager(
                 session: GeckoSession,
                 uri: String,
             ): GeckoResult<GeckoSession>? {
-                Log.i(TAG, "onNewSession tab=$tabId uri=$uri")
+                Log.i(TAG, "Opening new tab from tab $tabId")
                 val currentSpaceId = store.findTab(tabId)?.spaceId ?: "default"
                 val newId = UUID.randomUUID().toString()
                 val newSession = buildSession(newId)
@@ -331,7 +348,7 @@ class TabManager(
                 perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean,
             ) {
-                Log.i(TAG, "onLocationChange tab=$tabId url=$url")
+                Log.i(TAG, "Location changed in tab $tabId")
                 updateTabState(tabId) { it.copy(url = url ?: "", errorText = null) }
             }
 
@@ -350,12 +367,12 @@ class TabManager(
                 uri: String?,
                 error: WebRequestError,
             ): GeckoResult<String?>? {
-                Log.e(TAG, "onLoadError tab=$tabId uri=$uri category=${error.category} code=${error.code}")
+                Log.e(TAG, "Page load failed in tab $tabId category=${error.category} code=${error.code}")
                 // Auto-retry with www. prefix for bare domains (e.g. https://pornhub.com → https://www.pornhub.com)
                 if (uri != null && error.category == WebRequestError.ERROR_CATEGORY_NETWORK) {
                     val wwwUrl = tryAddWww(uri)
                     if (wwwUrl != null) {
-                        Log.i(TAG, "Retrying with www: $wwwUrl")
+                        Log.i(TAG, "Retrying page load with www prefix")
                         session.loadUri(wwwUrl)
                         store.updateTab(tabId) { it.copy(url = wwwUrl, errorText = null) }
                         onStateChanged?.invoke()
@@ -375,7 +392,7 @@ class TabManager(
 
         s.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
-                Log.i(TAG, "onPageStart tab=$tabId url=$url")
+                Log.i(TAG, "Page load started in tab $tabId")
                 updateTabState(tabId) { it.copy(isLoading = true, progress = 10, errorText = null) }
             }
 

@@ -7,6 +7,7 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -152,30 +153,50 @@ class DownloadsViewModel(
     }
 
     fun pause(downloadId: String) {
-        viewModelScope.launch { repository.pauseDownload(downloadId) }
+        performAction("pause") { repository.pauseDownload(downloadId) }
     }
 
     fun resume(downloadId: String) {
-        viewModelScope.launch { repository.resumeDownload(downloadId) }
+        performAction("resume") { repository.resumeDownload(downloadId) }
     }
 
     fun cancel(downloadId: String) {
-        viewModelScope.launch { repository.cancelDownload(downloadId) }
+        performAction("cancel") { repository.cancelDownload(downloadId) }
     }
 
     fun remove(downloadId: String) {
-        viewModelScope.launch { repository.removeDownload(downloadId) }
+        performAction("remove") { repository.removeDownload(downloadId) }
     }
 
     fun retry(downloadId: String) {
-        viewModelScope.launch { repository.retryDownload(downloadId) }
+        performAction("retry") { repository.retryDownload(downloadId) }
     }
 
     fun setPriority(downloadId: String, priority: DownloadPriority) {
-        viewModelScope.launch { repository.setPriority(downloadId, priority) }
+        performAction("update priority") { repository.setPriority(downloadId, priority) }
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────
+
+    private fun performAction(action: String, operation: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                operation()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val message = if (
+                    action == "pause" &&
+                    e.message?.contains("does not support active pause", ignoreCase = true) == true
+                ) {
+                    "Pause isn't supported for this download type."
+                } else {
+                    "Could not $action this download. Please try again."
+                }
+                _uiState.update { it.copy(error = message) }
+            }
+        }
+    }
 
     /** Map exceptions from addDownload to user-readable, non-technical strings. */
     private fun mapAddDownloadError(e: Exception): String = when {
@@ -219,4 +240,3 @@ class DownloadsViewModel(
         }
     }
 }
-

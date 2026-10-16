@@ -11,7 +11,7 @@ import java.util.UUID
  * - Consecutive duplicate URLs are not added again (avoids anchor / pushState spam).
  * - Title updates amend the most recent matching entry.
  * - Max entries capped to avoid unbounded growth.
- * - All history is in-memory only — no persistence in Phase 20G.
+ * - Per-tab history is kept in memory; the global history snapshot can be persisted by the browser.
  *
  * No Android imports. JVM-testable.
  */
@@ -64,6 +64,11 @@ class HistoryStore(private val maxEntries: Int = 200) {
         (_globalHistory.ifEmpty { _history.values.flatten() })
             .sortedByDescending { it.timestampMs }
 
+    fun restoreGlobalHistory(entries: List<HistoryEntry>) {
+        _globalHistory.clear()
+        _globalHistory.addAll(entries.sortedByDescending { it.timestampMs }.take(maxEntries * 2))
+    }
+
     /** Clears history for [tabId] only. */
     fun clearTab(tabId: String) {
         _history.remove(tabId)
@@ -84,4 +89,3 @@ class HistoryStore(private val maxEntries: Int = 200) {
     fun totalCount(): Int =
         if (_globalHistory.isNotEmpty()) _globalHistory.size else _history.values.sumOf { it.size }
 }
-

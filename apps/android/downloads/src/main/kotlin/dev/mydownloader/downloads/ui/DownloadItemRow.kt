@@ -126,7 +126,9 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(onClick = onPause) { Text("Pause") }
+                        if (!item.engine.equals("yt_dlp", ignoreCase = true)) {
+                            TextButton(onClick = onPause) { Text("Pause") }
+                        }
                         TextButton(onClick = onCancel) { Text("Cancel") }
                     }
                 }
@@ -148,9 +150,27 @@ fun DownloadItemRow(
 
                 is DownloadState.Paused -> {
                     Spacer(modifier = Modifier.height(4.dp))
-                    // DownloadState.Paused carries no byte-progress fields — the domain model
-                    // does not propagate progress into the paused state. Extending this requires
-                    // changes to the Rust models crate and the Android bridge (Phase 20E+).
+                    val progress = state.totalBytes?.takeIf { it > 0L }?.let {
+                        state.downloadedBytes.toFloat() / it.toFloat()
+                    }
+                    if (progress != null) {
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${formatBytes(state.downloadedBytes)} / ${formatBytes(state.totalBytes!!)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else if (state.downloadedBytes > 0L) {
+                        Text(
+                            text = "${formatBytes(state.downloadedBytes)} downloaded",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Text(
                         text = "Paused",
                         style = MaterialTheme.typography.labelMedium,

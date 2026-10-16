@@ -990,17 +990,29 @@ fun BrowserScreen(
                         TextButton(onClick = { viewModel.requestMediaFormats(video) }) {
                             Text("Retry")
                         }
+                        if (uiState.mediaFormats.isEmpty()) {
+                            TextButton(
+                                onClick = { viewModel.downloadDetectedVideo(video) },
+                                enabled = !uiState.isQueueingMedia,
+                            ) {
+                                Text(if (uiState.isQueueingMedia) "Adding download…" else "Download automatically")
+                            }
+                        }
                     }
                     else -> Column(
                         modifier = Modifier
                             .heightIn(max = 400.dp)
                             .verticalScroll(rememberScrollState()),
                     ) {
+                        uiState.mediaQueueError?.let { error ->
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                        }
                         TextButton(
                             onClick = { viewModel.downloadDetectedVideo(video) },
+                            enabled = !uiState.isQueueingMedia,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Automatic best quality")
+                            Text(if (uiState.isQueueingMedia) "Adding download…" else "Automatic best quality")
                         }
                         uiState.mediaFormats.forEach { format ->
                             TextButton(
@@ -1015,6 +1027,7 @@ fun BrowserScreen(
                                     )
                                 },
                                 modifier = Modifier.fillMaxWidth(),
+                                enabled = !uiState.isQueueingMedia,
                             ) {
                                 Text(format.label)
                             }

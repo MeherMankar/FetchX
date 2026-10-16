@@ -1,5 +1,6 @@
 package dev.fetchx.bridge
 
+import android.util.Log
 import dev.fetchx.bridge.uniffi.DownloadEventDto
 import dev.fetchx.bridge.uniffi.DownloadEventListener
 import dev.fetchx.bridge.uniffi.DownloadInfoDto
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CompletableDeferred
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Implements [DownloadRepository] by delegating to the Rust [DownloadService]
@@ -52,6 +55,8 @@ class BridgeDownloadRepository(
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
+    private val initialSnapshotReady = CompletableDeferred<Unit>()
+    private val refreshGeneration = AtomicLong()
 
     init {
         // Register the Rust → Kotlin event listener. The callback is invoked on a
@@ -60,27 +65,44 @@ class BridgeDownloadRepository(
             override fun onEvent(event: DownloadEventDto) {
                 mapEvent(event)?.let { _events.tryEmit(it) }
                 // Refresh the snapshot on every event so observeDownloads() stays current.
+                val generation = refreshGeneration.incrementAndGet()
                 externalScope.launch {
                     val items = withContext(Dispatchers.IO) {
                         service.listDownloads().map(::mapItem)
                     }
-                    _downloads.value = items
+                    if (generation == refreshGeneration.get()) _downloads.value = items
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.e(TAG, "Could not refresh download snapshot after event", error)
                 }
             }
         })
 
         // Load initial state.
         externalScope.launch {
-            val items = withContext(Dispatchers.IO) {
-                service.listDownloads().map(::mapItem)
+            try {
+                val generation = refreshGeneration.incrementAndGet()
+                val items = withContext(Dispatchers.IO) {
+                    service.listDownloads().map(::mapItem)
+                }
+                if (generation == refreshGeneration.get()) _downloads.value = items
+                initialSnapshotReady.complete(Unit)
+            } catch (error: Exception) {
+                initialSnapshotReady.completeExceptionally(error)
+                Log.e(TAG, "Could not load initial download snapshot", error)
+                throw error
             }
-            _downloads.value = items
         }
     }
 
     // ── DownloadRepository interface ──────────────────────────────────────
 
     override fun observeDownloads(): Flow<List<DownloadItem>> = _downloads.asStateFlow()
+
+    suspend fun awaitInitialSnapshot() {
+        initialSnapshotReady.await()
+    }
 
     override fun observeEvents(): Flow<DownloadEvent> = _events.asSharedFlow()
 
@@ -195,7 +217,10 @@ class BridgeDownloadRepository(
             etaSeconds = dto.progress.estimatedRemainingSeconds.takeIf { it >= 0L },
             segmentCount = 1,
         )
-        DownloadStatusDto.PAUSED -> DownloadState.Paused
+        DownloadStatusDto.PAUSED -> DownloadState.Paused(
+            downloadedBytes = dto.progress.downloadedBytes.toLong(),
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+        )
         DownloadStatusDto.COMPLETED -> DownloadState.Completed(
             totalBytes = dto.progress.totalBytes.takeIf { it >= 0L } ?: 0L,
             destinationPath = dto.destination,
@@ -205,6 +230,10 @@ class BridgeDownloadRepository(
             retryable = true,
         )
         DownloadStatusDto.CANCELLED -> DownloadState.Cancelled
+    }
+
+    private companion object {
+        const val TAG = "BridgeDownloadRepo"
     }
 
     /**

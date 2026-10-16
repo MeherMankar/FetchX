@@ -127,9 +127,13 @@ class MappingTest {
 
     @Test
     fun pausedStatusMapsToPausedState() {
-        val item = makeDto(status = DownloadStatusDto.PAUSED)
+        val item = makeDto(
+            status = DownloadStatusDto.PAUSED,
+            downloadedBytes = 512uL,
+            totalBytes = 1024L,
+        )
         val mapped = repo.mapItemPublic(item)
-        assertEquals(DownloadState.Paused, mapped.state)
+        assertEquals(DownloadState.Paused(512L, 1024L), mapped.state)
     }
 
     @Test
@@ -233,7 +237,10 @@ private class MappingDelegate {
             etaSeconds = dto.progress.estimatedRemainingSeconds.takeIf { it >= 0L },
             segmentCount = 1,
         )
-        DownloadStatusDto.PAUSED -> dev.fetchx.core.download.DownloadState.Paused
+        DownloadStatusDto.PAUSED -> dev.fetchx.core.download.DownloadState.Paused(
+            downloadedBytes = dto.progress.downloadedBytes.toLong(),
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+        )
         DownloadStatusDto.COMPLETED -> dev.fetchx.core.download.DownloadState.Completed(
             totalBytes = dto.progress.totalBytes.takeIf { it >= 0L } ?: 0L,
             destinationPath = dto.destination,
@@ -245,4 +252,3 @@ private class MappingDelegate {
         DownloadStatusDto.CANCELLED -> dev.fetchx.core.download.DownloadState.Cancelled
     }
 }
-

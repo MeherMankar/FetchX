@@ -1,4 +1,4 @@
 [bindings.kotlin]
 package_name = "dev.fetchx.bridge.uniffi"
 cdylib_name  = "fetchx_android_bridge"
-
+disable_java_cleaner = true

@@ -15,6 +15,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.Job
 
 private const val TAG = "DownloadForegroundSvc"
 
@@ -35,6 +37,7 @@ class DownloadForegroundService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var notificationManager: DownloadNotificationManager
+    private var downloadsJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -50,7 +53,13 @@ class DownloadForegroundService : Service() {
             return START_NOT_STICKY
         }
 
-        repo.observeDownloads()
+        if (downloadsJob?.isActive == true) return START_NOT_STICKY
+
+        startForegroundCompat(0)
+        downloadsJob = kotlinx.coroutines.flow.flow {
+            repo.awaitInitialSnapshot()
+            repo.observeDownloads().collect { emit(it) }
+        }
             .onEach { items ->
                 val activeCount = items.count { it.state is DownloadState.Active }
                 val queuedCount = items.count { it.state is DownloadState.Queued }
@@ -80,6 +89,16 @@ class DownloadForegroundService : Service() {
                 }
 
                 startForegroundCompat(activeCount)
+            }
+            .catch { error ->
+                Log.e(TAG, "Download observation failed", error)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+                stopSelf(startId)
             }
             .launchIn(scope)
 

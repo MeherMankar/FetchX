@@ -87,7 +87,7 @@ dependencies {
     // The @aar classifier is required — it bundles libjnidispatch.so for each ABI.
     // Without it the plain JVM jar is used which lacks the native dispatch library,
     // causing UnsatisfiedLinkError at runtime on device.
-    implementation("net.java.dev.jna:jna:5.15.0@aar")
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)

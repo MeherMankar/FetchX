@@ -123,5 +123,17 @@ class HistoryStoreTest {
         assertEquals(1, store.allEntries().size)
         assertEquals("https://example.com", store.allEntries().first().url)
     }
-}
 
+    @Test fun `restored global history is sorted and retained across tab cleanup`() {
+        val store = HistoryStore()
+        store.restoreGlobalHistory(
+            listOf(
+                HistoryEntry("older", "https://older.example", null, 100L),
+                HistoryEntry("newer", "https://newer.example", null, 200L),
+            ),
+        )
+
+        assertEquals("https://newer.example", store.allEntries().first().url)
+        assertEquals(2, store.totalCount())
+    }
+}

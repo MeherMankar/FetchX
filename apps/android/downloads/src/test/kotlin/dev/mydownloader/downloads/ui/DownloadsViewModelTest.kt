@@ -100,6 +100,20 @@ class DownloadsViewModelTest {
         assertEquals("id1", repo.lastPausedId)
     }
 
+    @Test
+    fun unsupportedPauseShowsMessageInsteadOfThrowing() = runTest {
+        val repo = FakeDownloadRepository().apply {
+            actionFailure = IllegalStateException(
+                "engine unavailable: YtDlp engine does not support active pause",
+            )
+        }
+        val vm = DownloadsViewModel(repo)
+
+        vm.pause("id1")
+
+        assertEquals("Pause isn't supported for this download type.", vm.uiState.value.error)
+    }
+
     // ── 5. resume calls repository ────────────────────────────────────────
 
     @Test
@@ -138,6 +152,18 @@ class DownloadsViewModelTest {
         val vm = DownloadsViewModel(repo)
         vm.remove("id1")
         assertEquals("id1", repo.lastRemovedId)
+    }
+
+    @Test
+    fun removeFailureIsShownInsteadOfCrashing() = runTest {
+        val repo = FakeDownloadRepository().apply {
+            actionFailure = IllegalStateException("remove failed")
+        }
+        val vm = DownloadsViewModel(repo)
+
+        vm.remove("id1")
+
+        assertEquals("Could not remove this download. Please try again.", vm.uiState.value.error)
     }
 
     // ── 9. setPriority calls repository ──────────────────────────────────
@@ -279,6 +305,7 @@ private class FakeDownloadRepository : DownloadRepository {
     var lastRetriedId: String? = null
     var lastRemovedId: String? = null
     var lastSetPriorityId: String? = null
+    var actionFailure: Exception? = null
 
     fun emit(items: List<DownloadItem>) {
         _downloads.value = items
@@ -305,6 +332,7 @@ private class FakeDownloadRepository : DownloadRepository {
     }
 
     override suspend fun pauseDownload(downloadId: String) {
+        actionFailure?.let { throw it }
         lastPausedId = downloadId
     }
 
@@ -317,6 +345,7 @@ private class FakeDownloadRepository : DownloadRepository {
     }
 
     override suspend fun removeDownload(downloadId: String, deleteFile: Boolean) {
+        actionFailure?.let { throw it }
         lastRemovedId = downloadId
     }
 
@@ -333,4 +362,3 @@ private class FakeDownloadRepository : DownloadRepository {
 
     override suspend fun getDownload(downloadId: String): DownloadItem? = null
 }
-

@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import android.net.Uri
+import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,6 +43,7 @@ import dev.fetchx.downloads.ui.DownloadsViewModel
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import java.io.File
 
 /**
@@ -140,10 +142,14 @@ fun AppNavigation(initialUrl: String? = null) {
                                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            context.startActivity(
-                                android.content.Intent.createChooser(intent, "Play with...")
-                                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),
-                            )
+                            try {
+                                context.startActivity(
+                                    android.content.Intent.createChooser(intent, "Play with...")
+                                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                                )
+                            } catch (_: ActivityNotFoundException) {
+                                Toast.makeText(context, "No video player is installed", Toast.LENGTH_LONG).show()
+                            }
                         }
                     },
                 )
@@ -192,6 +198,8 @@ fun AppNavigation(initialUrl: String? = null) {
                                         navController.navigate(Screen.Downloads.route) {
                                             launchSingleTop = true
                                         }
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
                                     } catch (error: Exception) {
                                         Toast.makeText(
                                             context,
@@ -213,7 +221,11 @@ fun AppNavigation(initialUrl: String? = null) {
                                     setDataAndType(android.net.Uri.parse(url), "video/*")
                                     addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
-                                context.startActivity(intent)
+                                try {
+                                    context.startActivity(intent)
+                                } catch (_: ActivityNotFoundException) {
+                                    Toast.makeText(context, "No video player is installed", Toast.LENGTH_LONG).show()
+                                }
                             } else {
                                 android.widget.Toast.makeText(
                                     context,
