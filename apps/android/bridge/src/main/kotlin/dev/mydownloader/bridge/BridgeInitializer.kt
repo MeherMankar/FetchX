@@ -91,9 +91,11 @@ object BridgeInitializer {
 
                 val repo = BridgeDownloadRepository(svc)
                 repository = repo
+                initError = null
                 Log.i(TAG, "Bridge initialized successfully")
                 return repo
             } catch (e: Exception) {
+                initError = e
                 Log.e(TAG, "Bridge initialization failed: $e")
                 throw e
             }

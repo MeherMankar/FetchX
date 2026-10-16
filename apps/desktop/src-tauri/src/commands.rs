@@ -4,28 +4,28 @@ use std::{
 };
 
 use fetchx_core::StateMachineError;
+use fetchx_core_services::{ConfigService, CoreRepository, CoreServices, EngineRuntime};
 use fetchx_downloader::{YtDlpFormat, validate_http_source_url};
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
     EngineKind, FileName, Timestamp,
 };
-use fetchx_queue::{EventRepository, QueueError, QueueManager};
+use fetchx_queue::{QueueError, QueueManager};
 use fetchx_scheduler::{ScheduleError, Scheduler};
-use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
+use fetchx_storage::{Database, DownloadRepository};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::config::ConfigService;
-use crate::engines::EngineRuntime;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
 
 /// The concrete repository type used by the desktop application.
-pub(crate) type AppRepository = EventRepository<SqliteDownloadRepository>;
+pub(crate) type AppRepository = CoreRepository;
 
 pub struct AppState {
+    pub(crate) core_services: Option<Arc<CoreServices>>,
     _database: Database,
     pub(crate) repository: AppRepository,
     queue: QueueManager,
@@ -38,6 +38,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
     pub(crate) fn new(
         database: Database,
         repository: AppRepository,
@@ -48,6 +49,7 @@ impl AppState {
         engine_runtime: EngineRuntime,
     ) -> Self {
         Self {
+            core_services: None,
             _database: database,
             repository,
             queue,
@@ -56,6 +58,21 @@ impl AppState {
             shutdown_state: Arc::new(AtomicU8::new(0)),
             config_service,
             engine_runtime: Arc::new(engine_runtime),
+        }
+    }
+
+    pub(crate) fn from_core_services(core: CoreServices) -> Self {
+        let core_services = Arc::new(core);
+        Self {
+            _database: core_services.database.clone(),
+            repository: core_services.repository.clone(),
+            queue: core_services.queue().clone(),
+            scheduler: core_services.scheduler.clone(),
+            downloads_dir: core_services.downloads_dir.clone(),
+            shutdown_state: Arc::new(AtomicU8::new(0)),
+            config_service: core_services.config_service.clone(),
+            engine_runtime: Arc::clone(&core_services.engine_runtime),
+            core_services: Some(core_services),
         }
     }
 
@@ -157,6 +174,7 @@ impl AppState {
     pub(crate) fn clone_for_browser(&self) -> Self {
         Self {
             _database: self._database.clone(),
+            core_services: self.core_services.clone(),
             repository: self.repository.clone(),
             queue: self.queue.clone(),
             scheduler: self.scheduler.clone(),
@@ -827,8 +845,7 @@ mod tests {
         AddDownloadRequest, AppState, DownloadDto, IpcError, IpcErrorCode, extension_is_safe,
         filename_for_url, parse_download_id, validate_http_source_url,
     };
-    use crate::config::ConfigService;
-    use crate::engines::EngineRuntime;
+    use fetchx_core_services::{ConfigService, EngineConfig, EngineRuntime};
 
     struct WaitingEngine {
         repository: SqliteDownloadRepository,
@@ -896,9 +913,9 @@ mod tests {
         // EngineRuntime with only DirectHttp.  The runtime provides the dispatcher
         // reference stored in AppState, but the test scheduler uses WaitingEngine
         // so the existing test behaviour (wait for Downloading, then act) is preserved.
-        let engine_config = crate::config::EngineConfig::default();
+        let engine_config = EngineConfig::default();
         let engine_runtime =
-            EngineRuntime::initialize(repository.clone(), &engine_config, std::env::temp_dir())
+            EngineRuntime::initialize(repository.clone(), &engine_config, &std::env::temp_dir())
                 .await?;
 
         // Build scheduler with WaitingEngine so tests can observe lifecycle transitions.

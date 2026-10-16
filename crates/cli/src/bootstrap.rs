@@ -58,11 +58,15 @@ fn downloads_dir() -> PathBuf {
 /// Start the shared core services using the same paths as the desktop app.
 pub async fn start() -> Result<CoreServices, CoreServicesError> {
     let data_dir = app_data_dir();
-    let cfg = CoreServicesConfig {
+    start_with_config(CoreServicesConfig {
         database_path: data_dir.join("fetchx.db"),
         downloads_dir: downloads_dir(),
         runtime_dir: data_dir.join("runtime"),
-    };
+    })
+    .await
+}
+
+async fn start_with_config(cfg: CoreServicesConfig) -> Result<CoreServices, CoreServicesError> {
     tracing::debug!(
         database = %cfg.database_path.display(),
         downloads = %cfg.downloads_dir.display(),
@@ -74,4 +78,32 @@ pub async fn start() -> Result<CoreServices, CoreServicesError> {
 /// Returns the plugin directory: `{data_dir}/plugins/`.
 pub fn plugin_dir() -> Option<std::path::PathBuf> {
     Some(app_data_dir().join("plugins"))
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::start_with_config;
+    use fetchx_core_services::CoreServicesConfig;
+
+    #[tokio::test]
+    async fn cli_bootstrap_uses_shared_core_services() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = start_with_config(CoreServicesConfig {
+            database_path: root.path().join("fetchx.db"),
+            downloads_dir: root.path().join("downloads"),
+            runtime_dir: root.path().join("runtime"),
+        })
+        .await?;
+
+        assert!(
+            services
+                .engine_runtime
+                .is_available(fetchx_models::EngineKind::DirectHttp)
+        );
+        assert!(services.queue().snapshot().await?.items.is_empty());
+        services.shutdown().await?;
+        Ok(())
+    }
 }

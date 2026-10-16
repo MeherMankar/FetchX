@@ -1,20 +1,13 @@
-use std::{
-    path::PathBuf,
-    sync::{Arc, atomic::Ordering},
-};
+use std::sync::{Arc, atomic::Ordering};
 
-use fetchx_queue::{DownloadEvent, DownloadEventBus, EventRepository, QueueConfig};
-use fetchx_scheduler::Scheduler;
-use fetchx_storage::Database;
+use fetchx_core_services::{CoreServices, CoreServicesConfig};
+use fetchx_queue::{DownloadEvent, DownloadEventBus};
 use tauri::{Emitter, Manager, RunEvent};
-use tokio::fs;
 use tracing_subscriber::EnvFilter;
 
 use crate::browser_ipc::BrowserIpcServer;
 use crate::commands::{self, AppState, DownloadDto};
-use crate::config::ConfigService;
 use crate::engine_commands;
-use crate::engines::EngineRuntime;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
@@ -25,54 +18,20 @@ const SHUTDOWN_COMPLETE: u8 = 2;
 
 impl AppState {
     async fn initialize(
-        database_path: PathBuf,
-        downloads_dir: PathBuf,
+        database_path: std::path::PathBuf,
+        downloads_dir: std::path::PathBuf,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        if let Some(parent) = database_path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        fs::create_dir_all(&downloads_dir).await?;
-
-        // 1. Database
-        let database = Database::connect_path(database_path.clone()).await?;
-        let inner_repository = database.downloads();
-
-        // 2. Event bus wrapping the repository
-        let event_bus = DownloadEventBus::new();
-        let repository = EventRepository::new(inner_repository, event_bus);
-
-        // 3. Load persisted engine configuration
-        let config_service = ConfigService::new(database.config());
-        let engine_config = config_service.load().await.unwrap_or_default();
-
-        // 4. Initialize engines (optional engines degrade gracefully).
-        // The runtime directory lives beside the database in the app-data directory.
         let runtime_dir = database_path
             .parent()
             .map(|p| p.join("runtime"))
             .unwrap_or_else(|| std::env::temp_dir().join("fetchx-runtime"));
-        fs::create_dir_all(&runtime_dir).await?;
-        let engine_runtime =
-            EngineRuntime::initialize(repository.clone(), &engine_config, runtime_dir).await?;
-
-        // 5. Queue + Scheduler using the dispatcher
-        let scheduler = Scheduler::start(
-            repository.clone(),
-            engine_runtime.dispatcher.clone(),
-            QueueConfig::default(),
-        )
-        .await?;
-        let queue = scheduler.queue_manager();
-
-        Ok(AppState::new(
-            database,
-            repository,
-            scheduler,
-            queue,
+        let services = CoreServices::start(CoreServicesConfig {
+            database_path,
             downloads_dir,
-            config_service,
-            engine_runtime,
-        ))
+            runtime_dir,
+        })
+        .await?;
+        Ok(AppState::from_core_services(services))
     }
 }
 
@@ -197,16 +156,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ) {
                 Ok(_) => {
                     api.prevent_exit();
+                    let core_services = state.core_services.clone();
                     let scheduler = state.scheduler.clone();
                     let engine_runtime = state.engine_runtime.clone();
                     let app_handle = app_handle.clone();
                     let shutdown_state = Arc::clone(&state.shutdown_state);
                     tauri::async_runtime::spawn(async move {
-                        // Shut down scheduler + queue first, then optional engines.
-                        if let Err(error) = scheduler.shutdown().await {
-                            tracing::error!(%error, "scheduler failed to shut down cleanly");
+                        if let Some(core_services) = core_services {
+                            if let Err(error) = core_services.shutdown().await {
+                                tracing::error!(%error, "core services failed to shut down cleanly");
+                            }
+                        } else {
+                            if let Err(error) = scheduler.shutdown().await {
+                                tracing::error!(%error, "scheduler failed to shut down cleanly");
+                            }
+                            if let Err(error) = engine_runtime.shutdown().await {
+                                tracing::error!(%error, "engine runtime failed to shut down cleanly");
+                            }
                         }
-                        engine_runtime.shutdown().await;
                         // Shut down browser IPC server if it is running.
                         if let Some(browser_server) = app_handle.try_state::<BrowserIpcServer>() {
                             browser_server.shutdown().await;
@@ -226,4 +193,33 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::AppState;
+
+    #[tokio::test]
+    async fn desktop_state_initializes_through_core_services()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let state =
+            AppState::initialize(root.path().join("fetchx.db"), root.path().join("downloads"))
+                .await?;
+
+        let core_services = state
+            .core_services
+            .as_ref()
+            .ok_or("CoreServices was not retained by desktop state")?;
+        assert!(
+            core_services
+                .engine_runtime
+                .is_available(fetchx_models::EngineKind::DirectHttp)
+        );
+        assert!(core_services.queue().snapshot().await?.items.is_empty());
+        core_services.shutdown().await?;
+        Ok(())
+    }
 }

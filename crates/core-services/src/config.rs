@@ -175,3 +175,84 @@ impl ConfigService {
         Ok(defaults)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use fetchx_storage::Database;
+
+    use super::{Aria2Config, ConfigError, ConfigService, EngineConfig};
+
+    async fn service() -> ConfigService {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database should initialize");
+        ConfigService::new(database.config())
+    }
+
+    #[tokio::test]
+    async fn defaults_persist_and_reset() {
+        let service = service().await;
+        let defaults = service.load().await.expect("defaults should load");
+        assert_eq!(defaults.version, 1);
+        assert!(!defaults.aria2.enabled);
+        assert!(!defaults.yt_dlp.enabled);
+
+        let mut changed = defaults;
+        changed.aria2.enabled = true;
+        service.save(&changed).await.expect("config should save");
+        service.reset().await.expect("reset should save defaults");
+        assert!(
+            !service
+                .load()
+                .await
+                .expect("reset config loads")
+                .aria2
+                .enabled
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_aria2_configuration() {
+        let mut config = EngineConfig::default();
+        config.aria2.rpc_port = 0;
+        assert!(matches!(config.validate(), Err(ConfigError::InvalidPort)));
+
+        config.aria2 = Aria2Config {
+            rpc_secret: Some("secret with spaces".to_owned()),
+            ..Aria2Config::default()
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::SecretHasWhitespace)
+        ));
+    }
+
+    #[tokio::test]
+    async fn corrupt_configuration_falls_back_but_future_version_fails() {
+        let service = service().await;
+        service
+            .repo
+            .set(super::CONFIG_KEY, "not valid JSON")
+            .await
+            .expect("corrupt value should be storable");
+        assert_eq!(
+            service
+                .load()
+                .await
+                .expect("corrupt config falls back")
+                .version,
+            1
+        );
+
+        let future = r#"{"version":99,"direct_http":{"enabled":true},"aria2":{"enabled":false,"executable_path":null,"rpc_port":6800,"rpc_secret":null},"yt_dlp":{"enabled":false,"executable_path":null}}"#;
+        service
+            .repo
+            .set(super::CONFIG_KEY, future)
+            .await
+            .expect("future config should be storable");
+        assert!(matches!(
+            service.load().await,
+            Err(ConfigError::UnsupportedVersion(99))
+        ));
+    }
+}

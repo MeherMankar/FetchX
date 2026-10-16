@@ -11,14 +11,14 @@
 
 use std::{path::PathBuf, time::Duration};
 
+use fetchx_core_services::{
+    Aria2Config, ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
+};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::{fs, process::Command};
 
-use crate::{
-    commands::AppState,
-    config::{Aria2Config, ConfigError, EngineConfig, YtDlpConfig as PersistedYtDlpConfig},
-};
+use crate::commands::AppState;
 
 // ============================================================
 // Request / response DTOs
@@ -330,10 +330,7 @@ pub struct EngineStatusDto {
     pub yt_dlp: EngineInstanceStatusDto,
 }
 
-pub(crate) fn engine_instance_dto(
-    avail: &crate::engines::EngineAvailability,
-) -> EngineInstanceStatusDto {
-    use crate::engines::EngineAvailability;
+pub(crate) fn engine_instance_dto(avail: &EngineAvailability) -> EngineInstanceStatusDto {
     match avail {
         EngineAvailability::Disabled => EngineInstanceStatusDto {
             enabled: false,

@@ -1,7 +1,7 @@
 //! Platform-independent service bootstrap for FetchX.
 //!
-//! Both the Tauri desktop application and the CLI share the same core
-//! services: database, repository, engine runtime, queue, and scheduler.
+//! The Tauri desktop application, Android bridge, CLI, and future headless
+//! server share the same database, repository, engine runtime, queue, and scheduler.
 //! This crate provides a single [`CoreServices`] type that wires them
 //! together from explicit paths, without any Tauri or GUI dependency.
 //!
@@ -37,10 +37,12 @@ use fetchx_queue::{DownloadEventBus, EventRepository, QueueConfig, QueueManager}
 use fetchx_scheduler::Scheduler;
 use fetchx_storage::{Database, SqliteDownloadRepository};
 use thiserror::Error;
-use tokio::{fs, process::Command, time::Duration};
+use tokio::{fs, process::Command, sync::Mutex, time::Duration};
 use tracing::{info, warn};
 
-pub use config::{Aria2Config, ConfigService, DirectHttpConfig, EngineConfig, YtDlpConfig};
+pub use config::{
+    Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, YtDlpConfig,
+};
 pub use engine_status::{EngineAvailability, EngineRuntimeStatus};
 
 pub mod config;
@@ -71,7 +73,7 @@ pub struct CoreServicesConfig {
 
 /// Owns the live service graph: database, event bus, engines, queue, scheduler.
 ///
-/// Drop-in for both the desktop `AppState` and the CLI.
+/// Shared service owner used by desktop, Android, CLI, and headless hosts.
 pub struct CoreServices {
     pub database: Database,
     pub repository: CoreRepository,
@@ -81,6 +83,7 @@ pub struct CoreServices {
     pub scheduler: Scheduler<CoreRepository>,
     queue: QueueManager,
     pub downloads_dir: PathBuf,
+    shutdown_complete: Mutex<bool>,
 }
 
 impl CoreServices {
@@ -133,8 +136,14 @@ impl CoreServices {
         let config_service = ConfigService::new(database.config());
         let engine_config = match engine_config_override {
             Some(config) => config,
-            None => config_service.load().await.unwrap_or_default(),
+            None => config_service
+                .load()
+                .await
+                .map_err(CoreServicesError::Config)?,
         };
+        engine_config
+            .validate()
+            .map_err(CoreServicesError::Config)?;
 
         // Engine runtime
         let engine_runtime = EngineRuntime::initialize_with_ytdlp_runner(
@@ -146,13 +155,21 @@ impl CoreServices {
         .await?;
 
         // Queue + Scheduler
-        let scheduler = Scheduler::start(
+        let scheduler = match Scheduler::start(
             repository.clone(),
             engine_runtime.dispatcher.clone(),
             QueueConfig::default(),
         )
         .await
-        .map_err(|e| CoreServicesError::Queue(e.to_string()))?;
+        {
+            Ok(scheduler) => scheduler,
+            Err(error) => {
+                if let Err(cleanup_error) = engine_runtime.shutdown().await {
+                    warn!(%cleanup_error, "engine shutdown failed after scheduler startup failure");
+                }
+                return Err(CoreServicesError::Queue(error.to_string()));
+            }
+        };
         let queue = scheduler.queue_manager();
 
         Ok(Self {
@@ -164,6 +181,7 @@ impl CoreServices {
             scheduler,
             queue,
             downloads_dir: cfg.downloads_dir,
+            shutdown_complete: Mutex::new(false),
         })
     }
 
@@ -186,20 +204,30 @@ impl CoreServices {
 
     // ── Shutdown ──────────────────────────────────────────────────────────
 
-    /// Gracefully shuts down all services.
+    /// Gracefully shuts down all services. Repeated and concurrent calls are safe.
     ///
-    /// Order: scheduler → queue → optional engines.
-    pub async fn shutdown(self) -> Result<(), CoreServicesError> {
-        if let Err(e) = self.scheduler.shutdown().await {
-            warn!(error = %e, "scheduler shutdown error");
+    /// Order: scheduler/queue → optional engines. Storage closes when the service graph drops.
+    pub async fn shutdown(&self) -> Result<(), CoreServicesError> {
+        let mut shutdown_complete = self.shutdown_complete.lock().await;
+        if *shutdown_complete {
+            return Ok(());
         }
-        self.engine_runtime.shutdown().await;
+        let scheduler_result = self.scheduler.shutdown().await;
+        let engine_result = self.engine_runtime.shutdown().await;
+        *shutdown_complete = true;
+
+        if let Err(error) = scheduler_result {
+            return Err(CoreServicesError::Shutdown(error.to_string()));
+        }
+        if let Err(error) = engine_result {
+            return Err(CoreServicesError::Shutdown(error.to_string()));
+        }
         Ok(())
     }
 }
 
 // ============================================================
-// EngineRuntime (extracted from desktop engines.rs)
+// Shared engine runtime
 // ============================================================
 
 pub struct EngineRuntime {
@@ -242,8 +270,8 @@ impl EngineRuntime {
         log_avail("yt-dlp", &ytdlp_avail);
         info!(engine = "hls", "engine ready");
 
-        let mut dispatcher = EngineDispatcher::new(repository, direct_http, aria2_engine)
-            .with_hls(hls_engine);
+        let mut dispatcher =
+            EngineDispatcher::new(repository, direct_http, aria2_engine).with_hls(hls_engine);
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
@@ -258,13 +286,14 @@ impl EngineRuntime {
         })
     }
 
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Result<(), CoreServicesError> {
         if let Some(sup) = &self.aria2_supervisor {
-            match sup.shutdown().await {
-                Ok(()) => info!("aria2 supervisor shut down"),
-                Err(e) => warn!(error = %e, "aria2 shutdown error"),
-            }
+            sup.shutdown()
+                .await
+                .map_err(|error| CoreServicesError::Shutdown(error.to_string()))?;
+            info!("aria2 supervisor shut down");
         }
+        Ok(())
     }
 
     /// `true` when `kind` is currently available at runtime.
@@ -412,4 +441,135 @@ pub enum CoreServicesError {
     Engine(String),
     #[error("queue error: {0}")]
     Queue(String),
+    #[error("configuration error: {0}")]
+    Config(#[from] ConfigError),
+    #[error("service shutdown error: {0}")]
+    Shutdown(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use fetchx_models::{
+        DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSource,
+        DownloadStatus, EngineKind, FileName, Timestamp,
+    };
+    use fetchx_storage::DownloadRepository;
+
+    use super::{CoreServices, CoreServicesConfig, EngineAvailability};
+
+    fn config(root: &std::path::Path) -> CoreServicesConfig {
+        CoreServicesConfig {
+            database_path: root.join("fetchx.db"),
+            downloads_dir: root.join("downloads"),
+            runtime_dir: root.join("runtime"),
+        }
+    }
+
+    #[tokio::test]
+    async fn starts_shared_graph_and_shutdown_is_idempotent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+
+        assert!(services.engine_runtime.is_available(EngineKind::DirectHttp));
+        assert!(services.engine_runtime.is_available(EngineKind::Hls));
+        assert!(services.queue().snapshot().await?.items.is_empty());
+
+        let (first, second) = tokio::join!(services.shutdown(), services.shutdown());
+        first?;
+        second?;
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_service_graphs_can_start_and_stop_independently()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first_root = tempdir()?;
+        let second_root = tempdir()?;
+        let (first, second) = tokio::try_join!(
+            CoreServices::start(config(first_root.path())),
+            CoreServices::start(config(second_root.path()))
+        )?;
+
+        let (first_result, second_result) = tokio::join!(first.shutdown(), second.shutdown());
+        first_result?;
+        second_result?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persists_configuration_and_reports_optional_engine_start_failure()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{Aria2Config, ConfigService, EngineConfig, YtDlpConfig};
+        use fetchx_storage::Database;
+
+        let root = tempdir()?;
+        let paths = config(root.path());
+        let database = Database::connect_path(&paths.database_path).await?;
+        let config_service = ConfigService::new(database.config());
+        let engine_config = EngineConfig {
+            aria2: Aria2Config {
+                enabled: true,
+                executable_path: Some(root.path().join("missing-aria2")),
+                ..Aria2Config::default()
+            },
+            yt_dlp: YtDlpConfig {
+                enabled: true,
+                executable_path: Some(root.path().join("missing-yt-dlp")),
+            },
+            ..EngineConfig::default()
+        };
+        config_service.save(&engine_config).await?;
+        drop(database);
+
+        let services = CoreServices::start(paths).await?;
+        assert!(matches!(
+            &services.engine_runtime.status.yt_dlp,
+            EngineAvailability::Unavailable { .. }
+        ));
+        assert!(matches!(
+            &services.engine_runtime.status.aria2,
+            EngineAvailability::Unavailable { .. }
+        ));
+        assert!(services.config_service.load().await?.yt_dlp.enabled);
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restart_recovers_persisted_download_state() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let paths = config(root.path());
+        let services = CoreServices::start(paths.clone()).await?;
+        let now = Timestamp::now()?;
+        let id = DownloadId::new();
+        let item = DownloadItem::from_parts(
+            id,
+            DownloadSource::new("https://example.com/file.zip", EngineKind::DirectHttp)?,
+            FileName::new("file.zip")?,
+            paths.downloads_dir.join("file.zip"),
+            DownloadStatus::Paused,
+            DownloadPriority::default(),
+            DownloadProgress::default(),
+            now,
+            now,
+            None,
+        )?;
+        services.repository.create(&item).await?;
+        services.shutdown().await?;
+
+        let restarted = CoreServices::start(paths).await?;
+        let recovered = restarted
+            .repository
+            .get(id)
+            .await?
+            .ok_or("persisted download missing after restart")?;
+        assert_eq!(recovered.status(), DownloadStatus::Paused);
+        restarted.shutdown().await?;
+        Ok(())
+    }
 }

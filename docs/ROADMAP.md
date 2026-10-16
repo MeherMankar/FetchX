@@ -78,7 +78,7 @@ Each phase documents coverage using these categories:
 ## Phase Dependency Graph
 
 ```
-Phases 1-20O (Completed)
+Phases 1-20P (Completed)
         |
         +-------------------------------------------+
         |                                           |
@@ -1110,6 +1110,11 @@ Global settings correctly propagate to GeckoView. UI tested on device.
 
 ### Phase 20P -- CoreServices Consolidation (CRITICAL)
 
+**Status: IMPLEMENTATION COMPLETE.** Windows, Android, and CLI now use the
+shared `CoreServices` graph. Rust tests, Windows desktop/CLI builds, Android
+native bridge builds, and Android debug/release APK builds pass. A device
+startup smoke test remains unverified when no Android device is connected.
+
 **Goal:** Make `crates/core-services` the single service bootstrap/graph shared by
 Windows, Android, CLI, and future headless server.
 
@@ -1124,22 +1129,29 @@ Server        -+
 ```
 
 **Tasks:**
-- Migrate desktop Tauri initialization to `crates/core-services` (currently partial)
-- Integrate Android Bridge with shared CoreServices (already done; verify completeness)
-- Eliminate duplicated service construction in desktop AppState
-- Unify: storage init, queue init, scheduler init, engine init, event bus, config,
+- [x] Migrate desktop Tauri initialization to `crates/core-services`
+- [x] Integrate Android Bridge with shared CoreServices
+- [x] Remove duplicate production service construction from desktop AppState
+- [x] Unify storage, queue, scheduler, engines, event bus, configuration,
   shutdown lifecycle, error handling, dependency injection
-- Ensure CLI and desktop use the same service graph (not just the same design)
+- [x] Ensure CLI and desktop use the same service graph
 
-**Windows requirements:** Desktop AppState migrated; no duplicate service init code.
-**Android requirements:** BridgeInitializer verified to use exactly the same CoreServices.
-**CLI requirements:** Already uses CoreServices; verify no divergence after desktop migration.
+**Windows requirements:** Met; desktop AppState retains the CoreServices owner and
+only exposes cloned service handles to Tauri commands.
+**Android requirements:** Met; BridgeInitializer owns the Rust bridge, whose
+DownloadService constructs CoreServices.
+**CLI requirements:** Met; CLI bootstrap uses CoreServices with host-specific paths.
 
-**Tests:** startup, shutdown, duplicate-init, concurrent-init, persistence recovery,
-engine-startup failure, graceful engine shutdown.
+**Tests:** Shared graph startup/shutdown and repeated/concurrent shutdown,
+concurrent independent startups, persisted state recovery, engine startup failures,
+desktop bootstrap, CLI bootstrap, and Android bridge service initialization/shutdown.
 
 **Exit criteria:** Desktop and CLI use identical CoreServices/service graph.
 No duplicated service initialization in any client.
+
+**Device validation:** Android arm64/x86_64 Rust bridge and debug/release APKs
+build successfully. Device launch validation is pending because no Android
+device was connected during this phase.
 
 **Dependencies:** Phases 1-20O completed.
 
@@ -1653,15 +1665,14 @@ The objective is architectural improvement, not Motrix duplication.
 
 ## Cross-Platform Alignment Required
 
-The following completed phases currently have gaps in cross-platform coverage
-that should be addressed in Phase 20P or dedicated alignment tasks:
+The following completed phases still have gaps in cross-platform coverage that
+require dedicated alignment tasks:
 
 | Phase | Gap | Resolution |
 |-------|-----|-----------|
 | 11B | aria2 not bundled for Android | Phase 26B |
 | 12 | yt-dlp not bundled for Android | Phase 26B |
 | 13 | FFmpeg not bundled for Android | Phase 26B |
-| 14A-16C | Desktop not yet migrated to shared CoreServices | Phase 20P |
 | 17 | Android does not accept browser-extension connections | Phase 21I |
 | 19 | Android does not yet support plugin processes | Phase 20P+ |
 | 20D | Windows download UI not aligned with Android UI patterns | Phase 20P |

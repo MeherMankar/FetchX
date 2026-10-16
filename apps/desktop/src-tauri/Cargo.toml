@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 fetchx-browser-protocol = { path = "../../../crates/browser-protocol" }
+fetchx-core-services = { path = "../../../crates/core-services" }
 fetchx-core = { path = "../../../crates/core" }
 fetchx-downloader = { path = "../../../crates/downloader" }
 fetchx-models = { path = "../../../crates/models" }
@@ -31,4 +32,4 @@ workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-
+tempfile = "3"

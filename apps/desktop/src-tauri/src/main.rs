@@ -4,9 +4,7 @@
 mod app;
 mod browser_ipc;
 mod commands;
-mod config;
 mod engine_commands;
-mod engines;
 mod events;
 
 fn main() {
