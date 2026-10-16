@@ -827,7 +827,7 @@ fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -
         "--format".into(),
         selected_format.into(),
         "--concurrent-fragments".into(),
-        "1".into(),
+        "4".into(),
         "--hls-prefer-native".into(),
         "--newline".into(),
         "--progress-template".into(),
@@ -1709,6 +1709,12 @@ mod tests {
                     .arguments
                     .contains(&"--concurrent-fragments".to_owned())
             );
+            let concurrent_fragments_index = state
+                .arguments
+                .iter()
+                .position(|argument| argument == "--concurrent-fragments")
+                .ok_or("missing concurrent fragments option")?;
+            assert_eq!(state.arguments[concurrent_fragments_index + 1], "4");
             assert!(state.arguments.contains(&"--extractor-args".to_owned()));
             let delimiter = state
                 .arguments
