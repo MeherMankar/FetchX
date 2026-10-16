@@ -67,14 +67,16 @@ class BridgeDownloadRepository(
                 // Refresh the snapshot on every event so observeDownloads() stays current.
                 val generation = refreshGeneration.incrementAndGet()
                 externalScope.launch {
-                    val items = withContext(Dispatchers.IO) {
-                        service.listDownloads().map(::mapItem)
+                    try {
+                        val items = withContext(Dispatchers.IO) {
+                            service.listDownloads().map(::mapItem)
+                        }
+                        if (generation == refreshGeneration.get()) _downloads.value = items
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        Log.e(TAG, "Could not refresh download snapshot after event", error)
                     }
-                    if (generation == refreshGeneration.get()) _downloads.value = items
-                } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    Log.e(TAG, "Could not refresh download snapshot after event", error)
                 }
             }
         })
