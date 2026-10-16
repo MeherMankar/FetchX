@@ -669,6 +669,12 @@ async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
     assert_eq!(tokio::fs::metadata(destination).await?.len(), TOTAL as u64);
     assert_eq!(completed.status(), DownloadStatus::Completed);
     assert_eq!(completed.progress().downloaded_bytes(), TOTAL as u64);
+    assert!(
+        completed
+            .progress()
+            .speed_bytes_per_second()
+            .is_some_and(|speed| speed > 0)
+    );
     let part_path = PathBuf::from(format!(
         "{}.part",
         directory.destination("segmented.bin").display()
@@ -1366,6 +1372,35 @@ async fn downloads_small_empty_unknown_length_and_large_files() -> Result<(), Bo
         assert!(!PathBuf::from(format!("{}.part", destination.display())).exists());
     }
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn single_stream_download_persists_measured_speed_and_eta() -> Result<(), Box<dyn Error>> {
+    let body = vec![42_u8; 128 * 1024];
+    let mut response = ServerResponse::ok(body.clone());
+    response.body_chunks = body.chunks(16 * 1024).map(<[u8]>::to_vec).collect();
+    response.delay_between_chunks = Duration::from_millis(25);
+    let (url, server) = start_server(response).await?;
+    let config = HttpEngineConfig {
+        minimum_segmented_file_size: u64::MAX,
+        progress_bytes_interval: 16 * 1024,
+        progress_time_interval: Duration::from_millis(20),
+        ..HttpEngineConfig::default()
+    };
+    let (database, engine, directory) = setup_engine(config).await?;
+    let destination = directory.destination("single-stream-speed.bin");
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    server.await?;
+
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert!(
+        completed
+            .progress()
+            .speed_bytes_per_second()
+            .is_some_and(|speed| speed > 0)
+    );
+    assert_eq!(completed.progress().estimated_remaining_seconds(), Some(0));
     Ok(())
 }
 

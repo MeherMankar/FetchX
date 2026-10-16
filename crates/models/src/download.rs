@@ -34,21 +34,49 @@ impl DownloadSource {
         format_id: impl Into<String>,
     ) -> Result<Self, DownloadSourceError> {
         let format_id = format_id.into();
-        if self.engine != EngineKind::YtDlp
-            || format_id.is_empty()
-            || format_id.len() > 128
-            || !format_id
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphanumeric)
-            || !format_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-        {
+        if self.engine != EngineKind::YtDlp || !Self::is_valid_yt_dlp_format_selector(&format_id) {
             return Err(DownloadSourceError::InvalidYtDlpFormat);
         }
         self.yt_dlp_format = Some(format_id);
         Ok(self)
+    }
+
+    fn is_valid_yt_dlp_format_selector(selector: &str) -> bool {
+        if selector.is_empty() || selector.len() > 128 {
+            return false;
+        }
+
+        let mut alternatives = selector.split('/');
+        let Some(video_format) = alternatives.next() else {
+            return false;
+        };
+        if alternatives.clone().count() > 1 {
+            return false;
+        }
+
+        let mut tracks = video_format.split('+');
+        let Some(video_id) = tracks.next() else {
+            return false;
+        };
+        if !Self::is_valid_yt_dlp_format_id(video_id) {
+            return false;
+        }
+        match tracks.next() {
+            None => alternatives.next().is_none(),
+            Some("bestaudio") => alternatives.next() == Some(video_id) && tracks.next().is_none(),
+            Some(_) => false,
+        }
+    }
+
+    fn is_valid_yt_dlp_format_id(format_id: &str) -> bool {
+        !format_id.is_empty()
+            && format_id
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && format_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
     }
 
     #[must_use]
@@ -427,6 +455,10 @@ mod tests {
         assert_eq!(restored, source);
         assert_eq!(restored.yt_dlp_format(), Some("137"));
 
+        let adaptive_source = DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+            .with_yt_dlp_format("137+bestaudio/137")?;
+        assert_eq!(adaptive_source.yt_dlp_format(), Some("137+bestaudio/137"));
+
         assert!(
             DownloadSource::new("https://example.com/video", EngineKind::DirectHttp)?
                 .with_yt_dlp_format("137")
@@ -437,6 +469,19 @@ mod tests {
                 .with_yt_dlp_format("--exec")
                 .is_err()
         );
+        for selector in [
+            "137+bad-audio/137",
+            "137+bestaudio/138",
+            "137+bestaudio/137/138",
+            "137;exec/137",
+        ] {
+            assert!(
+                DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+                    .with_yt_dlp_format(selector)
+                    .is_err(),
+                "unexpectedly accepted selector: {selector}"
+            );
+        }
         Ok(())
     }
 

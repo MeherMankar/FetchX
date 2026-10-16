@@ -120,7 +120,13 @@ class BridgeDownloadRepository(
     override suspend fun discoverMediaFormats(url: String): List<YtDlpFormat> =
         withContext(Dispatchers.IO) {
             service.discoverMediaFormats(url).map { format ->
-                YtDlpFormat(format.formatId, format.label, format.extension)
+                YtDlpFormat(
+                    format.formatId,
+                    format.label,
+                    format.extension,
+                    format.title,
+                    format.platform,
+                )
             }
     }
 

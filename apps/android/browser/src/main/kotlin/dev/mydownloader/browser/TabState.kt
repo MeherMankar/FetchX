@@ -9,9 +9,11 @@ data class TabState(
     val url: String = "about:blank",
     val title: String? = null,
     val isLoading: Boolean = false,
+    val progress: Int = 0,
     val canGoBack: Boolean = false,
     val canGoForward: Boolean = false,
     val errorText: String? = null,
     /** The Space (profile) this tab belongs to. */
     val spaceId: String = "default",
 )
+

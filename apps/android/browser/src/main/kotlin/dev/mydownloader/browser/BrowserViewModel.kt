@@ -1,6 +1,7 @@
 package dev.fetchx.browser
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Log
@@ -110,10 +111,17 @@ data class BrowserUiState(
     val mediaFormats: List<YtDlpFormat> = emptyList(),
     val isDiscoveringMediaFormats: Boolean = false,
     val mediaFormatError: String? = null,
+    val pendingDownload: PendingDownload? = null,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
     val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
 }
+
+data class PendingDownload(
+    val url: String,
+    val filename: String? = null,
+)
+
 
 class BrowserViewModel internal constructor(
     internal val bookmarkController: BookmarkController = BookmarkController(),
@@ -130,6 +138,7 @@ class BrowserViewModel internal constructor(
     private var runtime: GeckoRuntime? = null
     private var applicationContext: Context? = null
     private var searchPreferences: SharedPreferences? = null
+    private var browserDataPreferences: SharedPreferences? = null
     private var searchSuggestionJob: Job? = null
     private var extensionManager: ExtensionManager? = null
     private var extensionStateListener: (() -> Unit)? = null
@@ -144,7 +153,7 @@ class BrowserViewModel internal constructor(
 
     /**
      * Called from the AndroidView factory (and on recomposition).
-     * First call: creates the TabManager and the initial tab.
+     * First call: creates the TabManager, restores saved tabs and bookmarks.
      * Subsequent calls: re-attaches the active session to the (potentially new) GeckoView.
      */
     fun attachView(view: GeckoView, runtime: GeckoRuntime) {
@@ -152,6 +161,11 @@ class BrowserViewModel internal constructor(
         this.runtime = runtime
         applicationContext = view.context.applicationContext
         loadSearchSettings(view.context.applicationContext)
+        loadSavedPrivacySettings()
+        val savedBookmarks = loadSavedBookmarks()
+        if (savedBookmarks.isNotEmpty()) {
+            bookmarkController.loadBookmarks(savedBookmarks)
+        }
         val manager = extensionManager ?: GeckoRuntimeHolder.getExtensionManager(runtime).also {
             extensionManager = it
         }
@@ -166,8 +180,18 @@ class BrowserViewModel internal constructor(
             newTm.onStateChanged = ::rebuildState
             newTm.onNavigationStateChanged = ::updateNavigationState
             newTm.onVideoDetected = ::onVideoDetected
-            newTm.createTab()
-            Log.i(TAG, "TabManager initialized with first tab")
+            newTm.onDownloadRequested = { url, filename ->
+                _uiState.update { it.copy(pendingDownload = PendingDownload(url, filename)) }
+            }
+            newTm.onExternalUriRequested = ::openExternalUri
+            val restoredTabs = loadSavedTabs()
+            val restoredActiveId = loadSavedActiveTabId()
+            if (restoredTabs.isNotEmpty()) {
+                newTm.restoreTabs(restoredTabs, restoredActiveId)
+            } else {
+                newTm.createTab()
+            }
+            Log.i(TAG, "TabManager initialized")
         }
         // Always attach the active session to the current view.
         tm.activeSession()?.let { view.setSession(it) }
@@ -177,6 +201,10 @@ class BrowserViewModel internal constructor(
     private fun rebuildState() {
         val tm = tabManager ?: return
         val activeId = tm.activeTabId()
+        val previousActiveId = _uiState.value.activeTabId
+        if (activeId != null && activeId != previousActiveId) {
+            reattachActiveSession()
+        }
         val tabs = tm.allTabStates()
         val activeUrl = tabs.find { it.id == activeId }?.url ?: "about:blank"
         val historyEntries = tm.historyForActiveTab()
@@ -204,6 +232,8 @@ class BrowserViewModel internal constructor(
                 essentials = essentialsStore.mostVisited(tm.allHistory()),
             )
         }
+        saveCurrentTabs(tabs, activeId)
+        saveBookmarks(bState.bookmarks)
     }
 
     private fun updateNavigationState(tabId: String, tab: TabState) {
@@ -227,9 +257,18 @@ class BrowserViewModel internal constructor(
         reattachActiveSession()
     }
 
+    fun closeAllTabs(spaceId: String? = null) {
+        tabManager?.closeAllTabs(spaceId)
+        reattachActiveSession()
+    }
+
     fun selectTab(tabId: String) {
         tabManager?.selectTab(tabId)
         reattachActiveSession()
+    }
+
+    fun clearPendingDownload() {
+        _uiState.update { it.copy(pendingDownload = null) }
     }
 
     // ──Navigation ─────────────────────────────────────────────────────────
@@ -373,7 +412,6 @@ class BrowserViewModel internal constructor(
         }
         val pageUrl = _uiState.value.activeTab?.url
             ?.takeIf { it.startsWith("http") }
-        val downloadUrl = pageUrl ?: video.url
         _uiState.update {
             it.copy(
                 pendingMediaVideo = video,
@@ -384,9 +422,34 @@ class BrowserViewModel internal constructor(
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val formats = repo.discoverMediaFormats(downloadUrl)
+                var formats: List<dev.fetchx.core.download.YtDlpFormat> = emptyList()
+                var discoveryError: Exception? = null
+                // 1. Try pageUrl first (allows yt-dlp to find all qualities/audio-merge formats)
+                if (pageUrl != null) {
+                    try {
+                        formats = repo.discoverMediaFormats(pageUrl)
+                    } catch (e: Exception) {
+                        discoveryError = e
+                        Log.w(TAG, "Format discovery on pageUrl failed, falling back to stream url", e)
+                    }
+                }
+                // 2. If pageUrl discovery was empty or failed, try direct video stream url
+                if (formats.isEmpty() && video.url.isNotBlank() && video.url != pageUrl) {
+                    try {
+                        formats = repo.discoverMediaFormats(video.url)
+                    } catch (e: Exception) {
+                        if (discoveryError == null) discoveryError = e
+                        Log.w(TAG, "Format discovery on video.url failed", e)
+                    }
+                }
                 _uiState.update {
-                    it.copy(mediaFormats = formats, isDiscoveringMediaFormats = false)
+                    it.copy(
+                        mediaFormats = formats,
+                        isDiscoveringMediaFormats = false,
+                        mediaFormatError = if (formats.isEmpty() && discoveryError != null && video.url.isBlank())
+                            discoveryError.message ?: "Format discovery failed."
+                        else null,
+                    )
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -417,6 +480,9 @@ class BrowserViewModel internal constructor(
         video: DetectedVideo,
         formatId: String? = null,
         extension: String? = null,
+        formatLabel: String? = null,
+        videoTitle: String? = null,
+        platformName: String? = null,
     ) {
         val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
             Log.w(TAG, "downloadDetectedVideo: bridge not initialized")
@@ -430,20 +496,34 @@ class BrowserViewModel internal constructor(
         )
         val pageUrl = _uiState.value.activeTab?.url
             ?.takeIf { it.startsWith("http") }
-        val downloadUrl = pageUrl ?: video.url
-        val baseName = video.suggestedFilename
-            .substringBefore(".m3u8")
-            .substringBefore(".mpd")
-            .substringBeforeLast(".")
-            .ifBlank { "video" }
-        val safeExtension = extension
-            ?.takeIf {
-                it.length in 1..10 && it.all { character ->
-                    character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9'
-                }
-            }
-            ?: "mp4"
-        val fileName = "$baseName.$safeExtension"
+        // If a specific format was chosen from page format discovery, pass pageUrl.
+        // Otherwise, if this is a direct intercepted stream or default, download direct video stream url.
+        val downloadUrl = if (formatId != null && pageUrl != null) pageUrl else (video.url.takeIf { it.isNotBlank() } ?: pageUrl ?: "")
+        val discoveredMetadata = _uiState.value.mediaFormats
+            .firstOrNull { it.formatId == formatId }
+            ?: _uiState.value.mediaFormats.firstOrNull()
+        val rawTitle = _uiState.value.activeTab?.title
+            ?.takeIf { it.isNotBlank() && !it.startsWith("http://") && !it.startsWith("https://") }
+        val title = videoTitle
+            ?.takeIf { it.isNotBlank() }
+            ?: discoveredMetadata?.title
+                ?.takeIf { it.isNotBlank() }
+            ?: rawTitle
+            ?: video.suggestedFilename
+        val platform = platformName
+            ?.takeIf { it.isNotBlank() }
+            ?: discoveredMetadata?.platform
+                ?.takeIf { it.isNotBlank() }
+            ?: runCatching {
+                java.net.URI(downloadUrl).host?.removePrefix("www.")
+            }.getOrNull()
+        val desiredName = buildMediaFileName(
+            title = title,
+            quality = formatLabel,
+            platform = platform,
+            extension = extension,
+        )
+        val fileName = generateUniqueFileName(destDir, desiredName)
         val destPath = java.io.File(destDir, fileName).absolutePath
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -706,6 +786,7 @@ class BrowserViewModel internal constructor(
     private fun syncPrivacySettings() {
         val settings = privacyController.settings.value
         _uiState.update { it.copy(privacySettings = settings) }
+        savePrivacySettings(settings)
     }
 
     private fun syncExtensionManagerState() {
@@ -977,6 +1058,131 @@ class BrowserViewModel internal constructor(
         tabManager?.activeSession()?.let { view.setSession(it) }
     }
 
+    private fun openExternalUri(uriString: String) {
+        val context = applicationContext ?: return
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uriString)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not open external app for URI: $uriString", e)
+        }
+    }
+
+    private fun loadSavedTabs(): List<TabState> {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return emptyList()
+
+        val raw = prefs.getString(SAVED_TABS_KEY, null) ?: return emptyList()
+        return raw.split("\n").mapNotNull { line ->
+            val parts = line.split("\t\t")
+            if (parts.size >= 4) {
+                TabState(
+                    id = parts[0],
+                    url = parts[1],
+                    title = parts[2].takeIf { it.isNotBlank() },
+                    spaceId = parts[3],
+                )
+            } else null
+        }
+    }
+
+    private fun loadSavedActiveTabId(): String? {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return null
+        return prefs.getString(SAVED_ACTIVE_TAB_ID_KEY, null)?.takeIf { it.isNotBlank() }
+    }
+
+    private fun saveCurrentTabs(tabs: List<TabState>, activeId: String?) {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return
+
+        val encoded = tabs.joinToString("\n") { tab ->
+            "${tab.id}\t\t${tab.url}\t\t${tab.title.orEmpty()}\t\t${tab.spaceId}"
+        }
+        prefs.edit()
+            .putString(SAVED_TABS_KEY, encoded)
+            .putString(SAVED_ACTIVE_TAB_ID_KEY, activeId.orEmpty())
+            .apply()
+    }
+
+    private fun loadSavedBookmarks(): List<Bookmark> {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return emptyList()
+
+        val raw = prefs.getString(SAVED_BOOKMARKS_KEY, null) ?: return emptyList()
+        return raw.split("\n").mapNotNull { line ->
+            val parts = line.split("\t\t")
+            if (parts.size >= 5) {
+                Bookmark(
+                    id = parts[0],
+                    url = parts[1],
+                    title = parts[2],
+                    createdAtMs = parts[3].toLongOrNull() ?: 0L,
+                    updatedAtMs = parts[4].toLongOrNull() ?: 0L,
+                )
+            } else null
+        }
+    }
+
+    private fun saveBookmarks(bookmarks: List<Bookmark>) {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return
+
+        val encoded = bookmarks.joinToString("\n") { b ->
+            "${b.id}\t\t${b.url}\t\t${b.title}\t\t${b.createdAtMs}\t\t${b.updatedAtMs}"
+        }
+        prefs.edit().putString(SAVED_BOOKMARKS_KEY, encoded).apply()
+    }
+
+    private fun loadSavedPrivacySettings() {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return
+
+        if (!prefs.contains(PRIVACY_AD_BLOCKING_KEY)) return
+
+        val settings = PrivacySettings(
+            adBlockingEnabled = prefs.getBoolean(PRIVACY_AD_BLOCKING_KEY, true),
+            fingerprintingProtectionEnabled = prefs.getBoolean(PRIVACY_FINGERPRINT_KEY, true),
+            cryptominingProtectionEnabled = prefs.getBoolean(PRIVACY_CRYPTOMINING_KEY, true),
+            thirdPartyCookieIsolationEnabled = prefs.getBoolean(PRIVACY_COOKIE_ISOLATION_KEY, true),
+            httpsOnlyEnabled = prefs.getBoolean(PRIVACY_HTTPS_ONLY_KEY, false),
+        )
+        privacyController.setAdBlockingEnabled(settings.adBlockingEnabled)
+        privacyController.setFingerprintingProtectionEnabled(settings.fingerprintingProtectionEnabled)
+        privacyController.setCryptominingProtectionEnabled(settings.cryptominingProtectionEnabled)
+        privacyController.setThirdPartyCookieIsolationEnabled(settings.thirdPartyCookieIsolationEnabled)
+        privacyController.setHttpsOnlyEnabled(settings.httpsOnlyEnabled)
+    }
+
+    private fun savePrivacySettings(settings: PrivacySettings) {
+        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            Context.MODE_PRIVATE,
+        )?.also { browserDataPreferences = it } ?: return
+
+        prefs.edit()
+            .putBoolean(PRIVACY_AD_BLOCKING_KEY, settings.adBlockingEnabled)
+            .putBoolean(PRIVACY_FINGERPRINT_KEY, settings.fingerprintingProtectionEnabled)
+            .putBoolean(PRIVACY_CRYPTOMINING_KEY, settings.cryptominingProtectionEnabled)
+            .putBoolean(PRIVACY_COOKIE_ISOLATION_KEY, settings.thirdPartyCookieIsolationEnabled)
+            .putBoolean(PRIVACY_HTTPS_ONLY_KEY, settings.httpsOnlyEnabled)
+            .apply()
+    }
+
     override fun onCleared() {
         super.onCleared()
         searchSuggestionJob?.cancel()
@@ -998,11 +1204,38 @@ class BrowserViewModel internal constructor(
         Log.i(TAG, "BrowserViewModel cleared")
     }
 
+    private fun generateUniqueFileName(dir: java.io.File, desiredName: String): String {
+        val sanitized = desiredName.trim()
+            .replace(Regex("[/\\\\:*?\"<>|]"), "_")
+            .trimStart('.')
+            .ifBlank { "download" }
+        if (!java.io.File(dir, sanitized).exists()) return sanitized
+        val dot = sanitized.lastIndexOf('.')
+        val base = if (dot > 0) sanitized.substring(0, dot) else sanitized
+        val ext = if (dot > 0) sanitized.substring(dot) else ""
+        var n = 1
+        while (java.io.File(dir, "$base ($n)$ext").exists()) {
+            n++
+        }
+
+        return "$base ($n)$ext"
+    }
+
     companion object {
         private const val SEARCH_PREFERENCES_FILE = "fetchx_browser_search"
         private const val SEARCH_ENGINE_KEY = "search_engine"
         private const val LOCAL_SUGGESTIONS_KEY = "browser_suggestions_enabled"
         const val SEARCH_SUGGESTION_DEBOUNCE_MS = 300L
+
+        private const val BROWSER_DATA_PREFERENCES_FILE = "fetchx_browser_data"
+        private const val SAVED_TABS_KEY = "saved_browser_tabs"
+        private const val SAVED_ACTIVE_TAB_ID_KEY = "saved_active_tab_id"
+        private const val SAVED_BOOKMARKS_KEY = "saved_bookmarks"
+        private const val PRIVACY_AD_BLOCKING_KEY = "privacy_ad_blocking"
+        private const val PRIVACY_FINGERPRINT_KEY = "privacy_fingerprint"
+        private const val PRIVACY_CRYPTOMINING_KEY = "privacy_cryptomining"
+        private const val PRIVACY_COOKIE_ISOLATION_KEY = "privacy_cookie_isolation"
+        private const val PRIVACY_HTTPS_ONLY_KEY = "privacy_https_only"
 
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -1011,6 +1244,7 @@ class BrowserViewModel internal constructor(
         }
     }
 }
+
 
 /**
  * Normalizes address-bar input, using the new-tab page for blank input.

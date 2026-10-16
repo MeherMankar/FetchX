@@ -87,6 +87,12 @@ class BookmarkController(
         }
     }
 
+    fun loadBookmarks(bookmarks: List<Bookmark>, currentUrl: String = "") {
+        store.loadBookmarks(bookmarks)
+        refreshForUrl(currentUrl)
+    }
+
     /** Returns the current state snapshot. */
     fun currentState(): State = _state.value
 }
+

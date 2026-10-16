@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+        Grants FileProvider access to files under Context.getExternalFilesDir(null).
+        This covers the downloads directory used by AppNavigation.
+    -->
+    <external-files-path
+        name="downloads"
+        path="." />
+</paths>

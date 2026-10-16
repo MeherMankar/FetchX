@@ -217,9 +217,11 @@ executable or searches absolute entries in `PATH`, then checks its version throu
 injectable runner. The adapter builds structured arguments and disables user config,
 plugins, playlists, colors, cache use, and overwrites. It does not pass browser cookies,
 arbitrary user options, or secrets. URLs must be HTTP/HTTPS and cannot contain embedded
-credentials. The engine requests one best-format output and caps yt-dlp fragment
-concurrency at one; it reports a fixed one-connection demand to Queue Manager rather than
-claiming control over yt-dlp's internal networking.
+credentials. The engine requests one best-format output and allows yt-dlp to download up
+to sixteen HLS/DASH fragments concurrently. This can improve throughput when the source
+supports parallel fragment requests, but cannot exceed source or network bandwidth limits.
+It reports a fixed one-connection demand to Queue Manager rather than claiming control
+over yt-dlp's internal networking.
 
 Active yt-dlp work cannot be paused safely: Queue Manager rejects active pause requests.
 Queue shutdown cancels its process, waits for termination, and returns interrupted work
@@ -289,4 +291,3 @@ not introduced in this foundation phase.
 The main webview capability grants only the event listener permissions required by
 the shell. It has no filesystem, shell, process, or unrestricted-network plugin
 permissions. Engine process management and filesystem publication remain Rust-owned.
-

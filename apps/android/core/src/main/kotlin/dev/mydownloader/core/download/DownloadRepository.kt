@@ -6,6 +6,8 @@ data class YtDlpFormat(
     val formatId: String,
     val label: String,
     val extension: String?,
+    val title: String? = null,
+    val platform: String? = null,
 )
 
 /**

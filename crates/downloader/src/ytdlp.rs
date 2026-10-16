@@ -96,6 +96,8 @@ pub struct YtDlpFormat {
     pub label: String,
     pub extension: Option<String>,
     pub file_size_bytes: Option<u64>,
+    pub title: Option<String>,
+    pub platform: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -474,7 +476,7 @@ where
         if output_size < item.progress().downloaded_bytes() {
             return Err(YtDlpError::ProgressRegression.into());
         }
-        self.persist_progress(item, &mut expected_updated_at, &final_progress)
+        self.persist_progress(item, &mut expected_updated_at, &final_progress, true)
             .await?;
         if *control.cancellation.borrow_and_update() {
             return Err(DownloadEngineError::Cancelled);
@@ -503,6 +505,7 @@ where
         item: &mut DownloadItem,
         expected_updated_at: &mut Timestamp,
         update: &YtDlpProgress,
+        allow_total_override: bool,
     ) -> Result<(), DownloadEngineError> {
         let downloaded_bytes = update
             .downloaded_bytes
@@ -510,9 +513,19 @@ where
         if downloaded_bytes < item.progress().downloaded_bytes() {
             return Err(YtDlpError::ProgressRegression.into());
         }
-        let total = update
-            .total_bytes
-            .filter(|total| *total >= downloaded_bytes);
+        let total = if allow_total_override {
+            update
+                .total_bytes
+                .filter(|total| *total >= downloaded_bytes)
+        } else {
+            match (item.progress().total_bytes(), update.total_bytes) {
+                (Some(previous_total), _) => Some(previous_total),
+                (None, Some(candidate_total)) if candidate_total >= downloaded_bytes => {
+                    Some(candidate_total)
+                }
+                _ => None,
+            }
+        };
         item.set_progress_at(
             DownloadProgress::new(
                 downloaded_bytes,
@@ -531,10 +544,20 @@ where
             )
             .await?
         {
-            let error = self.current_state_error(item.id()).await?;
-            self.runner
-                .report_diagnostic(state_machine_diagnostic_code("progress", &error));
-            return Err(DownloadEngineError::StateMachine(error));
+            let current = self.repository.get(item.id()).await?;
+            if let Some(current) = current {
+                if !matches!(
+                    current.status(),
+                    DownloadStatus::Downloading | DownloadStatus::Preparing
+                ) {
+                    let error = self.current_state_error(item.id()).await?;
+                    self.runner
+                        .report_diagnostic(state_machine_diagnostic_code("progress", &error));
+                    return Err(DownloadEngineError::StateMachine(error));
+                }
+                *expected_updated_at = current.updated_at();
+            }
+            return Ok(());
         }
         *expected_updated_at = item.updated_at();
         Ok(())
@@ -550,7 +573,13 @@ where
         control: &mut ManagedDownloadControl,
     ) -> Result<(), DownloadEngineError> {
         let update = match event {
-            YtDlpRunnerEvent::ProgressLine(line) => parse_progress_line(&line)?,
+            YtDlpRunnerEvent::ProgressLine(line) => match parse_progress_line(&line) {
+                Ok(progress) => progress,
+                Err(error) => {
+                    warn!(%line, %error, "ignoring unparseable yt-dlp progress line");
+                    return Ok(());
+                }
+            },
             YtDlpRunnerEvent::ProcessFailed(message) => {
                 return Err(YtDlpError::RuntimeFailure(message).into());
             }
@@ -575,7 +604,7 @@ where
         let changed_progress = downloaded_bytes != *progress;
         *progress = downloaded_bytes;
         if changed_progress && now.duration_since(*last_persisted_at) >= PROGRESS_PERSIST_INTERVAL {
-            self.persist_progress(item, expected_updated_at, &update)
+            self.persist_progress(item, expected_updated_at, &update, false)
                 .await?;
             *last_persisted_at = now;
         }
@@ -616,20 +645,38 @@ where
         id: DownloadId,
         operation: &DownloadEngineError,
     ) -> Result<(), DownloadEngineError> {
-        let current = self
-            .repository
-            .get(id)
-            .await?
-            .ok_or(DownloadEngineError::NotFound(id))?;
-        if !matches!(
-            current.status(),
-            DownloadStatus::Preparing | DownloadStatus::Downloading
-        ) {
-            return Ok(());
+        let error_repr = match operation.persisted_error() {
+            Ok(err) => err,
+            Err(_) => fetchx_models::DownloadError::new(
+                fetchx_models::DownloadErrorCode::Engine,
+                "The download failed.",
+            )
+            .map_err(DownloadEngineError::DomainError)?,
+        };
+        for _ in 0..3 {
+            let current = match self.repository.get(id).await? {
+                Some(item) => item,
+                None => return Ok(()),
+            };
+            if !matches!(
+                current.status(),
+                DownloadStatus::Preparing | DownloadStatus::Downloading
+            ) {
+                return Ok(());
+            }
+            match self
+                .state_machine
+                .transition_with_error(id, DownloadStatus::Failed, error_repr.clone())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(StateMachineError::ConcurrentTransition { .. }) => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+                Err(err) => return Err(err.into()),
+            }
         }
-        self.state_machine
-            .transition_with_error(id, DownloadStatus::Failed, operation.persisted_error()?)
-            .await?;
         Ok(())
     }
 }
@@ -765,10 +812,16 @@ fn parse_optional_u64(value: &str) -> Result<Option<u64>, YtDlpError> {
     if is_unknown(value) {
         return Ok(None);
     }
-    value
-        .parse::<u64>()
-        .map(Some)
-        .map_err(|_| YtDlpError::MalformedProgress)
+    if let Ok(val) = value.parse::<u64>() {
+        return Ok(Some(val));
+    }
+    let float_val = value
+        .parse::<f64>()
+        .map_err(|_| YtDlpError::MalformedProgress)?;
+    if !float_val.is_finite() || float_val < 0.0 || float_val > (u64::MAX - 1024) as f64 {
+        return Err(YtDlpError::MalformedProgress);
+    }
+    Ok(Some(float_val.floor() as u64))
 }
 
 fn parse_optional_estimate(value: &str) -> Result<Option<u64>, YtDlpError> {
@@ -811,13 +864,13 @@ fn is_unknown(value: &str) -> bool {
 }
 
 fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -> Vec<OsString> {
-    let selected_format = selected_format.unwrap_or("best[ext=mp4]/best");
+    let selected_format = selected_format.unwrap_or("bestvideo*+bestaudio/best");
     let mut arguments = vec![
         "--ignore-config".into(),
         "--no-plugin-dirs".into(),
         "--no-colors".into(),
         "--no-playlist".into(),
-        "--no-overwrites".into(),
+        "--force-overwrites".into(),
         "--continue".into(),
         "--no-cache-dir".into(),
         "--no-write-thumbnail".into(),
@@ -827,13 +880,11 @@ fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -
         "--format".into(),
         selected_format.into(),
         "--concurrent-fragments".into(),
-        "4".into(),
+        "16".into(),
         "--hls-prefer-native".into(),
         "--newline".into(),
         "--progress-template".into(),
         PROGRESS_TEMPLATE.into(),
-        "--extractor-args".into(),
-        "youtube:player_client=android,web".into(),
         "--paths".into(),
     ];
     let mut home_path = OsString::from("home:");
@@ -858,37 +909,60 @@ pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError>
         .get("formats")
         .and_then(serde_json::Value::as_array)
         .ok_or(YtDlpError::InvalidFormatOutput)?;
+    let title = value
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned);
+    let platform = value
+        .get("extractor_key")
+        .or_else(|| value.get("extractor"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned);
 
     let mut discovered = Vec::new();
     for format in formats {
         if format.get("has_drm").and_then(serde_json::Value::as_bool) == Some(true)
             || !codec_is_present(format.get("vcodec"))
-            || !codec_is_present(format.get("acodec"))
         {
             continue;
         }
-        let Some(format_id) = format.get("format_id").and_then(serde_json::Value::as_str) else {
-            continue;
+        let format_id_owned;
+        let format_id = match format.get("format_id") {
+            Some(serde_json::Value::String(s)) => s.as_str(),
+            Some(serde_json::Value::Number(n)) => {
+                format_id_owned = n.to_string();
+                format_id_owned.as_str()
+            }
+            _ => continue,
         };
         if !is_valid_ytdlp_format_id(format_id) {
             continue;
         }
+        let format_id = if codec_is_present(format.get("acodec")) {
+            format_id.to_owned()
+        } else {
+            format!("{}+bestaudio/{}", format_id, format_id)
+        };
 
         let extension = format
             .get("ext")
             .and_then(serde_json::Value::as_str)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
-        let resolution = format
-            .get("resolution")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.is_empty() && *value != "unknown")
-            .map(str::to_owned)
-            .or_else(|| {
-                let width = format.get("width").and_then(serde_json::Value::as_u64)?;
-                let height = format.get("height").and_then(serde_json::Value::as_u64)?;
-                Some(format!("{width}x{height}"))
-            });
+        let height = format.get("height").and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+        });
+        let resolution = height.map(format_resolution_label).or_else(|| {
+            format
+                .get("resolution")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty() && *value != "unknown")
+                .map(str::to_owned)
+        });
+        let needs_audio_merge = !codec_is_present(format.get("acodec"));
         let note = format
             .get("format_note")
             .and_then(serde_json::Value::as_str)
@@ -904,6 +978,9 @@ pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError>
         let mut label = resolution
             .or_else(|| note.map(str::to_owned))
             .unwrap_or_else(|| "Video".to_owned());
+        if needs_audio_merge {
+            label.push_str(" + audio");
+        }
         if let Some(extension) = &extension {
             label.push_str(" - ");
             label.push_str(extension);
@@ -913,16 +990,28 @@ pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError>
             label.push_str(&format_file_size(size));
         }
         discovered.push(YtDlpFormat {
-            format_id: format_id.to_owned(),
+            format_id,
             label,
             extension,
             file_size_bytes,
+            title: title.clone(),
+            platform: platform.clone(),
         });
         if discovered.len() == MAX_DISCOVERED_FORMATS {
             break;
         }
     }
     Ok(discovered)
+}
+
+fn format_resolution_label(height: u64) -> String {
+    let (name, threshold) = match height {
+        4_320.. => ("8K", 4_320),
+        2_160.. => ("4K", 2_160),
+        1_440.. => ("2K", 1_440),
+        _ => return format!("{height}p"),
+    };
+    format!("{name} ({threshold}p)")
 }
 
 fn codec_is_present(value: Option<&serde_json::Value>) -> bool {
@@ -946,7 +1035,7 @@ fn is_valid_ytdlp_format_id(format_id: &str) -> bool {
             .is_some_and(u8::is_ascii_alphanumeric)
         && format_id
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._=-".contains(&byte))
 }
 
 fn format_file_size(size: u64) -> String {
@@ -1263,8 +1352,6 @@ impl YtDlpProcessRunner for TokioYtDlpRunner {
                     "--skip-download",
                     "--no-playlist",
                     "--dump-single-json",
-                    "--extractor-args",
-                    "youtube:player_client=android,web",
                     "--",
                     url,
                 ])
@@ -1554,7 +1641,7 @@ mod tests {
         assert_eq!(complete.percentage_basis_points, Some(2_540));
         assert_eq!(complete.downloaded_bytes, Some(254));
         assert_eq!(complete.total_bytes, Some(1_000));
-        assert_eq!(complete.speed_bytes_per_second, Some(13));
+        assert_eq!(complete.speed_bytes_per_second, Some(12));
         assert_eq!(complete.estimated_remaining_seconds, Some(8));
 
         let unknown = parse_progress_line("FETCHX_PROGRESS|NA|73|NA|NA|NA|NA")
@@ -1591,6 +1678,49 @@ mod tests {
         assert_eq!(progress.estimated_remaining_seconds, Some(7));
     }
 
+    #[tokio::test]
+    async fn keeps_total_bytes_stable_while_download_progresses() -> Result<(), Box<dyn Error>> {
+        let runner = FakeRunner::default();
+        let (engine, _, id) = fixture("https://example.test/video", runner).await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Downloading)
+            .await?;
+        let mut item = engine.repository.get(id).await?.expect("item exists");
+        let mut expected_updated_at = item.updated_at();
+
+        let initial = YtDlpProgress {
+            percentage_basis_points: Some(1_000),
+            downloaded_bytes: Some(10_240),
+            total_bytes: Some(1_048_576),
+            speed_bytes_per_second: Some(1_024),
+            estimated_remaining_seconds: Some(60),
+        };
+        engine
+            .persist_progress(&mut item, &mut expected_updated_at, &initial, false)
+            .await?;
+
+        let drifted = YtDlpProgress {
+            percentage_basis_points: Some(2_000),
+            downloaded_bytes: Some(20_480),
+            total_bytes: Some(1_572_864),
+            speed_bytes_per_second: Some(2_048),
+            estimated_remaining_seconds: Some(30),
+        };
+        engine
+            .persist_progress(&mut item, &mut expected_updated_at, &drifted, false)
+            .await?;
+
+        let stored = engine.repository.get(id).await?.expect("item still exists");
+        assert_eq!(stored.progress().downloaded_bytes(), 20_480);
+        assert_eq!(stored.progress().total_bytes(), Some(1_048_576));
+        Ok(())
+    }
+
     #[test]
     fn rejects_malformed_progress_records() {
         for line in [
@@ -1608,22 +1738,31 @@ mod tests {
     }
 
     #[test]
-    fn discovers_only_safe_combined_video_formats() {
+    fn discovers_safe_combined_and_adaptive_video_formats() {
         let output = br#"{
+            "title":"A sample video",
+            "extractor_key":"XHamster",
             "formats": [
                 {"format_id":"18","ext":"mp4","width":640,"height":360,
                  "vcodec":"avc1","acodec":"mp4a","filesize":1048576},
                 {"format_id":"140","ext":"m4a","vcodec":"none","acodec":"mp4a"},
-                {"format_id":"137","ext":"mp4","vcodec":"avc1","acodec":"none"},
+                {"format_id":"137","ext":"mp4","width":3840,"height":2160,
+                 "vcodec":"avc1","acodec":"none"},
                 {"format_id":"unsafe+format","ext":"mp4","vcodec":"avc1","acodec":"mp4a"},
                 {"format_id":"drm","ext":"mp4","vcodec":"avc1","acodec":"mp4a","has_drm":true}
             ]
         }"#;
         let formats = parse_format_output(output).expect("valid format output");
-        assert_eq!(formats.len(), 1);
+        assert_eq!(formats.len(), 2);
         assert_eq!(formats[0].format_id, "18");
-        assert_eq!(formats[0].label, "640x360 - mp4 - 1.0 MB");
+        assert_eq!(formats[0].label, "360p - mp4 - 1.0 MB");
         assert_eq!(formats[0].file_size_bytes, Some(1_048_576));
+        assert_eq!(formats[0].title.as_deref(), Some("A sample video"));
+        assert_eq!(formats[0].platform.as_deref(), Some("XHamster"));
+        assert_eq!(formats[1].format_id, "137+bestaudio/137");
+        assert_eq!(formats[1].label, "4K (2160p) + audio - mp4");
+        assert_eq!(formats[1].title.as_deref(), Some("A sample video"));
+        assert_eq!(formats[1].platform.as_deref(), Some("XHamster"));
     }
 
     #[test]
@@ -1714,8 +1853,7 @@ mod tests {
                 .iter()
                 .position(|argument| argument == "--concurrent-fragments")
                 .ok_or("missing concurrent fragments option")?;
-            assert_eq!(state.arguments[concurrent_fragments_index + 1], "4");
-            assert!(state.arguments.contains(&"--extractor-args".to_owned()));
+            assert_eq!(state.arguments[concurrent_fragments_index + 1], "16");
             let delimiter = state
                 .arguments
                 .iter()

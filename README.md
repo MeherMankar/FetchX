@@ -31,6 +31,11 @@ path; no shell or PATH-based executable discovery is used. One-shot scheduled st
 times are persisted in SQLite and coordinated by an event-driven Scheduler above the
 Queue Manager.
 
+Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
+video/audio selections use a bundled, statically linked FFmpeg 8.1.2 executable
+(LGPL configuration, without GPL-only external libraries), built for the app's
+supported ABIs with `scripts/build-android-ffmpeg.sh`.
+
 The supervised aria2 RPC listener is restricted to loopback and requires a
 runtime-generated authentication secret. The secret is supplied through a short-lived
 private runtime config file, not process arguments, logs, or persistent application

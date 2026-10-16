@@ -114,4 +114,14 @@ class HistoryStoreTest {
         assertEquals("https://c.com", all[1].url)   // timestamp 2000
         assertEquals("https://a.com", all[2].url)   // timestamp 1000
     }
+
+    @Test fun `removeTab preserves allEntries global history`() {
+        val store = HistoryStore()
+        store.recordNavigation("t1", "https://example.com", 1000L)
+        store.removeTab("t1")
+        assertTrue(store.entriesForTab("t1").isEmpty())
+        assertEquals(1, store.allEntries().size)
+        assertEquals("https://example.com", store.allEntries().first().url)
+    }
 }
+

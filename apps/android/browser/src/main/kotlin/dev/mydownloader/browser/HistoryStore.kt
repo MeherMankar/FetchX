@@ -19,6 +19,7 @@ class HistoryStore(private val maxEntries: Int = 200) {
 
     // tabId → ordered list, newest first
     private val _history = mutableMapOf<String, MutableList<HistoryEntry>>()
+    private val _globalHistory = mutableListOf<HistoryEntry>()
 
     /** Records a completed navigation for [tabId]. Ignores duplicates of the last URL. */
     fun recordNavigation(tabId: String, url: String, timestampMs: Long) {
@@ -26,18 +27,31 @@ class HistoryStore(private val maxEntries: Int = 200) {
         val entries = _history.getOrPut(tabId) { mutableListOf() }
         // Skip if this URL is identical to the most recent entry.
         if (entries.firstOrNull()?.url == url) return
-        entries.add(0, HistoryEntry(id = UUID.randomUUID().toString(), url = url, title = null, timestampMs = timestampMs))
+        val entry = HistoryEntry(id = UUID.randomUUID().toString(), url = url, title = null, timestampMs = timestampMs)
+        entries.add(0, entry)
         // Trim to max.
         while (entries.size > maxEntries) entries.removeAt(entries.size - 1)
+
+        // Also retain in global browsing history
+        if (_globalHistory.firstOrNull()?.url != url) {
+            _globalHistory.add(0, entry)
+            while (_globalHistory.size > maxEntries * 2) _globalHistory.removeAt(_globalHistory.size - 1)
+        }
     }
 
     /** Updates the title of the most recent entry for [tabId] matching [url]. */
     fun updateTitle(tabId: String, url: String, title: String?) {
         if (title.isNullOrBlank()) return
-        val entries = _history[tabId] ?: return
-        val index = entries.indexOfFirst { it.url == url }
-        if (index != -1) {
-            entries[index] = entries[index].copy(title = title)
+        val entries = _history[tabId]
+        if (entries != null) {
+            val index = entries.indexOfFirst { it.url == url }
+            if (index != -1) {
+                entries[index] = entries[index].copy(title = title)
+            }
+        }
+        val globalIndex = _globalHistory.indexOfFirst { it.url == url }
+        if (globalIndex != -1) {
+            _globalHistory[globalIndex] = _globalHistory[globalIndex].copy(title = title)
         }
     }
 
@@ -47,7 +61,8 @@ class HistoryStore(private val maxEntries: Int = 200) {
 
     /** Returns all entries across all tabs, newest first by timestamp. */
     fun allEntries(): List<HistoryEntry> =
-        _history.values.flatten().sortedByDescending { it.timestampMs }
+        (_globalHistory.ifEmpty { _history.values.flatten() })
+            .sortedByDescending { it.timestampMs }
 
     /** Clears history for [tabId] only. */
     fun clearTab(tabId: String) {
@@ -57,13 +72,16 @@ class HistoryStore(private val maxEntries: Int = 200) {
     /** Clears all history. */
     fun clearAll() {
         _history.clear()
+        _globalHistory.clear()
     }
 
-    /** Removes history when a tab is closed. */
+    /** Removes history for [tabId] when a tab is closed, keeping global browsing history intact. */
     fun removeTab(tabId: String) {
         _history.remove(tabId)
     }
 
     /** Returns the total number of entries across all tabs. */
-    fun totalCount(): Int = _history.values.sumOf { it.size }
+    fun totalCount(): Int =
+        if (_globalHistory.isNotEmpty()) _globalHistory.size else _history.values.sumOf { it.size }
 }
+

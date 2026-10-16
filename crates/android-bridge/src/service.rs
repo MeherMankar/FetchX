@@ -234,6 +234,17 @@ impl DownloadService {
             })
             .map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let dest = PathBuf::from(&destination);
+        let (dest, fname) = if dest.exists() {
+            let unique_dest = unique_destination_path(&dest);
+            let unique_fname = unique_dest
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| FileName::new(n).ok())
+                .unwrap_or(fname);
+            (unique_dest, unique_fname)
+        } else {
+            (dest, fname)
+        };
         let rust_priority = priority_from_dto(priority);
 
         self.with_inner(|inner| {
@@ -379,15 +390,26 @@ impl DownloadService {
                 .block_on(inner.core.queue().remove_download(old_id))
                 .map_err(MobileApiError::from)?;
 
-            // 5. Build a new item preserving source/filename/destination.
+            // 5. Build a new item preserving source/filename/destination (or resolving collision if destination exists).
             let created_at =
                 Timestamp::now().map_err(|e| MobileApiError::Runtime(e.to_string()))?;
             let new_id = DownloadId::new();
+            let (destination, filename) = if item.destination().exists() {
+                let unique_dest = unique_destination_path(item.destination());
+                let unique_fname = unique_dest
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| FileName::new(n).ok())
+                    .unwrap_or_else(|| item.filename().clone());
+                (unique_dest, unique_fname)
+            } else {
+                (item.destination().to_path_buf(), item.filename().clone())
+            };
             let new_item = DownloadItem::new(
                 new_id,
                 item.source().clone(),
-                item.filename().clone(),
-                item.destination().to_path_buf(),
+                filename,
+                destination,
                 created_at,
             );
 
@@ -627,6 +649,32 @@ fn format_to_dto(format: YtDlpFormat) -> YtDlpFormatDto {
         format_id: format.format_id,
         label: format.label,
         extension: format.extension,
+        title: format.title,
+        platform: format.platform,
+    }
+}
+
+fn unique_destination_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    let ext = path.extension().and_then(|s| s.to_str());
+    let mut counter = 1;
+    loop {
+        let new_name = match ext {
+            Some(ext) => format!("{stem} ({counter}).{ext}"),
+            None => format!("{stem} ({counter})"),
+        };
+        let candidate = parent.join(new_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
     }
 }
 
@@ -910,6 +958,44 @@ mod tests {
             received.load(Ordering::SeqCst),
             "event listener did not receive Created event within 2 seconds"
         );
+        svc.shutdown();
+    }
+
+    #[test]
+    fn unique_destination_path_generates_numbered_copies() {
+        let dir = tempdir().expect("tempdir");
+        let initial = dir.path().join("video.mp4");
+        assert_eq!(super::unique_destination_path(&initial), initial);
+
+        std::fs::write(&initial, b"content").expect("write");
+        let copy1 = super::unique_destination_path(&initial);
+        assert_eq!(copy1, dir.path().join("video (1).mp4"));
+
+        std::fs::write(&copy1, b"content").expect("write");
+        let copy2 = super::unique_destination_path(&initial);
+        assert_eq!(copy2, dir.path().join("video (2).mp4"));
+    }
+
+    #[test]
+    fn add_download_auto_disambiguates_existing_destination() {
+        let (config, dir) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+        let existing_dest = dir.path().join("downloads").join("file.zip");
+        std::fs::create_dir_all(existing_dest.parent().unwrap()).expect("mkdirs");
+        std::fs::write(&existing_dest, b"existing").expect("write");
+
+        let id = svc
+            .add_download(
+                "https://example.com/file.zip".to_string(),
+                "file.zip".to_string(),
+                existing_dest.to_string_lossy().into_owned(),
+                DownloadPriorityDto::Normal,
+            )
+            .expect("add_download failed");
+
+        let item = svc.get_download(id).expect("get").expect("found");
+        assert_eq!(item.filename, "file (1).zip");
+        assert!(item.destination.ends_with("file (1).zip"));
         svc.shutdown();
     }
 }

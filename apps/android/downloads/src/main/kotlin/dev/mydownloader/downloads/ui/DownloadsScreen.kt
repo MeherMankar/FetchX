@@ -57,6 +57,7 @@ private val TABS = listOf("All", "Active", "Queued", "Completed", "Failed", "Can
 fun DownloadsScreen(
     viewModel: DownloadsViewModel,
     downloadsDir: String = "",
+    onPlayFile: (String) -> Unit = {},
 ) {
     // Collect all state flows with lifecycle awareness.
     val allDownloads by viewModel.allDownloads.collectAsStateWithLifecycle()
@@ -191,6 +192,10 @@ fun DownloadsScreen(
                             onCancel = { viewModel.cancel(item.id) },
                             onRemove = { viewModel.remove(item.id) },
                             onRetry = { viewModel.retry(item.id) },
+                            onPlayFile = if (item.state is dev.fetchx.core.download.DownloadState.Completed &&
+                                isVideoFile(item.fileName)) {
+                                { onPlayFile((item.state as dev.fetchx.core.download.DownloadState.Completed).destinationPath) }
+                            } else null,
                         )
                     }
                 }
@@ -210,3 +215,10 @@ fun DownloadsScreen(
         )
     }
 }
+
+private val VIDEO_EXTENSIONS = setOf(
+    "mp4", "mkv", "webm", "avi", "mov", "flv", "3gp", "m4v", "ts"
+)
+
+private fun isVideoFile(fileName: String): Boolean =
+    fileName.substringAfterLast('.', "").lowercase() in VIDEO_EXTENSIONS

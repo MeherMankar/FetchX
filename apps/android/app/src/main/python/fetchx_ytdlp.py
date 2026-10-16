@@ -2,10 +2,15 @@ import io
 import json
 import os
 import sys
+import tempfile
+import threading
 import traceback
 
 from yt_dlp import YoutubeDL, parse_options
 from yt_dlp.utils import DownloadCancelled
+
+
+_progress_write_lock = threading.Lock()
 
 
 def _ensure_streams():
@@ -14,6 +19,32 @@ def _ensure_streams():
         sys.stdout = io.StringIO()
     if sys.stderr is None:
         sys.stderr = io.StringIO()
+
+
+def _write_progress(progress_path, line):
+    directory = os.path.dirname(progress_path)
+    prefix = os.path.basename(progress_path) + "."
+    temporary_progress_path = None
+    try:
+        with _progress_write_lock:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=directory,
+                prefix=prefix,
+                suffix=".tmp",
+                delete=False,
+            ) as progress_file:
+                temporary_progress_path = progress_file.name
+                progress_file.write(line + "\n")
+            os.replace(temporary_progress_path, progress_path)
+            temporary_progress_path = None
+    finally:
+        if temporary_progress_path is not None:
+            try:
+                os.remove(temporary_progress_path)
+            except FileNotFoundError:
+                pass
 
 
 def validate_version():
@@ -37,10 +68,6 @@ def prepare_options(arguments):
     # Also remove newline since it's only meaningful for terminal output.
     options.pop("newline", None)
 
-    extractor_args = options.setdefault("extractor_args", {})
-    youtube_args = extractor_args.setdefault("youtube", {})
-    if not youtube_args.get("player_client"):
-        youtube_args["player_client"] = ["android", "web"]
     return options, urls
 
 
@@ -103,21 +130,31 @@ def run(arguments, progress_path, cancel_path):
             eta = progress.get("eta")
             percent = "NA"
             denominator = total or estimate
-            if downloaded is not None and denominator:
-                percent = f"{downloaded * 100.0 / denominator:.1f}%"
+            if downloaded is not None and denominator and denominator > 0:
+                pct = min(100.0, max(0.0, float(downloaded) * 100.0 / float(denominator)))
+                percent = f"{pct:.1f}%"
+
+            def clean_num(val):
+                if val is None:
+                    return "NA"
+                try:
+                    num = float(val)
+                    if not (num == num):  # NaN check
+                        return "NA"
+                    return str(int(num))
+                except (ValueError, TypeError):
+                    return "NA"
+
             fields = (
                 percent,
-                downloaded if downloaded is not None else "NA",
-                total if total is not None else "NA",
-                estimate if estimate is not None else "NA",
-                speed if speed is not None else "NA",
-                eta if eta is not None else "NA",
+                clean_num(downloaded),
+                clean_num(total),
+                clean_num(estimate),
+                clean_num(speed),
+                clean_num(eta),
             )
-            line = "FETCHX_PROGRESS|" + "|".join(str(value) for value in fields)
-            temporary_progress_path = progress_path + ".tmp"
-            with open(temporary_progress_path, "w", encoding="utf-8") as progress_file:
-                progress_file.write(line + "\n")
-            os.replace(temporary_progress_path, progress_path)
+            line = "FETCHX_PROGRESS|" + "|".join(fields)
+            _write_progress(progress_path, line)
 
         # Capture all yt-dlp log messages for diagnostics
         log_messages = []
@@ -177,28 +214,79 @@ def discover_formats(url):
             "noplaylist": True,
             "ignoreconfig": True,
             "no_color": True,
+            "user_agent": "Mozilla/5.0 (Android 13; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0",
+            "http_headers": {
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
         with YoutubeDL(options) as downloader:
             info = downloader.extract_info(url, download=False)
+        info = info or {}
         formats = []
-        for item in (info or {}).get("formats") or []:
+        raw_formats = info.get("formats")
+        # Direct video or single stream fallback
+        if not raw_formats and (info.get("url") or info.get("height") or info.get("ext")):
+            raw_formats = [info]
+
+        seen_keys = set()
+        for item in raw_formats or []:
             if item.get("has_drm"):
                 continue
+            vcodec = item.get("vcodec")
+            if vcodec == "none":
+                continue
+            fmt_id = item.get("format_id")
+            fmt_id_str = str(fmt_id) if fmt_id is not None else "best"
+            ext = item.get("ext") or "mp4"
+            height = item.get("height")
+            res = item.get("resolution") or (f"{height}p" if height else None)
+
+            # Deduplicate same resolution and extension
+            dedup_key = (height or res, ext)
+            if dedup_key in seen_keys:
+                continue
+            if height or res:
+                seen_keys.add(dedup_key)
+
             formats.append({
-                "format_id": item.get("format_id"),
-                "ext": item.get("ext"),
-                "resolution": item.get("resolution"),
+                "format_id": fmt_id_str,
+                "ext": ext,
+                "resolution": res,
                 "width": item.get("width"),
-                "height": item.get("height"),
+                "height": height,
                 "format_note": item.get("format_note"),
+                "quality": item.get("quality"),
                 "filesize": item.get("filesize"),
                 "filesize_approx": item.get("filesize_approx"),
-                "vcodec": item.get("vcodec"),
+                "vcodec": vcodec,
                 "acodec": item.get("acodec"),
                 "has_drm": item.get("has_drm"),
             })
-            if len(formats) >= 100:
-                break
-        return json.dumps({"formats": formats}, separators=(",", ":"))
+
+        def format_rank(item):
+            def numeric_value(key):
+                value = item.get(key)
+                return value if isinstance(value, (int, float)) else 0
+
+            return (
+                numeric_value("height"),
+                numeric_value("quality"),
+                numeric_value("filesize") or numeric_value("filesize_approx"),
+            )
+
+        formats.sort(
+            key=format_rank,
+            reverse=True,
+        )
+        formats = formats[:100]
+        return json.dumps(
+            {
+                "title": info.get("title"),
+                "extractor_key": info.get("extractor_key") or info.get("extractor"),
+                "formats": formats,
+            },
+            separators=(",", ":"),
+        )
     except Exception as error:
         return f"ERROR:{type(error).__name__}: {error}"

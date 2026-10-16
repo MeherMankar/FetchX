@@ -61,6 +61,8 @@ pub struct YtDlpFormatDto {
     pub format_id: String,
     pub label: String,
     pub extension: Option<String>,
+    pub title: Option<String>,
+    pub platform: Option<String>,
 }
 
 /// Event emitted by the Rust backend, forwarded to Kotlin listeners.

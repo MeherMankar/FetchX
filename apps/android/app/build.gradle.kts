@@ -47,6 +47,13 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libfetchx_ffmpeg.so"
+        }
+    }
 }
 
 chaquopy {

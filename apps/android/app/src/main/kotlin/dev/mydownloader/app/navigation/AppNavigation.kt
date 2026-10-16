@@ -3,6 +3,7 @@ package dev.fetchx.app.navigation
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tab
@@ -11,6 +12,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -21,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import android.net.Uri
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.fetchx.app.ui.theme.FetchXTheme
 import androidx.compose.ui.platform.LocalContext
@@ -81,56 +84,27 @@ fun AppNavigation(initialUrl: String? = null) {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = currentRoute == Screen.Browser.route && selectedBrowserItem == "home",
-                    onClick = {
-                        selectedBrowserItem = "home"
-                        showBrowserMenu = false
-                        navigateToBrowser(navController)
-                        homeRequest++
-                    },
-                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                )
-                NavigationBarItem(
-                    selected = currentRoute == Screen.Downloads.route,
-                    onClick = {
-                        showBrowserMenu = false
-                        navController.navigate(Screen.Downloads.route) {
-                            launchSingleTop = true
-                        }
-                    },
-                    icon = { Icon(Icons.Default.FileDownload, contentDescription = "Downloads") },
-                )
-                NavigationBarItem(
-                    selected = currentRoute == Screen.Browser.route && selectedBrowserItem == "search",
-                    onClick = {
-                        selectedBrowserItem = "search"
-                        showBrowserMenu = false
-                        navigateToBrowser(navController)
-                        searchRequest++
-                    },
-                    icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                )
-                NavigationBarItem(
-                    selected = currentRoute == Screen.Browser.route && selectedBrowserItem == "tabs",
-                    onClick = {
-                        selectedBrowserItem = "tabs"
-                        showBrowserMenu = false
-                        navigateToBrowser(navController)
-                        tabsRequest++
-                    },
-                    icon = { Icon(Icons.Default.Tab, contentDescription = "Tabs") },
-                )
-                NavigationBarItem(
-                    selected = currentRoute == Screen.Browser.route && selectedBrowserItem == "menu",
-                    onClick = {
-                        selectedBrowserItem = "menu"
-                        navigateToBrowser(navController)
-                        showBrowserMenu = true
-                    },
-                    icon = { Icon(Icons.Default.MoreVert, contentDescription = null) },
-                )
+            if (currentRoute != Screen.Browser.route) {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = currentRoute == Screen.Browser.route,
+                        onClick = {
+                            navigateToBrowser(navController)
+                        },
+                        icon = { Icon(Icons.Default.Language, contentDescription = "Browser") },
+                        label = { Text("Browser") },
+                    )
+                    NavigationBarItem(
+                        selected = currentRoute == Screen.Downloads.route,
+                        onClick = {
+                            navController.navigate(Screen.Downloads.route) {
+                                launchSingleTop = true
+                            }
+                        },
+                        icon = { Icon(Icons.Default.FileDownload, contentDescription = "Downloads") },
+                        label = { Text("Downloads") },
+                    )
+                }
             }
         },
     ) { innerPadding ->
@@ -143,6 +117,35 @@ fun AppNavigation(initialUrl: String? = null) {
                 DownloadsScreen(
                     viewModel = viewModel(factory = vmFactory),
                     downloadsDir = downloadsDir,
+                    onPlayFile = { path ->
+                        val file = java.io.File(path)
+                        val uri = try {
+                            androidx.core.content.FileProvider.getUriForFile(
+                                context,
+                                "${context.packageName}.fileprovider",
+                                file,
+                            )
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (uri == null) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Unable to open file: path is not accessible",
+                                android.widget.Toast.LENGTH_LONG,
+                            ).show()
+                        } else {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, "video/*")
+                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(
+                                android.content.Intent.createChooser(intent, "Play with...")
+                                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                            )
+                        }
+                    },
                 )
             }
             composable(Screen.Browser.route) {
@@ -159,6 +162,11 @@ fun AppNavigation(initialUrl: String? = null) {
                         onOpenBrowserMenu = { showBrowserMenu = true },
                         onOpenStorage = {
                             navController.navigate(Screen.Storage.route) {
+                                launchSingleTop = true
+                            }
+                        },
+                        onNavigateToDownloads = {
+                            navController.navigate(Screen.Downloads.route) {
                                 launchSingleTop = true
                             }
                         },
@@ -192,6 +200,26 @@ fun AppNavigation(initialUrl: String? = null) {
                                         ).show()
                                     }
                                 }
+                            }
+                        },
+                        onPlayVideo = { url ->
+                            val scheme = try {
+                                android.net.Uri.parse(url).scheme?.lowercase()
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (scheme == "http" || scheme == "https") {
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                    setDataAndType(android.net.Uri.parse(url), "video/*")
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "This URL cannot be opened in a video player",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
                             }
                         },
                         onThemeColorChange = { newSeed -> browserThemeSeed = newSeed },

@@ -176,7 +176,11 @@ impl DownloadEngineError {
                 DownloadErrorCode::Source,
                 "The yt-dlp source URL is invalid or unsupported.".to_owned(),
             ),
-            Self::YtDlp(YtDlpError::DestinationExists | YtDlpError::OutputUnavailable) => (
+            Self::YtDlp(YtDlpError::DestinationExists) => (
+                DownloadErrorCode::Destination,
+                "The destination file already exists.".to_owned(),
+            ),
+            Self::YtDlp(YtDlpError::OutputUnavailable) => (
                 DownloadErrorCode::Destination,
                 "The yt-dlp output could not be written safely.".to_owned(),
             ),

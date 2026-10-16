@@ -36,6 +36,22 @@ use crate::{DownloadEngine, DownloadEngineError};
 const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
 const MAX_SEGMENT_ATTEMPTS: u8 = 3;
 
+fn measure_speed(bytes: u64, elapsed: Duration) -> Option<u64> {
+    let elapsed_nanos = elapsed.as_nanos();
+    if elapsed_nanos == 0 {
+        return None;
+    }
+    let bytes_per_second = u128::from(bytes)
+        .saturating_mul(1_000_000_000)
+        .checked_div(elapsed_nanos)?;
+    Some(bytes_per_second.min(u128::from(u64::MAX)) as u64)
+}
+
+fn estimate_remaining(total_bytes: u64, downloaded_bytes: u64, speed: Option<u64>) -> Option<u64> {
+    let speed = speed.filter(|speed| *speed > 0)?;
+    Some(total_bytes.saturating_sub(downloaded_bytes) / speed)
+}
+
 /// Timeouts, request identity, and progress checkpoint policy for HTTP downloads.
 ///
 /// By default, progress is persisted after each MiB or one second, whichever comes
@@ -651,12 +667,11 @@ where
                             status,
                             total_size,
                             &downloaded,
+                            &mut last_persisted_bytes,
+                            &mut last_persisted_at,
                         ).await {
                             stop_reason = Some(SegmentedStop::Failure(error));
                             let _ = stop_sender.send(true);
-                        } else {
-                            last_persisted_bytes = current_bytes;
-                            last_persisted_at = Instant::now();
                         }
                     }
                 }
@@ -820,6 +835,8 @@ where
                 status,
                 total_size,
                 &downloaded,
+                &mut last_persisted_bytes,
+                &mut last_persisted_at,
             )
             .await?;
             return match reason {
@@ -836,6 +853,8 @@ where
             status,
             total_size,
             &downloaded,
+            &mut last_persisted_bytes,
+            &mut last_persisted_at,
         )
         .await?;
         if downloaded.load(Ordering::Acquire) != total_size {
@@ -875,15 +894,29 @@ where
         status: DownloadStatus,
         total_size: u64,
         downloaded: &AtomicU64,
+        last_sampled_bytes: &mut u64,
+        last_sampled_at: &mut Instant,
     ) -> Result<(), DownloadEngineError> {
         let downloaded_bytes = downloaded.load(Ordering::Acquire);
+        let now = Instant::now();
+        let speed = measure_speed(
+            downloaded_bytes.saturating_sub(*last_sampled_bytes),
+            now.duration_since(*last_sampled_at),
+        );
         item.set_progress_at(
-            DownloadProgress::new(downloaded_bytes, Some(total_size), None, None)?,
+            DownloadProgress::new(
+                downloaded_bytes,
+                Some(total_size),
+                speed,
+                estimate_remaining(total_size, downloaded_bytes, speed),
+            )?,
             next_timestamp(item.updated_at())?,
         )?;
         self.persist_if_status(item, status, *expected_updated_at)
             .await?;
         *expected_updated_at = item.updated_at();
+        *last_sampled_bytes = downloaded_bytes;
+        *last_sampled_at = now;
         Ok(())
     }
 
@@ -989,12 +1022,22 @@ where
                     .map_err(DownloadEngineError::Io)?;
                 downloaded_bytes = next_downloaded;
                 response_bytes = next_response_bytes;
+                let now = Instant::now();
+                let speed = measure_speed(
+                    downloaded_bytes.saturating_sub(last_persisted_bytes),
+                    now.duration_since(last_persisted_at),
+                );
                 item.set_progress_at(
-                    DownloadProgress::new(downloaded_bytes, total_bytes, None, None)?,
+                    DownloadProgress::new(
+                        downloaded_bytes,
+                        total_bytes,
+                        speed,
+                        total_bytes
+                            .and_then(|total| estimate_remaining(total, downloaded_bytes, speed)),
+                    )?,
                     next_timestamp(item.updated_at())?,
                 )?;
 
-                let now = Instant::now();
                 if downloaded_bytes.saturating_sub(last_persisted_bytes)
                     >= self.config.progress_bytes_interval
                     || now.duration_since(last_persisted_at) >= self.config.progress_time_interval

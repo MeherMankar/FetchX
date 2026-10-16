@@ -81,6 +81,12 @@ class BookmarkStore {
     /** Removes all bookmarks. */
     fun clearAll() { _bookmarks.clear() }
 
+    /** Loads or restores bookmarks from a saved snapshot. */
+    fun loadBookmarks(bookmarks: List<Bookmark>) {
+        _bookmarks.clear()
+        _bookmarks.addAll(bookmarks)
+    }
+
     /** Total number of bookmarks currently stored. */
     fun count(): Int = _bookmarks.size
 

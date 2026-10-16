@@ -40,7 +40,36 @@ class TabManager(
     /** Callback invoked on the main thread when a video URL/response is detected. */
     var onVideoDetected: ((DetectedVideo) -> Unit)? = null
 
+    /** Callback invoked when a direct download / external file response is received from GeckoView. */
+    var onDownloadRequested: ((url: String, filename: String?) -> Unit)? = null
+
+    /** Callback invoked when an external app URI scheme (mailto:, tel:, intent:, etc.) is requested. */
+    var onExternalUriRequested: ((String) -> Unit)? = null
+
     // ──Public API ─────────────────────────────────────────────────────────
+
+    /** Restores tabs from a saved snapshot and selects the active tab. */
+    fun restoreTabs(savedTabs: List<TabState>, activeId: String?) {
+        if (savedTabs.isEmpty()) return
+        sessions.values.forEach { it.close() }
+        sessions.clear()
+        store.clear()
+
+        for (tab in savedTabs) {
+            val session = buildSession(tab.id)
+            session.open(runtime)
+            trackerBlockingController.registerTab(tab.id)
+            sessions[tab.id] = session
+            store.addTab(tab)
+            if (tab.url.isNotBlank() && tab.url != "about:blank") {
+                session.loadUri(tab.url)
+            }
+        }
+        if (activeId != null && store.findTab(activeId) != null) {
+            store.setActive(activeId)
+        }
+        onStateChanged?.invoke()
+    }
 
     /** Creates a new tab in the given space, makes it active, and returns its ID. */
     fun createTab(initialUrl: String = "about:blank", spaceId: String = "default"): String {
@@ -68,6 +97,22 @@ class TabManager(
         // Ensure at least one tab always exists.
         if (store.tabCount() == 0) {
             createTab() // will call onStateChanged internally
+        } else {
+            onStateChanged?.invoke()
+        }
+    }
+
+    /** Closes all tabs in the given space, or across all spaces if spaceId is null. */
+    fun closeAllTabs(spaceId: String? = null) {
+        val tabsToClose = if (spaceId == null) store.allTabs() else store.allTabsForSpace(spaceId)
+        tabsToClose.forEach { tab ->
+            historyStore.removeTab(tab.id)
+            trackerBlockingController.removeTab(tab.id)
+            sessions.remove(tab.id)?.close()
+            store.removeTab(tab.id)
+        }
+        if (store.tabCount() == 0) {
+            createTab(spaceId = spaceId ?: "default")
         } else {
             onStateChanged?.invoke()
         }
@@ -165,6 +210,17 @@ class TabManager(
 
     // ──Internal helpers ───────────────────────────────────────────────────
 
+    private fun isExternalScheme(uri: String): Boolean {
+        val lower = uri.lowercase()
+        return lower.startsWith("mailto:") ||
+            lower.startsWith("tel:") ||
+            lower.startsWith("sms:") ||
+            lower.startsWith("intent:") ||
+            lower.startsWith("market:") ||
+            lower.startsWith("geo:") ||
+            lower.startsWith("whatsapp:")
+    }
+
     private fun updateTabState(tabId: String, update: (TabState) -> TabState) {
         store.updateTab(tabId, update)
         onStateChanged?.invoke()
@@ -224,7 +280,15 @@ class TabManager(
                 historyStore.updateTitle(tabId, currentUrl, title)
                 updateTabState(tabId) { it.copy(title = title) }
             }
+
+            override fun onExternalResponse(session: GeckoSession, response: org.mozilla.geckoview.WebResponse) {
+                Log.i(TAG, "onExternalResponse uri=${response.uri}")
+                val disposition = response.headers["content-disposition"] ?: response.headers["Content-Disposition"]
+                val filename = disposition?.substringAfter("filename=", "")?.trim('"', ' ', ';')?.takeIf { it.isNotBlank() }
+                onDownloadRequested?.invoke(response.uri, filename)
+            }
         }
+
 
         s.navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onLoadRequest(
@@ -232,11 +296,33 @@ class TabManager(
                 request: GeckoSession.NavigationDelegate.LoadRequest,
             ): GeckoResult<AllowOrDeny>? {
                 val url = request.uri
+                if (isExternalScheme(url)) {
+                    Log.i(TAG, "Handling external scheme: $url")
+                    onExternalUriRequested?.invoke(url)
+                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
                 if (VideoInterceptor.isVideoUrl(url)) {
                     VideoInterceptor.detect(tabId, url, null, null)
                         ?.let { onVideoDetected?.invoke(it) }
                 }
                 return null  // never block — always allow
+            }
+
+            override fun onNewSession(
+                session: GeckoSession,
+                uri: String,
+            ): GeckoResult<GeckoSession>? {
+                Log.i(TAG, "onNewSession tab=$tabId uri=$uri")
+                val currentSpaceId = store.findTab(tabId)?.spaceId ?: "default"
+                val newId = UUID.randomUUID().toString()
+                val newSession = buildSession(newId)
+                newSession.open(runtime)
+                trackerBlockingController.registerTab(newId)
+                sessions[newId] = newSession
+                val normalized = if (uri.isNotBlank()) normalizeUrl(uri) else "about:blank"
+                store.addTab(TabState(id = newId, url = normalized, spaceId = currentSpaceId))
+                onStateChanged?.invoke()
+                return GeckoResult.fromValue(newSession)
             }
 
             override fun onLocationChange(
@@ -280,6 +366,7 @@ class TabManager(
                     it.copy(
                         errorText = "Could not load page. Check your connection.",
                         isLoading = false,
+                        progress = 0,
                     )
                 }
                 return null
@@ -289,7 +376,11 @@ class TabManager(
         s.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
                 Log.i(TAG, "onPageStart tab=$tabId url=$url")
-                updateTabState(tabId) { it.copy(isLoading = true, errorText = null) }
+                updateTabState(tabId) { it.copy(isLoading = true, progress = 10, errorText = null) }
+            }
+
+            override fun onProgressChange(session: GeckoSession, progress: Int) {
+                updateTabState(tabId) { it.copy(progress = progress) }
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
@@ -300,12 +391,13 @@ class TabManager(
                         historyStore.recordNavigation(tabId, currentUrl, System.currentTimeMillis())
                     }
                 }
-                updateTabState(tabId) { it.copy(isLoading = false) }
+                updateTabState(tabId) { it.copy(isLoading = false, progress = 100) }
             }
         }
 
         return s
     }
+
 
     private fun updateNavigationState(
         session: GeckoSession,

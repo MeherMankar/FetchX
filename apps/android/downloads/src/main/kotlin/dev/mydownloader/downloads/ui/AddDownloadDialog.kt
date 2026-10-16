@@ -60,9 +60,12 @@ fun AddDownloadDialog(
         }
     }
 
-    val resolvedFileName = fileName.ifBlank {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val rawFileName = fileName.ifBlank {
         url.trimEnd('/').substringAfterLast('/').ifBlank { "download" }
     }
+    val resolvedFileName = dev.fetchx.downloads.storage.StorageManager(context)
+        .uniqueFileName(java.io.File(downloadsDir), rawFileName)
     val destinationPath = "$downloadsDir/$resolvedFileName"
 
     AlertDialog(
