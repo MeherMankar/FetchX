@@ -23,7 +23,6 @@ compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 jna = { group = "net.java.dev.jna", name = "jna", version = "5.15.0" }
 junit = { group = "junit", name = "junit", version = "4.13.2" }

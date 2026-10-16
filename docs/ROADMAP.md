@@ -80,20 +80,22 @@ Each phase documents coverage using these categories:
 ```
 Phases 1-20O (Completed)
         |
-20P CoreServices Consolidation
-        |
-20Q Download Reliability + Turbo Acceleration
-        |
-20R Bandwidth / Resource Policies
-        |
-20S BitTorrent / Magnet
-        |
-21A Remote Protocol
-        |
-21B Headless Server
-        |
-21C Authentication
-        |
+        +-------------------------------------------+
+        |                                           |
+20P CoreServices Consolidation          20B-A Browser Policy Core
+        |                                           |
+20Q Download Reliability + Turbo     20B-B FetchX Shields
+        |                                  /       \
+20R Bandwidth / Resource Policies  20B-C Content  20B-D Advanced Tracking
+        |                          Filtering           |
+20S BitTorrent / Magnet                 \             /
+        |                          20B-E Fingerprinting Protection
+21A Remote Protocol                          |
+        |                          20B-F Browser Security Hardening
+21B Headless Server                          |
+        |                          20B-G Privacy/Security Regression Tests
+21C Authentication                           |
+        |                          20B-H Shields & Site Controls UI
 21D Authorization
         |
 21E Remote Security
@@ -136,7 +138,14 @@ Phases 1-20O (Completed)
 | 20E-20L | Shared core | N/A | YES | Browser phases Android-first |
 | 20M | YES (research) | YES | YES | VPN/Tor research applies to both |
 | 20N-20O | Shared core | PARTIAL | YES | Storage/notification platform-specific; business logic shared |
-| 20P | YES | YES | YES | CoreServices unification |
+| 20B-A | N/A | N/A | YES | Browser Policy Core: Android browser layer only |
+| 20B-B | N/A | N/A | YES | FetchX Shields: Android browser layer only |
+| 20B-C | N/A | N/A | YES | Content Filtering: Android browser + optional WebExtension |
+| 20B-D | N/A | N/A | YES | Advanced Tracking Protection: Android browser layer |
+| 20B-E | N/A | N/A | YES | Fingerprinting Protection: Android browser layer |
+| 20B-F | N/A | N/A | YES | Browser Security Hardening: Android browser layer |
+| 20B-G | N/A | N/A | YES | Privacy/Security Tests: Android instrumentation |
+| 20B-H | N/A | N/A | YES | Shields UI: Android Compose browser UI |
 | 20Q | YES | YES | YES | Turbo engine in shared Rust |
 | 20R | YES | YES | YES | Policy in shared Rust |
 | 20S | YES | YES | YES | aria2 engine already shared |
@@ -538,7 +547,564 @@ All security boundaries preserved per AI_RULES.md.
 
 ---
 
-## Planned Phases
+## Brave-Inspired Browser Privacy & Security Research Reference
+
+FetchX has studied Brave's privacy/security architecture as a reference model.
+Brave concepts -- Shields, filter lists, fingerprinting defenses, URL parameter
+stripping, referrer policies, security hardening -- are incorporated as inspiration
+for FetchX's own browser policy and controls architecture.
+
+**What this means:**
+- Brave is REFERENCE / INSPIRATION, not a dependency.
+- FetchX will NOT include Brave Core.
+- FetchX will NOT become a Chromium fork.
+- FetchX will NOT copy Chromium-specific internals.
+- GeckoView remains the browser engine.
+- Only capabilities actually supported by GeckoView are implemented.
+- Unsupported GeckoView capabilities are classified as LIMITED or ENGINE-LEVEL,
+  not worked around unsafely.
+
+**Engineering Rule (GeckoView Capability Audit):**
+> Every Brave-inspired feature must first undergo a GeckoView capability audit.
+> If GeckoView does not expose the required capability, the roadmap must classify
+> it as LIMITED, UNSUPPORTED, WEBEXTENSION-DEPENDENT, or ENGINE-LEVEL rather than
+> introducing an unsafe workaround.
+
+---
+
+## Browser Privacy / Security Track (Phases 20B-A through 20B-H)
+
+These phases form a dedicated browser privacy and security track, numbered with
+the `20B-` prefix to distinguish them from the download-manager track (20P, 20Q, ...)
+while preserving all historical phase numbering and all existing planned phases.
+
+**Track dependency graph:**
+```
+GeckoView research / capability audit
+            |
+      20B-A Browser Policy Core
+            |
+      20B-B FetchX Shields
+            |
+  +---------+---------+
+  |                   |
+20B-C Content Filtering  20B-D Advanced Tracking Protection
+  |                   |
+  +----+--------------+
+       |
+  20B-E Advanced Fingerprinting Protection
+       |
+  20B-F Browser Security Hardening
+       |
+  20B-G Privacy & Security Regression Testing
+       |
+  20B-H Shields & Site Controls UI
+```
+
+The browser privacy track is intentionally independent of the download-manager
+track (20P-20S, 21A-21I, etc.). Download phases do not depend on browser privacy
+phases unless explicitly noted.
+
+---
+
+### Phase 20B-A -- Browser Policy Core (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer); browser-specific only
+
+**Goal:** Establish a single, centralized `FetchXBrowserPolicy` object that owns all
+browser-level privacy and security decisions. Eliminates scattered policy checks across
+`GeckoRuntimeHolder`, `PrivacyController`, `TabManager`, and `BrowserViewModel`.
+
+**Architecture:**
+```
+FetchXBrowserPolicy
+        |
+        +-- PrivacyPolicy
+        |       adBlocking, trackerBlocking, cookiePolicy, fingerprintPolicy
+        |
+        +-- SecurityPolicy
+        |       httpsOnly, mixedContent, dangerousDownloads, certErrors
+        |
+        +-- NetworkPolicy
+        |       referrerPolicy, trackingParamStripping, dnsPolicy
+        |
+        +-- SitePolicy
+        |       per-site overrides, exceptions, trust level
+        |
+        +-- PermissionPolicy
+        |       camera, microphone, location, notifications, popups, WebRTC
+        |
+        +-- TrackingPolicy
+        |       ETP level, first-party isolation, storage isolation
+        |
+        +-- FingerprintPolicy
+        |       canvas, WebGL, audio, fonts, screen, UA, hardware, platform
+        |
+        +-- CookiePolicy
+        |       third-party, isolation, partitioning, SameSite enforcement
+        |
+        +-- HTTPSPolicy
+        |       httpsOnly, upgradeInsecure, certOverride rules
+                |
+                v
+        GeckoView Adapter
+        (maps FetchXBrowserPolicy domains -> GeckoRuntimeSettings,
+         GeckoSessionSettings, ContentBlocking, WebExtensionController)
+                |
+                v
+           GeckoView
+```
+
+**Requirements:**
+- Centralize all privacy/security decisions in one typed structure
+- Support global defaults and per-site policy overrides
+- Support per-tab policy state where GeckoView allows it
+- Preserve all existing Phase 20I/20J/20K/20L behavior -- no regressions
+- The policy object must be serializable/persistable for user settings
+- GeckoView adapter translates policy to actual GeckoView API calls
+
+**Dependencies:** Phases 20I, 20J, 20K, 20L completed.
+
+**Tests:** Policy construction, policy override (global vs per-site), GeckoView
+adapter correctness, persistence round-trip, no-regression against existing phases.
+
+**Exit criteria:** All existing privacy/security controls route through
+`FetchXBrowserPolicy`. No scattered `GeckoRuntimeSettings` calls outside the adapter.
+
+---
+
+### Phase 20B-B -- FetchX Shields (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer)
+
+**Goal:** Implement a Brave-inspired Shields system with per-site controls and
+protection statistics, using GeckoView-native capabilities where available and
+WebExtension-based filtering where not.
+
+**Shield modes:**
+- `Off` -- no protections active for this site
+- `Standard` -- balanced protection; may be set as global default
+- `Strict` -- aggressive protection; may break some sites; user-overridable per-site
+
+**Shield controls (subject to GeckoView capability audit -- see classification below):**
+
+| Control | GeckoView Classification |
+|---------|------------------------|
+| Ad blocking | NATIVE_GECKO (ContentBlocking.AntiTracking.AD) |
+| Tracker blocking | NATIVE_GECKO (ContentBlocking.AntiTracking.*) |
+| First-party tracking | NATIVE_GECKO (ContentBlocking + cookie partitioning) |
+| Fingerprinting protection | NATIVE_GECKO (GeckoRuntimeSettings.setFingerprintingProtection) |
+| Third-party cookie controls | NATIVE_GECKO (ContentBlocking.CookieBehavior) |
+| HTTPS enforcement | NATIVE_GECKO (GeckoRuntimeSettings.HTTPS_ONLY) |
+| JavaScript policy | LIMITED (no per-site JS toggle in current GeckoView public API) |
+| Referrer policy | WEBEXTENSION or LIMITED |
+| Tracking URL parameter filtering | WEBEXTENSION |
+| Cryptomining protection | NATIVE_GECKO (ContentBlocking.AntiTracking.CRYPTOMINING) |
+| Notification abuse protection | CONFIGURABLE (PermissionDelegate) |
+| Popup blocking | CONFIGURABLE (GeckoSession popup policy) |
+
+**Per-site features:**
+- Per-origin Shield mode override (stored in SitePolicy)
+- Temporary exception (session-only, not persisted)
+- Permanent exception (persisted)
+- Shield statistics: trackers blocked, ads blocked, requests blocked
+- HTTPS upgrade status
+- Site trust level
+
+**Safe defaults:** Standard mode for all sites. Users may set per-site exceptions
+or change the global default. Aggressive mode must be user-initiated.
+
+**Compatibility warning:** Strict mode may break site functionality. FetchX must
+surface clear user messaging when strict blocking is likely responsible for breakage.
+
+**Dependencies:** Phase 20B-A (Browser Policy Core).
+
+**Tests:** Shield mode activation, per-site override, statistics counting, exception
+persistence, GeckoView ContentBlocking integration, standard vs strict behavior.
+
+**Exit criteria:** Functional Shield system on device. Statistics visible in UI.
+Per-site overrides work and persist across sessions.
+
+---
+
+### Phase 20B-C -- Content Filtering and Filter Lists (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer) + potential WEBEXTENSION layer
+
+**Goal:** Establish a sustainable content filtering system with managed filter lists.
+The implementation path MUST follow a GeckoView capability audit before committing
+to a specific engine approach.
+
+**GeckoView Capability Audit (required first):**
+Classify each implementation approach:
+- `NATIVE_GECKO` -- GeckoView ContentBlocking handles this natively
+- `WEBEXTENSION` -- requires a bundled WebExtension (e.g., uBlock Origin subset)
+- `FETCHX_IMPLEMENTABLE` -- FetchX can implement in Kotlin/Rust without engine changes
+- `ENGINE_LEVEL` -- requires changes to GeckoView itself; not possible in FetchX
+- `LIMITED` -- partial support with caveats
+
+| Capability | Classification | Notes |
+|------------|----------------|-------|
+| Basic ad blocking | NATIVE_GECKO | Via ETP category flags |
+| Full ABP/uBlock filter syntax | ENGINE_LEVEL / WEBEXTENSION | Cannot implement full adblock syntax without engine or extension |
+| Network request interception (full) | WEBEXTENSION | WebExtension webRequest API |
+| Element hiding / cosmetic filtering | WEBEXTENSION | Content script injection |
+| First-party URL rewriting | LIMITED | Partial via NavigationDelegate |
+| DNS-based blocking | ENGINE_LEVEL | Not exposed by GeckoView |
+
+**Architecture (Brave-inspired, GeckoView-adapted):**
+```
+FilterListManager
+        |
+        +-- FilterListIndex (list catalogue)
+        +-- FilterListUpdater (background updates with integrity check)
+        +-- RuleParser (Adblock Plus / uBO syntax subset)
+        +-- RuleMatcher (network request matching)
+        +-- CosmeticEngine (element hiding, content script)
+        +-- FilterStatistics (match counts per list and per site)
+```
+
+**Filter list candidates:**
+- EasyList (ads)
+- EasyPrivacy (tracking)
+- Peter Lowe's Ad and tracking server list
+- Regional lists (opt-in)
+- FetchX-maintained curated list
+- User custom rules
+
+**Filter list management requirements:**
+- Versioned lists with SHA-256 integrity check
+- Automatic background updates (configurable interval)
+- Rollback on failed/malformed update
+- Malformed-rule isolation (one bad rule must not break the whole list)
+- User enable/disable per list
+- Performance limit: filter matching must not measurably delay page load
+- Memory limit: total filter set must fit within Android background memory budget
+
+**Important:** Do NOT assume full uBlock-compatible behavior is achievable without
+a WebExtension. Phase 20B-C includes the audit that determines which filtering path
+is used. Implementation choices may include:
+1. Native GeckoView ContentBlocking (simplest; limited syntax support)
+2. Bundled uBlock Origin WebExtension (most capable; extension overhead)
+3. Hybrid: native for network blocking + extension for cosmetic filtering
+
+**Dependencies:** Phase 20B-B (FetchX Shields).
+
+**Exit criteria:** At least one filter list (EasyList or EasyPrivacy) operational.
+Filter-list update mechanism tested. Per-list statistics tracked.
+
+---
+
+### Phase 20B-D -- Advanced Tracking Protection (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer)
+
+**Goal:** Extend beyond basic ETP to cover advanced tracking vectors.
+
+**Targets (subject to GeckoView capability audit):**
+
+| Protection | Classification | Notes |
+|------------|----------------|-------|
+| URL tracking parameter stripping | WEBEXTENSION or FETCHX_IMPLEMENTABLE | Strip utm_*, fbclid, gclid, etc. from URLs before navigation |
+| Referrer policy enforcement | LIMITED / WEBEXTENSION | GeckoView does not expose per-site referrer policy in public API |
+| Redirect tracking protection | WEBEXTENSION | Detect and unwrap tracking redirects |
+| Third-party cookie blocking | NATIVE_GECKO | ACCEPT_NON_TRACKERS or ACCEPT_FIRST_PARTY |
+| Storage partitioning / dFPI | NATIVE_GECKO | GeckoRuntimeSettings cookie behavior |
+| Cross-site tracking via localStorage | ENGINE_LEVEL | First-party isolation partially available |
+| Login state tracking (link decoration) | WEBEXTENSION / LIMITED | |
+| Cryptomining protection | NATIVE_GECKO | ContentBlocking.AntiTracking.CRYPTOMINING |
+| Notification permission abuse | CONFIGURABLE | Aggressive default-deny policy for notification permission |
+| Global Privacy Control header | FETCHX_IMPLEMENTABLE | Inject GPC header via NavigationDelegate |
+| Anti-tracking URL parameters | FETCHX_IMPLEMENTABLE | Strip known tracking params from all navigated URLs |
+
+**URL Tracking Parameter Stripping (high priority):**
+- Strip known tracking parameters (utm_source, utm_medium, utm_campaign, fbclid,
+  gclid, msclkid, mc_eid, yclid, etc.) from URLs before loading
+- Maintain a curated, updatable tracking-parameter list
+- Do not strip parameters that may affect site functionality
+- Log stripped parameters in Shield statistics
+
+**Global Privacy Control:**
+- Inject `Sec-GPC: 1` header on all requests
+- Make this a user-configurable option (default: on in Strict mode)
+
+**Dependencies:** Phase 20B-B (FetchX Shields), Phase 20B-C (Content Filtering).
+
+**Exit criteria:** Tracking parameter stripping operational and tested.
+GPC header injection tested. Per-feature capability matrix documented.
+
+---
+
+### Phase 20B-E -- Advanced Fingerprinting Protection (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer)
+
+**Goal:** Reduce browser fingerprint entropy without making FetchX more uniquely
+identifiable through naive spoofing.
+
+**Core principle:**
+> Prioritize reducing entropy and maintaining consistent privacy-preserving behavior.
+> Do NOT blindly randomize fingerprint values.
+> Do NOT make FetchX more unique through naive spoofing.
+> Consistent values across sessions are often more private than random-per-session values.
+
+**Fingerprinting surface capability matrix:**
+
+| Surface | Classification | FetchX Approach |
+|---------|----------------|-----------------|
+| Canvas fingerprinting | NATIVE_GECKO | GeckoView noise injection (ContentBlocking.AntiTracking.FINGERPRINTING) |
+| WebGL fingerprinting | NATIVE_GECKO | Same as Canvas via GeckoView |
+| WebAudio fingerprinting | NATIVE_GECKO | GeckoView fingerprinting protection |
+| Font enumeration | ENGINE_LEVEL | GeckoView exposes a generic font set; cannot fully restrict |
+| Screen dimensions / devicePixelRatio | LIMITED | Cannot reliably override without engine support |
+| Timezone | LIMITED | Android system timezone; cannot spoof without engine support |
+| Language / Accept-Language | FETCHX_IMPLEMENTABLE | Override Accept-Language header to reduce entropy |
+| Hardware concurrency | LIMITED | GeckoView may report navigator.hardwareConcurrency; no override exposed |
+| Device memory | LIMITED | navigator.deviceMemory; no override in current GeckoView public API |
+| User-Agent | NATIVE_GECKO (already set) | Set to Firefox/GeckoView version; do not expose GeckoView token |
+| Client Hints (UA-CH) | LIMITED | GeckoView may respond to CH requests; no direct policy API exposed |
+| WebRTC IP leakage | CONFIGURABLE | Restrict WebRTC via permission policy; mDNS where available |
+| Battery API | ENGINE_LEVEL | Not normally exposed in Firefox/GeckoView |
+| Sensor APIs | ENGINE_LEVEL | Not normally exposed in Firefox |
+| Storage identifiers (localStorage, IndexedDB) | NATIVE_GECKO | dFPI / storage partitioning |
+| Connection type / NetworkInformation | LIMITED | GeckoView exposes this; no public override |
+
+**User-Agent strategy:**
+- Maintain a standardized Firefox/GeckoView User-Agent string matching the installed GeckoView version
+- Do not expose `GeckoView/` embedder token to sites
+- Update UA string when GeckoView is upgraded
+- Do not randomize UA per-request (increases uniqueness)
+
+**GeckoView fingerprinting protection (NATIVE_GECKO):**
+- Use `GeckoRuntimeSettings.setFingerprintingProtection(true)` for canvas/WebGL/audio noise injection
+- Verify GeckoView applies noise consistently and does not increase uniqueness
+
+**WebRTC IP leakage (CONFIGURABLE):**
+- Default: restrict WebRTC peer-to-peer IP discovery (mDNS-only or disable non-proxied UDP)
+- Policy: configurable in SecurityPolicy / FetchXBrowserPolicy
+
+**ENGINE_LEVEL limitations (must document, not hack around):**
+All ENGINE_LEVEL surfaces are documented in the UI as limitations. FetchX will not
+introduce unsafe workarounds (e.g., JavaScript injection to override navigator properties)
+that could be detected and used to fingerprint FetchX users specifically.
+
+**Dependencies:** Phase 20B-A (Browser Policy Core), Phase 20B-B (FetchX Shields).
+
+**Exit criteria:** Canvas/WebGL/audio noise injection tested via automated test page.
+WebRTC IP restriction tested. ENGINE_LEVEL limitations documented in UI.
+
+---
+
+### Phase 20B-F -- Browser Security Hardening (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer)
+
+**Goal:** Systematic browser security hardening. Builds on Phase 20O (Android
+Security Audit) with browser-specific security controls.
+
+**Process isolation note:**
+> FetchX will NOT reimplement Chromium's multi-process isolation.
+> FetchX relies on GeckoView's supported process and sandbox architecture.
+> This phase audits and verifies GeckoView's process model rather than replacing it.
+
+**Security hardening areas:**
+
+**HTTPS and mixed content:**
+- HTTPS-only mode (already in Phase 20J; verify and extend)
+- Mixed-content blocking: block active mixed content; warn on passive
+- Certificate error handling: no silent override; user must confirm
+- HSTS awareness (GeckoView handles this natively)
+- Dangerous download warnings (flag downloads triggered from HTTP pages)
+
+**Permission controls (via GeckoSession.PermissionDelegate):**
+- Camera: default deny; prompt on request; per-site persist
+- Microphone: default deny; prompt; per-site persist
+- Location: default deny; prompt; per-site persist
+- Notifications: aggressive default deny; prompt; per-site persist
+- Persistent storage: default deny; prompt
+- Autoplay: configurable (default: block audio autoplay)
+
+**Popup and redirect policy:**
+- Block unrequested popups (GeckoSession.onPopupBlock or equivalent)
+- Allow user to review blocked popups
+- Detect and warn on suspicious redirect chains
+
+**WebRTC security:**
+- Restrict non-proxied WebRTC UDP (mDNS-only or disable)
+- Prevent local IP leakage via WebRTC
+
+**Extension security:**
+- Preserve Phase 20K/20L extension permission model
+- No silent permission escalation
+- Extension installation must require user confirmation
+- Extension origin permissions audited before installation
+
+**Navigation security:**
+- External URI scheme handling: only well-known safe schemes (mailto:, tel:) auto-handled
+- intent: / market: schemes: prompt user before delegating to external app
+- file:// restriction: local file access restricted to explicitly opened files
+- javascript: scheme: blocked in navigation
+- data: URI navigation: restricted (navigating to data: URIs disallowed)
+
+**Download security:**
+- Flag downloads from HTTP (non-HTTPS) origins
+- Warn on executable file types (.apk, .exe, .sh, etc.)
+- Download destination safety (no path traversal -- already in Phase 20N)
+
+**GeckoView process model audit:**
+- Document GeckoView's content process and GPU process architecture
+- Verify FetchX does not run privileged operations in the content process
+- Audit IPC boundaries between browser UI, GeckoView content, and Rust Core
+- Document trust boundaries: browser -> Rust Core -> download system
+
+**Dependencies:** Phase 20O (Android Security/Privacy Audit), Phase 20B-A, 20B-B.
+
+**Exit criteria:** Permission policy tested on device. HTTPS-only tested.
+Mixed-content blocking confirmed. External URI handling audited.
+GeckoView process model documented.
+
+---
+
+### Phase 20B-G -- Privacy and Security Regression Testing (HIGH)
+
+**Platform Coverage:** ANDROID ADAPTER (browser layer)
+
+**Goal:** Automated and manual regression test suite ensuring all privacy/security
+features work correctly and do not regress across GeckoView upgrades.
+
+**Test categories:**
+
+**Tracker blocking tests:**
+- ETP category activation (AD, ANALYTIC, SOCIAL, CRYPTOMINING, FINGERPRINTING)
+- Per-site tracker exception
+- Shield mode change (Standard -> Strict -> Off)
+- Statistics increment on block
+
+**Filter list tests:**
+- Rule parser: valid rules parsed; malformed rules isolated
+- Rule matcher: network request match/no-match
+- Filter list update: successful fetch, checksum verify, apply
+- Filter list rollback on bad update
+- Performance: filter matching latency under 5ms for typical page
+
+**Cookie isolation tests:**
+- Third-party cookie blocking: verify no cross-site cookies
+- Storage partitioning: verify localStorage isolated per first-party
+- Session cookie behavior in normal vs incognito
+
+**Fingerprinting tests:**
+- Canvas noise injection verified via test page
+- WebGL noise injection verified
+- WebAudio fingerprint variation verified
+- UA string does not expose GeckoView embedder token
+- WebRTC local IP not leaked (mDNS-only verified)
+
+**HTTPS tests:**
+- HTTPS-only mode: HTTP navigation redirected or blocked
+- Mixed content: active mixed content blocked
+- Cert error handling: cert error shown; no silent override
+
+**Permission tests:**
+- Camera request: prompt shown; deny by default
+- Microphone request: prompt shown; deny by default
+- Location request: prompt shown; deny by default
+- Notification request: prompt shown; aggressive-deny default
+
+**WebRTC tests:**
+- Local IP not leaked via WebRTC in restricted mode
+
+**Extension security tests:**
+- Extension with dangerous permissions blocked
+- Extension permission prompt displayed correctly
+- Extension cannot access origins outside its declared scope
+
+**Navigation security tests:**
+- javascript: URI blocked in navigation
+- data: URI navigation blocked
+- External intent URI requires user confirmation
+- file:// navigation restricted
+
+**Per-site policy tests:**
+- Site override persists across sessions
+- Site exception removes protection correctly
+- Temporary exception expires at session end
+
+**Test infrastructure:**
+- JVM unit tests for pure Kotlin policy logic
+- Android instrumentation tests for GeckoView integration
+- Mock HTTP server for network-level tests
+- Browser test pages (privacy check pages) for on-device verification
+- Regression fixture set: URL list + expected block/allow decisions
+
+**Dependencies:** All 20B-A through 20B-F phases.
+
+**Exit criteria:** All test categories pass. Regression fixture set established.
+GeckoView upgrade process includes running this test suite.
+
+---
+
+### Phase 20B-H -- Shields and Site Controls UI (MEDIUM)
+
+**Platform Coverage:** ANDROID UI (browser layer)
+
+**Goal:** Expose FetchX Shields and all browser privacy/security controls through
+a coherent, FetchX-native UI. Does NOT copy Brave's exact UI design.
+
+**Shield panel (address bar -> Shield icon -> panel):**
+```
+FetchX Shield Panel
++---------------------------------------+
+| [Shield icon]  Site: example.com       |
+|                Shield: Standard [v]    |
++---------------------------------------+
+| Trackers blocked:       12             |
+| Ads blocked:             8             |
+| Requests blocked:       20             |
+| Fingerprinting:     Protected          |
+| Cookies:              Isolated         |
+| HTTPS:                    On           |
++---------------------------------------+
+| [Per-site exceptions]  [Details]       |
++---------------------------------------+
+```
+
+**Global privacy/security settings screen:**
+- Shield mode default (Off / Standard / Strict)
+- Tracker blocking category controls
+- Fingerprinting protection toggle
+- Cryptomining protection toggle
+- Cookie policy selector
+- HTTPS-only toggle
+- JavaScript policy (global; per-site in site panel)
+- Referrer policy (if implemented)
+- Tracking URL parameter stripping toggle
+- GPC (Global Privacy Control) toggle
+- Filter list management
+
+**Site-specific panel:**
+- Override Shield mode for this site
+- Allow/block cookies for this site
+- Allow/block JavaScript for this site
+- View blocked items for this site
+- Remove site exception
+
+**Permission status:**
+- Show per-site permissions granted (camera, microphone, location, notifications)
+- Revoke per-site permission from UI
+
+**Design principles:**
+- FetchX design language; do not copy Brave branding
+- Statistics shown only if meaningful (not zero-state noise)
+- Advanced controls behind a secondary "Details" or "Advanced" panel
+- Aggressive mode changes require user confirmation
+- Clear messaging when Strict mode may cause site breakage
+
+**Dependencies:** Phase 20B-B through 20B-F; Phase 20B-G (testing).
+
+**Exit criteria:** Shield panel displays live statistics. Per-site controls work.
+Global settings correctly propagate to GeckoView. UI tested on device.
+
+---
 
 ---
 
@@ -1037,6 +1603,16 @@ Both Windows and Android participate as sync clients using the same protocol.
 15. No anti-bot circumvention.
 16. No automatic Git commits/pushes.
 17. Update .gitignore after completion of every phase.
+18. **GeckoView capability audit required.** Every Brave-inspired browser privacy/security
+    feature must be classified (NATIVE_GECKO / CONFIGURABLE / FETCHX_IMPLEMENTABLE /
+    WEBEXTENSION / LIMITED / ENGINE_LEVEL) before implementation begins.
+    Unsupported capabilities must be documented as limitations, not worked around unsafely.
+19. **Browser privacy logic stays in the browser layer.** Browser-specific privacy/security
+    controls live in the Android browser module. They must not duplicate or replace Rust Core
+    download logic.
+20. **Brave is reference, not dependency.** FetchX draws inspiration from Brave's Shields
+    architecture and privacy concepts. FetchX will not include Brave Core, Chromium, or any
+    Brave-specific code. GeckoView remains the browser engine.
 
 ---
 
@@ -1069,8 +1645,8 @@ The objective is architectural improvement, not Motrix duplication.
 | Priority | Phases |
 |----------|--------|
 | CRITICAL | 20P, 20Q, 21A, 21B, 21C, 21D, 21E, 26A |
-| HIGH | 20R, 20S, 21F, 21G, 21H, 21I, 22A, 22B, 23A, 23B, 23C, 26B, 26C, 27 |
-| MEDIUM | 23D, 24, 25, 28, 29 |
+| HIGH | 20R, 20S, 20B-A, 20B-B, 20B-C, 20B-D, 20B-E, 20B-F, 20B-G, 21F, 21G, 21H, 21I, 22A, 22B, 23A, 23B, 23C, 26B, 26C, 27 |
+| MEDIUM | 20B-H, 23D, 24, 25, 28, 29 |
 | FUTURE | 30 |
 
 ---
