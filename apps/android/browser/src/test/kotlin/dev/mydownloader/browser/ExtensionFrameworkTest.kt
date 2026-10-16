@@ -227,12 +227,17 @@ class ExtensionFrameworkTest {
                 name = "Example Add-on",
                 permissions = listOf("tabs"),
                 origins = listOf("https://example.org/*"),
+                dataCollectionPermissions = listOf("technicalAndInteractionData"),
             ),
         ) { allowed ->
             approved = allowed
         }
 
         assertEquals("addon@example.org", manager.state.value.permissionRequest?.extensionId)
+        assertEquals(
+            listOf("technicalAndInteractionData"),
+            manager.state.value.permissionRequest?.dataCollectionPermissions,
+        )
         assertTrue(manager.resolveInstallPermissionRequest(allow = true))
         assertEquals(true, approved)
         assertNull(manager.state.value.permissionRequest)

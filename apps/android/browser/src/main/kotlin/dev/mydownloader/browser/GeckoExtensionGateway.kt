@@ -31,6 +31,7 @@ internal class GeckoExtensionGatewayImpl(
                 extension: WebExtension,
                 permissions: Array<String>,
                 origins: Array<String>,
+                dataCollectionPermissions: Array<String>,
             ): GeckoResult<WebExtension.PermissionPromptResponse> {
                 val marketplaceInstall = isMarketplaceInstallActive()
                 val canGrantPermissions = if (marketplaceInstall) {
@@ -42,11 +43,13 @@ internal class GeckoExtensionGatewayImpl(
                         origins = origins,
                     )
                 }
-                if (canGrantPermissions) {
-                    return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(true, false))
+                if (canGrantPermissions && dataCollectionPermissions.isEmpty()) {
+                    return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(true, false, false))
                 }
-                if (!marketplaceInstall || !canPresentPermissionRequest(permissions, origins)) {
-                    return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(false, false))
+                if (!marketplaceInstall ||
+                    !canPresentPermissionRequest(permissions, origins, dataCollectionPermissions)
+                ) {
+                    return GeckoResult.fromValue(WebExtension.PermissionPromptResponse(false, false, false))
                 }
 
                 val result = GeckoResult<WebExtension.PermissionPromptResponse>()
@@ -60,38 +63,27 @@ internal class GeckoExtensionGatewayImpl(
                         .take(MAX_PROMPT_TEXT_LENGTH),
                     permissions = permissions.distinct(),
                     origins = origins.distinct(),
+                    dataCollectionPermissions = dataCollectionPermissions.distinct(),
                 )
                 val handler = onInstallPermissionPrompt
                 if (handler == null) {
-                    result.complete(WebExtension.PermissionPromptResponse(false, false))
+                    result.complete(WebExtension.PermissionPromptResponse(false, false, false))
                 } else {
                     handler(request) { allow ->
                         if (completed.compareAndSet(false, true)) {
-                            result.complete(WebExtension.PermissionPromptResponse(allow, false))
+                            result.complete(
+                                WebExtension.PermissionPromptResponse(
+                                    allow,
+                                    false,
+                                    allow && dataCollectionPermissions.isNotEmpty(),
+                                ),
+                            )
                         }
                     }
                 }
                 return result
             }
 
-            override fun onUpdatePrompt(
-                currentlyInstalled: WebExtension,
-                updatedExtension: WebExtension,
-                newPermissions: Array<String>,
-                newOrigins: Array<String>,
-            ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(
-                if (canAcceptExtensionUpdatePermissions(newPermissions, newOrigins)) {
-                    AllowOrDeny.ALLOW
-                } else {
-                    AllowOrDeny.DENY
-                },
-            )
-
-            override fun onOptionalPrompt(
-                extension: WebExtension,
-                permissions: Array<String>,
-                origins: Array<String>,
-            ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.DENY)
         })
     }
 
@@ -415,9 +407,13 @@ internal class GeckoExtensionGatewayImpl(
         const val MAX_PROMPT_TEXT_LENGTH = 512
         const val MAX_PROMPT_ITEM_COUNT = 128
 
-        fun canPresentPermissionRequest(permissions: Array<String>, origins: Array<String>): Boolean =
-            permissions.size + origins.size <= MAX_PROMPT_ITEM_COUNT &&
-                (permissions + origins).all {
+        fun canPresentPermissionRequest(
+            permissions: Array<String>,
+            origins: Array<String>,
+            dataCollectionPermissions: Array<String>,
+        ): Boolean =
+            permissions.size + origins.size + dataCollectionPermissions.size <= MAX_PROMPT_ITEM_COUNT &&
+                (permissions + origins + dataCollectionPermissions).all {
                     it.isNotBlank() &&
                         it.length <= MAX_PROMPT_TEXT_LENGTH &&
                         it.none(Char::isISOControl)

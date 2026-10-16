@@ -8,9 +8,9 @@ import org.mozilla.geckoview.GeckoRuntimeSettings
 
 data class PrivacySettings(
     val adBlockingEnabled: Boolean = true,
-    val fingerprintingProtectionEnabled: Boolean = true,
+    val fingerprintingProtectionEnabled: Boolean = false, // off by default — causes significant slowdown
     val cryptominingProtectionEnabled: Boolean = true,
-    val thirdPartyCookieIsolationEnabled: Boolean = true,
+    val thirdPartyCookieIsolationEnabled: Boolean = false, // off by default — breaks many sites
     val httpsOnlyEnabled: Boolean = false,
 )
 

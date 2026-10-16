@@ -1,6 +1,6 @@
 package dev.fetchx.browser
 
-import kotlin.test.Test
+import org.junit.Test
 import kotlin.test.assertEquals
 
 class MediaFilenameTest {

@@ -1,14 +1,14 @@
 [versions]
-kotlin = "2.0.21"
-agp = "8.13.2"
+kotlin = "2.4.21"
+agp = "9.4.0-alpha04"
 composeBom = "2024.12.01"
 coreKtx = "1.15.0"
 lifecycle = "2.8.7"
 activityCompose = "1.9.3"
 navigationCompose = "2.8.5"
 coroutines = "1.9.0"
-geckoview = "140.0.20250707120347"
-chaquopy = "17.0.0"
+geckoview = "158.0.20261007201254"
+chaquopy = "17.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -29,11 +29,10 @@ jna = { group = "net.java.dev.jna", name = "jna", version = "5.15.0" }
 junit = { group = "junit", name = "junit", version = "4.13.2" }
 kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
-geckoview-arm64 = { group = "org.mozilla.geckoview", name = "geckoview-arm64-v8a", version.ref = "geckoview" }
+geckoview = { group = "org.mozilla.geckoview", name = "geckoview", version.ref = "geckoview" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 chaquopy = { id = "com.chaquo.python", version.ref = "chaquopy" }

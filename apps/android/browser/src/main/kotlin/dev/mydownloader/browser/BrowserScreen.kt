@@ -3117,11 +3117,12 @@ private fun ExtensionPermissionDialog(
             ) {
                 Text("${request.name} (${request.extensionId}) wants access to:")
                 (request.permissions.map { "Permission: $it" } +
-                    request.origins.map { "Site access: $it" }).forEach { item ->
+                    request.origins.map { "Site access: $it" } +
+                    request.dataCollectionPermissions.map { "Data collection: $it" }).forEach { item ->
                     Text("- $item", style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
-                    "Approving grants these requested permissions. Access to private browsing remains off.",
+                    "Approving grants these requested permissions and allows the listed data collection. Access to private browsing remains off.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 8.dp),
                 )

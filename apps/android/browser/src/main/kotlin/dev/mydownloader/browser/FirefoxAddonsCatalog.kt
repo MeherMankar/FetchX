@@ -23,6 +23,7 @@ data class ExtensionInstallPermissionRequest(
     val name: String,
     val permissions: List<String>,
     val origins: List<String>,
+    val dataCollectionPermissions: List<String> = emptyList(),
 )
 
 data class FirefoxAddonsCatalogState(

@@ -270,16 +270,13 @@ class TabManager(
         // Match the Firefox version to the embedded GeckoView release so sites do
         // not see an obsolete browser version or the GeckoView embedder token.
         s.settings.userAgentOverride =
-            "Mozilla/5.0 (Android ${Build.VERSION.RELEASE}; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0"
+            "Mozilla/5.0 (Android ${Build.VERSION.RELEASE}; Mobile; rv:158.0) Gecko/158.0 Firefox/158.0"
 
         s.contentBlockingDelegate = object : org.mozilla.geckoview.ContentBlocking.Delegate {
             override fun onContentBlocked(
                 session: GeckoSession,
                 event: org.mozilla.geckoview.ContentBlocking.BlockEvent,
             ) {
-                // Diagnostic log — only logs category int and whether it was blocking.
-                // Does NOT log the URI to avoid leaking URLs.
-                Log.i(TAG, "onContentBlocked tab=$tabId isBlocking=${event.isBlocking} category=${event.antiTrackingCategory}")
                 val accepted = recordTrackerBlockedEvent(
                     controller = trackerBlockingController,
                     tabId = tabId,
@@ -287,7 +284,6 @@ class TabManager(
                     antiTrackingCategory = event.antiTrackingCategory,
                     requestUri = event.uri,
                 )
-                Log.i(TAG, "onContentBlocked accepted=$accepted tab=$tabId")
             }
         }
 
@@ -348,7 +344,6 @@ class TabManager(
                 perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean,
             ) {
-                Log.i(TAG, "Location changed in tab $tabId")
                 updateTabState(tabId) { it.copy(url = url ?: "", errorText = null) }
             }
 
@@ -392,7 +387,6 @@ class TabManager(
 
         s.progressDelegate = object : GeckoSession.ProgressDelegate {
             override fun onPageStart(session: GeckoSession, url: String) {
-                Log.i(TAG, "Page load started in tab $tabId")
                 updateTabState(tabId) { it.copy(isLoading = true, progress = 10, errorText = null) }
             }
 

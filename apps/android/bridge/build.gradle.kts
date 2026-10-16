@@ -1,14 +1,18 @@
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.Exec
+
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
+}
+
+abstract class GenerateUniFfiKotlinBindings : Exec() {
+    @get:OutputDirectory
+    abstract val outputDirectory: org.gradle.api.file.DirectoryProperty
 }
 
 val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
 val bindingOutputDirectory = layout.buildDirectory.dir("generated/uniffi/kotlin")
-val generatedBinding = bindingOutputDirectory.map {
-    it.file("dev/fetchx/bridge/uniffi/android_bridge.kt")
-}
-val generateUniFfiKotlinBindings = tasks.register<Exec>("generateUniFfiKotlinBindings") {
+val generateUniFfiKotlinBindings = tasks.register<GenerateUniFfiKotlinBindings>("generateUniFfiKotlinBindings") {
     val udlFile = repositoryRoot.resolve("crates/android-bridge/uniffi/android_bridge.udl")
     val configFile = repositoryRoot.resolve("crates/android-bridge/uniffi.toml")
     val bridgeManifest = repositoryRoot.resolve("crates/android-bridge/Cargo.toml")
@@ -20,7 +24,7 @@ val generateUniFfiKotlinBindings = tasks.register<Exec>("generateUniFfiKotlinBin
         repositoryRoot.resolve("Cargo.toml"),
         repositoryRoot.resolve("Cargo.lock"),
     )
-    outputs.file(generatedBinding)
+    outputDirectory.set(bindingOutputDirectory)
     workingDir(repositoryRoot)
     commandLine(
         "cargo",
@@ -41,13 +45,17 @@ val generateUniFfiKotlinBindings = tasks.register<Exec>("generateUniFfiKotlinBin
         "--config",
         configFile.relativeTo(repositoryRoot).path,
         "--out-dir",
-        bindingOutputDirectory.get().asFile.absolutePath,
+        outputDirectory.get().asFile.absolutePath,
     )
 }
 
 android {
     namespace = "dev.fetchx.bridge"
-    compileSdk = 35
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         minSdk = 26
@@ -61,22 +69,28 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        }
     }
 
     sourceSets {
         getByName("main") {
             // Pre-built .so files land here; directories are created but .so files
             // are not checked in — only .gitkeep placeholders.
-            jniLibs.srcDirs("src/main/jniLibs")
-            java.srcDir(bindingOutputDirectory)
+            jniLibs.directories += "src/main/jniLibs"
         }
     }
 }
 
-tasks.named("preBuild") {
-    dependsOn(generateUniFfiKotlinBindings)
+androidComponents {
+    onVariants { variant ->
+        variant.sources.kotlin?.addGeneratedSourceDirectory(
+            generateUniFfiKotlinBindings,
+            GenerateUniFfiKotlinBindings::outputDirectory,
+        )
+    }
 }
 
 dependencies {

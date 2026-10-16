@@ -130,7 +130,12 @@ object GeckoRuntimeHolder {
             settings = PrivacySettings(),
         )
         val settings = GeckoRuntimeSettings.Builder()
-            .consoleOutput(true)
+            // ── Performance ───────────────────────────────────────────────
+            // Disable console log forwarding to avoid per-page JS log overhead
+            .consoleOutput(false)
+            // Enable JavaScript (JIT is on by default when JS is enabled)
+            .javaScriptEnabled(true)
+            // ── Security ──────────────────────────────────────────────────
             .allowInsecureConnections(privacy.allowInsecureConnections)
             .contentBlocking(
                 ContentBlocking.Settings.Builder()
@@ -140,6 +145,8 @@ object GeckoRuntimeHolder {
             )
             .build()
             .setFingerprintingProtection(privacy.fingerprintingProtectionEnabled)
+            // Match system dark/light mode — avoids a style-recalculation flash
+            .also { s -> s.setPreferredColorScheme(GeckoRuntimeSettings.COLOR_SCHEME_SYSTEM) }
         return GeckoRuntime.create(context, settings)
     }
 

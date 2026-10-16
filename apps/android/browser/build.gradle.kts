@@ -1,12 +1,15 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
     namespace = "dev.fetchx.browser"
-    compileSdk = 35
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         minSdk = 26
@@ -17,8 +20,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        }
     }
 
     buildFeatures {
@@ -27,9 +32,8 @@ android {
 }
 
 dependencies {
-    // GeckoView ABI-split arm64-v8a — keeps APK size manageable for debug builds
-    // Version is managed in libs.versions.toml
-    implementation(libs.geckoview.arm64)
+    // The universal artifact provides GeckoView for both ABIs enabled by the app.
+    implementation(libs.geckoview)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

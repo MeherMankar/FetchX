@@ -5,20 +5,19 @@ import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 class PrivacyControllerTest {
 
     @Test
-    fun `privacy defaults enable native protections without forcing https only`() {
+    fun `privacy defaults avoid site compatibility and performance costs`() {
         val controller = PrivacyController()
 
         assertEquals(
             PrivacySettings(
                 adBlockingEnabled = true,
-                fingerprintingProtectionEnabled = true,
+                fingerprintingProtectionEnabled = false,
                 cryptominingProtectionEnabled = true,
-                thirdPartyCookieIsolationEnabled = true,
+                thirdPartyCookieIsolationEnabled = false,
                 httpsOnlyEnabled = false,
             ),
             controller.settings.value,
@@ -33,16 +32,16 @@ class PrivacyControllerTest {
 
         controller.setAdBlockingEnabled(false)
         controller.setAdBlockingEnabled(false)
-        controller.setFingerprintingProtectionEnabled(false)
-        controller.setFingerprintingProtectionEnabled(false)
+        controller.setFingerprintingProtectionEnabled(true)
+        controller.setFingerprintingProtectionEnabled(true)
         controller.setHttpsOnlyEnabled(true)
 
         assertEquals(
             PrivacySettings(
                 adBlockingEnabled = false,
-                fingerprintingProtectionEnabled = false,
+                fingerprintingProtectionEnabled = true,
                 cryptominingProtectionEnabled = true,
-                thirdPartyCookieIsolationEnabled = true,
+                thirdPartyCookieIsolationEnabled = false,
                 httpsOnlyEnabled = true,
             ),
             controller.settings.value,
@@ -59,13 +58,12 @@ class PrivacyControllerTest {
 
         assertEquals(
             ContentBlocking.AntiTracking.AD or
-                ContentBlocking.AntiTracking.ANALYTIC or
-                ContentBlocking.AntiTracking.SOCIAL or
-                ContentBlocking.AntiTracking.FINGERPRINTING or
-                ContentBlocking.AntiTracking.CRYPTOMINING,
+            ContentBlocking.AntiTracking.ANALYTIC or
+            ContentBlocking.AntiTracking.SOCIAL or
+            ContentBlocking.AntiTracking.CRYPTOMINING,
             configuration.antiTrackingCategories,
         )
-        assertTrue(configuration.fingerprintingProtectionEnabled)
+        assertFalse(configuration.fingerprintingProtectionEnabled)
     }
 
     @Test
@@ -77,7 +75,6 @@ class PrivacyControllerTest {
 
         assertEquals(
             ContentBlocking.AntiTracking.AD or
-                ContentBlocking.AntiTracking.FINGERPRINTING or
                 ContentBlocking.AntiTracking.CRYPTOMINING,
             configuration.antiTrackingCategories,
         )
