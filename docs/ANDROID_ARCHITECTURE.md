@@ -282,6 +282,12 @@ notification, and graceful shutdown — not for download logic.
 `MANAGE_EXTERNAL_STORAGE` permission is explicitly not used (Google Play policy
 restriction and unnecessary for the use case).
 
+The read-only **Storage usage** screen scans FetchX's app-specific downloads,
+browser profile/cache, runtime workspaces, SQLite database/WAL/SHM, and remaining
+private app data. Browser extensions are included in browser-profile usage.
+Persisted SAF document trees are outside app-owned paths and are reported as not
+measured; the screen never deletes downloads, profile data, cache, or workspaces.
+
 ---
 
 ## NetworkRoute Abstraction
@@ -419,11 +425,14 @@ android {
 `scripts/build-android-native.ps1` automates the Rust cross-compilation step:
 
 ```powershell
-.\scripts\build-android-native.ps1 -Release
+.\scripts\build-android-native.ps1
 ```
 
-This runs `cargo ndk` for each configured ABI and copies the resulting `.so` files
-into `apps/android/bridge/src/main/jniLibs/<abi>/`.
+The default is an optimized release build for each configured ABI. This avoids
+packaging Rust debug information in Android APKs. Use `-Debug` only when native
+debug symbols are needed; `-Release` is retained as an explicit equivalent to
+the default. Both builds copy the resulting `.so` files into
+`apps/android/bridge/src/main/jniLibs/<abi>/`.
 
 After running this script, a normal `./gradlew assembleDebug` (or `assembleRelease`)
 produces an APK that contains the Rust native libraries.

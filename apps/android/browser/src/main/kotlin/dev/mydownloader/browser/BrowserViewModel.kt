@@ -164,6 +164,7 @@ class BrowserViewModel internal constructor(
         val tm = tabManager ?: TabManager(runtime, trackerBlockingController).also { newTm ->
             tabManager = newTm
             newTm.onStateChanged = ::rebuildState
+            newTm.onNavigationStateChanged = ::updateNavigationState
             newTm.onVideoDetected = ::onVideoDetected
             newTm.createTab()
             Log.i(TAG, "TabManager initialized with first tab")
@@ -205,6 +206,15 @@ class BrowserViewModel internal constructor(
         }
     }
 
+    private fun updateNavigationState(tabId: String, tab: TabState) {
+        _uiState.update { state ->
+            if (state.tabs.none { it.id == tabId }) return@update state
+            state.copy(tabs = state.tabs.map { existing ->
+                if (existing.id == tabId) tab else existing
+            })
+        }
+    }
+
     // ──Tab actions ────────────────────────────────────────────────────────
 
     fun newTab(url: String = "about:blank") {
@@ -229,8 +239,8 @@ class BrowserViewModel internal constructor(
         tabManager?.navigate(rawUrl, _uiState.value.selectedSearchEngine)
     }
 
-    fun goBack() { tabManager?.goBack() }
-    fun goForward() { tabManager?.goForward() }
+    fun goBack(): Boolean = tabManager?.goBack() == true
+    fun goForward(): Boolean = tabManager?.goForward() == true
     fun reload() { tabManager?.reload() }
 
     // ──History ────────────────────────────────────────────────────────────
@@ -413,7 +423,9 @@ class BrowserViewModel internal constructor(
             closeMediaFormatPicker()
             return
         }
-        val destDir = android.os.Environment.getExternalStoragePublicDirectory(
+        val destDir = applicationContext?.getExternalFilesDir(
+            android.os.Environment.DIRECTORY_DOWNLOADS
+        ) ?: android.os.Environment.getExternalStoragePublicDirectory(
             android.os.Environment.DIRECTORY_DOWNLOADS,
         )
         val pageUrl = _uiState.value.activeTab?.url

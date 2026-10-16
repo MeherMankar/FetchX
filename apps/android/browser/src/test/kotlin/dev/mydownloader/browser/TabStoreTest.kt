@@ -139,6 +139,32 @@ class TabStoreTest {
     }
 
     @Test
+    fun `navigation capabilities are independent and follow the active tab`() {
+        val store = TabStore()
+        store.addTab(makeTab("t1").copy(canGoBack = true))
+        store.addTab(makeTab("t2").copy(canGoForward = true))
+
+        assertFalse(store.activeTab()!!.canGoBack)
+        assertTrue(store.activeTab()!!.canGoForward)
+
+        assertTrue(store.setActive("t1"))
+        assertTrue(store.activeTab()!!.canGoBack)
+        assertFalse(store.activeTab()!!.canGoForward)
+    }
+
+    @Test
+    fun `navigation callback cannot update a closed tab`() {
+        val store = TabStore()
+        store.addTab(makeTab("t1"))
+        store.addTab(makeTab("t2"))
+        store.removeTab("t1")
+
+        assertFalse(store.updateTab("t1") { it.copy(canGoBack = true) })
+        assertFalse(store.activeTab()!!.canGoBack)
+        assertFalse(store.activeTab()!!.canGoForward)
+    }
+
+    @Test
     fun `clear empties all tabs and active id`() {
         val store = TabStore()
         store.addTab(makeTab("t1"))
@@ -148,4 +174,3 @@ class TabStoreTest {
         assertNull(store.activeTabId())
     }
 }
-

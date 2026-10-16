@@ -34,6 +34,9 @@ class TabManager(
     /** Callback to notify observers of state changes. */
     var onStateChanged: (() -> Unit)? = null
 
+    /** Callback for lightweight per-tab GeckoSession navigation capability updates. */
+    var onNavigationStateChanged: ((String, TabState) -> Unit)? = null
+
     /** Callback invoked on the main thread when a video URL/response is detected. */
     var onVideoDetected: ((DetectedVideo) -> Unit)? = null
 
@@ -59,8 +62,7 @@ class TabManager(
         if (store.findTab(tabId) == null) return
         historyStore.removeTab(tabId)
         trackerBlockingController.removeTab(tabId)
-        sessions[tabId]?.close()
-        sessions.remove(tabId)
+        sessions.remove(tabId)?.close()
         store.removeTab(tabId)
         Log.i(TAG, "Closed tab $tabId, remaining: ${store.tabCount()}")
         // Ensure at least one tab always exists.
@@ -108,8 +110,20 @@ class TabManager(
         onStateChanged?.invoke()
     }
 
-    fun goBack() { activeSession()?.goBack() }
-    fun goForward() { activeSession()?.goForward() }
+    fun goBack(): Boolean {
+        val session = activeSession() ?: return false
+        return SessionNavigationActions.goBackIfAvailable(store.activeTab()) {
+            session.goBack()
+        }
+    }
+
+    fun goForward(): Boolean {
+        val session = activeSession() ?: return false
+        return SessionNavigationActions.goForwardIfAvailable(store.activeTab()) {
+            session.goForward()
+        }
+    }
+
     fun reload() { activeSession()?.reload() }
 
     // ──History API ────────────────────────────────────────────────────────
@@ -142,8 +156,9 @@ class TabManager(
     fun dispose() {
         historyStore.clearAll()
         trackerBlockingController.clearTabs()
-        sessions.values.forEach { it.close() }
+        val openSessions = sessions.values.toList()
         sessions.clear()
+        openSessions.forEach { it.close() }
         store.clear()
         Log.i(TAG, "TabManager disposed")
     }
@@ -235,11 +250,13 @@ class TabManager(
             }
 
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                updateTabState(tabId) { it.copy(canGoBack = canGoBack) }
+                Log.d(TAG, "navigation capability tab=$tabId back=$canGoBack session=${System.identityHashCode(session)}")
+                updateNavigationState(session, tabId) { it.copy(canGoBack = canGoBack) }
             }
 
             override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                updateTabState(tabId) { it.copy(canGoForward = canGoForward) }
+                Log.d(TAG, "navigation capability tab=$tabId forward=$canGoForward session=${System.identityHashCode(session)}")
+                updateNavigationState(session, tabId) { it.copy(canGoForward = canGoForward) }
             }
 
             override fun onLoadError(
@@ -288,5 +305,16 @@ class TabManager(
         }
 
         return s
+    }
+
+    private fun updateNavigationState(
+        session: GeckoSession,
+        tabId: String,
+        update: (TabState) -> TabState,
+    ) {
+        if (sessions[tabId] !== session) return
+        if (!store.updateTab(tabId, update)) return
+        val state = store.findTab(tabId) ?: return
+        onNavigationStateChanged?.invoke(tabId, state)
     }
 }

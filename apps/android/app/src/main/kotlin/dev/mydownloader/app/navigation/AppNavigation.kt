@@ -37,6 +37,7 @@ import dev.fetchx.core.download.NoOpDownloadRepository
 import dev.fetchx.downloads.ui.DownloadsScreen
 import dev.fetchx.downloads.ui.DownloadsViewModel
 import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -156,6 +157,11 @@ fun AppNavigation(initialUrl: String? = null) {
                         showBrowserMenu = showBrowserMenu,
                         onBrowserMenuDismiss = { showBrowserMenu = false },
                         onOpenBrowserMenu = { showBrowserMenu = true },
+                        onOpenStorage = {
+                            navController.navigate(Screen.Storage.route) {
+                                launchSingleTop = true
+                            }
+                        },
                         browserVersionName = browserVersionName,
                         initialNavigateUrl = pendingUrl.also { pendingUrl = null },
                         onDownloadCurrentPage = { url, title ->
@@ -191,6 +197,9 @@ fun AppNavigation(initialUrl: String? = null) {
                         onThemeColorChange = { newSeed -> browserThemeSeed = newSeed },
                     )
                 }
+            }
+            composable(Screen.Storage.route) {
+                StorageScreen(onBack = { navController.popBackStack() })
             }
         }
     }

@@ -473,6 +473,10 @@ struct AndroidYtDlpProcessRunner {
 static NEXT_YTDLP_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
 impl YtDlpProcessRunner for AndroidYtDlpProcessRunner {
+    fn report_diagnostic(&self, code: &'static str) {
+        self.runtime.report_failure(code.to_owned());
+    }
+
     fn validate_version<'a>(
         &'a self,
         _executable: &'a Path,

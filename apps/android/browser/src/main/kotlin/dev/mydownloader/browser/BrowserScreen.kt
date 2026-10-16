@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
@@ -45,6 +46,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -125,6 +128,7 @@ fun BrowserScreen(
     showBrowserMenu: Boolean = false,
     onBrowserMenuDismiss: () -> Unit = {},
     onOpenBrowserMenu: () -> Unit = {},
+    onOpenStorage: () -> Unit = {},
     onDownloadCurrentPage: (url: String, title: String) -> Unit = { _, _ -> },
     browserVersionName: String = "unknown",
     initialNavigateUrl: String? = null,
@@ -139,6 +143,10 @@ fun BrowserScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     var isUrlBarExpanded by rememberSaveable { mutableStateOf(false) }
     var showBrowserUpdates by rememberSaveable { mutableStateOf(false) }
+
+    BackHandler(enabled = activeTab?.canGoBack == true) {
+        viewModel.goBack()
+    }
 
     LaunchedEffect(activeTab?.url) {
         viewModel.syncUrlInput(activeTab?.url?.takeUnless { it == "about:blank" }.orEmpty())
@@ -332,6 +340,23 @@ fun BrowserScreen(
                         }
                     }
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = { viewModel.goBack() },
+                        enabled = activeTab?.canGoBack == true,
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    IconButton(
+                        onClick = { viewModel.goForward() },
+                        enabled = activeTab?.canGoForward == true,
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
+                    }
+                }
                 if (uiState.activeTab?.isLoading == true) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
@@ -493,6 +518,13 @@ fun BrowserScreen(
                             onClick = { onBrowserMenuDismiss(); viewModel.openBrowserSettings() },
                         )
                         DropdownMenuItem(
+                            text = { Text("Storage usage") },
+                            onClick = {
+                                onBrowserMenuDismiss()
+                                onOpenStorage()
+                            },
+                        )
+                        DropdownMenuItem(
                             text = { Text("Browser updates") },
                             onClick = {
                                 onBrowserMenuDismiss()
@@ -635,7 +667,9 @@ fun BrowserScreen(
                                         .fillMaxWidth()
                                         .clickable {
                                             showPicker = false
-                                            viewModel.requestMediaFormats(video)
+                                            // Go straight to download — skip format discovery
+                                            // (discover_formats crashes on Android embedded Python)
+                                            viewModel.downloadDetectedVideo(video)
                                         }
                                         .padding(horizontal = 16.dp, vertical = 12.dp),
                                 ) {

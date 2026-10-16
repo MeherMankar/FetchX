@@ -156,7 +156,39 @@ pub enum YtDlpError {
     InvalidFormatOutput,
 }
 
+impl YtDlpError {
+    fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::ExecutableNotFound => "executable_not_found",
+            Self::ExecutableInvalid => "executable_invalid",
+            Self::ExecutableNotRunnable => "executable_not_runnable",
+            Self::ExecutableStart => "executable_start",
+            Self::VersionTimeout => "version_timeout",
+            Self::InvalidVersion => "invalid_version",
+            Self::InvalidUrl => "invalid_url",
+            Self::ProcessFailure { .. } => "process_failure",
+            Self::MalformedProgress => "malformed_progress",
+            Self::ProgressOutputTooLarge => "progress_output_too_large",
+            Self::ProgressOutputRead => "progress_output_read",
+            Self::RuntimeFailure(_) => "runtime_failure",
+            Self::ProgressRegression => "progress_regression",
+            Self::OutputUnavailable => "output_unavailable",
+            Self::DestinationExists => "destination_exists",
+            Self::WorkspaceUnavailable => "workspace_unavailable",
+            Self::ProcessCleanup => "process_cleanup",
+            Self::PauseUnsupported => "pause_unsupported",
+            Self::ProcessRunner => "process_runner",
+            Self::FormatDiscoveryUnsupported => "format_discovery_unsupported",
+            Self::FormatDiscoveryTimeout => "format_discovery_timeout",
+            Self::FormatOutputTooLarge => "format_output_too_large",
+            Self::InvalidFormatOutput => "invalid_format_output",
+        }
+    }
+}
+
 pub trait YtDlpProcessRunner: Send + Sync {
+    fn report_diagnostic(&self, _code: &'static str) {}
+
     fn validate_version<'a>(
         &'a self,
         executable: &'a Path,
@@ -293,7 +325,16 @@ where
                 Err(DownloadEngineError::Cancelled)
             }
             Err(error) => {
-                self.persist_failure(id, &error).await?;
+                self.runner
+                    .report_diagnostic(download_failure_diagnostic_code(&error));
+                if let Err(persistence_error) = self.persist_failure(id, &error).await {
+                    self.runner.report_diagnostic(match &persistence_error {
+                        DownloadEngineError::StateMachine(_) => "failure_state_machine",
+                        DownloadEngineError::Storage(_) => "failure_storage",
+                        _ => "failure_state_persist",
+                    });
+                    return Err(persistence_error);
+                }
                 warn!(download_id = %id, "yt-dlp download failed");
                 Err(error)
             }
@@ -324,10 +365,18 @@ where
         report_resource_demand(control, id, 1, 0).await?;
 
         if item.status() == DownloadStatus::Preparing {
-            *item = self
+            *item = match self
                 .state_machine
                 .transition(id, DownloadStatus::Downloading)
-                .await?;
+                .await
+            {
+                Ok(item) => item,
+                Err(error) => {
+                    self.runner
+                        .report_diagnostic(state_machine_diagnostic_code("start", &error));
+                    return Err(error.into());
+                }
+            };
         }
         let mut expected_updated_at = item.updated_at();
         let mut last_persisted_at = Instant::now();
@@ -431,10 +480,18 @@ where
             return Err(DownloadEngineError::Cancelled);
         }
         promote_output_to_destination(&output, item.destination()).await?;
-        *item = self
+        *item = match self
             .state_machine
             .transition(id, DownloadStatus::Completed)
-            .await?;
+            .await
+        {
+            Ok(item) => item,
+            Err(error) => {
+                self.runner
+                    .report_diagnostic(state_machine_diagnostic_code("complete", &error));
+                return Err(error.into());
+            }
+        };
         if tokio::fs::remove_dir_all(&workspace).await.is_err() {
             warn!("yt-dlp temporary workspace cleanup failed");
         }
@@ -474,9 +531,10 @@ where
             )
             .await?
         {
-            return Err(DownloadEngineError::StateMachine(
-                self.current_state_error(item.id()).await?,
-            ));
+            let error = self.current_state_error(item.id()).await?;
+            self.runner
+                .report_diagnostic(state_machine_diagnostic_code("progress", &error));
+            return Err(DownloadEngineError::StateMachine(error));
         }
         *expected_updated_at = item.updated_at();
         Ok(())
@@ -576,6 +634,43 @@ where
     }
 }
 
+fn download_failure_diagnostic_code(error: &DownloadEngineError) -> &'static str {
+    match error {
+        DownloadEngineError::YtDlp(error) => error.diagnostic_code(),
+        DownloadEngineError::StateMachine(error) => match error {
+            StateMachineError::NotFound(_) => "state_machine_not_found",
+            StateMachineError::InvalidTransition { .. } => "state_machine_invalid_transition",
+            StateMachineError::ConcurrentTransition { .. } => "state_machine_concurrent_transition",
+            StateMachineError::Timestamp(_) => "state_machine_timestamp",
+            StateMachineError::Domain(_) => "state_machine_domain",
+            StateMachineError::DomainError(_) => "state_machine_domain_error",
+            StateMachineError::Storage(_) => "state_machine_storage",
+        },
+        DownloadEngineError::Storage(_) => "storage",
+        DownloadEngineError::FailurePersistence { .. } => "failure_persistence",
+        DownloadEngineError::Io(_) => "file_io",
+        DownloadEngineError::ResourceManagerUnavailable => "resource_manager",
+        _ => "download_engine",
+    }
+}
+
+fn state_machine_diagnostic_code(stage: &'static str, error: &StateMachineError) -> &'static str {
+    match (stage, error) {
+        ("start", StateMachineError::ConcurrentTransition { .. }) => "start_concurrent_transition",
+        ("start", StateMachineError::InvalidTransition { .. }) => "start_invalid_transition",
+        ("progress", StateMachineError::ConcurrentTransition { .. }) => {
+            "progress_concurrent_transition"
+        }
+        ("progress", StateMachineError::InvalidTransition { .. }) => "progress_invalid_transition",
+        ("complete", StateMachineError::ConcurrentTransition { .. }) => {
+            "complete_concurrent_transition"
+        }
+        ("complete", StateMachineError::InvalidTransition { .. }) => "complete_invalid_transition",
+        (_, StateMachineError::Storage(_)) => "stage_state_storage",
+        _ => "stage_state_transition",
+    }
+}
+
 impl<R> DownloadEngine for YtDlpEngine<R>
 where
     R: DownloadRepository + Clone,
@@ -636,9 +731,12 @@ pub fn parse_progress_line(line: &str) -> Result<YtDlpProgress, YtDlpError> {
     }
     let percentage_basis_points = parse_percentage(percentage)?;
     let downloaded_bytes = parse_optional_u64(downloaded)?;
-    let total_bytes = parse_optional_u64(total)?.or(parse_optional_u64(estimate)?);
+    let total_bytes = match parse_optional_u64(total)? {
+        Some(total) => Some(total),
+        None => parse_optional_estimate(estimate)?,
+    };
     let speed_bytes_per_second = parse_optional_float(speed)?;
-    let estimated_remaining_seconds = parse_optional_u64(eta)?;
+    let estimated_remaining_seconds = parse_optional_estimate(eta)?;
     Ok(YtDlpProgress {
         percentage_basis_points,
         downloaded_bytes,
@@ -671,6 +769,23 @@ fn parse_optional_u64(value: &str) -> Result<Option<u64>, YtDlpError> {
         .parse::<u64>()
         .map(Some)
         .map_err(|_| YtDlpError::MalformedProgress)
+}
+
+fn parse_optional_estimate(value: &str) -> Result<Option<u64>, YtDlpError> {
+    let value = value.trim();
+    if is_unknown(value) {
+        return Ok(None);
+    }
+    if let Ok(estimate) = value.parse::<u64>() {
+        return Ok(Some(estimate));
+    }
+    let estimate = value
+        .parse::<f64>()
+        .map_err(|_| YtDlpError::MalformedProgress)?;
+    if !estimate.is_finite() || estimate < 0.0 || estimate > (u64::MAX - 1024) as f64 {
+        return Err(YtDlpError::MalformedProgress);
+    }
+    Ok(Some(estimate.ceil() as u64))
 }
 
 fn parse_optional_float(value: &str) -> Result<Option<u64>, YtDlpError> {
@@ -713,6 +828,7 @@ fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -
         selected_format.into(),
         "--concurrent-fragments".into(),
         "1".into(),
+        "--hls-prefer-native".into(),
         "--newline".into(),
         "--progress-template".into(),
         PROGRESS_TEMPLATE.into(),
@@ -810,9 +926,15 @@ pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError>
 }
 
 fn codec_is_present(value: Option<&serde_json::Value>) -> bool {
-    value
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|codec| !codec.is_empty() && codec != "none")
+    match value.and_then(serde_json::Value::as_str) {
+        // Explicitly absent codec (yt-dlp signals no audio/video track)
+        Some("none") | Some("") => false,
+        // Codec name present — stream has this track
+        Some(_) => true,
+        // null / missing field — codec info not reported (common for muxed streams)
+        // Treat as present to avoid filtering out valid muxed formats
+        None => true,
+    }
 }
 
 fn is_valid_ytdlp_format_id(format_id: &str) -> bool {
@@ -1303,6 +1425,7 @@ mod tests {
     struct FakeRunnerState {
         run_count: usize,
         arguments: Vec<String>,
+        diagnostic_codes: Vec<&'static str>,
         output: Vec<u8>,
         progress_lines: Vec<String>,
         wait_for_stop: bool,
@@ -1310,6 +1433,14 @@ mod tests {
     }
 
     impl YtDlpProcessRunner for FakeRunner {
+        fn report_diagnostic(&self, code: &'static str) {
+            self.state
+                .lock()
+                .expect("test runner mutex")
+                .diagnostic_codes
+                .push(code);
+        }
+
         fn validate_version<'a>(
             &'a self,
             _executable: &'a Path,
@@ -1440,6 +1571,27 @@ mod tests {
     }
 
     #[test]
+    fn parses_fractional_hls_total_estimates() {
+        let integral_estimate = parse_progress_line("FETCHX_PROGRESS|2.1%|1024|NA|48128.0|0.0|NA")
+            .expect("yt-dlp HLS estimate may be serialized as a float");
+        assert_eq!(integral_estimate.downloaded_bytes, Some(1_024));
+        assert_eq!(integral_estimate.total_bytes, Some(48_128));
+
+        let fractional_estimate =
+            parse_progress_line("FETCHX_PROGRESS|2.1%|1024|NA|48128.5|0.0|NA")
+                .expect("fractional byte estimates round up");
+        assert_eq!(fractional_estimate.total_bytes, Some(48_129));
+    }
+
+    #[test]
+    fn parses_fractional_hls_eta_seconds() {
+        let progress =
+            parse_progress_line("FETCHX_PROGRESS|13.9%|15360|NA|110592.0|9941.88|6.9994")
+                .expect("yt-dlp HLS ETA may be serialized as a float");
+        assert_eq!(progress.estimated_remaining_seconds, Some(7));
+    }
+
+    #[test]
     fn rejects_malformed_progress_records() {
         for line in [
             "unrelated output",
@@ -1484,6 +1636,40 @@ mod tests {
             parse_format_output(&vec![b' '; MAX_FORMAT_OUTPUT_BYTES + 1]),
             Err(YtDlpError::FormatOutputTooLarge)
         ));
+    }
+
+    #[test]
+    fn runtime_failure_diagnostic_does_not_include_raw_details() {
+        let error = YtDlpError::RuntimeFailure(
+            "request failed for https://private.example/video?token=secret".to_owned(),
+        );
+        assert_eq!(error.diagnostic_code(), "runtime_failure");
+    }
+
+    #[test]
+    fn state_machine_diagnostic_reports_only_a_fixed_category() {
+        let error = DownloadEngineError::StateMachine(StateMachineError::ConcurrentTransition {
+            from: DownloadStatus::Downloading,
+            to: DownloadStatus::Failed,
+            actual: DownloadStatus::Cancelled,
+        });
+        assert_eq!(
+            download_failure_diagnostic_code(&error),
+            "state_machine_concurrent_transition"
+        );
+    }
+
+    #[test]
+    fn state_machine_stage_diagnostic_is_fixed_and_contextual() {
+        let error = StateMachineError::ConcurrentTransition {
+            from: DownloadStatus::Downloading,
+            to: DownloadStatus::Failed,
+            actual: DownloadStatus::Cancelled,
+        };
+        assert_eq!(
+            state_machine_diagnostic_code("progress", &error),
+            "progress_concurrent_transition"
+        );
     }
 
     #[test]
@@ -1568,6 +1754,7 @@ mod tests {
                 "FETCHX_PROGRESS|40%|4|10|NA|1|1".to_owned(),
             ];
         }
+        let state = Arc::clone(&runner.state);
         let (engine, base, id) = fixture("https://example.test/video", runner).await?;
         let (_cancel_sender, cancellation) = watch::channel(false);
 
@@ -1578,6 +1765,10 @@ mod tests {
                 Err(DownloadEngineError::YtDlp(YtDlpError::ProgressRegression))
             ),
             "{result:?}"
+        );
+        assert_eq!(
+            state.lock().expect("test runner mutex").diagnostic_codes,
+            ["progress_regression"]
         );
         assert!(
             engine

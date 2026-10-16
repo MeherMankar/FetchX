@@ -22,6 +22,7 @@ pub trait YtDlpRuntime: Send + Sync {
     fn validate_version(&self) -> String;
     fn run(&self, arguments: Vec<String>, progress_path: String, cancel_path: String) -> String;
     fn discover_formats(&self, url: String) -> String;
+    fn report_failure(&self, diagnostic_code: String);
 }
 
 // The scaffolding must come after the trait definition above so that the

@@ -37,6 +37,10 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         return result
     }
 
+    override fun reportFailure(diagnosticCode: String) {
+        Log.e("FetchXYtDlp", "Rust yt-dlp failure code=$diagnosticCode")
+    }
+
     companion object {
         fun start(context: Context): AndroidYtDlpRuntime {
             if (!Python.isStarted()) {
