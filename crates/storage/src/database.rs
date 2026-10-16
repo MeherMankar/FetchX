@@ -53,6 +53,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             )),
             false,
         ),
+        Migration::new(
+            6,
+            Cow::Borrowed("add_hls_engine_kind"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0006_add_hls_engine_kind.sql"
+            )),
+            false,
+        ),
     ]),
     ..Migrator::DEFAULT
 });

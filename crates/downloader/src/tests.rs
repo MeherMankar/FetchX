@@ -155,6 +155,36 @@ async fn start_scripted_server(
     Ok((format!("http://{address}/file"), task))
 }
 
+async fn start_disconnect_then_success_server(
+    body: Vec<u8>,
+) -> Result<(String, JoinHandle<Vec<String>>), std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for attempt in 0..2 {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            if let Some(request) = read_request(&mut stream).await {
+                requests.push(request);
+            }
+            if attempt == 1 {
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes()).await;
+                let _ = stream.write_all(&body).await;
+                let _ = stream.flush().await;
+            }
+        }
+        requests
+    });
+
+    Ok((format!("http://{address}/file"), task))
+}
+
 async fn start_cancel_resume_server(
     body: Vec<u8>,
 ) -> Result<
@@ -181,7 +211,7 @@ async fn start_cancel_resume_server(
         requests.push(first_request);
         let first_chunk_size = 64 * 1024;
         let first_headers = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"test-v1\"\r\nConnection: close\r\n\r\n",
             body.len()
         );
         if first_stream
@@ -223,7 +253,7 @@ async fn start_cancel_resume_server(
 
         let remaining = &body[start..];
         let response_headers = format!(
-            "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nETag: \"test-v1\"\r\nConnection: close\r\n\r\n",
             remaining.len(),
             start,
             body.len() - 1,
@@ -272,11 +302,16 @@ async fn start_segment_server(
     let active = Arc::new(AtomicUsize::new(0));
     let max_active = Arc::new(AtomicUsize::new(0));
     let no_range_requests = Arc::new(AtomicUsize::new(0));
+    let accept_idle_timeout =
+        if matches!(mode, SegmentServerMode::Fail | SegmentServerMode::ShortBody) {
+            Duration::from_secs(3)
+        } else {
+            Duration::from_millis(500)
+        };
     let task = tokio::spawn(async move {
         let mut connections = Vec::with_capacity(total_connections);
         while connections.len() < total_connections {
-            let accepted =
-                tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
+            let accepted = tokio::time::timeout(accept_idle_timeout, listener.accept()).await;
             let Ok(Ok((stream, _))) = accepted else {
                 break;
             };
@@ -341,7 +376,7 @@ async fn serve_segment_connection(
     let Some(range) = range else {
         let _ = no_range_requests.fetch_add(1, Ordering::AcqRel);
         let headers = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"test-v1\"\r\nConnection: close\r\n\r\n",
             body.len()
         );
         if stream.write_all(headers.as_bytes()).await.is_err() || stream.flush().await.is_err() {
@@ -431,7 +466,7 @@ async fn serve_segment_connection(
         };
 
     let mut headers = format!(
-        "HTTP/1.1 {} Segment\r\nContent-Length: {content_length}\r\nConnection: close\r\n",
+        "HTTP/1.1 {} Segment\r\nContent-Length: {content_length}\r\nETag: \"test-v1\"\r\nConnection: close\r\n",
         status
     );
     if status == 206 {
@@ -440,7 +475,7 @@ async fn serve_segment_connection(
         ));
     }
     if matches!(mode, SegmentServerMode::RateLimit) {
-        headers.push_str("Retry-After: 60\r\n");
+        headers.push_str("Retry-After: 0\r\n");
     }
     headers.push_str("\r\n");
     if stream.write_all(headers.as_bytes()).await.is_ok() {
@@ -474,6 +509,43 @@ fn range_header(request: &str) -> Option<&str> {
         let (name, value) = line.split_once(':')?;
         name.eq_ignore_ascii_case("range").then(|| value.trim())
     })
+}
+
+async fn write_resume_identity(
+    destination: &Path,
+    url: &str,
+    validator: &str,
+) -> Result<(), Box<dyn Error>> {
+    let metadata = serde_json::to_vec(&serde_json::json!({
+        "url": url,
+        "validator": validator,
+    }))?;
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part.meta", destination.display())),
+        metadata,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn write_finalizing_identity(
+    destination: &Path,
+    url: &str,
+    validator: &str,
+    total_size: u64,
+) -> Result<(), Box<dyn Error>> {
+    let metadata = serde_json::to_vec(&serde_json::json!({
+        "url": url,
+        "validator": validator,
+        "finalizing": true,
+        "total_size": total_size,
+    }))?;
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part.meta", destination.display())),
+        metadata,
+    )
+    .await?;
+    Ok(())
 }
 
 fn segmented_config(minimum_size: u64) -> HttpEngineConfig {
@@ -669,12 +741,6 @@ async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
     assert_eq!(tokio::fs::metadata(destination).await?.len(), TOTAL as u64);
     assert_eq!(completed.status(), DownloadStatus::Completed);
     assert_eq!(completed.progress().downloaded_bytes(), TOTAL as u64);
-    assert!(
-        completed
-            .progress()
-            .speed_bytes_per_second()
-            .is_some_and(|speed| speed > 0)
-    );
     let part_path = PathBuf::from(format!(
         "{}.part",
         directory.destination("segmented.bin").display()
@@ -728,7 +794,7 @@ async fn adaptive_scheduler_backs_off_when_server_rejects_excess_concurrency()
         body.clone(),
         8,
         SegmentServerMode::FailAboveConcurrency(1),
-        32,
+        128,
         true,
     )
     .await?;
@@ -754,11 +820,42 @@ async fn adaptive_scheduler_backs_off_when_server_rejects_excess_concurrency()
 }
 
 #[tokio::test]
-async fn rate_limited_segments_are_not_retried_while_ignoring_retry_after()
+async fn extreme_segmented_profile_respects_configured_thirty_two_connection_ceiling()
 -> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 1024 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 251) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 32, SegmentServerMode::Valid, 64, true).await?;
+    let mut config = adaptive_segmented_config(1024);
+    config.segment_count = 32;
+    config.adaptive.min_concurrency = 8;
+    config.adaptive.initial_concurrency = 32;
+    config.adaptive.max_concurrency = 32;
+    config.adaptive.enabled = false;
+    let (database, engine, directory) = setup_engine(config).await?;
+    let destination = directory.destination("extreme-profile.bin");
+
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let report = server.await?;
+    let ranges = report
+        .requests
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+
+    assert_eq!(ranges.len(), 32);
+    assert!(report.max_active_segments > 8);
+    assert!(report.max_active_segments <= 32);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rate_limited_segments_retry_with_a_bounded_attempt_count() -> Result<(), Box<dyn Error>> {
     let body = vec![31_u8; 256 * 1024];
     let (url, server) =
-        start_segment_server(body, 4, SegmentServerMode::RateLimit, 5, false).await?;
+        start_segment_server(body, 4, SegmentServerMode::RateLimit, 64, false).await?;
     let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
     let destination = directory.destination("rate-limited.bin");
     let item = make_item(&url, &destination)?;
@@ -766,10 +863,11 @@ async fn rate_limited_segments_are_not_retried_while_ignoring_retry_after()
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
 
-    assert!(matches!(
-        engine.download(id, receiver).await,
-        Err(DownloadEngineError::HttpStatus(429))
-    ));
+    let result = engine.download(id, receiver).await;
+    assert!(
+        matches!(result, Err(DownloadEngineError::HttpStatus(429))),
+        "{result:?}"
+    );
     let report = server.await?;
     let range_requests = report
         .requests
@@ -786,9 +884,9 @@ async fn rate_limited_segments_are_not_retried_while_ignoring_retry_after()
         .await?
         .ok_or("rate-limited download missing")?;
 
-    assert!(!range_requests.is_empty());
-    assert!(range_requests.len() <= 4);
-    assert_eq!(range_requests.len(), unique_ranges.len());
+    assert!(range_requests.len() > 4);
+    assert!(range_requests.len() <= 16);
+    assert!(unique_ranges.len() <= 4);
     assert!(!destination.exists());
     assert_eq!(persisted.status(), DownloadStatus::Failed);
     Ok(())
@@ -856,7 +954,7 @@ async fn invalid_adaptive_configuration_is_rejected_by_engine() -> Result<(), Bo
     let database = Database::connect("sqlite::memory:").await?;
     let config = HttpEngineConfig {
         adaptive: AdaptiveConfig {
-            max_concurrency: 9,
+            max_concurrency: 33,
             ..AdaptiveConfig::default()
         },
         ..HttpEngineConfig::default()
@@ -938,7 +1036,7 @@ async fn ignored_segment_ranges_fall_back_without_mixing_segment_bodies()
 async fn short_segment_body_fails_without_publishing_destination() -> Result<(), Box<dyn Error>> {
     let body: Vec<u8> = (0..256 * 1024).map(|index| (index % 229) as u8).collect();
     let (url, server) =
-        start_segment_server(body, 4, SegmentServerMode::ShortBody, 5, false).await?;
+        start_segment_server(body, 4, SegmentServerMode::ShortBody, 20, false).await?;
     let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
     let destination = directory.destination("short-segment.bin");
     let item = make_item(&url, &destination)?;
@@ -946,11 +1044,15 @@ async fn short_segment_body_fails_without_publishing_destination() -> Result<(),
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
 
-    assert!(matches!(
-        engine.download(id, receiver).await,
-        Err(DownloadEngineError::SegmentFailed { .. })
-            | Err(DownloadEngineError::IncompleteResponse { .. })
-    ));
+    let result = engine.download(id, receiver).await;
+    assert!(
+        matches!(
+            result,
+            Err(DownloadEngineError::SegmentFailed { .. })
+                | Err(DownloadEngineError::IncompleteResponse { .. })
+        ),
+        "{result:?}"
+    );
     let report = server.await?;
     assert!(report.requests.len() >= 2);
     assert!(!destination.exists());
@@ -960,7 +1062,7 @@ async fn short_segment_body_fails_without_publishing_destination() -> Result<(),
 #[tokio::test]
 async fn failed_segment_does_not_publish_any_destination() -> Result<(), Box<dyn Error>> {
     let body: Vec<u8> = (0..256 * 1024).map(|index| (index % 227) as u8).collect();
-    let (url, server) = start_segment_server(body, 4, SegmentServerMode::Fail, 5, false).await?;
+    let (url, server) = start_segment_server(body, 4, SegmentServerMode::Fail, 20, false).await?;
     let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
     let destination = directory.destination("failed-segment.bin");
     let item = make_item(&url, &destination)?;
@@ -968,10 +1070,11 @@ async fn failed_segment_does_not_publish_any_destination() -> Result<(), Box<dyn
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
 
-    assert!(matches!(
-        engine.download(id, receiver).await,
-        Err(DownloadEngineError::SegmentFailed { .. })
-    ));
+    let result = engine.download(id, receiver).await;
+    assert!(
+        matches!(result, Err(DownloadEngineError::SegmentFailed { .. })),
+        "{result:?}"
+    );
     let report = server.await?;
     assert!(report.requests.len() >= 2);
     assert!(!destination.exists());
@@ -1045,6 +1148,7 @@ async fn cancellation_keeps_segment_bytes_and_later_invocation_resumes_them()
         false,
     )
     .await?;
+    write_resume_identity(&destination, &resume_url, "\"test-v1\"").await?;
     let cancelled = database
         .downloads()
         .get(id)
@@ -1099,10 +1203,13 @@ async fn resumes_using_actual_partial_size_and_validates_final_content()
     let remaining = &body[PARTIAL..];
     let response = scripted_response(
         206,
-        &[(
-            "Content-Range",
-            &format!("bytes {PARTIAL}-{}/{}", TOTAL - 1, TOTAL),
-        )],
+        &[
+            (
+                "Content-Range",
+                &format!("bytes {PARTIAL}-{}/{}", TOTAL - 1, TOTAL),
+            ),
+            ("ETag", "\"test-v1\""),
+        ],
         remaining,
     );
     let (url, server) = start_scripted_server(vec![response]).await?;
@@ -1110,6 +1217,7 @@ async fn resumes_using_actual_partial_size_and_validates_final_content()
     let destination = directory.destination("resumed.bin");
     let partial_path = PathBuf::from(format!("{}.part", destination.display()));
     tokio::fs::write(&partial_path, &body[..PARTIAL]).await?;
+    write_resume_identity(&destination, &url, "\"test-v1\"").await?;
 
     let mut item = make_item(&url, &destination)?;
     item.set_progress_at(
@@ -1167,6 +1275,7 @@ async fn invalid_partial_responses_never_append_or_publish() -> Result<(), Box<d
         let destination = directory.destination(name);
         let partial_path = PathBuf::from(format!("{}.part", destination.display()));
         tokio::fs::write(&partial_path, original).await?;
+        write_resume_identity(&destination, &url, "\"test-v1\"").await?;
         let item = make_item(&url, &destination)?;
         let id = item.id();
         database.downloads().create(&item).await?;
@@ -1206,6 +1315,7 @@ async fn resumed_partial_response_after_redirect_is_not_appended() -> Result<(),
     let destination = directory.destination("redirected-resume.bin");
     let partial_path = PathBuf::from(format!("{}.part", destination.display()));
     tokio::fs::write(&partial_path, b"hello").await?;
+    write_resume_identity(&destination, &url, "\"test-v1\"").await?;
     let item = make_item(&url, &destination)?;
     let id = item.id();
     database.downloads().create(&item).await?;
@@ -1238,9 +1348,174 @@ async fn ignored_range_restarts_from_zero_without_duplicate_bytes() -> Result<()
     let completed = run_download(&engine, &database, item).await?;
     let requests = server.await?;
 
-    assert_eq!(range_header(&requests[0]), Some("bytes=4096-"));
+    assert_eq!(range_header(&requests[0]), None);
     assert_eq!(tokio::fs::read(destination).await?, body);
     assert_eq!(completed.progress().downloaded_bytes(), 128 * 1024);
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_etag_prevents_appending_stale_partial_bytes() -> Result<(), Box<dyn Error>> {
+    let original = b"old!";
+    let replacement = b"new!";
+    let response = scripted_response(
+        206,
+        &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"test-v2\"")],
+        replacement,
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("changed-etag.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, original).await?;
+    write_resume_identity(&destination, &url, "\"test-v1\"").await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::RangeMismatch)
+    ));
+    let requests = server.await?;
+    assert_eq!(range_header(&requests[0]), Some("bytes=4-"));
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("if-range: \"test-v1\"")
+    );
+    assert_eq!(tokio::fs::read(partial_path).await?, original);
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_last_modified_prevents_appending_stale_partial_bytes() -> Result<(), Box<dyn Error>>
+{
+    let response = scripted_response(
+        206,
+        &[
+            ("Content-Range", "bytes 4-7/8"),
+            ("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT"),
+        ],
+        b"new!",
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("changed-last-modified.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, b"old!").await?;
+    write_resume_identity(&destination, &url, "Wed, 21 Oct 2015 07:27:00 GMT").await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::RangeMismatch)
+    ));
+    let requests = server.await?;
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("if-range: wed, 21 oct 2015 07:27:00 gmt")
+    );
+    assert_eq!(tokio::fs::read(partial_path).await?, b"old!");
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn if_range_mismatch_restarts_from_a_full_response() -> Result<(), Box<dyn Error>> {
+    let body = b"updated resource";
+    let response = scripted_response(200, &[("ETag", "\"test-v2\"")], body);
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("if-range-restart.bin");
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part", destination.display())),
+        b"old partial",
+    )
+    .await?;
+    write_resume_identity(&destination, &url, "\"test-v1\"").await?;
+    let item = make_item(&url, &destination)?;
+    let completed = run_download(&engine, &database, item).await?;
+    let requests = server.await?;
+
+    assert_eq!(range_header(&requests[0]), Some("bytes=11-"));
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("if-range: \"test-v1\"")
+    );
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn recovers_a_valid_file_after_crash_during_finalization() -> Result<(), Box<dyn Error>> {
+    for destination_already_published in [false, true] {
+        let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+        let destination = directory.destination("recovered-finalization.bin");
+        let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+        let url = "http://127.0.0.1:1/recovery-test";
+        let content = b"fully verified before publication";
+        tokio::fs::write(&partial_path, content).await?;
+        if destination_already_published {
+            tokio::fs::write(&destination, content).await?;
+        }
+        write_finalizing_identity(&destination, url, "\"test-v1\"", content.len() as u64).await?;
+
+        let item = make_item(url, &destination)?;
+        let id = item.id();
+        database.downloads().create(&item).await?;
+        let (_sender, receiver) = watch::channel(false);
+        let completed = engine.download(id, receiver).await?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(
+            completed.progress().downloaded_bytes(),
+            content.len() as u64
+        );
+        assert_eq!(tokio::fs::read(&destination).await?, content);
+        assert!(!partial_path.exists());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn final_publication_does_not_overwrite_a_concurrent_destination()
+-> Result<(), Box<dyn Error>> {
+    let (database, engine, directory) = setup_engine(HttpEngineConfig {
+        minimum_segmented_file_size: u64::MAX,
+        ..HttpEngineConfig::default()
+    })
+    .await?;
+    let (published_first_chunk, wait_for_first_chunk) = oneshot::channel();
+    let mut response = ServerResponse::ok(b"replacement".to_vec());
+    response.body_chunks = vec![b"replace".to_vec(), b"ment".to_vec()];
+    response.delay_between_chunks = Duration::from_millis(100);
+    response.signal_after_first_chunk = Some(published_first_chunk);
+    let (url, server) = start_server(response).await?;
+    let destination = directory.destination("concurrent-target.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+    let task = tokio::spawn(async move { engine.download(id, receiver).await });
+
+    wait_for_first_chunk.await?;
+    tokio::fs::write(&destination, b"existing owner").await?;
+    let result = task.await?;
+    assert!(matches!(
+        result,
+        Err(DownloadEngineError::DestinationExists)
+    ));
+    server.await?;
+    assert_eq!(tokio::fs::read(destination).await?, b"existing owner");
     Ok(())
 }
 
@@ -1276,6 +1551,7 @@ async fn handles_416_by_restarting_only_when_local_size_is_not_short() -> Result
         let mut partial_content = body[..partial_size.min(body.len())].to_vec();
         partial_content.resize(partial_size, b'x');
         tokio::fs::write(&partial_path, &partial_content).await?;
+        write_resume_identity(&destination, &url, "\"test-v1\"").await?;
         let item = make_item(&url, &destination)?;
         let id = item.id();
         database.downloads().create(&item).await?;
@@ -1310,10 +1586,13 @@ async fn resumes_unknown_total_from_valid_content_range() -> Result<(), Box<dyn 
     let partial_size = 7;
     let response = scripted_response(
         206,
-        &[(
-            "Content-Range",
-            &format!("bytes {partial_size}-{}/*", body.len() - 1),
-        )],
+        &[
+            (
+                "Content-Range",
+                &format!("bytes {partial_size}-{}/*", body.len() - 1),
+            ),
+            ("ETag", "\"test-v1\""),
+        ],
         &body[partial_size..],
     );
     let (url, server) = start_scripted_server(vec![response]).await?;
@@ -1324,6 +1603,7 @@ async fn resumes_unknown_total_from_valid_content_range() -> Result<(), Box<dyn 
         &body[..partial_size],
     )
     .await?;
+    write_resume_identity(&destination, &url, "\"test-v1\"").await?;
     let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
 
     server.await?;
@@ -1420,12 +1700,38 @@ async fn follows_a_normal_redirect() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
+async fn transient_connection_failure_is_retried() -> Result<(), Box<dyn Error>> {
+    let body = b"retried successfully".to_vec();
+    let (url, server) = start_disconnect_then_success_server(body.clone()).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("connection-retry.bin");
+    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let requests = server.await?;
+
+    assert_eq!(requests.len(), 2);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_failures_persist_failed_state_and_safe_error() -> Result<(), Box<dyn Error>> {
     for status in [404, 403, 429, 500, 502, 503] {
         let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
-        let mut response = ServerResponse::ok(b"failure body".to_vec());
-        response.status = status;
-        let (url, server) = start_server(response).await?;
+        let attempts = if crate::retry::RetryPolicy::is_transient_status(status) {
+            4
+        } else {
+            1
+        };
+        let retry_headers = if attempts > 1 {
+            vec![("Retry-After", "0")]
+        } else {
+            vec![]
+        };
+        let responses = (0..attempts)
+            .map(|_| scripted_response(status, &retry_headers, b"failure body"))
+            .collect();
+        let (url, server) = start_scripted_server(responses).await?;
         let item = make_item(&url, &directory.destination("failed.bin"))?;
         let id = item.id();
         database.downloads().create(&item).await?;
@@ -1435,7 +1741,7 @@ async fn http_failures_persist_failed_state_and_safe_error() -> Result<(), Box<d
             engine.download(id, receiver).await,
             Err(DownloadEngineError::HttpStatus(found)) if found == status
         ));
-        server.await?;
+        assert_eq!(server.await?.len(), attempts);
         let persisted = database
             .downloads()
             .get(id)

@@ -48,6 +48,8 @@ pub enum DownloadEngineError {
     InvalidPartialFile,
     #[error("partial download file changed while it was being opened")]
     PartialFileChanged,
+    #[error("partial download metadata could not be encoded: {0}")]
+    InvalidPartialMetadata(String),
     #[error("segment {index} (bytes {start}-{end}) failed validation or transfer")]
     SegmentFailed { index: usize, start: u64, end: u64 },
     #[error("a segmented download worker failed unexpectedly")]
@@ -152,6 +154,7 @@ impl DownloadEngineError {
             | Self::UnexpectedPartialResponse
             | Self::InvalidPartialFile
             | Self::PartialFileChanged
+            | Self::InvalidPartialMetadata(_)
             | Self::SegmentFailed { .. }
             | Self::SegmentWorkerFailed
             | Self::ContentLengthExceeded { .. }

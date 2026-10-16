@@ -7,8 +7,8 @@ use reqwest::{Client, Url, header::CONTENT_TYPE};
 use tokio::sync::watch;
 
 use crate::{
-    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, HlsEngine, is_hls_url,
-    ManagedDownloadControl, ManagedDownloadEngine, YtDlpEngine, YtDlpFormat,
+    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, HlsEngine,
+    ManagedDownloadControl, ManagedDownloadEngine, YtDlpEngine, YtDlpFormat, is_hls_url,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -131,14 +131,14 @@ where
         cancellation: watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
         match self.selected_engine_for(id).await? {
-            EngineKind::DirectHttp => self.direct_http.download(id, cancellation).await,
-            EngineKind::Aria2 => self.aria2.download(id, cancellation).await,
+            EngineKind::DirectHttp => Box::pin(self.direct_http.download(id, cancellation)).await,
+            EngineKind::Aria2 => Box::pin(self.aria2.download(id, cancellation)).await,
             EngineKind::YtDlp => match &self.yt_dlp {
-                Some(engine) => engine.download(id, cancellation).await,
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
             EngineKind::Hls => match &self.hls {
-                Some(engine) => engine.download(id, cancellation).await,
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
         }
@@ -155,14 +155,16 @@ where
         control: ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
         match self.selected_engine_for(id).await? {
-            EngineKind::DirectHttp => self.direct_http.download_managed(id, control).await,
-            EngineKind::Aria2 => self.aria2.download_managed(id, control).await,
+            EngineKind::DirectHttp => {
+                Box::pin(self.direct_http.download_managed(id, control)).await
+            }
+            EngineKind::Aria2 => Box::pin(self.aria2.download_managed(id, control)).await,
             EngineKind::YtDlp => match &self.yt_dlp {
-                Some(engine) => engine.download_managed(id, control).await,
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
             EngineKind::Hls => match &self.hls {
-                Some(engine) => engine.download_managed(id, control).await,
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
         }

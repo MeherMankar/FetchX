@@ -28,26 +28,28 @@ use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
 };
 use fetchx_storage::DownloadRepository;
-use reqwest::{Client, StatusCode, Url};
+use reqwest::{Client, Url};
+use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, OpenOptions},
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     sync::{Semaphore, watch},
     time::sleep,
 };
 use tracing::{info, warn};
 
-use crate::{DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine};
+use crate::{
+    DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
+    retry::{RetryPolicy, retry_after_delay},
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_SEGMENT_CONCURRENCY: usize = 4;
 const MAX_SEGMENT_CONCURRENCY: usize = 16;
-const MAX_SEGMENT_RETRIES: u8 = 3;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
-const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 const MAX_MANIFEST_BYTES: usize = 10 * 1024 * 1024; // 10 MiB guard
 const MAX_SEGMENT_SIZE: u64 = 512 * 1024 * 1024; // 512 MiB per segment guard
 const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
@@ -66,7 +68,6 @@ pub struct HlsEngineConfig {
     pub user_agent: String,
 }
 
-
 impl Default for HlsEngineConfig {
     fn default() -> Self {
         Self {
@@ -81,7 +82,7 @@ impl Default for HlsEngineConfig {
 // ── Manifest types ────────────────────────────────────────────────────────────
 
 /// A single media segment parsed from a media playlist.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 struct HlsSegment {
     /// Absolute URI of the segment.
     uri: String,
@@ -93,11 +94,22 @@ struct HlsSegment {
 }
 
 /// Encryption key descriptor for an HLS segment.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 struct HlsKey {
     uri: String,
     /// 16-byte IV; if absent, the segment sequence number is used.
     iv: Option<[u8; AES128_BLOCK_SIZE]>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct HlsSegmentIdentity {
+    segment: HlsSegment,
+    size: u64,
+}
+
+struct SegmentAttemptError {
+    error: DownloadEngineError,
+    retry_after: Option<Duration>,
 }
 
 /// Outcome of parsing an `.m3u8` file.
@@ -236,13 +248,6 @@ where
             return Err(DownloadEngineError::Paused);
         }
 
-        // Reject destination collisions.
-        match tokio::fs::symlink_metadata(item.destination()).await {
-            Ok(_) => return Err(DownloadEngineError::DestinationExists),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(DownloadEngineError::Io(e)),
-        }
-
         // ── Step 1: Fetch and parse the manifest ───────────────────────────────
         if item.status() == DownloadStatus::Preparing {
             *item = self
@@ -251,26 +256,40 @@ where
                 .await?;
         }
 
-        let segments = self
-            .resolve_segments(url, control)
-            .await?;
+        let workspace = hls_workspace_path(item.destination(), id);
+        let part_path = workspace.join("assembled.ts");
+        match tokio::fs::symlink_metadata(item.destination()).await {
+            Ok(destination_metadata)
+                if destination_metadata.file_type().is_file()
+                    && files_equal(item.destination(), &part_path).await? =>
+            {
+                *item = self
+                    .state_machine
+                    .transition(id, DownloadStatus::Completed)
+                    .await?;
+                if tokio::fs::remove_dir_all(&workspace).await.is_err() {
+                    warn!(download_id = %id, "HLS recovered workspace cleanup failed");
+                }
+                return Ok(item.clone());
+            }
+            Ok(_) => return Err(DownloadEngineError::DestinationExists),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+
+        let segments = self.resolve_segments(url, control).await?;
 
         if segments.is_empty() {
             return Err(DownloadEngineError::InvalidUrl);
         }
 
         // ── Step 2: Determine workspace paths ──────────────────────────────────
-        let workspace = hls_workspace_path(item.destination(), id);
         // Create or reuse existing workspace (for resume).
         ensure_workspace(&workspace).await?;
 
-        let part_path = workspace.join("assembled.ts");
-
         // ── Step 3: Parallel segment download ─────────────────────────────────
         let total_segments = segments.len();
-        let downloaded_bytes_counter = Arc::new(AtomicU64::new(
-            item.progress().downloaded_bytes(),
-        ));
+        let downloaded_bytes_counter = Arc::new(AtomicU64::new(item.progress().downloaded_bytes()));
 
         // Estimate total bytes: sum of already-downloaded bytes per existing
         // segment files gives a floor; we also use duration hints if known.
@@ -349,8 +368,7 @@ where
                 return Err(DownloadEngineError::Cancelled);
             }
             let body = self.fetch_manifest(&current_url).await?;
-            let text =
-                String::from_utf8(body).map_err(|_| DownloadEngineError::InvalidUrl)?;
+            let text = String::from_utf8(body).map_err(|_| DownloadEngineError::InvalidUrl)?;
             match parse_playlist(&text, &current_url)? {
                 PlaylistKind::Media(segments) => return Ok(segments),
                 PlaylistKind::Master(variants) => {
@@ -374,9 +392,7 @@ where
             .await
             .map_err(DownloadEngineError::Request)?;
         if !response.status().is_success() {
-            return Err(DownloadEngineError::HttpStatus(
-                response.status().as_u16(),
-            ));
+            return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
         }
         let bytes = response
             .bytes()
@@ -419,9 +435,9 @@ where
 
         // Track which segments were already complete from a previous partial run.
         let mut already_done = vec![false; total_segs];
-        for (i, _seg) in segments.iter().enumerate() {
+        for (i, segment) in segments.iter().enumerate() {
             let seg_path = segment_path(workspace, i);
-            if is_segment_complete(&seg_path).await {
+            if is_segment_complete(&seg_path, segment).await? {
                 already_done[i] = true;
                 completed_segs += 1;
             }
@@ -458,12 +474,12 @@ where
             let cancel_rx = cancel_tx.subscribe();
 
             join_set.spawn(async move {
-                let _permit = sem.acquire().await.map_err(|_| {
-                    DownloadEngineError::SegmentWorkerFailed
-                })?;
-                let size =
-                    download_one_segment(&client, &seg, &seg_path, i, cancel_rx, dl_counter)
-                        .await?;
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .map_err(|_| DownloadEngineError::SegmentWorkerFailed)?;
+                let size = download_one_segment(&client, &seg, &seg_path, i, cancel_rx, dl_counter)
+                    .await?;
                 Ok((i, size))
             });
             // Reap finished tasks eagerly to emit progress without waiting for
@@ -678,8 +694,7 @@ where
 
 // ── Segment download (single segment with retries) ────────────────────────────
 
-/// Downloads a single HLS segment to `path`, with up to [`MAX_SEGMENT_RETRIES`]
-/// attempts and exponential back-off.  Returns the number of bytes written.
+/// Downloads a single HLS segment with bounded retries and exponential back-off.
 async fn download_one_segment(
     client: &Client,
     seg: &HlsSegment,
@@ -690,41 +705,71 @@ async fn download_one_segment(
 ) -> Result<u64, DownloadEngineError> {
     let url = Url::parse(&seg.uri).map_err(|_| DownloadEngineError::InvalidUrl)?;
 
+    remove_segment_identity(path).await?;
+    let started_at = tokio::time::Instant::now();
     let mut attempts: u8 = 0;
     loop {
         if *cancel.borrow() {
             return Err(DownloadEngineError::Cancelled);
         }
 
-        attempts += 1;
-        match try_download_segment(client, &url, path, segment_index, &mut cancel, &downloaded_bytes).await {
-            Ok(size) => {
+        attempts = attempts.saturating_add(1);
+        match try_download_segment(
+            client,
+            &url,
+            path,
+            segment_index,
+            &mut cancel,
+            &downloaded_bytes,
+        )
+        .await
+        {
+            Ok(_size) => {
                 // AES-128 decryption if a key is present.
                 if let Some(key_info) = &seg.key {
                     decrypt_segment_aes128(client, key_info, path, seg.sequence).await?;
                 }
+                let size = tokio::fs::metadata(path)
+                    .await
+                    .map_err(DownloadEngineError::Io)?
+                    .len();
+                if size == 0 {
+                    return Err(DownloadEngineError::InvalidUrl);
+                }
+                save_segment_identity(path, seg, size).await?;
                 return Ok(size);
             }
-            Err(e) if attempts >= MAX_SEGMENT_RETRIES => {
-                return Err(e);
-            }
-            Err(DownloadEngineError::Cancelled) => {
-                return Err(DownloadEngineError::Cancelled);
-            }
-            Err(_) => {
-                // Exponential back-off: 500ms, 1000ms, 2000ms…
-                let delay = RETRY_BASE_DELAY * u32::from(1u8 << (attempts - 1));
+            Err(attempt_error) => {
+                if !is_retryable_segment_error(&attempt_error.error) {
+                    return Err(attempt_error.error);
+                }
+                let Some(delay) = RetryPolicy::HTTP.delay(
+                    attempts,
+                    attempt_error.retry_after,
+                    started_at.elapsed(),
+                ) else {
+                    return Err(attempt_error.error);
+                };
                 let sleep_fut = sleep(delay);
                 tokio::select! {
                     _ = sleep_fut => {}
-                    _ = cancel.changed() => {
-                        if *cancel.borrow() {
+                    changed = cancel.changed() => {
+                        if changed.is_err() || *cancel.borrow() {
                             return Err(DownloadEngineError::Cancelled);
                         }
                     }
                 }
             }
         }
+    }
+}
+
+fn is_retryable_segment_error(error: &DownloadEngineError) -> bool {
+    match error {
+        DownloadEngineError::HttpStatus(status) => RetryPolicy::is_transient_status(*status),
+        DownloadEngineError::Request(error) => RetryPolicy::is_transient_request(error),
+        DownloadEngineError::IncompleteResponse { .. } => true,
+        _ => false,
     }
 }
 
@@ -736,31 +781,47 @@ async fn try_download_segment(
     _segment_index: usize,
     cancel: &mut watch::Receiver<bool>,
     downloaded_bytes: &AtomicU64,
-) -> Result<u64, DownloadEngineError> {
+) -> Result<u64, SegmentAttemptError> {
     // Remove stale partial file so we always start fresh per attempt.
-    let _ = tokio::fs::remove_file(path).await;
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(SegmentAttemptError {
+                error: DownloadEngineError::Io(error),
+                retry_after: None,
+            });
+        }
+    }
 
     let response = {
         let send_fut = client.get(url.clone()).send();
         tokio::select! {
             biased;
-            _ = cancel.changed() => {
-                if *cancel.borrow() {
-                    return Err(DownloadEngineError::Cancelled);
-                }
-                return Err(DownloadEngineError::Cancelled);
+            changed = cancel.changed() => {
+                let _ = changed;
+                return Err(SegmentAttemptError {
+                    error: DownloadEngineError::Cancelled,
+                    retry_after: None,
+                });
             }
-            result = send_fut => result.map_err(DownloadEngineError::Request)?
+            result = send_fut => result.map_err(|error| SegmentAttemptError {
+                error: DownloadEngineError::Request(error),
+                retry_after: None,
+            })?
         }
     };
 
-    if response.status() == StatusCode::SERVICE_UNAVAILABLE
-        || response.status() == StatusCode::TOO_MANY_REQUESTS
-    {
-        return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
-    }
     if !response.status().is_success() {
-        return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(retry_after_delay);
+        return Err(SegmentAttemptError {
+            error: DownloadEngineError::HttpStatus(response.status().as_u16()),
+            retry_after,
+        });
     }
 
     let mut file = OpenOptions::new()
@@ -768,9 +829,21 @@ async fn try_download_segment(
         .create_new(true)
         .open(path)
         .await
-        .map_err(DownloadEngineError::Io)?;
+        .map_err(|error| SegmentAttemptError {
+            error: DownloadEngineError::Io(error),
+            retry_after: None,
+        })?;
 
     let mut written: u64 = 0;
+    let expected_length = response.content_length();
+    if expected_length.is_some_and(|size| size > MAX_SEGMENT_SIZE) {
+        return Err(SegmentAttemptError {
+            error: DownloadEngineError::ContentLengthExceeded {
+                expected: MAX_SEGMENT_SIZE,
+            },
+            retry_after: None,
+        });
+    }
     let mut response = response;
 
     loop {
@@ -781,11 +854,17 @@ async fn try_download_segment(
                 if *cancel.borrow() {
                     let _ = file.flush().await;
                     let _ = tokio::fs::remove_file(path).await;
-                    return Err(DownloadEngineError::Cancelled);
+                    return Err(SegmentAttemptError {
+                        error: DownloadEngineError::Cancelled,
+                        retry_after: None,
+                    });
                 }
                 continue;
             }
-            result = chunk_fut => result.map_err(DownloadEngineError::Request)?
+            result = chunk_fut => result.map_err(|error| SegmentAttemptError {
+                error: DownloadEngineError::Request(error),
+                retry_after: None,
+            })?
         };
 
         let Some(chunk) = chunk else { break };
@@ -793,23 +872,47 @@ async fn try_download_segment(
         let chunk_len = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
         let next_written = written
             .checked_add(chunk_len)
-            .ok_or(DownloadEngineError::ByteCountOverflow)?;
+            .ok_or_else(|| SegmentAttemptError {
+                error: DownloadEngineError::ByteCountOverflow,
+                retry_after: None,
+            })?;
         if next_written > MAX_SEGMENT_SIZE {
             let _ = tokio::fs::remove_file(path).await;
-            return Err(DownloadEngineError::ContentLengthExceeded {
-                expected: MAX_SEGMENT_SIZE,
+            return Err(SegmentAttemptError {
+                error: DownloadEngineError::ContentLengthExceeded {
+                    expected: MAX_SEGMENT_SIZE,
+                },
+                retry_after: None,
             });
         }
 
         file.write_all(&chunk)
             .await
-            .map_err(DownloadEngineError::Io)?;
+            .map_err(|error| SegmentAttemptError {
+                error: DownloadEngineError::Io(error),
+                retry_after: None,
+            })?;
         written = next_written;
         downloaded_bytes.fetch_add(chunk_len, Ordering::AcqRel);
     }
 
-    file.flush().await.map_err(DownloadEngineError::Io)?;
-    file.sync_all().await.map_err(DownloadEngineError::Io)?;
+    if expected_length.is_some_and(|expected| expected != written) {
+        return Err(SegmentAttemptError {
+            error: DownloadEngineError::IncompleteResponse {
+                expected: expected_length.unwrap_or_default(),
+                actual: written,
+            },
+            retry_after: None,
+        });
+    }
+    file.flush().await.map_err(|error| SegmentAttemptError {
+        error: DownloadEngineError::Io(error),
+        retry_after: None,
+    })?;
+    file.sync_all().await.map_err(|error| SegmentAttemptError {
+        error: DownloadEngineError::Io(error),
+        retry_after: None,
+    })?;
     Ok(written)
 }
 
@@ -876,8 +979,8 @@ async fn decrypt_segment_aes128(
     }
 
     // Decrypt using pure-Rust AES-128-CBC (no unsafe, PKCS7 padding).
-    let plaintext = aes128_cbc_decrypt(&key, &iv, &ciphertext)
-        .ok_or(DownloadEngineError::InvalidUrl)?;
+    let plaintext =
+        aes128_cbc_decrypt(&key, &iv, &ciphertext).ok_or(DownloadEngineError::InvalidUrl)?;
 
     tokio::fs::write(path, &plaintext)
         .await
@@ -916,7 +1019,10 @@ fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], ciphertext: &[u8]) -> Optio
         return None;
     }
     let pad_start = plaintext.len().checked_sub(pad_byte)?;
-    if plaintext[pad_start..].iter().any(|&b| b as usize != pad_byte) {
+    if plaintext[pad_start..]
+        .iter()
+        .any(|&b| b as usize != pad_byte)
+    {
         return None;
     }
     plaintext.truncate(pad_start);
@@ -958,17 +1064,26 @@ fn aes128_key_schedule(key: &[u8; 16]) -> [[u8; 16]; 11] {
         if i % 4 == 0 {
             // RotWord + SubWord + Rcon
             temp = [temp[1], temp[2], temp[3], temp[0]];
-            temp = [S_BOX[temp[0] as usize], S_BOX[temp[1] as usize],
-                    S_BOX[temp[2] as usize], S_BOX[temp[3] as usize]];
+            temp = [
+                S_BOX[temp[0] as usize],
+                S_BOX[temp[1] as usize],
+                S_BOX[temp[2] as usize],
+                S_BOX[temp[3] as usize],
+            ];
             temp[0] ^= RCON[i / 4 - 1];
         }
-        w[i] = [w[i-4][0]^temp[0], w[i-4][1]^temp[1], w[i-4][2]^temp[2], w[i-4][3]^temp[3]];
+        w[i] = [
+            w[i - 4][0] ^ temp[0],
+            w[i - 4][1] ^ temp[1],
+            w[i - 4][2] ^ temp[2],
+            w[i - 4][3] ^ temp[3],
+        ];
     }
 
     let mut rk = [[0u8; 16]; 11];
     for r in 0..11 {
         for c in 0..4 {
-            rk[r][4*c..4*c+4].copy_from_slice(&w[4*r+c]);
+            rk[r][4 * c..4 * c + 4].copy_from_slice(&w[4 * r + c]);
         }
     }
     rk
@@ -1057,10 +1172,13 @@ fn inv_mix_columns(state: &mut [u8; 16]) {
         let s1 = state[col * 4 + 1];
         let s2 = state[col * 4 + 2];
         let s3 = state[col * 4 + 3];
-        state[col * 4]     = gf_mul(s0, 0x0e) ^ gf_mul(s1, 0x0b) ^ gf_mul(s2, 0x0d) ^ gf_mul(s3, 0x09);
-        state[col * 4 + 1] = gf_mul(s0, 0x09) ^ gf_mul(s1, 0x0e) ^ gf_mul(s2, 0x0b) ^ gf_mul(s3, 0x0d);
-        state[col * 4 + 2] = gf_mul(s0, 0x0d) ^ gf_mul(s1, 0x09) ^ gf_mul(s2, 0x0e) ^ gf_mul(s3, 0x0b);
-        state[col * 4 + 3] = gf_mul(s0, 0x0b) ^ gf_mul(s1, 0x0d) ^ gf_mul(s2, 0x09) ^ gf_mul(s3, 0x0e);
+        state[col * 4] = gf_mul(s0, 0x0e) ^ gf_mul(s1, 0x0b) ^ gf_mul(s2, 0x0d) ^ gf_mul(s3, 0x09);
+        state[col * 4 + 1] =
+            gf_mul(s0, 0x09) ^ gf_mul(s1, 0x0e) ^ gf_mul(s2, 0x0b) ^ gf_mul(s3, 0x0d);
+        state[col * 4 + 2] =
+            gf_mul(s0, 0x0d) ^ gf_mul(s1, 0x09) ^ gf_mul(s2, 0x0e) ^ gf_mul(s3, 0x0b);
+        state[col * 4 + 3] =
+            gf_mul(s0, 0x0b) ^ gf_mul(s1, 0x0d) ^ gf_mul(s2, 0x09) ^ gf_mul(s3, 0x0e);
     }
 }
 
@@ -1126,12 +1244,12 @@ fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEn
 
     let has_stream_inf = lines.iter().any(|l| l.starts_with("#EXT-X-STREAM-INF:"));
     if has_stream_inf {
-        return Ok(PlaylistKind::Master(parse_master_playlist(&lines, base_url)));
+        return Ok(PlaylistKind::Master(parse_master_playlist(
+            &lines, base_url,
+        )));
     }
 
-    Ok(PlaylistKind::Media(parse_media_playlist(
-        &lines, base_url,
-    )?))
+    Ok(PlaylistKind::Media(parse_media_playlist(&lines, base_url)?))
 }
 
 fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
@@ -1141,8 +1259,7 @@ fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
     for line in lines {
         let line = line.trim();
         if line.starts_with("#EXT-X-STREAM-INF:") {
-            bandwidth = extract_attribute(line, "BANDWIDTH")
-                .and_then(|v| v.parse::<u64>().ok());
+            bandwidth = extract_attribute(line, "BANDWIDTH").and_then(|v| v.parse::<u64>().ok());
         } else if !line.starts_with('#') && !line.is_empty() {
             let uri = resolve_uri(line, base_url);
             variants.push(VariantStream {
@@ -1313,9 +1430,7 @@ async fn update_progress<R: DownloadRepository>(
 // ── Filesystem helpers ────────────────────────────────────────────────────────
 
 fn hls_workspace_path(destination: &Path, id: DownloadId) -> PathBuf {
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty());
+    let parent = destination.parent().filter(|p| !p.as_os_str().is_empty());
     parent
         .unwrap_or_else(|| Path::new("."))
         .join(format!(".fetchx-hls-{id}"))
@@ -1329,17 +1444,130 @@ async fn ensure_workspace(path: &Path) -> Result<(), DownloadEngineError> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(m) if m.is_dir() => Ok(()),
         Ok(_) => Err(DownloadEngineError::TemporaryFileExists),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir_all(path).await.map_err(DownloadEngineError::Io)
-        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => fs::create_dir_all(path)
+            .await
+            .map_err(DownloadEngineError::Io),
         Err(e) => Err(DownloadEngineError::Io(e)),
     }
 }
 
-async fn is_segment_complete(path: &Path) -> bool {
-    tokio::fs::symlink_metadata(path)
+async fn is_segment_complete(
+    path: &Path,
+    segment: &HlsSegment,
+) -> Result<bool, DownloadEngineError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    if !metadata.file_type().is_file() || metadata.len() == 0 {
+        return Ok(false);
+    }
+
+    let identity = match tokio::fs::read(segment_identity_path(path)).await {
+        Ok(bytes) => serde_json::from_slice::<HlsSegmentIdentity>(&bytes).ok(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    Ok(identity
+        .is_some_and(|identity| identity.segment == *segment && identity.size == metadata.len()))
+}
+
+async fn files_equal(left: &Path, right: &Path) -> Result<bool, DownloadEngineError> {
+    let left_metadata = match tokio::fs::symlink_metadata(left).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    let right_metadata = match tokio::fs::symlink_metadata(right).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    if !left_metadata.file_type().is_file()
+        || !right_metadata.file_type().is_file()
+        || left_metadata.len() != right_metadata.len()
+    {
+        return Ok(false);
+    }
+
+    let mut left_file = tokio::fs::File::open(left)
         .await
-        .is_ok_and(|m| m.is_file() && m.len() > 0)
+        .map_err(DownloadEngineError::Io)?;
+    let mut right_file = tokio::fs::File::open(right)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        let left_read = left_file
+            .read(&mut left_buffer)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let right_read = right_file
+            .read(&mut right_buffer)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn segment_identity_path(path: &Path) -> PathBuf {
+    let mut identity = path.as_os_str().to_os_string();
+    identity.push(".complete");
+    PathBuf::from(identity)
+}
+
+fn segment_identity_temporary_path(path: &Path) -> PathBuf {
+    let mut identity = segment_identity_path(path).into_os_string();
+    identity.push(".tmp");
+    PathBuf::from(identity)
+}
+
+async fn remove_segment_identity(path: &Path) -> Result<(), DownloadEngineError> {
+    for identity_path in [
+        segment_identity_path(path),
+        segment_identity_temporary_path(path),
+    ] {
+        match tokio::fs::remove_file(identity_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+    }
+    Ok(())
+}
+
+async fn save_segment_identity(
+    path: &Path,
+    segment: &HlsSegment,
+    size: u64,
+) -> Result<(), DownloadEngineError> {
+    let bytes = serde_json::to_vec(&HlsSegmentIdentity {
+        segment: segment.clone(),
+        size,
+    })
+    .map_err(|error| DownloadEngineError::InvalidPartialMetadata(error.to_string()))?;
+    let temporary_path = segment_identity_temporary_path(path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    file.write_all(&bytes)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    file.flush().await.map_err(DownloadEngineError::Io)?;
+    file.sync_all().await.map_err(DownloadEngineError::Io)?;
+    tokio::fs::rename(temporary_path, segment_identity_path(path))
+        .await
+        .map_err(DownloadEngineError::Io)
 }
 
 /// Estimates total download bytes from segment durations and existing file sizes.
@@ -1376,24 +1604,12 @@ async fn promote_to_destination(
     destination: &Path,
 ) -> Result<(), DownloadEngineError> {
     match tokio::fs::hard_link(source, destination).await {
-        Ok(()) => return Ok(()),
+        Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(DownloadEngineError::DestinationExists);
+            Err(DownloadEngineError::DestinationExists)
         }
-        Err(_) => {}
+        Err(error) => Err(DownloadEngineError::Io(error)),
     }
-    // Hard-link failed (cross-device or unsupported): try rename, then copy.
-    if tokio::fs::symlink_metadata(destination).await.is_ok() {
-        return Err(DownloadEngineError::DestinationExists);
-    }
-    if tokio::fs::rename(source, destination).await.is_ok() {
-        return Ok(());
-    }
-    tokio::fs::copy(source, destination)
-        .await
-        .map_err(DownloadEngineError::Io)?;
-    let _ = tokio::fs::remove_file(source).await;
-    Ok(())
 }
 
 // ── URL validation ────────────────────────────────────────────────────────────
@@ -1431,8 +1647,243 @@ fn next_timestamp(previous: Timestamp) -> Result<Timestamp, DownloadEngineError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fetchx_models::{DownloadSource, FileName, Timestamp};
+    use fetchx_storage::{Database, DownloadRepository};
+    use std::{
+        collections::{HashMap, VecDeque},
+        error::Error,
+        path::PathBuf,
+        sync::Arc,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+        sync::{Mutex, oneshot, watch},
+        task::JoinHandle,
+        time::timeout,
+    };
 
     // ── Manifest parsing ──────────────────────────────────────────────────────
+
+    struct LocalResponse {
+        status: u16,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+        chunk_size: usize,
+        chunk_delay: Duration,
+        first_chunk: Option<oneshot::Sender<()>>,
+    }
+
+    impl LocalResponse {
+        fn ok(body: impl AsRef<[u8]>) -> Self {
+            Self {
+                status: 200,
+                body: body.as_ref().to_vec(),
+                headers: Vec::new(),
+                chunk_size: 16 * 1024,
+                chunk_delay: Duration::ZERO,
+                first_chunk: None,
+            }
+        }
+
+        fn status(status: u16) -> Self {
+            Self {
+                status,
+                body: Vec::new(),
+                headers: Vec::new(),
+                chunk_size: 16 * 1024,
+                chunk_delay: Duration::ZERO,
+                first_chunk: None,
+            }
+        }
+    }
+
+    struct LocalHlsServer {
+        base_url: String,
+        routes: Arc<Mutex<HashMap<String, VecDeque<LocalResponse>>>>,
+        task: JoinHandle<Vec<String>>,
+    }
+
+    impl LocalHlsServer {
+        async fn start(expected_requests: usize) -> Result<Self, Box<dyn Error>> {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let routes = Arc::new(Mutex::new(HashMap::<String, VecDeque<LocalResponse>>::new()));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let task_routes = Arc::clone(&routes);
+            let task_requests = Arc::clone(&requests);
+            let task = tokio::spawn(async move {
+                let mut connections = Vec::with_capacity(expected_requests);
+                for _ in 0..expected_requests {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let routes = Arc::clone(&task_routes);
+                    let requests = Arc::clone(&task_requests);
+                    connections.push(tokio::spawn(async move {
+                        serve_local_response(stream, routes, requests).await;
+                    }));
+                }
+                for connection in connections {
+                    let _ = connection.await;
+                }
+                requests.lock().await.clone()
+            });
+
+            Ok(Self {
+                base_url: format!("http://{address}"),
+                routes,
+                task,
+            })
+        }
+
+        async fn add_responses(
+            &self,
+            path: &str,
+            responses: impl IntoIterator<Item = LocalResponse>,
+        ) {
+            self.routes
+                .lock()
+                .await
+                .insert(path.to_owned(), responses.into_iter().collect());
+        }
+
+        async fn finish(self) -> Result<Vec<String>, Box<dyn Error>> {
+            Ok(timeout(Duration::from_secs(10), self.task).await??)
+        }
+    }
+
+    async fn serve_local_response(
+        mut stream: TcpStream,
+        routes: Arc<Mutex<HashMap<String, VecDeque<LocalResponse>>>>,
+        requests: Arc<Mutex<Vec<String>>>,
+    ) {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let Ok(read) = stream.read(&mut buffer).await else {
+                return;
+            };
+            if read == 0 {
+                return;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+
+        let request = String::from_utf8_lossy(&request).into_owned();
+        let Some(path) = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+        else {
+            return;
+        };
+        requests.lock().await.push(path.to_owned());
+        let mut response = routes
+            .lock()
+            .await
+            .get_mut(path)
+            .and_then(VecDeque::pop_front)
+            .unwrap_or_else(|| LocalResponse::status(404));
+
+        let reason = match response.status {
+            200 => "OK",
+            404 => "Not Found",
+            503 => "Service Unavailable",
+            _ => "Test Response",
+        };
+        let mut headers = format!(
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            response.status,
+            reason,
+            response.body.len()
+        );
+        for (name, value) in response.headers {
+            headers.push_str(&format!("{name}: {value}\r\n"));
+        }
+        headers.push_str("\r\n");
+        if stream.write_all(headers.as_bytes()).await.is_err() {
+            return;
+        }
+
+        let chunk_size = response.chunk_size.max(1);
+        for (index, chunk) in response.body.chunks(chunk_size).enumerate() {
+            if stream.write_all(chunk).await.is_err() {
+                return;
+            }
+            if index == 0
+                && let Some(signal) = response.first_chunk.take()
+            {
+                let _ = signal.send(());
+            }
+            if !response.chunk_delay.is_zero() {
+                sleep(response.chunk_delay).await;
+            }
+        }
+        let _ = stream.flush().await;
+    }
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Result<Self, std::io::Error> {
+            let path = std::env::temp_dir().join(format!("FetchX-HLS-{}", DownloadId::new()));
+            std::fs::create_dir(&path)?;
+            Ok(Self(path))
+        }
+
+        fn destination(&self) -> PathBuf {
+            self.0.join("capture.ts")
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn create_hls_item(
+        database: &Database,
+        url: &str,
+        destination: &Path,
+    ) -> Result<DownloadItem, Box<dyn Error>> {
+        let item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(url, EngineKind::Hls)?,
+            FileName::new("capture.ts")?,
+            destination.to_path_buf(),
+            Timestamp::now()?,
+        );
+        database.downloads().create(&item).await?;
+        Ok(item)
+    }
+
+    async fn create_hls_engine(
+        database: &Database,
+        concurrency: usize,
+    ) -> Result<HlsEngine<fetchx_storage::SqliteDownloadRepository>, DownloadEngineError> {
+        HlsEngine::with_config(
+            database.downloads(),
+            HlsEngineConfig {
+                segment_concurrency: concurrency,
+                ..HlsEngineConfig::default()
+            },
+        )
+    }
+
+    fn media_playlist(segments: &[&str]) -> String {
+        format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n{}#EXT-X-ENDLIST\n",
+            segments
+                .iter()
+                .map(|segment| format!("#EXTINF:1.0,\n{segment}\n"))
+                .collect::<String>()
+        )
+    }
 
     const MEDIA_PLAYLIST: &str = r#"#EXTM3U
 #EXT-X-VERSION:3
@@ -1507,7 +1958,10 @@ seg0.ts
         };
         let key = segments[0].key.as_ref().expect("key present");
         assert!(key.uri.contains("key"));
-        assert_eq!(key.iv, Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]));
+        assert_eq!(
+            key.iv,
+            Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+        );
     }
 
     #[test]
@@ -1546,8 +2000,7 @@ seg0.ts
         let ciphertext = [
             // block 1 ciphertext from NIST
             0x76, 0x49, 0xab, 0xac, 0x81, 0x19, 0xb2, 0x46, 0xce, 0xe9, 0x8e, 0x9b, 0x12, 0xe9,
-            0x19, 0x7d,
-            // PKCS#7 padding block (16 bytes of 0x10)
+            0x19, 0x7d, // PKCS#7 padding block (16 bytes of 0x10)
             0xb2, 0x62, 0xc3, 0x44, 0xb0, 0x11, 0xfb, 0x55, 0x98, 0x59, 0xd0, 0xa4, 0xe5, 0x12,
             0x31, 0xa2,
         ];
@@ -1648,5 +2101,315 @@ seg0.ts
             engine.download(missing_id, rx).await,
             Err(DownloadEngineError::NotFound(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn media_playlist_downloads_fragments_and_cleans_workspace() -> Result<(), Box<dyn Error>>
+    {
+        let server = LocalHlsServer::start(3).await?;
+        server
+            .add_responses(
+                "/media.m3u8",
+                [LocalResponse::ok(media_playlist(&["a.ts", "b.ts"]))],
+            )
+            .await;
+        server
+            .add_responses("/a.ts", [LocalResponse::ok(b"first")])
+            .await;
+        server
+            .add_responses("/b.ts", [LocalResponse::ok(b"second")])
+            .await;
+
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/media.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 2).await?;
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let completed = engine.download(item.id(), cancel_rx).await?;
+        let requests = server.finish().await?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(directory.destination()).await?,
+            b"firstsecond"
+        );
+        assert_eq!(requests.len(), 3);
+        assert!(!hls_workspace_path(&directory.destination(), item.id()).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn master_playlist_selects_variant_and_downloads_absolute_and_relative_uris()
+    -> Result<(), Box<dyn Error>> {
+        let server = LocalHlsServer::start(4).await?;
+        server
+            .add_responses(
+                "/master.m3u8",
+                [LocalResponse::ok(
+                    "#EXTM3U\n\
+                     #EXT-X-STREAM-INF:BANDWIDTH=100\nlow/playlist.m3u8\n\
+                     #EXT-X-STREAM-INF:BANDWIDTH=900\nhigh/playlist.m3u8\n",
+                )],
+            )
+            .await;
+        server
+            .add_responses(
+                "/high/playlist.m3u8",
+                [LocalResponse::ok(media_playlist(&[
+                    &format!("{}/absolute.ts", server.base_url),
+                    "relative.ts",
+                ]))],
+            )
+            .await;
+        server
+            .add_responses("/absolute.ts", [LocalResponse::ok(b"absolute")])
+            .await;
+        server
+            .add_responses("/high/relative.ts", [LocalResponse::ok(b"relative")])
+            .await;
+
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/master.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 2).await?;
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let completed = engine.download(item.id(), cancel_rx).await?;
+        let requests = server.finish().await?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(directory.destination()).await?,
+            b"absoluterelative"
+        );
+        assert!(requests.contains(&"/high/playlist.m3u8".to_owned()));
+        assert!(requests.contains(&"/absolute.ts".to_owned()));
+        assert!(requests.contains(&"/high/relative.ts".to_owned()));
+        assert!(!requests.contains(&"/low/playlist.m3u8".to_owned()));
+        assert!(!hls_workspace_path(&directory.destination(), item.id()).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn transient_hls_fragment_failure_retries_and_honors_retry_after()
+    -> Result<(), Box<dyn Error>> {
+        let server = LocalHlsServer::start(3).await?;
+        server
+            .add_responses(
+                "/retry.m3u8",
+                [LocalResponse::ok(media_playlist(&["flaky.ts"]))],
+            )
+            .await;
+        let mut rate_limited = LocalResponse::status(503);
+        rate_limited
+            .headers
+            .push(("Retry-After".to_owned(), "0".to_owned()));
+        server
+            .add_responses("/flaky.ts", [rate_limited, LocalResponse::ok(b"recovered")])
+            .await;
+
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/retry.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 1).await?;
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let completed = engine.download(item.id(), cancel_rx).await?;
+        let requests = server.finish().await?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(directory.destination()).await?,
+            b"recovered"
+        );
+        assert_eq!(
+            requests.iter().filter(|path| *path == "/flaky.ts").count(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permanent_hls_fragment_failure_is_not_retried_or_published()
+    -> Result<(), Box<dyn Error>> {
+        let server = LocalHlsServer::start(2).await?;
+        server
+            .add_responses(
+                "/failure.m3u8",
+                [LocalResponse::ok(media_playlist(&["missing.ts"]))],
+            )
+            .await;
+        server
+            .add_responses("/missing.ts", [LocalResponse::status(404)])
+            .await;
+
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/failure.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 1).await?;
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        assert!(matches!(
+            engine.download(item.id(), cancel_rx).await,
+            Err(DownloadEngineError::HttpStatus(404))
+        ));
+        let requests = server.finish().await?;
+        let persisted = database
+            .downloads()
+            .get(item.id())
+            .await?
+            .ok_or("failed HLS download was not persisted")?;
+
+        assert_eq!(persisted.status(), DownloadStatus::Failed);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|path| *path == "/missing.ts")
+                .count(),
+            1
+        );
+        assert!(!directory.destination().exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancellation_resumes_only_identity_validated_hls_fragments()
+    -> Result<(), Box<dyn Error>> {
+        let server = LocalHlsServer::start(6).await?;
+        let playlist = media_playlist(&["complete.ts", "slow.ts", "tail.ts"]);
+        server
+            .add_responses(
+                "/resume.m3u8",
+                [
+                    LocalResponse::ok(playlist.clone()),
+                    LocalResponse::ok(playlist),
+                ],
+            )
+            .await;
+        server
+            .add_responses("/complete.ts", [LocalResponse::ok(b"saved")])
+            .await;
+        let (first_chunk_tx, first_chunk_rx) = oneshot::channel();
+        let mut slow_response = LocalResponse::ok(vec![7; 512 * 1024]);
+        slow_response.chunk_size = 1024;
+        slow_response.chunk_delay = Duration::from_millis(20);
+        slow_response.first_chunk = Some(first_chunk_tx);
+        server
+            .add_responses("/slow.ts", [slow_response, LocalResponse::ok(b"resumed")])
+            .await;
+        server
+            .add_responses("/tail.ts", [LocalResponse::ok(b"tail")])
+            .await;
+
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/resume.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 1).await?;
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let id = item.id();
+        let download = tokio::spawn(async move { engine.download(id, cancel_rx).await });
+
+        timeout(Duration::from_secs(5), first_chunk_rx).await??;
+        cancel_tx.send(true)?;
+        assert!(matches!(
+            timeout(Duration::from_secs(5), download).await??,
+            Err(DownloadEngineError::Cancelled)
+        ));
+
+        let workspace = hls_workspace_path(&directory.destination(), id);
+        assert!(workspace.exists());
+        assert!(segment_identity_path(&segment_path(&workspace, 0)).exists());
+        assert!(!directory.destination().exists());
+
+        let engine = create_hls_engine(&database, 1).await?;
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let completed = engine.download(id, cancel_rx).await?;
+        let requests = server.finish().await?;
+        let persisted = database
+            .downloads()
+            .get(id)
+            .await?
+            .ok_or("resumed HLS download was not persisted")?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(persisted.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(directory.destination()).await?,
+            b"savedresumedtail"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|path| *path == "/complete.ts")
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests.iter().filter(|path| *path == "/slow.ts").count(),
+            2
+        );
+        assert!(!workspace.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovers_hls_crash_after_destination_publication() -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            "http://127.0.0.1:1/not-requested.m3u8",
+            &directory.destination(),
+        )
+        .await?;
+        let workspace = hls_workspace_path(&directory.destination(), item.id());
+        tokio::fs::create_dir_all(&workspace).await?;
+        let assembled = workspace.join("assembled.ts");
+        tokio::fs::write(&assembled, b"finalized-before-crash").await?;
+        tokio::fs::hard_link(&assembled, directory.destination()).await?;
+        let engine = create_hls_engine(&database, 1).await?;
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let completed = engine.download(item.id(), cancel_rx).await?;
+        let persisted = database
+            .downloads()
+            .get(item.id())
+            .await?
+            .ok_or("recovered HLS download was not persisted")?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(persisted.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(directory.destination()).await?,
+            b"finalized-before-crash"
+        );
+        assert!(!workspace.exists());
+        Ok(())
     }
 }

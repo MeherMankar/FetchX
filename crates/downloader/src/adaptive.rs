@@ -30,6 +30,7 @@ pub struct AdaptiveConfig {
     pub enabled: bool,
     pub min_concurrency: usize,
     pub initial_concurrency: usize,
+    /// A hard ceiling, not a guaranteed number of active requests. Values above 32 are rejected.
     pub max_concurrency: usize,
     pub measurement_window: Duration,
     pub improvement_threshold_percent: u8,
@@ -61,7 +62,7 @@ impl AdaptiveConfig {
         self.min_concurrency >= 1
             && self.min_concurrency <= self.initial_concurrency
             && self.initial_concurrency <= self.max_concurrency
-            && self.max_concurrency <= 8
+            && self.max_concurrency <= 32
             && self.measurement_window >= Duration::from_millis(10)
             && (1..=100).contains(&self.improvement_threshold_percent)
             && (1..=100).contains(&self.regression_threshold_percent)
@@ -407,6 +408,42 @@ mod tests {
     }
 
     #[test]
+    fn configured_extreme_ceiling_is_bounded_at_thirty_two_workers() {
+        let extreme = AdaptiveConfig {
+            min_concurrency: 8,
+            initial_concurrency: 8,
+            max_concurrency: 32,
+            ..config()
+        };
+        assert!(extreme.is_valid());
+        assert_eq!(AdaptiveController::new(extreme).desired_concurrency(64), 8);
+        assert!(
+            !AdaptiveConfig {
+                max_concurrency: 33,
+                ..config()
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
+    fn balanced_turbo_and_extreme_ceiling_configurations_are_accepted() {
+        for (minimum, initial, maximum) in [(2, 2, 8), (4, 4, 16), (8, 8, 32)] {
+            let profile = AdaptiveConfig {
+                min_concurrency: minimum,
+                initial_concurrency: initial,
+                max_concurrency: maximum,
+                ..config()
+            };
+            assert!(profile.is_valid());
+            assert_eq!(
+                AdaptiveController::new(profile).desired_concurrency(maximum),
+                initial
+            );
+        }
+    }
+
+    #[test]
     fn sustained_throughput_regression_decreases_concurrency() {
         let mut controller = AdaptiveController::new(config());
         establish_baseline(&mut controller);
@@ -517,7 +554,7 @@ mod tests {
                 ..config()
             },
             AdaptiveConfig {
-                max_concurrency: 9,
+                max_concurrency: 33,
                 ..config()
             },
             AdaptiveConfig {

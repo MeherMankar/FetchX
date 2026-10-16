@@ -1,11 +1,12 @@
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant},
 };
 
 use reqwest::{
     Client, StatusCode, Url,
-    header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE, RETRY_AFTER},
+    header::{CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE, RANGE, RETRY_AFTER},
 };
 use thiserror::Error;
 use tokio::{
@@ -14,7 +15,11 @@ use tokio::{
     sync::watch,
 };
 
-use crate::DownloadEngineError;
+use crate::{
+    DownloadEngineError,
+    http::response_validator,
+    retry::{RetryPolicy, retry_after_delay},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SegmentState {
@@ -53,7 +58,7 @@ pub(super) fn plan_segments(
     count: usize,
     path_for_index: impl Fn(usize) -> PathBuf,
 ) -> Result<Option<Vec<Segment>>, SegmentPlanError> {
-    if total_size == 0 || !(2..=16).contains(&count) {
+    if total_size == 0 || !(2..=32).contains(&count) {
         return Ok(None);
     }
 
@@ -119,10 +124,12 @@ pub(super) async fn prepare_segment(segment: &mut Segment) -> Result<bool, Downl
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn download_segment(
     segment: &mut Segment,
     total_size: u64,
     requested_url: &Url,
+    validator: &str,
     client: &Client,
     cancellation: &mut watch::Receiver<bool>,
     stop: &mut watch::Receiver<bool>,
@@ -134,6 +141,7 @@ pub(super) async fn download_segment(
 
     segment.state = SegmentState::Downloading;
     segment.attempts = segment.attempts.saturating_add(1);
+    let started_at = Instant::now();
     let mut file = if segment.current == 0 {
         match fs::symlink_metadata(&segment.path).await {
             Ok(metadata) if metadata.file_type().is_file() && metadata.len() == 0 => {
@@ -194,6 +202,7 @@ pub(super) async fn download_segment(
         let request = client
             .get(requested_url.clone())
             .header(RANGE, range_value)
+            .header(IF_RANGE, validator)
             .send();
         let response = tokio::select! {
             changed = cancellation.changed() => {
@@ -210,17 +219,58 @@ pub(super) async fn download_segment(
                 }
                 continue;
             }
-            response = request => response.map_err(|_| segment_error(segment))?,
+            response = request => match response {
+                Ok(response) => response,
+                Err(error) => {
+                    if RetryPolicy::is_transient_request(&error) {
+                        segment.attempts = segment.attempts.saturating_add(1);
+                        if let Some(delay) = RetryPolicy::HTTP.delay(
+                            segment.attempts.saturating_sub(1),
+                            None,
+                            started_at.elapsed(),
+                        ) {
+                            if !wait_before_retry(delay, cancellation, stop).await? {
+                                file.sync_all().await.map_err(DownloadEngineError::Io)?;
+                                return Ok(SegmentResult::Cancelled);
+                            }
+                            continue;
+                        }
+                    }
+                    return Err(DownloadEngineError::Request(error));
+                }
+            },
         };
 
         if response.status() == StatusCode::OK {
             return Ok(SegmentResult::Fallback);
         }
-        if response.status() == StatusCode::TOO_MANY_REQUESTS
-            || (response.status() == StatusCode::SERVICE_UNAVAILABLE
-                && response.headers().contains_key(RETRY_AFTER))
-        {
-            return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
+        if RetryPolicy::is_transient_status(response.status().as_u16()) {
+            let status = response.status().as_u16();
+            let retry_after = response
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(retry_after_delay);
+            if status >= 500 && retry_after.is_none() {
+                return Err(segment_error(segment));
+            }
+            segment.attempts = segment.attempts.saturating_add(1);
+            if let Some(delay) = RetryPolicy::HTTP.delay(
+                segment.attempts.saturating_sub(1),
+                retry_after,
+                started_at.elapsed(),
+            ) {
+                if !wait_before_retry(delay, cancellation, stop).await? {
+                    file.sync_all().await.map_err(DownloadEngineError::Io)?;
+                    return Ok(SegmentResult::Cancelled);
+                }
+                continue;
+            }
+            return if status >= 500 {
+                Err(segment_error(segment))
+            } else {
+                Err(DownloadEngineError::HttpStatus(status))
+            };
         }
         if response.status() != StatusCode::PARTIAL_CONTENT {
             if matches!(
@@ -232,6 +282,9 @@ pub(super) async fn download_segment(
             return Err(segment_error(segment));
         }
         if !same_http_target(response.url(), requested_url) {
+            return Ok(SegmentResult::Fallback);
+        }
+        if response_validator(&response).as_deref() != Some(validator) {
             return Ok(SegmentResult::Fallback);
         }
         let Some((response_start, response_end, response_total)) = parse_content_range(&response)
@@ -315,6 +368,33 @@ pub(super) async fn download_segment(
     file.sync_all().await.map_err(DownloadEngineError::Io)?;
     segment.state = SegmentState::Complete;
     Ok(SegmentResult::Complete)
+}
+
+async fn wait_before_retry(
+    delay: Duration,
+    cancellation: &mut watch::Receiver<bool>,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<bool, DownloadEngineError> {
+    let sleep = tokio::time::sleep(delay);
+    tokio::pin!(sleep);
+    loop {
+        if is_cancelled(cancellation) || is_cancelled(stop) {
+            return Ok(false);
+        }
+        tokio::select! {
+            _ = &mut sleep => return Ok(true),
+            changed = cancellation.changed() => {
+                if changed.is_err() || is_cancelled(cancellation) {
+                    return Ok(false);
+                }
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || is_cancelled(stop) {
+                    return Ok(false);
+                }
+            }
+        }
+    }
 }
 
 fn is_cancelled(receiver: &watch::Receiver<bool>) -> bool {
@@ -413,9 +493,21 @@ mod tests {
                 .is_none()
         );
         assert!(
-            plan_segments(100, 17, |_| PathBuf::new())
+            plan_segments(100, 33, |_| PathBuf::new())
                 .expect("unbounded count selects fallback")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn extreme_profile_can_plan_thirty_two_bounded_segments() {
+        let segments = plan_segments(320, 32, |_| PathBuf::new())
+            .expect("valid plan")
+            .expect("thirty-two segments are supported");
+
+        assert_eq!(segments.len(), 32);
+        assert_eq!(segments.first().map(|segment| segment.start), Some(0));
+        assert_eq!(segments.last().map(|segment| segment.end), Some(319));
+        assert!(segments.iter().all(|segment| segment.expected_length == 10));
     }
 }

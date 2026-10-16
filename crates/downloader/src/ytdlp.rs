@@ -1198,21 +1198,7 @@ async fn promote_output_to_destination(
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             Err(YtDlpError::DestinationExists.into())
         }
-        Err(_) => {
-            if tokio::fs::symlink_metadata(destination).await.is_ok() {
-                return Err(YtDlpError::DestinationExists.into());
-            }
-            match tokio::fs::rename(output, destination).await {
-                Ok(()) => Ok(()),
-                Err(_) => {
-                    tokio::fs::copy(output, destination)
-                        .await
-                        .map_err(DownloadEngineError::Io)?;
-                    let _ = tokio::fs::remove_file(output).await;
-                    Ok(())
-                }
-            }
-        }
+        Err(error) => Err(DownloadEngineError::Io(error)),
     }
 }
 

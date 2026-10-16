@@ -17,8 +17,12 @@ use fetchx_models::{
 use fetchx_storage::DownloadRepository;
 use reqwest::{
     Client, Response, StatusCode, Url,
-    header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE},
+    header::{
+        ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
+        RETRY_AFTER,
+    },
 };
+use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom},
@@ -30,11 +34,12 @@ use tracing::{info, warn};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
+use crate::retry::{RetryPolicy, retry_after_delay};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{DownloadEngine, DownloadEngineError};
 
 const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
-const MAX_SEGMENT_ATTEMPTS: u8 = 3;
+const MAX_SEGMENT_ATTEMPTS: u8 = 4;
 
 fn measure_speed(bytes: u64, elapsed: Duration) -> Option<u64> {
     let elapsed_nanos = elapsed.as_nanos();
@@ -63,7 +68,7 @@ pub struct HttpEngineConfig {
     pub progress_bytes_interval: u64,
     pub progress_time_interval: Duration,
     pub user_agent: String,
-    /// Maximum number of planned ranges; values outside 2..=16 disable segmentation.
+    /// Maximum number of planned ranges; values outside 2..=32 disable segmentation.
     pub segment_count: usize,
     /// Files smaller than this threshold use the single-stream path.
     pub minimum_segmented_file_size: u64,
@@ -88,6 +93,17 @@ struct SegmentedContext {
     url: Url,
     total_size: u64,
     segment_count: usize,
+    validator: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ResourceIdentity {
+    url: String,
+    validator: Option<String>,
+    #[serde(default)]
+    finalizing: bool,
+    #[serde(default)]
+    total_size: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -302,18 +318,30 @@ where
         }
         let url = parse_http_url(item.source().url())?;
         let destination = item.destination().to_path_buf();
+        let temporary_path = temporary_path(&destination);
+        if let Some(completed) = self
+            .recover_finalization(&item, &url, &temporary_path, &destination)
+            .await?
+        {
+            return Ok(completed);
+        }
         if fs::try_exists(&destination)
             .await
             .map_err(DownloadEngineError::Io)?
         {
             return Err(DownloadEngineError::DestinationExists);
         }
-        let temporary_path = temporary_path(&destination);
 
         let partial_size = inspect_partial_file(&temporary_path).await?;
         let partial_exists = partial_size.is_some();
         let existing_size = partial_size.unwrap_or(0);
-        let range_start = (existing_size > 0).then_some(existing_size);
+        let stored_identity = load_resource_identity(&temporary_path).await?;
+        let resume_validator = stored_identity
+            .as_ref()
+            .filter(|identity| identity.url == url.as_str())
+            .and_then(|identity| identity.validator.clone());
+        let range_start =
+            (existing_size > 0 && resume_validator.is_some()).then_some(existing_size);
         let mut expected_updated_at = item.updated_at();
         let initial_progress = DownloadProgress::new(existing_size, None, None, None)?;
         item.set_progress_at(initial_progress, next_timestamp(item.updated_at())?)?;
@@ -327,11 +355,15 @@ where
         expected_updated_at = item.updated_at();
 
         info!(download_id = %id, "starting HTTP download");
-        let mut response = self.send_request(url.clone(), range_start, control).await?;
-        let segmentation_enabled = (2..=16).contains(&self.config.segment_count)
+        let mut response = self
+            .send_request(url.clone(), range_start, resume_validator.clone(), control)
+            .await?;
+        let initial_validator = response_validator(&response);
+        let segmentation_enabled = (2..=32).contains(&self.config.segment_count)
             && self.config.minimum_segmented_file_size > 0;
         if !partial_exists
             && segmentation_enabled
+            && initial_validator.is_some()
             && response.status() == StatusCode::OK
             && response
                 .headers()
@@ -345,6 +377,26 @@ where
                 .ok_or(DownloadEngineError::InvalidContentLength)?;
             let segment_count =
                 segmented_layout(&temporary_path, self.config.segment_count, total_size).await?;
+            let validator = initial_validator
+                .clone()
+                .ok_or(DownloadEngineError::InvalidConfiguration)?;
+            let can_resume_segments = stored_identity.as_ref().is_some_and(|identity| {
+                identity.url == url.as_str()
+                    && identity.validator.as_deref() == Some(validator.as_str())
+            });
+            if !can_resume_segments {
+                cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
+            }
+            save_resource_identity(
+                &temporary_path,
+                &ResourceIdentity {
+                    url: url.to_string(),
+                    validator: Some(validator.clone()),
+                    finalizing: false,
+                    total_size: None,
+                },
+            )
+            .await?;
             drop(response);
             match self
                 .download_segmented(
@@ -356,6 +408,7 @@ where
                         url: url.clone(),
                         total_size,
                         segment_count,
+                        validator,
                     },
                     control,
                 )
@@ -371,7 +424,7 @@ where
                         .ok_or(DownloadEngineError::NotFound(id))?;
                     current_status = item.status();
                     expected_updated_at = item.updated_at();
-                    response = self.send_request(url.clone(), None, control).await?;
+                    response = self.send_request(url.clone(), None, None, control).await?;
                 }
             }
         }
@@ -380,6 +433,9 @@ where
         let mut reset_before_download = false;
         let mut expected_response_bytes = None;
         let mut partial_content_range = None;
+        if partial_exists && range_start.is_none() {
+            reset_before_download = true;
+        }
 
         if range_start.is_some() && response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
             let unsatisfied = parse_unsatisfied_range(&response)?;
@@ -390,7 +446,7 @@ where
             // A matching length does not prove that a stale partial belongs to the
             // current representation, so restart instead of publishing it.
             drop(response);
-            response = self.send_request(url.clone(), None, control).await?;
+            response = self.send_request(url.clone(), None, None, control).await?;
             reset_before_download = true;
         } else if range_start.is_some() && response.status() == StatusCode::OK {
             reset_before_download = true;
@@ -429,6 +485,22 @@ where
         if !response.status().is_success() {
             return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
         }
+        let current_validator = response_validator(&response);
+        if append && current_validator.as_deref() != resume_validator.as_deref() {
+            return Err(DownloadEngineError::RangeMismatch);
+        }
+        if !append {
+            save_resource_identity(
+                &temporary_path,
+                &ResourceIdentity {
+                    url: url.to_string(),
+                    validator: current_validator,
+                    finalizing: false,
+                    total_size: None,
+                },
+            )
+            .await?;
+        }
 
         if reset_before_download {
             reset_partial_file(&temporary_path, partial_exists).await?;
@@ -466,12 +538,74 @@ where
         .await
     }
 
+    async fn recover_finalization(
+        &self,
+        item: &DownloadItem,
+        url: &Url,
+        temporary: &Path,
+        destination: &Path,
+    ) -> Result<Option<DownloadItem>, DownloadEngineError> {
+        let Some(identity) = load_resource_identity(temporary).await? else {
+            return Ok(None);
+        };
+        let Some(expected_size) = identity.total_size else {
+            return Ok(None);
+        };
+        if !identity.finalizing || identity.url != url.as_str() {
+            return Ok(None);
+        }
+        let temporary_metadata = match fs::symlink_metadata(temporary).await {
+            Ok(metadata) if metadata.file_type().is_file() => metadata,
+            Ok(_) => return Err(DownloadEngineError::InvalidPartialFile),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        };
+        if temporary_metadata.len() != expected_size {
+            return Ok(None);
+        }
+
+        if fs::try_exists(destination)
+            .await
+            .map_err(DownloadEngineError::Io)?
+        {
+            if !files_equal(temporary, destination).await? {
+                return Ok(None);
+            }
+        } else {
+            publish_without_replacement(temporary, destination).await?;
+        }
+
+        let mut recovered = item.clone();
+        recovered.set_progress_at(
+            DownloadProgress::new(expected_size, Some(expected_size), None, Some(0))?,
+            next_timestamp(item.updated_at())?,
+        )?;
+        self.persist_if_status(&recovered, item.status(), item.updated_at())
+            .await?;
+        if item.status() == DownloadStatus::Preparing {
+            self.state_machine
+                .transition(item.id(), DownloadStatus::Downloading)
+                .await?;
+        } else if item.status() != DownloadStatus::Downloading {
+            return Ok(None);
+        }
+        let completed = self
+            .state_machine
+            .transition(item.id(), DownloadStatus::Completed)
+            .await?;
+        remove_published_temporary(temporary).await;
+        Ok(Some(completed))
+    }
+
     async fn send_request(
         &self,
         url: Url,
         range_start: Option<u64>,
+        if_range: Option<String>,
         control: &mut ManagedDownloadControl,
     ) -> Result<Response, DownloadEngineError> {
+        let started_at = Instant::now();
+        let mut failed_attempts = 0_u8;
         loop {
             if *control.cancellation.borrow_and_update() {
                 return Err(DownloadEngineError::Cancelled);
@@ -494,13 +628,51 @@ where
                 response = async {
                     let request = self.client.get(url.clone());
                     let request = if let Some(start) = range_start {
-                        request.header(RANGE, format!("bytes={start}-"))
+                        let request = request.header(RANGE, format!("bytes={start}-"));
+                        if let Some(validator) = &if_range {
+                            request.header(IF_RANGE, validator)
+                        } else {
+                            request
+                        }
                     } else {
                         request
                     };
                     request.send().await
                 } => {
-                    return response.map_err(DownloadEngineError::Request);
+                    match response {
+                        Ok(response)
+                            if RetryPolicy::is_transient_status(response.status().as_u16()) =>
+                        {
+                            let retry_after = parse_retry_after(&response);
+                            failed_attempts = failed_attempts.saturating_add(1);
+                            if let Some(delay) = RetryPolicy::HTTP.delay(
+                                failed_attempts,
+                                retry_after,
+                                started_at.elapsed(),
+                            ) {
+                                drop(response);
+                                wait_for_retry(delay, control).await?;
+                            } else {
+                                return Ok(response);
+                            }
+                        }
+                        Ok(response) => return Ok(response),
+                        Err(error) => {
+                            if !RetryPolicy::is_transient_request(&error) {
+                                return Err(DownloadEngineError::Request(error));
+                            }
+                            failed_attempts = failed_attempts.saturating_add(1);
+                            if let Some(delay) = RetryPolicy::HTTP.delay(
+                                failed_attempts,
+                                None,
+                                started_at.elapsed(),
+                            ) {
+                                wait_for_retry(delay, control).await?;
+                            } else {
+                                return Err(DownloadEngineError::Request(error));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -519,6 +691,7 @@ where
             url,
             total_size,
             segment_count,
+            validator,
         } = context;
         let temporary_path = temporary_path(item.destination());
         let mut segments = segments::plan_segments(total_size, segment_count, |index| {
@@ -577,6 +750,7 @@ where
             initial_target,
             total_size,
             &url,
+            &validator,
             &self.client,
             &control.cancellation,
             &stop_receiver,
@@ -648,6 +822,7 @@ where
                                 .min(connection_limit),
                             total_size,
                             &url,
+                            &validator,
                             &self.client,
                             &control.cancellation,
                             &stop_receiver,
@@ -721,6 +896,7 @@ where
                         target,
                         total_size,
                         &url,
+                        &validator,
                         &self.client,
                         &control.cancellation,
                         &stop_receiver,
@@ -808,6 +984,7 @@ where
                             target,
                             total_size,
                             &url,
+                            &validator,
                             &self.client,
                             &control.cancellation,
                             &stop_receiver,
@@ -877,16 +1054,19 @@ where
         )
         .await?;
         cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
+        mark_resource_finalizing(&temporary_path, total_size).await?;
         publish_without_replacement(&temporary_path, item.destination()).await?;
 
         let completed = self
             .state_machine
             .transition(id, DownloadStatus::Completed)
             .await?;
+        remove_published_temporary(&temporary_path).await;
         info!(download_id = %id, bytes = total_size, "segmented download completed");
         Ok(SegmentedOutcome::Completed(Box::new(completed)))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn persist_segment_progress(
         &self,
         item: &mut DownloadItem,
@@ -1108,12 +1288,15 @@ where
                 if *control.cancellation.borrow_and_update() {
                     return Err(DownloadEngineError::Cancelled);
                 }
+                mark_resource_finalizing(&temporary_path, item.progress().downloaded_bytes())
+                    .await?;
                 publish_without_replacement(&temporary_path, item.destination()).await?;
 
                 let completed = self
                     .state_machine
                     .transition(id, DownloadStatus::Completed)
                     .await?;
+                remove_published_temporary(&temporary_path).await;
                 info!(download_id = %id, bytes = item.progress().downloaded_bytes(), "download completed");
                 Ok(completed)
             }
@@ -1231,6 +1414,7 @@ fn spawn_segment_workers(
     target_concurrency: usize,
     total_size: u64,
     url: &Url,
+    validator: &str,
     client: &Client,
     cancellation: &watch::Receiver<bool>,
     stop: &watch::Receiver<bool>,
@@ -1243,6 +1427,7 @@ fn spawn_segment_workers(
         let mut segment = segments[index].clone();
         let client = client.clone();
         let url = url.clone();
+        let validator = validator.to_owned();
         let mut cancellation = cancellation.clone();
         let mut stop = stop.clone();
         let downloaded = Arc::clone(downloaded);
@@ -1251,6 +1436,7 @@ fn spawn_segment_workers(
                 &mut segment,
                 total_size,
                 &url,
+                &validator,
                 &client,
                 &mut cancellation,
                 &mut stop,
@@ -1334,6 +1520,158 @@ fn same_http_target(response: &Url, requested: &Url) -> bool {
     response.set_fragment(None);
     requested.set_fragment(None);
     response == requested
+}
+
+pub(crate) fn response_validator(response: &Response) -> Option<String> {
+    response
+        .headers()
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim_start().starts_with("W/"))
+        .or_else(|| {
+            response
+                .headers()
+                .get(LAST_MODIFIED)
+                .and_then(|value| value.to_str().ok())
+        })
+        .map(str::to_owned)
+}
+
+fn resource_identity_path(temporary: &Path) -> PathBuf {
+    let mut path = temporary.as_os_str().to_os_string();
+    path.push(".meta");
+    PathBuf::from(path)
+}
+
+async fn load_resource_identity(
+    temporary: &Path,
+) -> Result<Option<ResourceIdentity>, DownloadEngineError> {
+    let path = resource_identity_path(temporary);
+    let bytes = match fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    match serde_json::from_slice(&bytes) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(error) => {
+            warn!(path = %path.display(), %error, "ignoring invalid HTTP resume metadata");
+            Ok(None)
+        }
+    }
+}
+
+async fn save_resource_identity(
+    temporary: &Path,
+    identity: &ResourceIdentity,
+) -> Result<(), DownloadEngineError> {
+    let bytes = serde_json::to_vec(identity)
+        .map_err(|error| DownloadEngineError::InvalidPartialMetadata(error.to_string()))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(resource_identity_path(temporary))
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    file.write_all(&bytes)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    file.flush().await.map_err(DownloadEngineError::Io)?;
+    file.sync_all().await.map_err(DownloadEngineError::Io)?;
+    Ok(())
+}
+
+async fn mark_resource_finalizing(
+    temporary: &Path,
+    total_size: u64,
+) -> Result<(), DownloadEngineError> {
+    let mut identity = load_resource_identity(temporary).await?.ok_or_else(|| {
+        DownloadEngineError::InvalidPartialMetadata(
+            "resume identity is missing before finalization".to_owned(),
+        )
+    })?;
+    identity.finalizing = true;
+    identity.total_size = Some(total_size);
+    save_resource_identity(temporary, &identity).await
+}
+
+async fn files_equal(left: &Path, right: &Path) -> Result<bool, DownloadEngineError> {
+    let left_metadata = fs::symlink_metadata(left)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    let right_metadata = fs::symlink_metadata(right)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    if !left_metadata.file_type().is_file()
+        || !right_metadata.file_type().is_file()
+        || left_metadata.len() != right_metadata.len()
+    {
+        return Ok(false);
+    }
+
+    let mut left_file = File::open(left).await.map_err(DownloadEngineError::Io)?;
+    let mut right_file = File::open(right).await.map_err(DownloadEngineError::Io)?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        let left_read = left_file
+            .read(&mut left_buffer)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let right_read = right_file
+            .read(&mut right_buffer)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+async fn remove_published_temporary(path: &Path) {
+    if let Err(error) = fs::remove_file(path).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(path = %path.display(), %error, "could not remove finalized temporary file");
+    }
+}
+
+fn parse_retry_after(response: &Response) -> Option<Duration> {
+    let value = response.headers().get(RETRY_AFTER)?.to_str().ok()?;
+    retry_after_delay(value)
+}
+
+async fn wait_for_retry(
+    delay: Duration,
+    control: &mut ManagedDownloadControl,
+) -> Result<(), DownloadEngineError> {
+    let sleep = tokio::time::sleep(delay);
+    tokio::pin!(sleep);
+    loop {
+        if *control.cancellation.borrow_and_update() {
+            return Err(DownloadEngineError::Cancelled);
+        }
+        if *control.pause.borrow() {
+            return Err(DownloadEngineError::Paused);
+        }
+        tokio::select! {
+            _ = &mut sleep => return Ok(()),
+            changed = control.cancellation.changed() => {
+                if changed.is_err() || *control.cancellation.borrow_and_update() {
+                    return Err(DownloadEngineError::Cancelled);
+                }
+            }
+            changed = control.pause.changed() => {
+                if changed.is_err() || *control.pause.borrow() {
+                    return Err(DownloadEngineError::Paused);
+                }
+            }
+        }
+    }
 }
 
 fn parse_content_length(response: &Response) -> Result<Option<u64>, DownloadEngineError> {
@@ -1505,7 +1843,7 @@ async fn segmented_layout(
     total_size: u64,
 ) -> Result<usize, DownloadEngineError> {
     if configured_segment_count != 4 {
-        for candidate in std::iter::once(4).chain(2..=16) {
+        for candidate in std::iter::once(4).chain(2..=32) {
             if candidate == configured_segment_count {
                 continue;
             }
@@ -1682,29 +2020,10 @@ async fn publish_without_replacement(
     destination: &Path,
 ) -> Result<(), DownloadEngineError> {
     match fs::hard_link(temporary, destination).await {
-        Ok(()) => {
-            fs::remove_file(temporary)
-                .await
-                .map_err(DownloadEngineError::Io)?;
-            Ok(())
-        }
+        Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(DownloadEngineError::DestinationExists)
         }
-        Err(_) => {
-            if fs::symlink_metadata(destination).await.is_ok() {
-                return Err(DownloadEngineError::DestinationExists);
-            }
-            match fs::rename(temporary, destination).await {
-                Ok(()) => Ok(()),
-                Err(_) => {
-                    fs::copy(temporary, destination)
-                        .await
-                        .map_err(DownloadEngineError::Io)?;
-                    let _ = fs::remove_file(temporary).await;
-                    Ok(())
-                }
-            }
-        }
+        Err(error) => Err(DownloadEngineError::Io(error)),
     }
 }
