@@ -541,8 +541,8 @@ impl IpcError {
             EngineKind::YtDlp => {
                 "yt-dlp is currently unavailable. Please check Settings → Download Engines."
             }
-            EngineKind::DirectHttp => {
-                // DirectHttp is always available; this branch should not be reached.
+            EngineKind::DirectHttp | EngineKind::Hls => {
+                // DirectHttp and Hls are always available; this branch should not be reached.
                 "The requested download engine is not available."
             }
         };

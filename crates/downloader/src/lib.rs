@@ -6,6 +6,7 @@ mod dispatcher;
 mod engine;
 mod error;
 mod ffmpeg;
+mod hls;
 mod http;
 mod segments;
 mod supervisor;
@@ -26,6 +27,7 @@ pub use ffmpeg::{
     MediaStreamKind, TranscodePreset,
 };
 pub use http::{DirectHttpEngine, HttpEngineConfig, validate_http_source_url};
+pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 pub use supervisor::{
     Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,
     Aria2SupervisorState, ProcessExit, SupervisedProcess,

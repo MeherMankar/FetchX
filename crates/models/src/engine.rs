@@ -9,6 +9,9 @@ pub enum EngineKind {
     Aria2,
     #[serde(rename = "yt_dlp")]
     YtDlp,
+    /// Native parallel HLS downloader (fetches all segments concurrently).
+    #[serde(rename = "hls")]
+    Hls,
 }
 
 #[cfg(test)]
@@ -21,6 +24,7 @@ mod tests {
             (EngineKind::DirectHttp, "\"direct_http\""),
             (EngineKind::Aria2, "\"aria2\""),
             (EngineKind::YtDlp, "\"yt_dlp\""),
+            (EngineKind::Hls, "\"hls\""),
         ] {
             let serialized = serde_json::to_string(&engine)?;
             assert_eq!(serialized, expected);

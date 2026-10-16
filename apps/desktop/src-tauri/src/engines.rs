@@ -110,7 +110,7 @@ impl EngineRuntime {
     pub fn is_available(&self, kind: fetchx_models::EngineKind) -> bool {
         use fetchx_models::EngineKind;
         match kind {
-            EngineKind::DirectHttp => true,
+            EngineKind::DirectHttp | EngineKind::Hls => true,
             EngineKind::Aria2 => matches!(self.status.aria2, EngineAvailability::Available { .. }),
             EngineKind::YtDlp => {
                 matches!(self.status.yt_dlp, EngineAvailability::Available { .. })

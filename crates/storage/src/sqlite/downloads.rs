@@ -484,6 +484,7 @@ fn engine_to_str(value: EngineKind) -> &'static str {
         EngineKind::DirectHttp => "direct_http",
         EngineKind::Aria2 => "aria2",
         EngineKind::YtDlp => "yt_dlp",
+        EngineKind::Hls => "hls",
     }
 }
 
@@ -492,6 +493,7 @@ fn engine_from_str(value: &str) -> Result<EngineKind, StorageError> {
         "direct_http" => Ok(EngineKind::DirectHttp),
         "aria2" => Ok(EngineKind::Aria2),
         "yt_dlp" => Ok(EngineKind::YtDlp),
+        "hls" => Ok(EngineKind::Hls),
         _ => Err(StorageError::invalid_data(
             "engine_kind",
             "unknown engine kind",

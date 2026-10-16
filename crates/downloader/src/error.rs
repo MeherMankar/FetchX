@@ -18,6 +18,8 @@ pub enum DownloadEngineError {
     InvalidUrl,
     #[error("only HTTP and HTTPS URLs are supported")]
     UnsupportedScheme,
+    #[error("unsupported media format: {0}")]
+    UnsupportedFormat(&'static str),
     #[error("download is assigned to a different engine")]
     EngineMismatch,
     #[error("the selected download engine is not implemented")]
@@ -114,6 +116,10 @@ impl DownloadEngineError {
             | Self::EmbeddedCredentials => (
                 DownloadErrorCode::Source,
                 "The download source is invalid or unsupported.".to_owned(),
+            ),
+            Self::UnsupportedFormat(_) => (
+                DownloadErrorCode::Engine,
+                "The selected media format is not supported.".to_owned(),
             ),
             Self::EngineNotAvailable => (
                 DownloadErrorCode::Engine,

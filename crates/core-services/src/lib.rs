@@ -29,8 +29,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
-    DirectHttpEngine, EngineDispatcher, YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine,
-    YtDlpProcessRunner,
+    DirectHttpEngine, EngineDispatcher, HlsEngine, YtDlpConfig as DownloaderYtDlpConfig,
+    YtDlpEngine, YtDlpProcessRunner,
 };
 use fetchx_models::EngineKind;
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueConfig, QueueManager};
@@ -228,6 +228,11 @@ impl EngineRuntime {
                 .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
         );
 
+        let hls_engine = Arc::new(
+            HlsEngine::new(repository.clone())
+                .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
+        );
+
         let (aria2_engine, aria2_supervisor, aria2_avail) =
             init_aria2(repository.clone(), config, runtime_dir).await;
         let (yt_dlp_engine, ytdlp_avail) =
@@ -235,8 +240,10 @@ impl EngineRuntime {
 
         log_avail("aria2", &aria2_avail);
         log_avail("yt-dlp", &ytdlp_avail);
+        info!(engine = "hls", "engine ready");
 
-        let mut dispatcher = EngineDispatcher::new(repository, direct_http, aria2_engine);
+        let mut dispatcher = EngineDispatcher::new(repository, direct_http, aria2_engine)
+            .with_hls(hls_engine);
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
@@ -263,7 +270,7 @@ impl EngineRuntime {
     /// `true` when `kind` is currently available at runtime.
     pub fn is_available(&self, kind: EngineKind) -> bool {
         match kind {
-            EngineKind::DirectHttp => true,
+            EngineKind::DirectHttp | EngineKind::Hls => true,
             EngineKind::Aria2 => matches!(self.status.aria2, EngineAvailability::Available { .. }),
             EngineKind::YtDlp => matches!(self.status.yt_dlp, EngineAvailability::Available { .. }),
         }

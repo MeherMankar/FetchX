@@ -1,12 +1,14 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use fetchx_models::{DownloadId, DownloadItem, EngineKind};
 use fetchx_storage::DownloadRepository;
+use reqwest::{Client, Url, header::CONTENT_TYPE};
 use tokio::sync::watch;
 
 use crate::{
-    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
-    ManagedDownloadEngine, YtDlpEngine, YtDlpFormat,
+    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, HlsEngine, is_hls_url,
+    ManagedDownloadControl, ManagedDownloadEngine, YtDlpEngine, YtDlpFormat,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -15,6 +17,8 @@ pub struct EngineDispatcher<R> {
     direct_http: Arc<DirectHttpEngine<R>>,
     aria2: Arc<Aria2Engine<R>>,
     yt_dlp: Option<Arc<YtDlpEngine<R>>>,
+    hls: Option<Arc<HlsEngine<R>>>,
+    probe_client: Client,
 }
 
 impl<R> EngineDispatcher<R>
@@ -31,11 +35,21 @@ where
             direct_http,
             aria2,
             yt_dlp: None,
+            hls: None,
+            probe_client: Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("default HLS probe client configuration is valid"),
         }
     }
 
     pub fn with_yt_dlp(mut self, engine: Arc<YtDlpEngine<R>>) -> Self {
         self.yt_dlp = Some(engine);
+        self
+    }
+
+    pub fn with_hls(mut self, engine: Arc<HlsEngine<R>>) -> Self {
+        self.hls = Some(engine);
         self
     }
 
@@ -58,6 +72,53 @@ where
             .map(|item| item.source().engine())
             .ok_or(DownloadEngineError::NotFound(id))
     }
+
+    async fn selected_engine_for(&self, id: DownloadId) -> Result<EngineKind, DownloadEngineError> {
+        let item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let source = item.source();
+        if source.engine() == EngineKind::Hls
+            || (source.engine() == EngineKind::DirectHttp && is_hls_url(source.url()))
+        {
+            return Ok(EngineKind::Hls);
+        }
+        if source.engine() != EngineKind::DirectHttp {
+            return Ok(source.engine());
+        }
+
+        let Ok(url) = Url::parse(source.url()) else {
+            return Ok(EngineKind::DirectHttp);
+        };
+        let response = self.probe_client.head(url).send().await;
+        if response.is_ok_and(|response| {
+            response.status().is_success()
+                && response
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(is_hls_content_type)
+        }) {
+            Ok(EngineKind::Hls)
+        } else {
+            Ok(EngineKind::DirectHttp)
+        }
+    }
+}
+
+fn is_hls_content_type(content_type: &str) -> bool {
+    matches!(
+        content_type
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "application/x-mpegurl" | "application/vnd.apple.mpegurl"
+    )
 }
 
 impl<R> DownloadEngine for EngineDispatcher<R>
@@ -69,10 +130,14 @@ where
         id: DownloadId,
         cancellation: watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
-        match self.engine_for(id).await? {
+        match self.selected_engine_for(id).await? {
             EngineKind::DirectHttp => self.direct_http.download(id, cancellation).await,
             EngineKind::Aria2 => self.aria2.download(id, cancellation).await,
             EngineKind::YtDlp => match &self.yt_dlp {
+                Some(engine) => engine.download(id, cancellation).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+            EngineKind::Hls => match &self.hls {
                 Some(engine) => engine.download(id, cancellation).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
@@ -89,10 +154,14 @@ where
         id: DownloadId,
         control: ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
-        match self.engine_for(id).await? {
+        match self.selected_engine_for(id).await? {
             EngineKind::DirectHttp => self.direct_http.download_managed(id, control).await,
             EngineKind::Aria2 => self.aria2.download_managed(id, control).await,
             EngineKind::YtDlp => match &self.yt_dlp {
+                Some(engine) => engine.download_managed(id, control).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+            EngineKind::Hls => match &self.hls {
                 Some(engine) => engine.download_managed(id, control).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
@@ -105,7 +174,7 @@ where
                 .yt_dlp
                 .as_ref()
                 .is_some_and(|engine| engine.supports_active_pause(EngineKind::YtDlp)),
-            EngineKind::DirectHttp | EngineKind::Aria2 => true,
+            EngineKind::DirectHttp | EngineKind::Aria2 | EngineKind::Hls => true,
         }
     }
 
@@ -117,7 +186,7 @@ where
         async move {
             match self.engine_for(id).await? {
                 EngineKind::Aria2 => self.aria2.cancel_inactive(id).await,
-                EngineKind::DirectHttp | EngineKind::YtDlp => Ok(()),
+                EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls => Ok(()),
             }
         }
     }
