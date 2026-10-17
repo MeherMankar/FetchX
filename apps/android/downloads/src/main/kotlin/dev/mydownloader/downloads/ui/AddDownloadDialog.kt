@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -18,11 +19,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.fetchx.core.download.DownloadPriority
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
+import java.util.UUID
 
 /**
  * Dialog for adding a new download.
@@ -49,6 +57,47 @@ fun AddDownloadDialog(
     var userEditedFileName by rememberSaveable { mutableStateOf(false) }
     var urlError by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedPriority by rememberSaveable { mutableStateOf(DownloadPriority.NORMAL) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val torrentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val sourceFile = withContext(Dispatchers.IO) {
+                        val directory = File(context.filesDir, "torrent-sources")
+                        if (!directory.exists() && !directory.mkdirs()) {
+                            throw IOException("Could not create private torrent storage")
+                        }
+                        val destination = File(directory, "${UUID.randomUUID()}.torrent")
+                        try {
+                            val input = context.contentResolver.openInputStream(uri)
+                                ?: throw IOException("Could not open the selected torrent document")
+                            input.use { source ->
+                                destination.outputStream().use { output ->
+                                    source.copyTo(output)
+                                }
+                            }
+                            destination
+                        } catch (error: IOException) {
+                            destination.delete()
+                            throw error
+                        } catch (error: SecurityException) {
+                            destination.delete()
+                            throw error
+                        }
+                    }
+                    url = sourceFile.absolutePath
+                    urlError = null
+                } catch (error: IOException) {
+                    urlError = error.message ?: "Could not read the selected torrent file"
+                } catch (error: SecurityException) {
+                    urlError = "Permission to read the selected torrent file was denied"
+                }
+            }
+        }
+    }
 
     // Auto-derive fileName from URL's last path segment when the user has not edited it manually.
     LaunchedEffect(url) {
@@ -60,7 +109,6 @@ fun AddDownloadDialog(
         }
     }
 
-    val context = androidx.compose.ui.platform.LocalContext.current
     val rawFileName = fileName.ifBlank {
         url.trimEnd('/').substringAfterLast('/').ifBlank { "download" }
     }
@@ -91,6 +139,17 @@ fun AddDownloadDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+
+                Button(
+                    onClick = {
+                        torrentPicker.launch(
+                            arrayOf("application/x-bittorrent", "application/octet-stream")
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Choose .torrent file")
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 

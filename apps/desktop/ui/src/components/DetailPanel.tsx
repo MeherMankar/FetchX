@@ -1,8 +1,11 @@
+import { useEffect, useState } from "react";
+
+import { getTorrentTelemetry } from "../api/downloads";
 import type { Download, DownloadSchedule } from "../api/types";
 import { formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTime, formatSpeed } from "../lib/format";
 import { canSchedule, canChangePriority, canPause, canResume, canCancel, canRetry } from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
-import type { DownloadPriority } from "../api/types";
+import type { DownloadPriority, TorrentTelemetry } from "../api/types";
 
 const ENGINE_LABELS: Record<string, string> = {
   direct_http: "Direct HTTP",
@@ -24,6 +27,7 @@ interface DetailPanelProps {
   onSetSchedule: (id: string, ms: number) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
   onError: (message: string) => void;
+  onStopSeeding: (id: string) => Promise<void>;
 }
 
 export function DetailPanel({
@@ -40,9 +44,40 @@ export function DetailPanel({
   onSetSchedule,
   onClearSchedule,
   onError,
+  onStopSeeding,
 }: DetailPanelProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
+  const isTorrent = download.engine === "aria2"
+    && (download.url.startsWith("magnet:") || download.url.startsWith("torrent+file:"));
+  const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
+  const [torrentTelemetryError, setTorrentTelemetryError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTorrentTelemetry(null);
+    setTorrentTelemetryError(null);
+    if (!isTorrent) return;
+
+    let active = true;
+    let interval: number | undefined;
+    const refresh = async () => {
+      try {
+        const telemetry = await getTorrentTelemetry(download.id);
+        if (active) setTorrentTelemetry(telemetry);
+      } catch (cause) {
+        if (active) {
+          setTorrentTelemetryError(cause instanceof Error ? cause.message : String(cause));
+          if (interval !== undefined) window.clearInterval(interval);
+        }
+      }
+    };
+    void refresh();
+    interval = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      active = false;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [download.id, isTorrent]);
 
   return (
     <aside className="detail-panel" aria-label="Download details">
@@ -86,6 +121,47 @@ export function DetailPanel({
             )}
           </dl>
         </section>
+
+        {isTorrent && (
+          <section className="detail-section">
+            <p className="detail-section-title">Torrent</p>
+            {torrentTelemetryError ? (
+              <p className="detail-error-message">{torrentTelemetryError}</p>
+            ) : torrentTelemetry ? (
+              <>
+                <dl className="detail-dl">
+                  <dt>Peers</dt>
+                  <dd>{torrentTelemetry.peer_count ?? "Unavailable"}</dd>
+                  <dt>Seeds</dt>
+                  <dd>{torrentTelemetry.seed_count ?? "Unavailable"}</dd>
+                  <dt>Download</dt>
+                  <dd>{torrentTelemetry.download_speed_bps === null ? "Unavailable" : formatSpeed(torrentTelemetry.download_speed_bps)}</dd>
+                  <dt>Upload</dt>
+                  <dd>{torrentTelemetry.upload_speed_bps === null ? "Unavailable" : formatSpeed(torrentTelemetry.upload_speed_bps)}</dd>
+                  <dt>Uploaded</dt>
+                  <dd>{torrentTelemetry.uploaded_bytes === null ? "Unavailable" : formatBytes(torrentTelemetry.uploaded_bytes)}</dd>
+                  <dt>Share ratio</dt>
+                  <dd>{torrentTelemetry.share_ratio === null ? "Unavailable" : torrentTelemetry.share_ratio.toFixed(3)}</dd>
+                  <dt>Seeding</dt>
+                  <dd>{torrentTelemetry.seeding === null ? "Unavailable" : torrentTelemetry.seeding ? "Yes" : "No"}</dd>
+                  <dt>Trackers</dt>
+                  <dd>{torrentTelemetry.tracker_uris === null ? "Unavailable" : torrentTelemetry.tracker_uris.join(", ") || "None reported"}</dd>
+                </dl>
+                {torrentTelemetry.seeding === true && (
+                  <button
+                    className="button button-secondary"
+                    disabled={busy}
+                    onClick={() => void onStopSeeding(download.id)}
+                  >
+                    Stop seeding
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="field-hint">Live telemetry is unavailable until aria2 reports the task.</p>
+            )}
+          </section>
+        )}
 
         {/* Error */}
         {download.error && (

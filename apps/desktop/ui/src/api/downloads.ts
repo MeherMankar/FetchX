@@ -11,6 +11,8 @@ import type {
   QueueSnapshot,
   ScheduleDownloadRequest,
   SetPriorityRequest,
+  TorrentInspection,
+  TorrentTelemetry,
   YtDlpFormat,
 } from "./types";
 import type { DownloadPriority } from "./types";
@@ -21,6 +23,20 @@ export function listDownloads(): Promise<Download[]> {
 
 export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
+}
+
+export function addTorrentDownload(
+  torrentPath: string,
+  selectedFileIndexes?: number[],
+): Promise<Download> {
+  return invoke<Download>("add_torrent_download", {
+    torrent_path: torrentPath,
+    selected_file_indexes: selectedFileIndexes ?? null,
+  });
+}
+
+export function inspectTorrentFile(torrentPath: string): Promise<TorrentInspection> {
+  return invoke<TorrentInspection>("inspect_torrent_file", { torrent_path: torrentPath });
 }
 
 export function addMediaDownload(
@@ -85,6 +101,14 @@ export function retryDownload(downloadId: string): Promise<Download> {
 
 export function getQueueSnapshot(): Promise<QueueSnapshot> {
   return invoke<QueueSnapshot>("get_queue_snapshot");
+}
+
+export function getTorrentTelemetry(downloadId: string): Promise<TorrentTelemetry | null> {
+  return invoke<TorrentTelemetry | null>("get_torrent_telemetry", { id: downloadId });
+}
+
+export function stopTorrentSeeding(downloadId: string): Promise<void> {
+  return invoke<void>("stop_torrent_seeding", { id: downloadId });
 }
 
 export async function listenForDownloadChanges(

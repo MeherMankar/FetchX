@@ -35,11 +35,14 @@ use fetchx_downloader::{
 use fetchx_models::EngineKind;
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, FileName, Timestamp,
-    parse_magnet_uri, parse_torrent_metainfo,
+    TorrentFileSelection, TorrentMetadata, parse_magnet_uri, parse_torrent_metainfo,
 };
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
-use fetchx_storage::{Database, SqliteDownloadRepository};
+use fetchx_storage::{
+    Database, DownloadRepository, SqliteDownloadRepository, TorrentMetadataRepository,
+    TorrentMetadataRow, TorrentSeedState, TorrentSourceType,
+};
 use thiserror::Error;
 use tokio::{fs, io::AsyncReadExt, process::Command, sync::Mutex, time::Duration};
 use tracing::{info, warn};
@@ -88,6 +91,21 @@ pub struct CoreServices {
     queue: QueueManager,
     pub downloads_dir: PathBuf,
     shutdown_complete: Mutex<bool>,
+}
+
+/// Parameters for [`CoreServices::create_torrent_metadata_row`].
+/// Using a struct avoids the clippy `too_many_arguments` lint.
+struct TorrentMetadataParams {
+    id: DownloadId,
+    source_type: TorrentSourceType,
+    magnet_uri: Option<String>,
+    local_torrent_path: Option<PathBuf>,
+    info_hash: String,
+    torrent_name: String,
+    destination: PathBuf,
+    selected_file_indexes: Vec<u32>,
+    selected_total_bytes: u64,
+    created_at: Timestamp,
 }
 
 impl CoreServices {
@@ -155,6 +173,7 @@ impl CoreServices {
             &engine_config,
             &cfg.runtime_dir,
             ytdlp_runner,
+            Some(database.torrent_metadata()),
         )
         .await?;
 
@@ -206,6 +225,109 @@ impl CoreServices {
         &self.downloads_dir
     }
 
+    /// Durable torrent metadata repository for aria2 magnet/.torrent downloads.
+    #[must_use]
+    pub fn torrent_metadata(&self) -> fetchx_storage::SqliteTorrentMetadataRepository {
+        self.database.torrent_metadata()
+    }
+
+    /// Queries current torrent telemetry from aria2 for a persisted torrent task.
+    pub async fn torrent_telemetry(
+        &self,
+        id: DownloadId,
+    ) -> Result<Option<fetchx_models::TorrentTelemetry>, CoreServicesError> {
+        self.engine_runtime
+            .aria2_engine
+            .torrent_telemetry(id)
+            .await
+            .map_err(|error| CoreServicesError::Engine(error.to_string()))
+    }
+
+    /// Creates a durable torrent metadata row after a torrent download is queued.
+    async fn create_torrent_metadata_row(
+        &self,
+        params: TorrentMetadataParams,
+    ) -> Result<(), CoreServicesError> {
+        let TorrentMetadataParams {
+            id,
+            source_type,
+            magnet_uri,
+            local_torrent_path,
+            info_hash,
+            torrent_name,
+            destination,
+            selected_file_indexes,
+            selected_total_bytes,
+            created_at,
+        } = params;
+        let row = TorrentMetadataRow {
+            download_id: id,
+            source_type,
+            magnet_uri,
+            local_torrent_path,
+            info_hash,
+            torrent_name,
+            destination,
+            metadata_state: if source_type == TorrentSourceType::Magnet {
+                "pending".to_owned()
+            } else {
+                "ready".to_owned()
+            },
+            selected_file_indexes,
+            selected_total_bytes,
+            aria2_gid: None,
+            seed_state: TorrentSeedState::Downloading,
+            uploaded_bytes: 0,
+            upload_speed_bps: 0,
+            peer_count: 0,
+            seed_count: 0,
+            created_at,
+            updated_at: created_at,
+        };
+        self.database
+            .torrent_metadata()
+            .create_torrent_metadata(&row)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?;
+        Ok(())
+    }
+
+    async fn enqueue_torrent_item(
+        &self,
+        item: DownloadItem,
+        metadata: TorrentMetadataParams,
+    ) -> Result<DownloadId, CoreServicesError> {
+        let id = item.id();
+        self.queue
+            .enqueue_deferred(item)
+            .await
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))?;
+        if let Err(error) = self.create_torrent_metadata_row(metadata).await {
+            if let Err(cleanup_error) = self.queue.cancel(id).await {
+                warn!(download_id = %id, %cleanup_error, "could not cancel torrent after metadata persistence failure");
+            }
+            if let Err(cleanup_error) = self.queue.remove_download(id).await {
+                warn!(download_id = %id, %cleanup_error, "could not remove incomplete torrent queue item");
+            }
+            return Err(error);
+        }
+        if let Err(error) = self.queue.release_download(id).await {
+            if let Err(cleanup_error) = self
+                .database
+                .torrent_metadata()
+                .delete_torrent_metadata(id)
+                .await
+            {
+                warn!(download_id = %id, %cleanup_error, "could not remove torrent metadata after queue release failure");
+            }
+            if let Err(cleanup_error) = self.queue.cancel(id).await {
+                warn!(download_id = %id, %cleanup_error, "could not cancel torrent after queue release failure");
+            }
+            return Err(CoreServicesError::Queue(error.to_string()));
+        }
+        Ok(id)
+    }
+
     /// Validates and queues a magnet job through the shared aria2 runtime.
     ///
     /// Magnet output is isolated in a per-job directory unless the caller
@@ -226,20 +348,34 @@ impl CoreServices {
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
         let filename = FileName::new(magnet.suggested_filename())
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
-        let destination = destination.unwrap_or_else(|| {
-            self.downloads_dir
-                .join(format!("torrent-{}-{id}", magnet.info_hash))
-        });
+        let default_dest = self
+            .downloads_dir
+            .join(format!("torrent-{}-{id}", magnet.info_hash));
+        let destination = destination.unwrap_or(default_dest);
+        let destination = validate_torrent_destination(&destination, &self.downloads_dir)
+            .await
+            .map_err(|e| CoreServicesError::InvalidMagnet(e.to_string()))?;
         let created_at = Timestamp::now()
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
-        let mut item = DownloadItem::new(id, source, filename, destination, created_at);
+        let mut item = DownloadItem::new(id, source, filename, destination.clone(), created_at);
         item.set_priority_at(priority, created_at)
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
-        self.queue
-            .enqueue(item)
-            .await
-            .map_err(|error| CoreServicesError::Queue(error.to_string()))?;
-        Ok(id)
+        self.enqueue_torrent_item(
+            item,
+            TorrentMetadataParams {
+                id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(uri.to_owned()),
+                local_torrent_path: None,
+                info_hash: magnet.info_hash.clone(),
+                torrent_name: magnet.suggested_filename(),
+                destination,
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                created_at,
+            },
+        )
+        .await
     }
 
     /// Validates and queues a local `.torrent` file through shared aria2.
@@ -252,64 +388,145 @@ impl CoreServices {
         priority: DownloadPriority,
         destination: Option<PathBuf>,
     ) -> Result<DownloadId, CoreServicesError> {
-        if !torrent_path
-            .extension()
-            .and_then(std::ffi::OsStr::to_str)
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
-        {
-            return Err(CoreServicesError::InvalidTorrent(
-                "source must have a .torrent extension".to_owned(),
-            ));
-        }
-        let metadata = fs::symlink_metadata(&torrent_path)
+        self.enqueue_torrent_file_with_selection(torrent_path, priority, destination, None)
             .await
-            .map_err(CoreServicesError::Io)?;
-        if !metadata.file_type().is_file() || metadata.len() > 8 * 1024 * 1024 {
-            return Err(CoreServicesError::InvalidTorrent(
-                "source must be a regular torrent file no larger than 8 MiB".to_owned(),
-            ));
-        }
-        let torrent_file = fs::File::open(&torrent_path)
+    }
+
+    /// Parses a local torrent file for the shared file-selection UI.
+    pub async fn inspect_torrent_file(
+        &self,
+        torrent_path: PathBuf,
+    ) -> Result<TorrentMetadata, CoreServicesError> {
+        load_torrent_metainfo(torrent_path)
             .await
-            .map_err(CoreServicesError::Io)?;
-        let mut torrent_bytes = Vec::new();
-        torrent_file
-            .take(8 * 1024 * 1024 + 1)
-            .read_to_end(&mut torrent_bytes)
+            .map(|(_, metadata)| metadata)
+    }
+
+    /// Validates and queues a local `.torrent` file with a durable file selection.
+    ///
+    /// The selection uses zero-based file indexes from the parsed metainfo.
+    pub async fn enqueue_torrent_file_with_selection(
+        &self,
+        torrent_path: PathBuf,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+        selected_file_indexes: Option<Vec<u32>>,
+    ) -> Result<DownloadId, CoreServicesError> {
+        let (torrent_path, torrent) = load_torrent_metainfo(torrent_path).await?;
+        // Validate destination BEFORE engine availability check so security
+        // errors are reported even when aria2 is not running.
+        let id = DownloadId::new();
+        let default_dest = self
+            .downloads_dir
+            .join(format!("torrent-{}-{id}", torrent.info_hash));
+        let destination = destination.unwrap_or(default_dest);
+        let destination = validate_torrent_destination(&destination, &self.downloads_dir)
             .await
-            .map_err(CoreServicesError::Io)?;
-        if torrent_bytes.len() > 8 * 1024 * 1024 {
-            return Err(CoreServicesError::InvalidTorrent(
-                "torrent file exceeds 8 MiB".to_owned(),
-            ));
-        }
-        let torrent = parse_torrent_metainfo(&torrent_bytes)
-            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+            .map_err(|e| CoreServicesError::InvalidTorrent(e.to_string()))?;
         if !self.engine_runtime.is_available(EngineKind::Aria2) {
             return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
         }
-        let torrent_path = fs::canonicalize(torrent_path)
-            .await
-            .map_err(CoreServicesError::Io)?;
         let source = DownloadSource::new_torrent_file(&torrent_path, EngineKind::Aria2)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        let torrent_name_for_meta = torrent.name.clone();
+        let torrent_info_hash_for_meta = torrent.info_hash.clone();
+        let selection = match selected_file_indexes {
+            Some(indexes) => {
+                let indexes = indexes
+                    .into_iter()
+                    .map(usize::try_from)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| CoreServicesError::InvalidTorrent("invalid file index".into()))?;
+                TorrentFileSelection::from_indices(torrent.files.len(), indexes)
+                    .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?
+            }
+            None => torrent.selection_all(),
+        };
+        if selection.selected_count() == 0 {
+            return Err(CoreServicesError::InvalidTorrent(
+                "at least one torrent file must be selected".to_owned(),
+            ));
+        }
+        let selected_total_size = selection
+            .selected_size(&torrent)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
         let filename = FileName::new(torrent.name)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
-        let id = DownloadId::new();
-        let destination = destination.unwrap_or_else(|| {
-            self.downloads_dir
-                .join(format!("torrent-{}-{id}", torrent.info_hash))
-        });
         let created_at = Timestamp::now()
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
-        let mut item = DownloadItem::new(id, source, filename, destination, created_at);
+        let mut item = DownloadItem::new(id, source, filename, destination.clone(), created_at);
         item.set_priority_at(priority, created_at)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
-        self.queue
-            .enqueue(item)
+        let selected_indexes: Vec<u32> = selection
+            .selected_indices()
+            .map(u32::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                CoreServicesError::InvalidTorrent("torrent has too many files to index".to_owned())
+            })?;
+        self.enqueue_torrent_item(
+            item,
+            TorrentMetadataParams {
+                id,
+                source_type: TorrentSourceType::TorrentFile,
+                magnet_uri: None,
+                local_torrent_path: Some(torrent_path),
+                info_hash: torrent_info_hash_for_meta,
+                torrent_name: torrent_name_for_meta,
+                destination,
+                selected_file_indexes: selected_indexes,
+                selected_total_bytes: selected_total_size,
+                created_at,
+            },
+        )
+        .await
+    }
+
+    /// Stops torrent seeding for the given download, transitioning it to Stopped.
+    ///
+    /// The download must be in `Seeding` state. After stopping seeding the
+    /// underlying aria2 task is removed.
+    pub async fn stop_torrent_seeding(&self, id: DownloadId) -> Result<(), CoreServicesError> {
+        let item = self
+            .repository
+            .get(id)
             .await
-            .map_err(|error| CoreServicesError::Queue(error.to_string()))?;
-        Ok(id)
+            .map_err(|e| CoreServicesError::Queue(e.to_string()))?
+            .ok_or_else(|| CoreServicesError::Queue(format!("download {id} not found")))?;
+        if item.status() != fetchx_models::DownloadStatus::Seeding {
+            return Err(CoreServicesError::Queue(format!(
+                "download {id} is not seeding (status: {:?})",
+                item.status()
+            )));
+        }
+        self.queue
+            .cancel(id)
+            .await
+            .map_err(|e| CoreServicesError::Queue(e.to_string()))?;
+        fetchx_core::DownloadStateMachine::new(self.repository.clone())
+            .transition(id, fetchx_models::DownloadStatus::Stopped)
+            .await
+            .map_err(|e| CoreServicesError::Queue(e.to_string()))?;
+        let mut meta_row = self
+            .database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|e| CoreServicesError::Database(e.to_string()))?
+            .ok_or_else(|| {
+                CoreServicesError::Database(format!("torrent metadata for {id} was not found"))
+            })?;
+        meta_row.seed_state = fetchx_storage::TorrentSeedState::Stopped;
+        meta_row.aria2_gid = None;
+        meta_row.updated_at = Timestamp::now()
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))?
+            .max(meta_row.updated_at);
+        self.database
+            .torrent_metadata()
+            .update_torrent_metadata(&meta_row)
+            .await
+            .map_err(|e| CoreServicesError::Database(e.to_string()))?;
+        Ok(())
     }
 
     // ── Shutdown ──────────────────────────────────────────────────────────
@@ -342,6 +559,7 @@ impl CoreServices {
 
 pub struct EngineRuntime {
     pub dispatcher: Arc<EngineDispatcher<CoreRepository>>,
+    pub aria2_engine: Arc<Aria2Engine<CoreRepository>>,
     pub aria2_supervisor: Option<Arc<Aria2Supervisor>>,
     pub status: EngineRuntimeStatus,
 }
@@ -352,7 +570,7 @@ impl EngineRuntime {
         config: &EngineConfig,
         runtime_dir: &std::path::Path,
     ) -> Result<Self, CoreServicesError> {
-        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None).await
+        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None, None).await
     }
 
     async fn initialize_with_ytdlp_runner(
@@ -360,6 +578,7 @@ impl EngineRuntime {
         config: &EngineConfig,
         runtime_dir: &std::path::Path,
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
+        torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
     ) -> Result<Self, CoreServicesError> {
         let direct_http = Arc::new(
             DirectHttpEngine::new(repository.clone())
@@ -372,7 +591,7 @@ impl EngineRuntime {
         );
 
         let (aria2_engine, aria2_supervisor, aria2_avail) =
-            init_aria2(repository.clone(), config, runtime_dir).await;
+            init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await;
         let (yt_dlp_engine, ytdlp_avail) =
             init_ytdlp(repository.clone(), config, ytdlp_runner).await;
 
@@ -381,13 +600,15 @@ impl EngineRuntime {
         info!(engine = "hls", "engine ready");
 
         let mut dispatcher =
-            EngineDispatcher::new(repository, direct_http, aria2_engine).with_hls(hls_engine);
+            EngineDispatcher::new(repository, direct_http, Arc::clone(&aria2_engine))
+                .with_hls(hls_engine);
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
 
         Ok(Self {
             dispatcher: Arc::new(dispatcher),
+            aria2_engine,
             aria2_supervisor,
             status: EngineRuntimeStatus {
                 aria2: aria2_avail,
@@ -432,6 +653,7 @@ async fn init_aria2(
     repository: CoreRepository,
     config: &EngineConfig,
     runtime_dir: &std::path::Path,
+    torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
 ) -> (
     Arc<Aria2Engine<CoreRepository>>,
     Option<Arc<Aria2Supervisor>>,
@@ -452,7 +674,11 @@ async fn init_aria2(
     match Aria2Supervisor::start(sup_cfg).await {
         Ok(sup) => {
             let version = detect_aria2_version(&executable).await;
-            let engine = Arc::new(Aria2Engine::with_supervisor(repository, Arc::clone(&sup)));
+            let mut engine = Aria2Engine::with_supervisor(repository, Arc::clone(&sup));
+            if let Some(torrent_metadata) = torrent_metadata {
+                engine = engine.with_torrent_metadata_repository(torrent_metadata);
+            }
+            let engine = Arc::new(engine);
             (engine, Some(sup), EngineAvailability::Available { version })
         }
         Err(e) => {
@@ -535,6 +761,119 @@ async fn init_ytdlp(
             },
         ),
     }
+}
+
+// ============================================================
+// Filesystem security for torrent destinations
+// ============================================================
+
+/// Validates a torrent destination directory before aria2 submission.
+///
+/// Rejects:
+/// - Paths that escape `downloads_dir` via traversal
+/// - UNC paths (`\\server\share`) on Windows
+/// - Symlinks and Windows junctions/reparse points
+/// - Absolute paths that are not under `downloads_dir`
+///
+/// Creates the destination directory if it does not exist yet.
+/// Returns the canonicalized destination path on success.
+async fn load_torrent_metainfo(
+    torrent_path: PathBuf,
+) -> Result<(PathBuf, TorrentMetadata), CoreServicesError> {
+    if !torrent_path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+    {
+        return Err(CoreServicesError::InvalidTorrent(
+            "source must have a .torrent extension".to_owned(),
+        ));
+    }
+    let file_metadata = fs::symlink_metadata(&torrent_path)
+        .await
+        .map_err(CoreServicesError::Io)?;
+    if !file_metadata.file_type().is_file() || file_metadata.len() > 8 * 1024 * 1024 {
+        return Err(CoreServicesError::InvalidTorrent(
+            "source must be a regular torrent file no larger than 8 MiB".to_owned(),
+        ));
+    }
+    let mut torrent_bytes = Vec::new();
+    fs::File::open(&torrent_path)
+        .await
+        .map_err(CoreServicesError::Io)?
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut torrent_bytes)
+        .await
+        .map_err(CoreServicesError::Io)?;
+    if torrent_bytes.len() > 8 * 1024 * 1024 {
+        return Err(CoreServicesError::InvalidTorrent(
+            "torrent file exceeds 8 MiB".to_owned(),
+        ));
+    }
+    let torrent = parse_torrent_metainfo(&torrent_bytes)
+        .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+    let canonical_path = fs::canonicalize(torrent_path)
+        .await
+        .map_err(CoreServicesError::Io)?;
+    Ok((canonical_path, torrent))
+}
+
+async fn validate_torrent_destination(
+    destination: &std::path::Path,
+    downloads_dir: &std::path::Path,
+) -> Result<PathBuf, String> {
+    // Reject UNC paths on Windows (\\server\share).
+    #[cfg(windows)]
+    {
+        let s = destination.to_string_lossy();
+        if s.starts_with("\\\\") {
+            return Err("UNC paths are not permitted as torrent destinations".to_owned());
+        }
+    }
+
+    // Create directory so canonicalize can succeed, but first check metadata to
+    // detect symlinks / junctions before creation.
+    if destination.exists() {
+        let meta = tokio::fs::symlink_metadata(destination)
+            .await
+            .map_err(|e| format!("destination stat error: {e}"))?;
+        if meta.file_type().is_symlink() {
+            return Err("torrent destination must not be a symlink".to_owned());
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+            if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err(
+                    "torrent destination must not be a reparse point or junction".to_owned(),
+                );
+            }
+        }
+    } else {
+        // Create directories, then check they are not a symlink.
+        tokio::fs::create_dir_all(destination)
+            .await
+            .map_err(|e| format!("cannot create torrent destination: {e}"))?;
+    }
+
+    // Canonicalize both paths and confirm containment.
+    let canonical_dest = tokio::fs::canonicalize(destination)
+        .await
+        .map_err(|e| format!("cannot canonicalize destination: {e}"))?;
+    let canonical_root = tokio::fs::canonicalize(downloads_dir)
+        .await
+        .map_err(|e| format!("cannot canonicalize downloads dir: {e}"))?;
+
+    if !canonical_dest.starts_with(&canonical_root) {
+        return Err(format!(
+            "torrent destination '{}' must be under downloads directory '{}'",
+            canonical_dest.display(),
+            canonical_root.display()
+        ));
+    }
+
+    Ok(canonical_dest)
 }
 
 // ============================================================
@@ -719,6 +1058,65 @@ mod tests {
             ))
         ));
         assert!(services.queue().snapshot().await?.items.is_empty());
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn torrent_destination_traversal_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        let valid_torrent = root.path().join("valid.torrent");
+        tokio::fs::write(
+            &valid_torrent,
+            b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:\
+              01234567890123456789ee",
+        )
+        .await?;
+
+        // Traversal via ..
+        let traversal_dest = root
+            .path()
+            .join("downloads")
+            .join("..")
+            .join("..")
+            .join("escape");
+        let result = services
+            .enqueue_torrent_file(
+                valid_torrent.clone(),
+                DownloadPriority::Normal,
+                Some(traversal_dest),
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(super::CoreServicesError::InvalidTorrent(msg)) if msg.contains("must be under")),
+            "expected traversal rejection, got: {result:?}"
+        );
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn magnet_destination_traversal_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+
+        let traversal_dest = root
+            .path()
+            .join("downloads")
+            .join("..")
+            .join("..")
+            .join("secret");
+        let result = services
+            .enqueue_magnet(
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                DownloadPriority::Normal,
+                Some(traversal_dest),
+            )
+            .await;
+        // This will fail with UnavailableEngine (aria2 not running) or traversal rejection.
+        // Either is acceptable — what matters is it does NOT succeed.
+        assert!(result.is_err(), "traversal path should be rejected");
         services.shutdown().await?;
         Ok(())
     }

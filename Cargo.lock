@@ -1143,6 +1143,7 @@ dependencies = [
 name = "fetchx-core-services"
 version = "0.1.0"
 dependencies = [
+ "fetchx-core",
  "fetchx-downloader",
  "fetchx-models",
  "fetchx-queue",
@@ -1280,6 +1281,8 @@ name = "fetchx-storage"
 version = "0.1.0"
 dependencies = [
  "fetchx-models",
+ "serde",
+ "serde_json",
  "sqlx",
  "thiserror 2.0.21",
  "tokio",

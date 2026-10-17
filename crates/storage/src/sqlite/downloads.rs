@@ -510,6 +510,10 @@ fn status_to_str(value: DownloadStatus) -> &'static str {
         DownloadStatus::Completed => "completed",
         DownloadStatus::Failed => "failed",
         DownloadStatus::Cancelled => "cancelled",
+        DownloadStatus::MetadataAcquiring => "metadata_acquiring",
+        DownloadStatus::Seeding => "seeding",
+        DownloadStatus::Recovering => "recovering",
+        DownloadStatus::Stopped => "stopped",
     }
 }
 
@@ -522,6 +526,10 @@ fn status_from_str(value: &str) -> Result<DownloadStatus, StorageError> {
         "completed" => Ok(DownloadStatus::Completed),
         "failed" => Ok(DownloadStatus::Failed),
         "cancelled" => Ok(DownloadStatus::Cancelled),
+        "metadata_acquiring" => Ok(DownloadStatus::MetadataAcquiring),
+        "seeding" => Ok(DownloadStatus::Seeding),
+        "recovering" => Ok(DownloadStatus::Recovering),
+        "stopped" => Ok(DownloadStatus::Stopped),
         _ => Err(StorageError::invalid_data(
             "status",
             "unknown download status",

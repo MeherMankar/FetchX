@@ -77,6 +77,17 @@ class DownloadNotificationManager(
         safeNotify(stableId(item.id), b.build())
     }
 
+    fun notifyTorrentStatus(item: DownloadItem, status: String, ongoing: Boolean = true) {
+        val b = NotificationCompat.Builder(context, CHANNEL_ACTIVE)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(notificationTitle(item, "Torrent task"))
+            .setContentText(status)
+            .setOngoing(ongoing)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+        safeNotify(stableId(item.id), b.build())
+    }
+
     fun notifyQueued(item: DownloadItem) {
         val b = NotificationCompat.Builder(context, CHANNEL_ACTIVE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)

@@ -2,14 +2,16 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { getEngineStatus } from "../api/engine";
 import {
+  addTorrentDownload,
   addDownload,
   addMediaDownload,
   discoverYtDlpFormats,
+  inspectTorrentFile,
   scheduleDownload,
   setDownloadPriority,
 } from "../api/downloads";
 import type { DownloadPriority, EngineKind, EngineStatus, YtDlpFormat } from "../api/types";
-import { errorMessage, msToDatetimeLocal } from "../lib/format";
+import { errorMessage, formatBytes, msToDatetimeLocal } from "../lib/format";
 
 interface AddDialogProps {
   initialUrl?: string;
@@ -66,6 +68,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [busy, setBusy] = useState(false);
   const [formats, setFormats] = useState<YtDlpFormat[] | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState("");
+  const [torrentInspection, setTorrentInspection] = useState<Awaited<ReturnType<typeof inspectTorrentFile>> | null>(null);
+  const [selectedTorrentFiles, setSelectedTorrentFiles] = useState<number[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
@@ -104,13 +108,19 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
         return;
       }
     }
+    if (isTorrentFile && torrentInspection && selectedTorrentFiles.length === 0) {
+      setError("Select at least one torrent file.");
+      return;
+    }
 
     setBusy(true);
     try {
       // Pass the selected engine to the backend.
       // The backend re-validates availability — the frontend cannot bypass this check.
       // Omit engine_kind when Direct HTTP is selected to use the backend default.
-      const download = engineKind === "yt_dlp" && !isTorrent
+      const download = isTorrentFile && torrentInspection
+        ? await addTorrentDownload(url.trim(), selectedTorrentFiles)
+        : engineKind === "yt_dlp" && !isTorrent
         ? await addMediaDownload(
             url,
             selectedFormatId || undefined,
@@ -147,6 +157,22 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       setError(errorMessage(cause));
     } finally {
       setFormatsLoading(false);
+    }
+  };
+
+  const inspectTorrent = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const metadata = await inspectTorrentFile(url.trim());
+      setTorrentInspection(metadata);
+      setSelectedTorrentFiles(metadata.files.map((file) => file.index));
+    } catch (cause) {
+      setTorrentInspection(null);
+      setSelectedTorrentFiles([]);
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -194,6 +220,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 setUrl(e.target.value);
                 setFormats(null);
                 setSelectedFormatId("");
+                setTorrentInspection(null);
+                setSelectedTorrentFiles([]);
               }}
               required
               disabled={busy || formatsLoading}
@@ -206,6 +234,56 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   ? "Local .torrent files use aria2. Metainfo paths are validated before the job is queued."
                 : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
+            {isTorrentFile && (
+              <div className="field">
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => void inspectTorrent()}
+                  disabled={busy || !url.trim()}
+                >
+                  Inspect torrent files
+                </button>
+                {torrentInspection && (
+                  <div className="torrent-file-list">
+                    <p>
+                      {torrentInspection.name} · {formatBytes(torrentInspection.total_size)}
+                    </p>
+                    <div className="button-row">
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() => setSelectedTorrentFiles(torrentInspection.files.map((file) => file.index))}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() => setSelectedTorrentFiles([])}
+                      >
+                        Deselect all
+                      </button>
+                    </div>
+                    {torrentInspection.files.map((file) => (
+                      <label className="torrent-file-option" key={file.index}>
+                        <input
+                          type="checkbox"
+                          checked={selectedTorrentFiles.includes(file.index)}
+                          onChange={(event) => {
+                            setSelectedTorrentFiles((current) => event.target.checked
+                              ? [...current, file.index].sort((a, b) => a - b)
+                              : current.filter((index) => index !== file.index));
+                          }}
+                        />
+                        <span>{file.path}</span>
+                        <span>{formatBytes(file.size)}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="field">

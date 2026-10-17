@@ -6,7 +6,9 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 
-use crate::{SqliteConfigRepository, SqliteDownloadRepository, StorageError};
+use crate::{
+    SqliteConfigRepository, SqliteDownloadRepository, SqliteTorrentMetadataRepository, StorageError,
+};
 
 static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
     migrations: Cow::Owned(vec![
@@ -59,6 +61,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             MigrationType::Simple,
             Cow::Borrowed(include_str!(
                 "../../../migrations/0006_add_hls_engine_kind.sql"
+            )),
+            false,
+        ),
+        Migration::new(
+            7,
+            Cow::Borrowed("torrent_metadata"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0007_torrent_metadata.sql"
             )),
             false,
         ),
@@ -131,6 +142,12 @@ impl Database {
     #[must_use]
     pub fn config(&self) -> SqliteConfigRepository {
         SqliteConfigRepository::new(self.pool.clone())
+    }
+
+    /// Returns a repository for durable torrent metadata rows.
+    #[must_use]
+    pub fn torrent_metadata(&self) -> SqliteTorrentMetadataRepository {
+        SqliteTorrentMetadataRepository::new(self.pool.clone())
     }
 
     #[cfg(test)]

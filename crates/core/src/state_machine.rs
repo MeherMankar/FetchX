@@ -13,22 +13,42 @@ pub fn validate_transition(
         (from, to),
         (DownloadStatus::Queued, DownloadStatus::Preparing)
             | (DownloadStatus::Queued, DownloadStatus::Paused)
-            | (DownloadStatus::Preparing, DownloadStatus::Queued)
-            | (DownloadStatus::Downloading, DownloadStatus::Queued)
             | (DownloadStatus::Queued, DownloadStatus::Cancelled)
+            | (DownloadStatus::Queued, DownloadStatus::MetadataAcquiring)
+            | (DownloadStatus::Preparing, DownloadStatus::Queued)
             | (DownloadStatus::Preparing, DownloadStatus::Downloading)
             | (DownloadStatus::Preparing, DownloadStatus::Failed)
             | (DownloadStatus::Preparing, DownloadStatus::Cancelled)
             | (DownloadStatus::Preparing, DownloadStatus::Paused)
+            | (DownloadStatus::Downloading, DownloadStatus::Queued)
             | (DownloadStatus::Downloading, DownloadStatus::Paused)
             | (DownloadStatus::Downloading, DownloadStatus::Completed)
             | (DownloadStatus::Downloading, DownloadStatus::Failed)
             | (DownloadStatus::Downloading, DownloadStatus::Cancelled)
+            | (DownloadStatus::Downloading, DownloadStatus::Seeding)
+            | (DownloadStatus::Downloading, DownloadStatus::Recovering)
             | (DownloadStatus::Paused, DownloadStatus::Downloading)
             | (DownloadStatus::Paused, DownloadStatus::Queued)
             | (DownloadStatus::Paused, DownloadStatus::Cancelled)
             | (DownloadStatus::Failed, DownloadStatus::Preparing)
             | (DownloadStatus::Cancelled, DownloadStatus::Preparing)
+            // Torrent-specific lifecycle edges.
+            | (DownloadStatus::MetadataAcquiring, DownloadStatus::Downloading)
+            | (DownloadStatus::MetadataAcquiring, DownloadStatus::Failed)
+            | (DownloadStatus::MetadataAcquiring, DownloadStatus::Cancelled)
+            | (DownloadStatus::MetadataAcquiring, DownloadStatus::Queued)
+            | (DownloadStatus::Seeding, DownloadStatus::Stopped)
+            | (DownloadStatus::Seeding, DownloadStatus::Paused)
+            | (DownloadStatus::Seeding, DownloadStatus::Cancelled)
+            | (DownloadStatus::Seeding, DownloadStatus::Recovering)
+            | (DownloadStatus::Stopped, DownloadStatus::Queued)
+            | (DownloadStatus::Stopped, DownloadStatus::Cancelled)
+            | (DownloadStatus::Cancelled, DownloadStatus::Stopped)
+            | (DownloadStatus::Recovering, DownloadStatus::Queued)
+            | (DownloadStatus::Recovering, DownloadStatus::Downloading)
+            | (DownloadStatus::Recovering, DownloadStatus::Seeding)
+            | (DownloadStatus::Recovering, DownloadStatus::Failed)
+            | (DownloadStatus::Recovering, DownloadStatus::Cancelled)
     );
 
     if allowed {
@@ -87,9 +107,16 @@ where
         };
         if !matches!(
             item.status(),
-            DownloadStatus::Preparing | DownloadStatus::Downloading
+            DownloadStatus::Preparing
+                | DownloadStatus::Downloading
+                | DownloadStatus::MetadataAcquiring
+                | DownloadStatus::Recovering
+                | DownloadStatus::Seeding
         ) {
             return Ok(None);
+        }
+        if item.status() == DownloadStatus::Seeding {
+            self.transition(id, DownloadStatus::Recovering).await?;
         }
         self.transition(id, DownloadStatus::Queued).await.map(Some)
     }
@@ -172,7 +199,7 @@ mod tests {
 
     use super::{DownloadStateMachine, StateMachineError, validate_transition};
 
-    const STATES: [DownloadStatus; 7] = [
+    const STATES: [DownloadStatus; 11] = [
         DownloadStatus::Queued,
         DownloadStatus::Preparing,
         DownloadStatus::Downloading,
@@ -180,9 +207,13 @@ mod tests {
         DownloadStatus::Completed,
         DownloadStatus::Failed,
         DownloadStatus::Cancelled,
+        DownloadStatus::MetadataAcquiring,
+        DownloadStatus::Seeding,
+        DownloadStatus::Recovering,
+        DownloadStatus::Stopped,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 18] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 37] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
         (DownloadStatus::Queued, DownloadStatus::Paused),
         (DownloadStatus::Preparing, DownloadStatus::Paused),
@@ -201,6 +232,29 @@ mod tests {
         (DownloadStatus::Paused, DownloadStatus::Cancelled),
         (DownloadStatus::Failed, DownloadStatus::Preparing),
         (DownloadStatus::Cancelled, DownloadStatus::Preparing),
+        // Torrent lifecycle.
+        (DownloadStatus::Queued, DownloadStatus::MetadataAcquiring),
+        (
+            DownloadStatus::MetadataAcquiring,
+            DownloadStatus::Downloading,
+        ),
+        (DownloadStatus::MetadataAcquiring, DownloadStatus::Failed),
+        (DownloadStatus::MetadataAcquiring, DownloadStatus::Cancelled),
+        (DownloadStatus::MetadataAcquiring, DownloadStatus::Queued),
+        (DownloadStatus::Downloading, DownloadStatus::Seeding),
+        (DownloadStatus::Downloading, DownloadStatus::Recovering),
+        (DownloadStatus::Seeding, DownloadStatus::Stopped),
+        (DownloadStatus::Seeding, DownloadStatus::Paused),
+        (DownloadStatus::Seeding, DownloadStatus::Cancelled),
+        (DownloadStatus::Seeding, DownloadStatus::Recovering),
+        (DownloadStatus::Stopped, DownloadStatus::Queued),
+        (DownloadStatus::Stopped, DownloadStatus::Cancelled),
+        (DownloadStatus::Cancelled, DownloadStatus::Stopped),
+        (DownloadStatus::Recovering, DownloadStatus::Queued),
+        (DownloadStatus::Recovering, DownloadStatus::Downloading),
+        (DownloadStatus::Recovering, DownloadStatus::Seeding),
+        (DownloadStatus::Recovering, DownloadStatus::Failed),
+        (DownloadStatus::Recovering, DownloadStatus::Cancelled),
     ];
 
     fn item(status: DownloadStatus) -> Result<DownloadItem, Box<dyn Error>> {
@@ -282,6 +336,33 @@ mod tests {
         assert!(completed.updated_at() > queued.updated_at());
         assert!(downloading.updated_at() >= preparing.updated_at());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restart_requeues_interrupted_seeding_through_recovering() -> Result<(), Box<dyn Error>>
+    {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let state_machine = DownloadStateMachine::new(repository.clone());
+        let seeding = item(DownloadStatus::Seeding)?;
+        let id = seeding.id();
+        repository.create(&seeding).await?;
+
+        let recovered = state_machine
+            .recover_interrupted(id)
+            .await?
+            .ok_or("seeding task was not recovered")?;
+
+        assert_eq!(recovered.status(), DownloadStatus::Queued);
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .ok_or("download not found")?
+                .status(),
+            DownloadStatus::Queued
+        );
         Ok(())
     }
 

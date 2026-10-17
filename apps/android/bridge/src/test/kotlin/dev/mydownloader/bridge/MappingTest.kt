@@ -143,6 +143,34 @@ class MappingTest {
         assertEquals(DownloadState.Queued, mapped.state)
     }
 
+    @Test
+    fun metadataAcquiringStatusMapsToMetadataAcquiringState() {
+        val item = makeDto(status = DownloadStatusDto.METADATA_ACQUIRING)
+        val mapped = repo.mapItemPublic(item)
+        assert(mapped.state is DownloadState.MetadataAcquiring)
+    }
+
+    @Test
+    fun seedingStatusMapsToSeedingState() {
+        val item = makeDto(status = DownloadStatusDto.SEEDING)
+        val mapped = repo.mapItemPublic(item)
+        assert(mapped.state is DownloadState.Seeding)
+    }
+
+    @Test
+    fun recoveringStatusMapsToRecoveringState() {
+        val item = makeDto(status = DownloadStatusDto.RECOVERING)
+        val mapped = repo.mapItemPublic(item)
+        assertEquals(DownloadState.Recovering, mapped.state)
+    }
+
+    @Test
+    fun stoppedStatusMapsToStoppedState() {
+        val item = makeDto(status = DownloadStatusDto.STOPPED)
+        val mapped = repo.mapItemPublic(item)
+        assertEquals(DownloadState.Stopped, mapped.state)
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────
 
     private fun makeDto(
@@ -229,6 +257,10 @@ private class MappingDelegate {
 
     private fun mapState(dto: DownloadInfoDto): dev.fetchx.core.download.DownloadState = when (dto.status) {
         DownloadStatusDto.QUEUED -> dev.fetchx.core.download.DownloadState.Queued
+        DownloadStatusDto.METADATA_ACQUIRING -> dev.fetchx.core.download.DownloadState.MetadataAcquiring(
+            downloadedBytes = dto.progress.downloadedBytes.toLong(),
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+        )
         DownloadStatusDto.PREPARING,
         DownloadStatusDto.DOWNLOADING -> dev.fetchx.core.download.DownloadState.Active(
             downloadedBytes = dto.progress.downloadedBytes.toLong(),
@@ -250,5 +282,11 @@ private class MappingDelegate {
             retryable = true,
         )
         DownloadStatusDto.CANCELLED -> dev.fetchx.core.download.DownloadState.Cancelled
+        DownloadStatusDto.SEEDING -> dev.fetchx.core.download.DownloadState.Seeding(
+            downloadedBytes = dto.progress.downloadedBytes.toLong(),
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+        )
+        DownloadStatusDto.RECOVERING -> dev.fetchx.core.download.DownloadState.Recovering
+        DownloadStatusDto.STOPPED -> dev.fetchx.core.download.DownloadState.Stopped
     }
 }

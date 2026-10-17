@@ -18,6 +18,10 @@ pub enum DownloadStatusDto {
     Completed,
     Failed,
     Cancelled,
+    MetadataAcquiring,
+    Seeding,
+    Recovering,
+    Stopped,
 }
 
 /// Mirrors `DownloadPriority` across the FFI boundary.
@@ -65,6 +69,18 @@ pub struct YtDlpFormatDto {
     pub platform: Option<String>,
 }
 
+pub struct TorrentTelemetryDto {
+    pub download_speed_bps: Option<u64>,
+    pub upload_speed_bps: Option<u64>,
+    pub downloaded_bytes: Option<u64>,
+    pub uploaded_bytes: Option<u64>,
+    pub peer_count: Option<u64>,
+    pub seed_count: Option<u64>,
+    pub share_ratio: Option<f64>,
+    pub seeding: Option<bool>,
+    pub tracker_uris: Option<Vec<String>>,
+}
+
 /// Event emitted by the Rust backend, forwarded to Kotlin listeners.
 /// Maps to the `[Enum] interface DownloadEventDto` in android_bridge.udl.
 pub enum DownloadEventDto {
@@ -88,6 +104,10 @@ pub fn status_to_dto(s: DownloadStatus) -> DownloadStatusDto {
         DownloadStatus::Completed => DownloadStatusDto::Completed,
         DownloadStatus::Failed => DownloadStatusDto::Failed,
         DownloadStatus::Cancelled => DownloadStatusDto::Cancelled,
+        DownloadStatus::MetadataAcquiring => DownloadStatusDto::MetadataAcquiring,
+        DownloadStatus::Seeding => DownloadStatusDto::Seeding,
+        DownloadStatus::Recovering => DownloadStatusDto::Recovering,
+        DownloadStatus::Stopped => DownloadStatusDto::Stopped,
     }
 }
 

@@ -41,6 +41,23 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             .and_then(std::ffi::OsStr::to_str)
             .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent")))
     .then(|| Path::new(input).to_path_buf());
+    let selected_file_indexes = match opts.select_files.as_deref() {
+        Some(value) if torrent_path.is_some() => match parse_torrent_selection(value) {
+            Ok(indexes) => Some(indexes),
+            Err(message) => {
+                output::print_error(json, &message);
+                return exit::INVALID_ARGS;
+            }
+        },
+        Some(_) => {
+            output::print_error(
+                json,
+                "--select-files is only valid with a local .torrent file",
+            );
+            return exit::INVALID_ARGS;
+        }
+        None => None,
+    };
     let canonical_url = if magnet.is_some() || torrent_path.is_some() {
         input.to_owned()
     } else {
@@ -112,7 +129,12 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         }
     } else if let Some(torrent_path) = torrent_path {
         match svc
-            .enqueue_torrent_file(torrent_path, priority, opts.destination)
+            .enqueue_torrent_file_with_selection(
+                torrent_path,
+                priority,
+                opts.destination,
+                selected_file_indexes,
+            )
             .await
         {
             Ok(id) => id,
@@ -243,6 +265,26 @@ pub fn parse_priority(s: &str) -> Result<DownloadPriority, String> {
     }
 }
 
+fn parse_torrent_selection(value: &str) -> Result<Vec<u32>, String> {
+    let mut indexes = Vec::new();
+    for value in value.split(',') {
+        let index = value.trim().parse::<u32>().map_err(|_| {
+            "torrent file indexes must be positive comma-separated integers".to_owned()
+        })?;
+        let index = index.checked_sub(1).ok_or_else(|| {
+            "torrent file indexes are 1-based and must be greater than zero".to_owned()
+        })?;
+        if indexes.contains(&index) {
+            return Err(format!("torrent file index {} is repeated", index + 1));
+        }
+        indexes.push(index);
+    }
+    if indexes.is_empty() {
+        return Err("at least one torrent file index must be selected".to_owned());
+    }
+    Ok(indexes)
+}
+
 fn filename_for_url(url: &Url) -> String {
     url.path_segments()
         .and_then(|mut s| s.next_back())
@@ -253,7 +295,7 @@ fn filename_for_url(url: &Url) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_engine;
+    use super::{parse_torrent_selection, resolve_engine};
     use fetchx_models::{EngineKind, parse_magnet_uri};
 
     #[test]
@@ -266,5 +308,13 @@ mod tests {
         .expect("valid test magnet");
         assert_eq!(metadata.suggested_filename(), "unsafename.torrent");
         assert!(resolve_engine(true, false, Some("direct-http")).is_err());
+    }
+
+    #[test]
+    fn torrent_selection_uses_one_based_unique_indexes() {
+        assert_eq!(parse_torrent_selection("1,3"), Ok(vec![0, 2]));
+        assert!(parse_torrent_selection("0").is_err());
+        assert!(parse_torrent_selection("1,1").is_err());
+        assert!(parse_torrent_selection("1,x").is_err());
     }
 }

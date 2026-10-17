@@ -7,8 +7,13 @@ mod sqlite;
 
 pub use database::Database;
 pub use error::StorageError;
-pub use repository::DownloadRepository;
-pub use sqlite::{SqliteConfigRepository, SqliteDownloadRepository};
+pub use repository::{
+    DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
+    TorrentSourceType,
+};
+pub use sqlite::{
+    SqliteConfigRepository, SqliteDownloadRepository, SqliteTorrentMetadataRepository,
+};
 
 #[cfg(test)]
 mod tests;

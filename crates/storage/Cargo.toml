@@ -8,6 +8,8 @@ rust-version.workspace = true
 fetchx-models = { path = "../models" }
 sqlx.workspace = true
 thiserror.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

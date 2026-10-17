@@ -1,15 +1,20 @@
 import type { Download, DownloadStatus } from "../api/types";
 
 export function isTerminal(status: DownloadStatus): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return status === "completed" || status === "failed" || status === "cancelled" || status === "stopped";
 }
 
 export function isActive(status: DownloadStatus): boolean {
-  return status === "downloading";
+  return status === "downloading"
+    || status === "preparing"
+    || status === "metadata_acquiring"
+    || status === "recovering"
+    || status === "seeding";
 }
 
 export function canPause(status: DownloadStatus): boolean {
-  return status === "queued" || status === "preparing" || status === "downloading";
+  return status === "queued" || status === "preparing" || status === "downloading"
+    || status === "metadata_acquiring" || status === "recovering" || status === "seeding";
 }
 
 export function canResume(status: DownloadStatus): boolean {
@@ -29,7 +34,7 @@ export function canSchedule(status: DownloadStatus): boolean {
 }
 
 export function canRetry(status: DownloadStatus): boolean {
-  return status === "failed" || status === "cancelled";
+  return status === "failed" || status === "cancelled" || status === "stopped";
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +58,9 @@ export function countStatuses(downloads: Download[]): Omit<StatusCounts, "schedu
     switch (d.status) {
       case "downloading":
       case "preparing":
+      case "metadata_acquiring":
+      case "recovering":
+      case "seeding":
         active++;
         break;
       case "queued":
@@ -62,6 +70,7 @@ export function countStatuses(downloads: Download[]): Omit<StatusCounts, "schedu
         paused++;
         break;
       case "completed":
+      case "stopped":
         completed++;
         break;
       case "failed":

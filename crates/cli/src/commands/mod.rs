@@ -8,6 +8,7 @@ pub mod plugins;
 pub mod priority;
 pub mod schedule;
 pub mod status;
+pub mod torrent;
 pub mod version;
 
 use fetchx_models::{DownloadId, DownloadIdParseError};

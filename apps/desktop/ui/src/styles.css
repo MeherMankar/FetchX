@@ -963,6 +963,40 @@ a {
   cursor: pointer;
 }
 
+.torrent-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.torrent-file-list p {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+}
+
+.torrent-file-option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.torrent-file-option span:nth-child(2) {
+  overflow-wrap: anywhere;
+}
+
 /* ============================================================
    Footer
    ============================================================ */

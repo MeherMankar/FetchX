@@ -192,9 +192,10 @@ fun DownloadsScreen(
                             onCancel = { viewModel.cancel(item.id) },
                             onRemove = { viewModel.remove(item.id) },
                             onRetry = { viewModel.retry(item.id) },
-                            onPlayFile = if (item.state is dev.fetchx.core.download.DownloadState.Completed &&
+                            onPlayFile = if ((item.state is dev.fetchx.core.download.DownloadState.Completed ||
+                                item.state is dev.fetchx.core.download.DownloadState.Stopped) &&
                                 isVideoFile(item.fileName)) {
-                                { onPlayFile((item.state as dev.fetchx.core.download.DownloadState.Completed).destinationPath) }
+                                { onPlayFile(item.destinationPath) }
                             } else null,
                         )
                     }

@@ -8,6 +8,12 @@ sealed class DownloadState {
     /** Waiting to be started by the queue manager. */
     data object Queued : DownloadState()
 
+    /** aria2 is resolving a magnet before the torrent file list is available. */
+    data class MetadataAcquiring(
+        val downloadedBytes: Long,
+        val totalBytes: Long?,
+    ) : DownloadState()
+
     /** Actively downloading (one or more segments in progress). */
     data class Active(
         val downloadedBytes: Long,
@@ -23,6 +29,15 @@ sealed class DownloadState {
         val totalBytes: Long? = null,
     ) : DownloadState()
 
+    /** The payload is complete and aria2 is still seeding. */
+    data class Seeding(
+        val downloadedBytes: Long,
+        val totalBytes: Long?,
+    ) : DownloadState()
+
+    /** The shared Rust queue is reconciling an interrupted task. */
+    data object Recovering : DownloadState()
+
     /** Download finished successfully. */
     data class Completed(
         val totalBytes: Long,
@@ -37,4 +52,7 @@ sealed class DownloadState {
 
     /** Cancelled by the user. */
     data object Cancelled : DownloadState()
+
+    /** Seeding was explicitly stopped; completed files remain available. */
+    data object Stopped : DownloadState()
 }

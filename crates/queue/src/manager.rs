@@ -1855,6 +1855,9 @@ mod tests {
                     .transition(id, DownloadStatus::Cancelled)
                     .await?;
             }
+            status => {
+                return Err(format!("persist_item_in_status does not support {status:?}").into());
+            }
         }
         Ok(id)
     }

@@ -12,7 +12,7 @@ use fetchx_models::{
 };
 use fetchx_queue::{QueueError, QueueManager};
 use fetchx_scheduler::{ScheduleError, Scheduler};
-use fetchx_storage::{Database, DownloadRepository};
+use fetchx_storage::{Database, DownloadRepository, TorrentMetadataRepository};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -26,7 +26,7 @@ pub(crate) type AppRepository = CoreRepository;
 
 pub struct AppState {
     pub(crate) core_services: Option<Arc<CoreServices>>,
-    _database: Database,
+    pub(crate) database: Database,
     pub(crate) repository: AppRepository,
     queue: QueueManager,
     pub(crate) scheduler: Scheduler<AppRepository>,
@@ -50,7 +50,7 @@ impl AppState {
     ) -> Self {
         Self {
             core_services: None,
-            _database: database,
+            database,
             repository,
             queue,
             scheduler,
@@ -64,7 +64,7 @@ impl AppState {
     pub(crate) fn from_core_services(core: CoreServices) -> Self {
         let core_services = Arc::new(core);
         Self {
-            _database: core_services.database.clone(),
+            database: core_services.database.clone(),
             repository: core_services.repository.clone(),
             queue: core_services.queue().clone(),
             scheduler: core_services.scheduler.clone(),
@@ -155,7 +155,12 @@ impl AppState {
         if let Some(torrent_path) = torrent_path {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
             let id = core_services
-                .enqueue_torrent_file(torrent_path, DownloadPriority::Normal, None)
+                .enqueue_torrent_file_with_selection(
+                    torrent_path,
+                    DownloadPriority::Normal,
+                    None,
+                    None,
+                )
                 .await
                 .map_err(|_| IpcError::internal())?;
             return self.get(id).await;
@@ -226,7 +231,7 @@ impl AppState {
     /// downloads_dir — all of which are already Arc-backed or cheaply cloneable.
     pub(crate) fn clone_for_browser(&self) -> Self {
         Self {
-            _database: self._database.clone(),
+            database: self.database.clone(),
             core_services: self.core_services.clone(),
             repository: self.repository.clone(),
             queue: self.queue.clone(),
@@ -662,6 +667,37 @@ pub async fn add_download(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn add_torrent_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    torrent_path: String,
+    selected_file_indexes: Option<Vec<u32>>,
+) -> Result<DownloadDto, IpcError> {
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let id = core_services
+        .enqueue_torrent_file_with_selection(
+            Path::new(&torrent_path).to_path_buf(),
+            DownloadPriority::Normal,
+            None,
+            selected_file_indexes,
+        )
+        .await
+        .map_err(|_| IpcError::internal())?;
+    let download = state.get(id).await?;
+    emit_event(
+        &app,
+        DOWNLOAD_UPDATED,
+        &DownloadUpdatedEvent {
+            download: download.clone(),
+        },
+    );
+    Ok(download)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn add_media_download(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -853,6 +889,157 @@ pub async fn retry_download(
 #[tauri::command]
 pub async fn get_queue_snapshot(state: State<'_, AppState>) -> Result<QueueSnapshotDto, IpcError> {
     state.snapshot().await
+}
+
+/// Torrent metadata transfer object for the desktop frontend.
+#[derive(Clone, Debug, Serialize)]
+pub struct TorrentMetadataDto {
+    pub download_id: String,
+    pub source_type: String,
+    pub info_hash: String,
+    pub torrent_name: String,
+    pub destination: String,
+    pub metadata_state: String,
+    pub selected_file_indexes: Vec<u32>,
+    pub selected_total_bytes: u64,
+    pub aria2_gid: Option<String>,
+    pub seed_state: String,
+    pub uploaded_bytes: u64,
+    pub upload_speed_bps: u64,
+    pub peer_count: u64,
+    pub seed_count: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TorrentFileDto {
+    pub index: u32,
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TorrentInspectionDto {
+    pub info_hash: String,
+    pub name: String,
+    pub total_size: u64,
+    pub files: Vec<TorrentFileDto>,
+}
+
+/// Torrent telemetry transfer object for the desktop frontend.
+#[derive(Clone, Debug, Serialize)]
+pub struct TorrentTelemetryDto {
+    pub download_speed_bps: Option<u64>,
+    pub upload_speed_bps: Option<u64>,
+    pub downloaded_bytes: Option<u64>,
+    pub uploaded_bytes: Option<u64>,
+    pub peer_count: Option<u64>,
+    pub seed_count: Option<u64>,
+    pub share_ratio: Option<f64>,
+    pub seeding: Option<bool>,
+    pub tracker_uris: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub async fn get_torrent_metadata(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<TorrentMetadataDto>, IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let row = state
+        .database
+        .torrent_metadata()
+        .get_torrent_metadata(download_id)
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(row.map(|r| TorrentMetadataDto {
+        download_id: r.download_id.to_string(),
+        source_type: format!("{:?}", r.source_type),
+        info_hash: r.info_hash,
+        torrent_name: r.torrent_name,
+        destination: r.destination.to_string_lossy().into_owned(),
+        metadata_state: r.metadata_state,
+        selected_file_indexes: r.selected_file_indexes,
+        selected_total_bytes: r.selected_total_bytes,
+        aria2_gid: r.aria2_gid,
+        seed_state: format!("{:?}", r.seed_state),
+        uploaded_bytes: r.uploaded_bytes,
+        upload_speed_bps: r.upload_speed_bps,
+        peer_count: r.peer_count,
+        seed_count: r.seed_count,
+    }))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inspect_torrent_file(
+    state: State<'_, AppState>,
+    torrent_path: String,
+) -> Result<TorrentInspectionDto, IpcError> {
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let metadata = core_services
+        .inspect_torrent_file(Path::new(&torrent_path).to_path_buf())
+        .await
+        .map_err(|_| IpcError::invalid_request())?;
+    let files = metadata
+        .files
+        .into_iter()
+        .enumerate()
+        .map(|(index, file)| {
+            Ok(TorrentFileDto {
+                index: u32::try_from(index).map_err(|_| IpcError::internal())?,
+                path: file.path.join("/"),
+                size: file.size,
+            })
+        })
+        .collect::<Result<Vec<_>, IpcError>>()?;
+    Ok(TorrentInspectionDto {
+        info_hash: metadata.info_hash,
+        name: metadata.name,
+        total_size: metadata.total_size,
+        files,
+    })
+}
+
+#[tauri::command]
+pub async fn get_torrent_telemetry(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<TorrentTelemetryDto>, IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let telemetry = core_services
+        .torrent_telemetry(download_id)
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(telemetry.map(|value| TorrentTelemetryDto {
+        download_speed_bps: value.download_speed_bps,
+        upload_speed_bps: value.upload_speed_bps,
+        downloaded_bytes: value.downloaded_bytes,
+        uploaded_bytes: value.uploaded_bytes,
+        peer_count: value.peer_count,
+        seed_count: value.seed_count,
+        share_ratio: value.share_ratio,
+        seeding: value.seeding,
+        tracker_uris: value.tracker_uris,
+    }))
+}
+
+#[tauri::command]
+pub async fn stop_torrent_seeding(state: State<'_, AppState>, id: String) -> Result<(), IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .stop_torrent_seeding(download_id)
+        .await
+        .map_err(|_| IpcError::internal())
 }
 
 fn emit_event<T: Serialize + Clone>(app: &AppHandle, name: &str, payload: &T) {

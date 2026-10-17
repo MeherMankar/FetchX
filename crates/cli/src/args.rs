@@ -65,6 +65,9 @@ pub enum Command {
 
     /// Plugin management commands.
     Plugins(PluginsOpts),
+
+    /// Torrent-specific commands.
+    Torrent(TorrentOpts),
 }
 
 // ── Plugins ────────────────────────────────────────────────────────────────
@@ -115,6 +118,10 @@ pub struct AddOpts {
     /// Destination file for HTTP downloads or destination directory for torrents.
     #[arg(long, value_name = "PATH")]
     pub destination: Option<std::path::PathBuf>,
+
+    /// Select 1-based file indexes in a local .torrent, comma-separated (for example: 1,3).
+    #[arg(long, value_name = "INDEXES", requires = "url")]
+    pub select_files: Option<String>,
 
     /// Queue priority: low | normal | high
     #[arg(short = 'p', long, value_name = "PRIORITY", default_value = "normal")]
@@ -171,6 +178,33 @@ pub struct ScheduleOpts {
     /// Remove an existing schedule.
     #[arg(long, conflicts_with = "at")]
     pub clear: bool,
+}
+
+// ── Torrent ───────────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct TorrentOpts {
+    #[command(subcommand)]
+    pub command: TorrentCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TorrentCommand {
+    /// Show detailed torrent status including telemetry (peers, seeds, speeds).
+    Status {
+        /// Download ID.
+        id: String,
+    },
+    /// List files in a torrent download.
+    Files {
+        /// Download ID.
+        id: String,
+    },
+    /// Stop seeding after a completed torrent download.
+    StopSeeding {
+        /// Download ID.
+        id: String,
+    },
 }
 
 #[cfg(test)]

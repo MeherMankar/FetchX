@@ -568,6 +568,18 @@ pub enum DownloadStatus {
     Failed,
     #[serde(rename = "cancelled")]
     Cancelled,
+    /// Torrent is fetching metadata (info hash / file list) before downloading.
+    #[serde(rename = "metadata_acquiring")]
+    MetadataAcquiring,
+    /// Torrent download is complete and aria2 is still seeding.
+    #[serde(rename = "seeding")]
+    Seeding,
+    /// Torrent is being reconciled against aria2 after a FetchX/aria2 restart.
+    #[serde(rename = "recovering")]
+    Recovering,
+    /// Torrent seeding has been stopped explicitly.
+    #[serde(rename = "stopped")]
+    Stopped,
 }
 
 #[cfg(test)]
@@ -633,6 +645,10 @@ mod tests {
             (DownloadStatus::Completed, "\"completed\""),
             (DownloadStatus::Failed, "\"failed\""),
             (DownloadStatus::Cancelled, "\"cancelled\""),
+            (DownloadStatus::MetadataAcquiring, "\"metadata_acquiring\""),
+            (DownloadStatus::Seeding, "\"seeding\""),
+            (DownloadStatus::Recovering, "\"recovering\""),
+            (DownloadStatus::Stopped, "\"stopped\""),
         ] {
             let serialized = serde_json::to_string(&status)?;
             assert_eq!(serialized, expected);

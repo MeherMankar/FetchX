@@ -508,6 +508,26 @@ pub enum TorrentMetadataError {
     InvalidSelection,
 }
 
+/// Real-time torrent telemetry sourced exclusively from aria2 JSON-RPC.
+///
+/// Fields not provided by aria2 are represented as `None`; callers must treat
+/// those values as unavailable rather than assuming zero.
+#[derive(Clone, Debug, Default)]
+pub struct TorrentTelemetry {
+    pub download_speed_bps: Option<u64>,
+    pub upload_speed_bps: Option<u64>,
+    pub downloaded_bytes: Option<u64>,
+    pub uploaded_bytes: Option<u64>,
+    pub peer_count: Option<u64>,
+    pub seed_count: Option<u64>,
+    /// Upload / download ratio. `None` when either counter is unavailable or download is zero.
+    pub share_ratio: Option<f64>,
+    /// Seeding status reported by aria2, or `None` when unavailable.
+    pub seeding: Option<bool>,
+    /// Tracker URIs reported by aria2, or `None` when unavailable.
+    pub tracker_uris: Option<Vec<String>>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

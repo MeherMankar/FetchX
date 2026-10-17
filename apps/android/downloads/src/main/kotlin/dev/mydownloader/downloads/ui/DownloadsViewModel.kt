@@ -73,9 +73,16 @@ class DownloadsViewModel(
             initialValue = emptyList(),
         )
 
-    /** Downloads currently active (downloading or preparing). */
+    /** Downloads currently active, including torrent metadata and seeding work. */
     val activeDownloads: StateFlow<List<DownloadItem>> = downloads
-        .map { list -> list.filter { it.state is DownloadState.Active } }
+        .map {
+            list -> list.filter {
+                it.state is DownloadState.Active
+                    || it.state is DownloadState.MetadataAcquiring
+                    || it.state is DownloadState.Recovering
+                    || it.state is DownloadState.Seeding
+            }
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
@@ -93,7 +100,7 @@ class DownloadsViewModel(
 
     /** Downloads that finished successfully. */
     val completedDownloads: StateFlow<List<DownloadItem>> = downloads
-        .map { list -> list.filter { it.state is DownloadState.Completed } }
+        .map { list -> list.filter { it.state is DownloadState.Completed || it.state is DownloadState.Stopped } }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),

@@ -148,6 +148,42 @@ fun DownloadItemRow(
                     }
                 }
 
+                is DownloadState.MetadataAcquiring -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Acquiring torrent metadata",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onCancel) { Text("Cancel") }
+                }
+
+                is DownloadState.Recovering -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Recovering torrent task",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onCancel) { Text("Cancel") }
+                }
+
+                is DownloadState.Seeding -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Seeding · ${formatBytes(state.downloadedBytes)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(onClick = onPause) { Text("Pause") }
+                        TextButton(onClick = onCancel) { Text("Cancel") }
+                    }
+                }
+
                 is DownloadState.Paused -> {
                     Spacer(modifier = Modifier.height(4.dp))
                     val progress = state.totalBytes?.takeIf { it > 0L }?.let {
@@ -262,6 +298,16 @@ fun DownloadItemRow(
                     ) {
                         TextButton(onClick = onRemove) { Text("Remove") }
                     }
+                }
+
+                is DownloadState.Stopped -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Seeding stopped",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onRemove) { Text("Remove") }
                 }
             }
         }

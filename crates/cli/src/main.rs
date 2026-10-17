@@ -114,5 +114,21 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
             Ok(code)
         }
         Plugins(opts) => Ok(commands::plugins::run(opts, cli.json).await),
+
+        Torrent(opts) => {
+            let svc = bootstrap::start().await?;
+            use args::TorrentCommand;
+            let code = match opts.command {
+                TorrentCommand::Status { id } => {
+                    commands::torrent::status(&svc, id, cli.json).await
+                }
+                TorrentCommand::Files { id } => commands::torrent::files(&svc, id, cli.json).await,
+                TorrentCommand::StopSeeding { id } => {
+                    commands::torrent::stop_seeding(&svc, id, cli.json).await
+                }
+            };
+            svc.shutdown().await?;
+            Ok(code)
+        }
     }
 }

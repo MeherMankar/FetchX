@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, path::PathBuf};
 
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, Timestamp,
@@ -81,4 +81,83 @@ pub trait DownloadRepository: Send + Sync {
 
     /// Deletes an item and returns whether a row was removed.
     fn delete(&self, id: DownloadId) -> impl Future<Output = Result<bool, StorageError>> + Send;
+}
+
+/// Durable torrent-specific metadata for aria2 magnet/.torrent downloads.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TorrentMetadataRow {
+    pub download_id: DownloadId,
+    pub source_type: TorrentSourceType,
+    pub magnet_uri: Option<String>,
+    pub local_torrent_path: Option<PathBuf>,
+    pub info_hash: String,
+    pub torrent_name: String,
+    pub destination: PathBuf,
+    pub metadata_state: String,
+    pub selected_file_indexes: Vec<u32>,
+    pub selected_total_bytes: u64,
+    pub aria2_gid: Option<String>,
+    pub seed_state: TorrentSeedState,
+    pub uploaded_bytes: u64,
+    pub upload_speed_bps: u64,
+    pub peer_count: u64,
+    pub seed_count: u64,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+}
+
+/// Source of a torrent download.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TorrentSourceType {
+    Magnet,
+    TorrentFile,
+}
+
+/// Seeding lifecycle of a torrent task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TorrentSeedState {
+    Downloading,
+    Seeding,
+    Stopped,
+}
+
+/// Async operations for persisted torrent metadata.
+pub trait TorrentMetadataRepository: Send + Sync {
+    /// Inserts a new torrent metadata row. A duplicate identifier is a database error.
+    fn create_torrent_metadata(
+        &self,
+        row: &TorrentMetadataRow,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// Replaces the stored torrent metadata for the same download identifier.
+    fn update_torrent_metadata(
+        &self,
+        row: &TorrentMetadataRow,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// Finds one torrent metadata row by download identifier.
+    fn get_torrent_metadata(
+        &self,
+        id: DownloadId,
+    ) -> impl Future<Output = Result<Option<TorrentMetadataRow>, StorageError>> + Send;
+
+    /// Finds one torrent metadata row by the persisted aria2 GID.
+    fn get_torrent_metadata_by_gid(
+        &self,
+        gid: &str,
+    ) -> impl Future<Output = Result<Option<TorrentMetadataRow>, StorageError>> + Send;
+
+    /// Lists torrent metadata rows for downloads that may still need aria2 reconciliation.
+    ///
+    /// A row is active when its seed state is not `Stopped` and its download has not
+    /// reached a terminal non-seeding state.
+    fn list_active_torrent_downloads(
+        &self,
+    ) -> impl Future<Output = Result<Vec<TorrentMetadataRow>, StorageError>> + Send;
+
+    /// Removes a torrent metadata row and reports whether one existed.
+    fn delete_torrent_metadata(
+        &self,
+        id: DownloadId,
+    ) -> impl Future<Output = Result<bool, StorageError>> + Send;
 }

@@ -6,7 +6,10 @@ use fetchx_models::{
     DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
 
-use crate::{Database, DownloadRepository, StorageError};
+use crate::{
+    Database, DownloadRepository, StorageError, TorrentMetadataRepository, TorrentMetadataRow,
+    TorrentSeedState, TorrentSourceType,
+};
 
 static TEMP_DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -48,7 +51,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(database.pool())
             .await?;
-    assert_eq!(migration_count, 6);
+    assert_eq!(migration_count, 7);
 
     Ok(())
 }
@@ -392,6 +395,192 @@ async fn values_outside_sqlite_integer_range_are_rejected() -> Result<(), Box<dy
         Err(StorageError::IntegerOutOfRange {
             field: "downloaded_bytes"
         })
+    ));
+    Ok(())
+}
+
+// ── TorrentMetadata tests ─────────────────────────────────────────────────
+
+fn torrent_row(download_id: DownloadId) -> TorrentMetadataRow {
+    TorrentMetadataRow {
+        download_id,
+        source_type: TorrentSourceType::TorrentFile,
+        magnet_uri: None,
+        local_torrent_path: Some(PathBuf::from("/tmp/test.torrent")),
+        info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        torrent_name: "Test Torrent".to_owned(),
+        destination: PathBuf::from("/downloads/test"),
+        metadata_state: "ready".to_owned(),
+        selected_file_indexes: vec![0, 1, 2],
+        selected_total_bytes: 1024,
+        aria2_gid: None,
+        seed_state: TorrentSeedState::Downloading,
+        uploaded_bytes: 0,
+        upload_speed_bps: 0,
+        peer_count: 0,
+        seed_count: 0,
+        created_at: Timestamp::from_unix_millis(1_700_000_000_000),
+        updated_at: Timestamp::from_unix_millis(1_700_000_000_000),
+    }
+}
+
+#[tokio::test]
+async fn torrent_metadata_insert_reload_and_list_active() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let dl_repo = database.downloads();
+    let tm_repo = database.torrent_metadata();
+
+    // Create parent download first (FK constraint).
+    let dl = item(DownloadId::new(), false)?;
+    dl_repo.create(&dl).await?;
+
+    let row = torrent_row(dl.id());
+    tm_repo.create_torrent_metadata(&row).await?;
+
+    let loaded = tm_repo
+        .get_torrent_metadata(dl.id())
+        .await?
+        .ok_or("torrent metadata row missing after insert")?;
+    assert_eq!(loaded, row);
+
+    let active = tm_repo.list_active_torrent_downloads().await?;
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].download_id, dl.id());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn torrent_metadata_update_and_gid_lookup() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let dl_repo = database.downloads();
+    let tm_repo = database.torrent_metadata();
+
+    let dl = item(DownloadId::new(), false)?;
+    dl_repo.create(&dl).await?;
+    let row = torrent_row(dl.id());
+    tm_repo.create_torrent_metadata(&row).await?;
+
+    let updated = TorrentMetadataRow {
+        aria2_gid: Some("aaaaaaaaaaaaaaaa".to_owned()),
+        uploaded_bytes: 512,
+        peer_count: 3,
+        seed_count: 7,
+        seed_state: TorrentSeedState::Seeding,
+        updated_at: Timestamp::from_unix_millis(1_700_000_001_000),
+        ..row.clone()
+    };
+    tm_repo.update_torrent_metadata(&updated).await?;
+
+    let reloaded = tm_repo
+        .get_torrent_metadata(dl.id())
+        .await?
+        .ok_or("row missing after update")?;
+    assert_eq!(reloaded.aria2_gid.as_deref(), Some("aaaaaaaaaaaaaaaa"));
+    assert_eq!(reloaded.seed_state, TorrentSeedState::Seeding);
+    assert_eq!(reloaded.peer_count, 3);
+
+    // Look up by GID.
+    let by_gid = tm_repo
+        .get_torrent_metadata_by_gid("aaaaaaaaaaaaaaaa")
+        .await?
+        .ok_or("row missing by GID lookup")?;
+    assert_eq!(by_gid.download_id, dl.id());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn torrent_metadata_magnet_row_insert_and_delete() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let dl_repo = database.downloads();
+    let tm_repo = database.torrent_metadata();
+
+    let dl = item(DownloadId::new(), false)?;
+    dl_repo.create(&dl).await?;
+
+    let magnet_row = TorrentMetadataRow {
+        download_id: dl.id(),
+        source_type: TorrentSourceType::Magnet,
+        magnet_uri: Some("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".to_owned()),
+        local_torrent_path: None,
+        info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        torrent_name: "Magnet Torrent".to_owned(),
+        destination: PathBuf::from("/downloads/magnet"),
+        metadata_state: "pending".to_owned(),
+        selected_file_indexes: vec![],
+        selected_total_bytes: 0,
+        aria2_gid: None,
+        seed_state: TorrentSeedState::Downloading,
+        uploaded_bytes: 0,
+        upload_speed_bps: 0,
+        peer_count: 0,
+        seed_count: 0,
+        created_at: Timestamp::from_unix_millis(1_700_000_000_000),
+        updated_at: Timestamp::from_unix_millis(1_700_000_000_000),
+    };
+    tm_repo.create_torrent_metadata(&magnet_row).await?;
+
+    assert!(tm_repo.delete_torrent_metadata(dl.id()).await?);
+    assert!(!tm_repo.delete_torrent_metadata(dl.id()).await?);
+    assert!(tm_repo.get_torrent_metadata(dl.id()).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn torrent_metadata_stopped_row_not_in_active_list() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let dl_repo = database.downloads();
+    let tm_repo = database.torrent_metadata();
+
+    let dl = item(DownloadId::new(), false)?;
+    dl_repo.create(&dl).await?;
+
+    let stopped_row = TorrentMetadataRow {
+        seed_state: TorrentSeedState::Stopped,
+        ..torrent_row(dl.id())
+    };
+    tm_repo.create_torrent_metadata(&stopped_row).await?;
+
+    let active = tm_repo.list_active_torrent_downloads().await?;
+    assert!(
+        active.is_empty(),
+        "stopped row should not appear in active list"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn torrent_metadata_cascade_deletes_with_download() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let dl_repo = database.downloads();
+    let tm_repo = database.torrent_metadata();
+
+    let dl = item(DownloadId::new(), false)?;
+    dl_repo.create(&dl).await?;
+    tm_repo
+        .create_torrent_metadata(&torrent_row(dl.id()))
+        .await?;
+
+    // Deleting the parent download should cascade to torrent_metadata.
+    dl_repo.delete(dl.id()).await?;
+    assert!(tm_repo.get_torrent_metadata(dl.id()).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn torrent_metadata_update_reports_not_found_for_missing_row() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let tm_repo = database.torrent_metadata();
+
+    let ghost_id = DownloadId::new();
+    let row = TorrentMetadataRow {
+        download_id: ghost_id,
+        ..torrent_row(ghost_id)
+    };
+    assert!(matches!(
+        tm_repo.update_torrent_metadata(&row).await,
+        Err(StorageError::NotFound(id)) if id == ghost_id
     ));
     Ok(())
 }

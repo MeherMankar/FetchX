@@ -26,8 +26,8 @@ use tokio::{
 use tracing::warn;
 
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, YtDlpFormatDto, event_to_dto, item_to_dto,
-    priority_from_dto,
+    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentTelemetryDto, YtDlpFormatDto,
+    event_to_dto, item_to_dto, priority_from_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -456,6 +456,44 @@ impl DownloadService {
                 .map_err(MobileApiError::from)?;
 
             Ok(new_id.to_string())
+        })
+    }
+
+    // ── Stop seeding ──────────────────────────────────────────────────────
+
+    pub fn stop_torrent_seeding(&self, id: String) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.stop_torrent_seeding(download_id))
+                .map_err(|e| MobileApiError::Runtime(e.to_string()))
+        })
+    }
+
+    pub fn get_torrent_telemetry(
+        &self,
+        id: String,
+    ) -> Result<Option<TorrentTelemetryDto>, MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            let telemetry = inner
+                .runtime
+                .block_on(inner.core.torrent_telemetry(download_id))
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
+            Ok(telemetry.map(|value| TorrentTelemetryDto {
+                download_speed_bps: value.download_speed_bps,
+                upload_speed_bps: value.upload_speed_bps,
+                downloaded_bytes: value.downloaded_bytes,
+                uploaded_bytes: value.uploaded_bytes,
+                peer_count: value.peer_count,
+                seed_count: value.seed_count,
+                share_ratio: value.share_ratio,
+                seeding: value.seeding,
+                tracker_uris: value.tracker_uris,
+            }))
         })
     }
 

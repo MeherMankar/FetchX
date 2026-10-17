@@ -5,7 +5,11 @@ export type DownloadStatus =
   | "paused"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "metadata_acquiring"
+  | "seeding"
+  | "recovering"
+  | "stopped";
 
 export type DownloadPriority = "low" | "normal" | "high";
 
@@ -50,6 +54,25 @@ export interface AddDownloadRequest {
   url: string;
   /** Optional engine selection. Omitting defaults to Direct HTTP on the backend. */
   engine_kind?: EngineKind;
+}
+
+export interface TorrentTelemetry {
+  download_speed_bps: number | null;
+  upload_speed_bps: number | null;
+  downloaded_bytes: number | null;
+  uploaded_bytes: number | null;
+  peer_count: number | null;
+  seed_count: number | null;
+  share_ratio: number | null;
+  seeding: boolean | null;
+  tracker_uris: string[] | null;
+}
+
+export interface TorrentInspection {
+  info_hash: string;
+  name: string;
+  total_size: number;
+  files: Array<{ index: number; path: string; size: number }>;
 }
 
 export interface YtDlpFormat {

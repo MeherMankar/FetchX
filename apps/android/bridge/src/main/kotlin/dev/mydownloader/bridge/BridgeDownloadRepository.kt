@@ -7,6 +7,7 @@ import dev.fetchx.bridge.uniffi.DownloadInfoDto
 import dev.fetchx.bridge.uniffi.DownloadPriorityDto
 import dev.fetchx.bridge.uniffi.DownloadService
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
+import dev.fetchx.bridge.uniffi.TorrentTelemetryDto
 import dev.fetchx.core.download.DownloadEvent
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
@@ -158,6 +159,9 @@ class BridgeDownloadRepository(
             }
     }
 
+    suspend fun getTorrentTelemetry(downloadId: String): TorrentTelemetryDto? =
+        withContext(Dispatchers.IO) { service.getTorrentTelemetry(downloadId) }
+
     override suspend fun pauseDownload(downloadId: String) =
         withContext(Dispatchers.IO) { service.pauseDownload(downloadId) }
 
@@ -215,6 +219,10 @@ class BridgeDownloadRepository(
 
     private fun mapState(dto: DownloadInfoDto): DownloadState = when (dto.status) {
         DownloadStatusDto.QUEUED -> DownloadState.Queued
+        DownloadStatusDto.METADATA_ACQUIRING -> DownloadState.MetadataAcquiring(
+            downloadedBytes = dto.progress.downloadedBytes.toLong(),
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+        )
         DownloadStatusDto.PREPARING,
         DownloadStatusDto.DOWNLOADING -> DownloadState.Active(
             downloadedBytes = dto.progress.downloadedBytes.toLong(),
@@ -236,6 +244,12 @@ class BridgeDownloadRepository(
             retryable = true,
         )
         DownloadStatusDto.CANCELLED -> DownloadState.Cancelled
+        DownloadStatusDto.SEEDING -> DownloadState.Seeding(
+            downloadedBytes = dto.progress.downloadedBytes.toLong(),
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+        )
+        DownloadStatusDto.RECOVERING -> DownloadState.Recovering
+        DownloadStatusDto.STOPPED -> DownloadState.Stopped
     }
 
     private companion object {

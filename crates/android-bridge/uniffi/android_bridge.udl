@@ -33,6 +33,18 @@ dictionary YtDlpFormatDto {
     string? platform;
 };
 
+dictionary TorrentTelemetryDto {
+    u64? download_speed_bps;
+    u64? upload_speed_bps;
+    u64? downloaded_bytes;
+    u64? uploaded_bytes;
+    u64? peer_count;
+    u64? seed_count;
+    f64? share_ratio;
+    boolean? seeding;
+    sequence<string>? tracker_uris;
+};
+
 enum DownloadStatusDto {
     "Queued",
     "Preparing",
@@ -41,6 +53,10 @@ enum DownloadStatusDto {
     "Completed",
     "Failed",
     "Cancelled",
+    "MetadataAcquiring",
+    "Seeding",
+    "Recovering",
+    "Stopped",
 };
 
 enum DownloadPriorityDto {
@@ -143,6 +159,12 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     void schedule_download(string id, i64 start_at_millis);
+
+    [Throws=MobileApiError]
+    void stop_torrent_seeding(string id);
+
+    [Throws=MobileApiError]
+    TorrentTelemetryDto? get_torrent_telemetry(string id);
 
     void add_event_listener(DownloadEventListener listener);
 

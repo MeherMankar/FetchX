@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+fetchx-core       = { path = "../core" }
 fetchx-downloader = { path = "../downloader" }
 fetchx-models     = { path = "../models" }
 fetchx-queue      = { path = "../queue" }

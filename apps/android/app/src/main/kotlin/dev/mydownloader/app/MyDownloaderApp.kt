@@ -54,7 +54,11 @@ class FetchXApp : Application() {
                 repo.awaitInitialSnapshot()
                 repo.observeDownloads().collect { downloads ->
                     val shouldStart = downloads.any {
-                        it.state is DownloadState.Active || it.state is DownloadState.Queued
+                        it.state is DownloadState.Active
+                            || it.state is DownloadState.Queued
+                            || it.state is DownloadState.MetadataAcquiring
+                            || it.state is DownloadState.Recovering
+                            || it.state is DownloadState.Seeding
                     }
                     if (shouldStart) {
                         val intent = Intent(this@FetchXApp, DownloadForegroundService::class.java)

@@ -61,7 +61,12 @@ class DownloadForegroundService : Service() {
             repo.observeDownloads().collect { emit(it) }
         }
             .onEach { items ->
-                val activeCount = items.count { it.state is DownloadState.Active }
+                val activeCount = items.count {
+                    it.state is DownloadState.Active
+                        || it.state is DownloadState.MetadataAcquiring
+                        || it.state is DownloadState.Recovering
+                        || it.state is DownloadState.Seeding
+                }
                 val queuedCount = items.count { it.state is DownloadState.Queued }
                 val runningCount = activeCount + queuedCount
 
@@ -69,8 +74,16 @@ class DownloadForegroundService : Service() {
                     when (item.state) {
                         is DownloadState.Active -> notificationManager.notifyProgress(item)
                         is DownloadState.Queued -> notificationManager.notifyQueued(item)
+                        is DownloadState.MetadataAcquiring ->
+                            notificationManager.notifyTorrentStatus(item, "Acquiring metadata")
+                        is DownloadState.Recovering ->
+                            notificationManager.notifyTorrentStatus(item, "Recovering torrent task")
+                        is DownloadState.Seeding ->
+                            notificationManager.notifyTorrentStatus(item, "Seeding")
                         is DownloadState.Paused -> notificationManager.notifyPaused(item)
                         is DownloadState.Completed -> notificationManager.notifyCompleted(item)
+                        is DownloadState.Stopped ->
+                            notificationManager.notifyTorrentStatus(item, "Seeding stopped", ongoing = false)
                         is DownloadState.Failed -> notificationManager.notifyFailed(item)
                         is DownloadState.Cancelled -> notificationManager.notifyCancelled(item)
                     }

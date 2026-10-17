@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getAppInfo } from "./api/app";
-import { getQueueSnapshot } from "./api/downloads";
+import { getQueueSnapshot, stopTorrentSeeding } from "./api/downloads";
 import type { Download, DownloadPriority, QueueSnapshot } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
 import { BulkActionBar } from "./components/BulkActionBar";
@@ -57,7 +57,13 @@ function filterDownloads(
     switch (section) {
       case "all": break;
       case "active":
-        if (d.status !== "downloading" && d.status !== "preparing") return false;
+        if (
+          d.status !== "downloading"
+          && d.status !== "preparing"
+          && d.status !== "metadata_acquiring"
+          && d.status !== "recovering"
+          && d.status !== "seeding"
+        ) return false;
         break;
       case "queued":
         if (d.status !== "queued") return false;
@@ -308,6 +314,15 @@ export function App() {
   const handleSetSchedule = useCallback((id: string, ms: number) => setSchedule(id, ms), [setSchedule]);
   const handleClearSchedule = useCallback((id: string) => clearSchedule(id), [clearSchedule]);
   const handleError = useCallback((message: string) => setGlobalError(message), []);
+  const handleStopSeeding = useCallback(async (id: string) => {
+    try {
+      await stopTorrentSeeding(id);
+      await load();
+      refreshSnapshot();
+    } catch (cause) {
+      setGlobalError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [load, refreshSnapshot]);
 
   // -------------------------------------------------------------------------
   // Bulk actions
@@ -656,6 +671,7 @@ export function App() {
               onSetSchedule={handleSetSchedule}
               onClearSchedule={handleClearSchedule}
               onError={handleError}
+              onStopSeeding={handleStopSeeding}
             />
           )}
         </div>
