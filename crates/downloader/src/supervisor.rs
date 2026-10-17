@@ -1209,6 +1209,7 @@ mod tests {
             .err()
             .ok_or("non-executable file unexpectedly started")?;
             assert!(matches!(error, Aria2SupervisorError::ExecutableNotRunnable));
+            fs::remove_file(&path)?;
         }
         let error = Aria2Supervisor::start_with_launcher(
             test_config(&directory),

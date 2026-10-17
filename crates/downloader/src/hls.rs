@@ -524,7 +524,7 @@ where
                     let now = tokio::time::Instant::now();
                     if now.duration_since(last_persist) >= PROGRESS_PERSIST_INTERVAL {
                         let dl_now = downloaded_bytes.load(Ordering::Relaxed);
-                        let _ = update_progress(
+                        if let Err(error) = update_progress(
                             &self.repository,
                             item,
                             &mut expected_ts,
@@ -533,7 +533,12 @@ where
                             None,
                             None,
                         )
-                        .await;
+                        .await
+                        {
+                            let _ = cancel_tx.send(true);
+                            while join_set.join_next().await.is_some() {}
+                            return Err(error);
+                        }
                         last_persist = now;
                     }
                 }
@@ -552,7 +557,7 @@ where
             let now = tokio::time::Instant::now();
             if now.duration_since(last_persist) >= PROGRESS_PERSIST_INTERVAL {
                 let dl_now = downloaded_bytes.load(Ordering::Relaxed);
-                let _ = update_progress(
+                if let Err(error) = update_progress(
                     &self.repository,
                     item,
                     &mut expected_ts,
@@ -561,7 +566,12 @@ where
                     None,
                     None,
                 )
-                .await;
+                .await
+                {
+                    let _ = cancel_tx.send(true);
+                    while join_set.join_next().await.is_some() {}
+                    return Err(error);
+                }
                 last_persist = now;
             }
         }
@@ -628,6 +638,20 @@ where
                 }
                 Err(e) => return Err(e.into()),
             }
+        }
+        let Some(current) = self.repository.get(id).await? else {
+            return Ok(());
+        };
+        if matches!(
+            current.status(),
+            DownloadStatus::Preparing | DownloadStatus::Downloading
+        ) {
+            return Err(StateMachineError::ConcurrentTransition {
+                from: current.status(),
+                to: DownloadStatus::Failed,
+                actual: current.status(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -1422,19 +1446,43 @@ async fn update_progress<R: DownloadRepository>(
     speed: Option<u64>,
     eta: Option<u64>,
 ) -> Result<(), DownloadEngineError> {
-    let now = next_timestamp(item.updated_at())?;
-    item.set_progress_at(
-        DownloadProgress::new(downloaded_bytes, total_bytes, speed, eta)?,
-        now,
-    )?;
+    for _ in 0..3 {
+        let checkpoint_bytes = downloaded_bytes.max(item.progress().downloaded_bytes());
+        let checkpoint_total = total_bytes.or(item.progress().total_bytes());
+        item.set_progress_at(
+            DownloadProgress::new(checkpoint_bytes, checkpoint_total, speed, eta)?,
+            next_timestamp(item.updated_at())?,
+        )?;
 
-    // Best-effort: if the row has moved (concurrent update) we just skip.
-    let _ = repository
-        .update_if_status_and_timestamp_current(item, DownloadStatus::Downloading, *expected_ts)
-        .await;
+        if repository
+            .update_if_status_and_timestamp_current(item, DownloadStatus::Downloading, *expected_ts)
+            .await?
+        {
+            *expected_ts = item.updated_at();
+            return Ok(());
+        }
 
-    *expected_ts = item.updated_at();
-    Ok(())
+        let Some(current) = repository.get(item.id()).await? else {
+            return Err(DownloadEngineError::NotFound(item.id()));
+        };
+        if current.status() != DownloadStatus::Downloading {
+            return Err(StateMachineError::ConcurrentTransition {
+                from: DownloadStatus::Downloading,
+                to: DownloadStatus::Downloading,
+                actual: current.status(),
+            }
+            .into());
+        }
+        *expected_ts = current.updated_at();
+        *item = current;
+    }
+
+    Err(StateMachineError::ConcurrentTransition {
+        from: DownloadStatus::Downloading,
+        to: DownloadStatus::Downloading,
+        actual: DownloadStatus::Downloading,
+    }
+    .into())
 }
 
 // ── Filesystem helpers ────────────────────────────────────────────────────────
@@ -2154,6 +2202,59 @@ seg0.ts
         );
         assert_eq!(requests.len(), 3);
         assert!(!hls_workspace_path(&directory.destination(), item.id()).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn progress_checkpoint_reports_a_concurrent_lifecycle_change()
+    -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            "https://example.test/media.m3u8",
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 1).await?;
+        engine
+            .state_machine
+            .transition(item.id(), DownloadStatus::Preparing)
+            .await?;
+        engine
+            .state_machine
+            .transition(item.id(), DownloadStatus::Downloading)
+            .await?;
+        let mut stale_item = engine
+            .repository
+            .get(item.id())
+            .await?
+            .ok_or("HLS download disappeared")?;
+        let mut expected_updated_at = stale_item.updated_at();
+        engine
+            .state_machine
+            .transition(item.id(), DownloadStatus::Paused)
+            .await?;
+
+        assert!(matches!(
+            update_progress(
+                &engine.repository,
+                &mut stale_item,
+                &mut expected_updated_at,
+                10,
+                Some(20),
+                None,
+                None,
+            )
+            .await,
+            Err(DownloadEngineError::StateMachine(
+                StateMachineError::ConcurrentTransition {
+                    from: DownloadStatus::Downloading,
+                    to: DownloadStatus::Downloading,
+                    actual: DownloadStatus::Paused,
+                }
+            ))
+        ));
         Ok(())
     }
 

@@ -14,10 +14,10 @@ use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
 };
 use fetchx_storage::DownloadRepository;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{mpsc, watch},
     task::JoinHandle,
@@ -98,6 +98,12 @@ pub struct YtDlpFormat {
     pub file_size_bytes: Option<u64>,
     pub title: Option<String>,
     pub platform: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct YtDlpFinalizationRecord {
+    output_name: String,
+    output_size: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -356,13 +362,16 @@ where
             return Err(YtDlpError::PauseUnsupported.into());
         }
         let url = validate_source_url(item.source().url())?;
+        let workspace = workspace_path(item.destination(), id);
+        prepare_workspace(&workspace).await?;
+        if Box::pin(self.recover_finalization(item, &workspace)).await? {
+            return Ok(item.clone());
+        }
         match tokio::fs::symlink_metadata(item.destination()).await {
             Ok(_) => return Err(YtDlpError::DestinationExists.into()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(DownloadEngineError::Io(error)),
         }
-        let workspace = workspace_path(item.destination(), id);
-        prepare_workspace(&workspace).await?;
         if control.bandwidth.external_download_rate_bytes_per_second == Some(0) {
             return Err(DownloadEngineError::InvalidConfiguration);
         }
@@ -474,6 +483,13 @@ where
             return Err(YtDlpError::OutputUnavailable.into());
         }
         let output_size = metadata.len();
+        tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&output)
+            .await?
+            .sync_all()
+            .await?;
         let final_progress = YtDlpProgress {
             percentage_basis_points: Some(10_000),
             downloaded_bytes: Some(output_size),
@@ -489,6 +505,7 @@ where
         if *control.cancellation.borrow_and_update() {
             return Err(DownloadEngineError::Cancelled);
         }
+        Box::pin(save_finalization_record(&workspace, &output, output_size)).await?;
         promote_output_to_destination(&output, item.destination()).await?;
         *item = match self
             .state_machine
@@ -508,6 +525,96 @@ where
         Ok(item.clone())
     }
 
+    async fn recover_finalization(
+        &self,
+        item: &mut DownloadItem,
+        workspace: &Path,
+    ) -> Result<bool, DownloadEngineError> {
+        let Some(record) = load_finalization_record(workspace).await? else {
+            return Ok(false);
+        };
+        let output = match find_output(workspace).await {
+            Ok(output) => output,
+            Err(YtDlpError::OutputUnavailable) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        let Some(output_name) = output.file_name().and_then(|name| name.to_str()) else {
+            return Ok(false);
+        };
+        let output_metadata = tokio::fs::symlink_metadata(&output).await?;
+        if !output_metadata.file_type().is_file()
+            || output_name != record.output_name
+            || output_metadata.len() != record.output_size
+        {
+            return Ok(false);
+        }
+
+        match tokio::fs::symlink_metadata(item.destination()).await {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                if !files_equal(&output, item.destination()).await? {
+                    return Err(YtDlpError::DestinationExists.into());
+                }
+            }
+            Ok(_) => return Err(YtDlpError::DestinationExists.into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+
+        if item.status() == DownloadStatus::Preparing {
+            *item = self
+                .state_machine
+                .transition(item.id(), DownloadStatus::Downloading)
+                .await?;
+        }
+        if item.status() != DownloadStatus::Downloading {
+            return Ok(false);
+        }
+        let mut expected_updated_at = item.updated_at();
+        self.persist_progress(
+            item,
+            &mut expected_updated_at,
+            &YtDlpProgress {
+                percentage_basis_points: Some(10_000),
+                downloaded_bytes: Some(record.output_size),
+                total_bytes: Some(record.output_size),
+                speed_bytes_per_second: None,
+                estimated_remaining_seconds: Some(0),
+            },
+            true,
+        )
+        .await?;
+
+        match tokio::fs::symlink_metadata(item.destination()).await {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                if !files_equal(&output, item.destination()).await? {
+                    return Err(YtDlpError::DestinationExists.into());
+                }
+            }
+            Ok(_) => return Err(YtDlpError::DestinationExists.into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match promote_output_to_destination(&output, item.destination()).await {
+                    Ok(()) => {}
+                    Err(DownloadEngineError::YtDlp(YtDlpError::DestinationExists)) => {
+                        if !files_equal(&output, item.destination()).await? {
+                            return Err(YtDlpError::DestinationExists.into());
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+
+        *item = self
+            .state_machine
+            .transition(item.id(), DownloadStatus::Completed)
+            .await?;
+        if tokio::fs::remove_dir_all(workspace).await.is_err() {
+            warn!("yt-dlp recovered finalization workspace cleanup failed");
+        }
+        Ok(true)
+    }
+
     async fn persist_progress(
         &self,
         item: &mut DownloadItem,
@@ -515,60 +622,73 @@ where
         update: &YtDlpProgress,
         allow_total_override: bool,
     ) -> Result<(), DownloadEngineError> {
-        let downloaded_bytes = update
+        let mut downloaded_bytes = update
             .downloaded_bytes
             .ok_or(YtDlpError::MalformedProgress)?;
         if downloaded_bytes < item.progress().downloaded_bytes() {
             return Err(YtDlpError::ProgressRegression.into());
         }
-        let total = if allow_total_override {
-            update
-                .total_bytes
-                .filter(|total| *total >= downloaded_bytes)
-        } else {
-            match (item.progress().total_bytes(), update.total_bytes) {
-                (Some(previous_total), _) => Some(previous_total),
-                (None, Some(candidate_total)) if candidate_total >= downloaded_bytes => {
-                    Some(candidate_total)
+        for _ in 0..3 {
+            let total = if allow_total_override {
+                update
+                    .total_bytes
+                    .filter(|total| *total >= downloaded_bytes)
+            } else {
+                match (item.progress().total_bytes(), update.total_bytes) {
+                    (Some(previous_total), _) => Some(previous_total),
+                    (None, Some(candidate_total)) if candidate_total >= downloaded_bytes => {
+                        Some(candidate_total)
+                    }
+                    _ => None,
                 }
-                _ => None,
+            };
+            item.set_progress_at(
+                DownloadProgress::new(
+                    downloaded_bytes,
+                    total,
+                    update.speed_bytes_per_second,
+                    update.estimated_remaining_seconds,
+                )?,
+                next_timestamp(item.updated_at())?,
+            )?;
+            if self
+                .repository
+                .update_if_status_and_timestamp_current(
+                    item,
+                    DownloadStatus::Downloading,
+                    *expected_updated_at,
+                )
+                .await?
+            {
+                *expected_updated_at = item.updated_at();
+                return Ok(());
             }
-        };
-        item.set_progress_at(
-            DownloadProgress::new(
-                downloaded_bytes,
-                total,
-                update.speed_bytes_per_second,
-                update.estimated_remaining_seconds,
-            )?,
-            next_timestamp(item.updated_at())?,
-        )?;
-        if !self
-            .repository
-            .update_if_status_and_timestamp_current(
-                item,
-                DownloadStatus::Downloading,
-                *expected_updated_at,
-            )
-            .await?
-        {
-            let current = self.repository.get(item.id()).await?;
-            if let Some(current) = current {
-                if !matches!(
-                    current.status(),
-                    DownloadStatus::Downloading | DownloadStatus::Preparing
-                ) {
-                    let error = self.current_state_error(item.id()).await?;
-                    self.runner
-                        .report_diagnostic(state_machine_diagnostic_code("progress", &error));
-                    return Err(DownloadEngineError::StateMachine(error));
-                }
-                *expected_updated_at = current.updated_at();
+
+            let Some(current) = self.repository.get(item.id()).await? else {
+                let error = StateMachineError::NotFound(item.id());
+                self.runner
+                    .report_diagnostic(state_machine_diagnostic_code("progress", &error));
+                return Err(DownloadEngineError::StateMachine(error));
+            };
+            if current.status() != DownloadStatus::Downloading {
+                let error = StateMachineError::ConcurrentTransition {
+                    from: DownloadStatus::Downloading,
+                    to: current.status(),
+                    actual: current.status(),
+                };
+                self.runner
+                    .report_diagnostic(state_machine_diagnostic_code("progress", &error));
+                return Err(DownloadEngineError::StateMachine(error));
             }
-            return Ok(());
+            downloaded_bytes = downloaded_bytes.max(current.progress().downloaded_bytes());
+            *expected_updated_at = current.updated_at();
+            *item = current;
         }
-        *expected_updated_at = item.updated_at();
-        Ok(())
+
+        let error = self.current_state_error(item.id()).await?;
+        self.runner
+            .report_diagnostic(state_machine_diagnostic_code("progress", &error));
+        Err(DownloadEngineError::StateMachine(error))
     }
 
     async fn handle_runner_event(
@@ -684,6 +804,19 @@ where
                 }
                 Err(err) => return Err(err.into()),
             }
+        }
+        if let Some(current) = self.repository.get(id).await?
+            && matches!(
+                current.status(),
+                DownloadStatus::Preparing | DownloadStatus::Downloading
+            )
+        {
+            return Err(StateMachineError::ConcurrentTransition {
+                from: current.status(),
+                to: DownloadStatus::Failed,
+                actual: current.status(),
+            }
+            .into());
         }
         Ok(())
     }
@@ -1140,6 +1273,78 @@ fn workspace_path(destination: &Path, id: DownloadId) -> PathBuf {
         .join(format!(".fetchx-ytdlp-{id}"))
 }
 
+fn finalization_record_path(workspace: &Path) -> PathBuf {
+    workspace.join(".fetchx-finalizing")
+}
+
+fn finalization_record_temporary_path(workspace: &Path) -> PathBuf {
+    workspace.join(".fetchx-finalizing.tmp")
+}
+
+async fn load_finalization_record(
+    workspace: &Path,
+) -> Result<Option<YtDlpFinalizationRecord>, YtDlpError> {
+    let path = finalization_record_path(workspace);
+    let metadata = match tokio::fs::symlink_metadata(&path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(YtDlpError::WorkspaceUnavailable),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(YtDlpError::WorkspaceUnavailable);
+    }
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| YtDlpError::WorkspaceUnavailable)?;
+    match serde_json::from_slice(&bytes) {
+        Ok(record) => Ok(Some(record)),
+        Err(_) => {
+            warn!("ignoring invalid yt-dlp finalization record");
+            Ok(None)
+        }
+    }
+}
+
+async fn remove_regular_file_if_present(path: &Path) -> Result<(), YtDlpError> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) if metadata.file_type().is_file() => tokio::fs::remove_file(path)
+            .await
+            .map_err(|_| YtDlpError::WorkspaceUnavailable),
+        Ok(_) => Err(YtDlpError::WorkspaceUnavailable),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(YtDlpError::WorkspaceUnavailable),
+    }
+}
+
+async fn save_finalization_record(
+    workspace: &Path,
+    output: &Path,
+    output_size: u64,
+) -> Result<(), DownloadEngineError> {
+    let output_name = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(YtDlpError::OutputUnavailable)?;
+    let bytes = serde_json::to_vec(&YtDlpFinalizationRecord {
+        output_name: output_name.to_owned(),
+        output_size,
+    })
+    .map_err(|_| YtDlpError::OutputUnavailable)?;
+    let temporary = finalization_record_temporary_path(workspace);
+    remove_regular_file_if_present(&temporary).await?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .await?;
+    file.write_all(&bytes).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    remove_regular_file_if_present(&finalization_record_path(workspace)).await?;
+    tokio::fs::rename(temporary, finalization_record_path(workspace)).await?;
+    Ok(())
+}
+
 async fn prepare_workspace(path: &Path) -> Result<(), YtDlpError> {
     match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) if metadata.file_type().is_dir() => restrict_workspace_permissions(path).await,
@@ -1192,7 +1397,9 @@ async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
         //   .ytdl          — yt-dlp resume/metadata sidecar
         //   .json          — --write-info-json output (should not appear given our flags)
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if name.ends_with(".part")
+        if name == ".fetchx-finalizing"
+            || name == ".fetchx-finalizing.tmp"
+            || name.ends_with(".part")
             || name.contains(".part-Frag")
             || name.ends_with(".ytdl")
             || name.ends_with(".json")
@@ -1205,6 +1412,32 @@ async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
         output = Some(path);
     }
     output.ok_or(YtDlpError::OutputUnavailable)
+}
+
+async fn files_equal(left: &Path, right: &Path) -> Result<bool, DownloadEngineError> {
+    let left_metadata = tokio::fs::symlink_metadata(left).await?;
+    let right_metadata = tokio::fs::symlink_metadata(right).await?;
+    if !left_metadata.file_type().is_file()
+        || !right_metadata.file_type().is_file()
+        || left_metadata.len() != right_metadata.len()
+    {
+        return Ok(false);
+    }
+
+    let mut left_file = tokio::fs::File::open(left).await?;
+    let mut right_file = tokio::fs::File::open(right).await?;
+    let mut left_buffer = [0_u8; 64 * 1024];
+    let mut right_buffer = [0_u8; 64 * 1024];
+    loop {
+        let left_read = left_file.read(&mut left_buffer).await?;
+        let right_read = right_file.read(&mut right_buffer).await?;
+        if left_read != right_read || left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 async fn promote_output_to_destination(
@@ -1725,6 +1958,59 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn progress_checkpoint_retries_after_a_concurrent_snapshot() -> Result<(), Box<dyn Error>>
+    {
+        let runner = FakeRunner::default();
+        let (engine, _, id) = fixture("https://example.test/video", runner).await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Downloading)
+            .await?;
+        let mut item = engine.repository.get(id).await?.ok_or("item missing")?;
+        let mut expected_updated_at = item.updated_at();
+
+        let mut concurrent_snapshot = item.clone();
+        concurrent_snapshot.set_progress_at(
+            DownloadProgress::new(3, Some(10), None, None)?,
+            next_timestamp(concurrent_snapshot.updated_at())?,
+        )?;
+        assert!(
+            engine
+                .repository
+                .update_if_status_and_timestamp_current(
+                    &concurrent_snapshot,
+                    DownloadStatus::Downloading,
+                    expected_updated_at,
+                )
+                .await?
+        );
+
+        engine
+            .persist_progress(
+                &mut item,
+                &mut expected_updated_at,
+                &YtDlpProgress {
+                    percentage_basis_points: Some(5000),
+                    downloaded_bytes: Some(5),
+                    total_bytes: Some(10),
+                    speed_bytes_per_second: None,
+                    estimated_remaining_seconds: None,
+                },
+                false,
+            )
+            .await?;
+
+        let persisted = engine.repository.get(id).await?.ok_or("item missing")?;
+        assert_eq!(persisted.progress().downloaded_bytes(), 5);
+        assert_eq!(persisted.progress().total_bytes(), Some(10));
+        Ok(())
+    }
+
     #[test]
     fn rejects_malformed_progress_records() {
         for line in [
@@ -1873,6 +2159,49 @@ mod tests {
         }
         assert!(!workspace_path(&base.join("video.webm"), id).exists());
         tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovers_a_published_output_after_crash_before_state_completion()
+    -> Result<(), Box<dyn Error>> {
+        for destination_already_published in [false, true] {
+            let runner = FakeRunner::default();
+            let state = Arc::clone(&runner.state);
+            let (engine, base, id) = fixture("https://example.test/video", runner).await?;
+            engine
+                .state_machine
+                .transition(id, DownloadStatus::Preparing)
+                .await?;
+            engine
+                .state_machine
+                .transition(id, DownloadStatus::Downloading)
+                .await?;
+            engine.state_machine.recover_interrupted(id).await?;
+
+            let destination = base.join("video.webm");
+            let workspace = workspace_path(&destination, id);
+            tokio::fs::create_dir_all(&workspace).await?;
+            let output = workspace.join("test.webm");
+            let contents = b"validated output before crash";
+            tokio::fs::write(&output, contents).await?;
+            if destination_already_published {
+                tokio::fs::hard_link(&output, &destination).await?;
+            }
+            save_finalization_record(&workspace, &output, contents.len() as u64).await?;
+
+            let (_cancel_sender, cancellation) = watch::channel(false);
+            let completed = engine.download(id, cancellation).await?;
+            assert_eq!(completed.status(), DownloadStatus::Completed);
+            assert_eq!(
+                completed.progress().downloaded_bytes(),
+                contents.len() as u64
+            );
+            assert_eq!(tokio::fs::read(&destination).await?, contents);
+            assert_eq!(state.lock().expect("test runner mutex").run_count, 0);
+            assert!(!workspace.exists());
+            tokio::fs::remove_dir_all(base).await?;
+        }
         Ok(())
     }
 

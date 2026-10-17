@@ -110,7 +110,8 @@ Phases 1-20P (Completed)
         |
 25 Observability
         |
-26 Production Packaging
+26A Production Packaging
+26D Release Automation (workflow implementation complete)
         |
 27 E2E Testing
         |
@@ -1530,6 +1531,33 @@ Flow: `check -> download -> verify signature/integrity -> install -> restart`.
 **Android:** In-app APK download and verification.
 
 Never execute unverified update artifacts on either platform.
+
+---
+
+### Phase 26D -- Automated Release Builds (MEDIUM)
+
+**Status: IMPLEMENTATION COMPLETE; GitHub-hosted workflow execution pending.**
+The release workflow is configured to build Android APKs (arm64-v8a and x86_64),
+Windows installers (NSIS `.exe` and `.msi`), Linux packages (`.deb` and AppImage),
+macOS `.dmg`, and CLI binaries for Windows, Linux, and macOS. It attaches
+SHA-256 checksums and creates a draft GitHub Release from either a version tag
+or a manual workflow dispatch.
+
+**Tasks:**
+- [x] Build platform release artifacts with GitHub Actions
+- [x] Support tag and manual version triggers
+- [x] Generate checksums and create a draft release for review
+- [x] Document optional Android and Apple signing configuration
+- [ ] Run the workflow on GitHub and verify uploaded release artifacts
+
+Android APK signing and Apple signing/notarization are optional repository-secret
+configurations. Without Android signing secrets, the generated APK is unsigned;
+Windows installers are currently unsigned. Linux RPM packaging and automated
+version updates across manifests are not included. This phase completes the
+release-workflow implementation, not the broader production packaging scope in
+Phase 26A.
+
+See [docs/RELEASING.md](RELEASING.md) for release triggers and signing setup.
 
 ---
 

@@ -867,7 +867,7 @@ async fn adaptive_scheduler_backs_off_when_server_rejects_excess_concurrency()
         body.clone(),
         8,
         SegmentServerMode::FailAboveConcurrency(1),
-        128,
+        512,
         true,
     )
     .await?;

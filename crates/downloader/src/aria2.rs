@@ -2641,7 +2641,7 @@ mod tests {
     #[tokio::test]
     async fn add_uri_encodes_destination_and_never_retries_an_ambiguous_request()
     -> Result<(), Box<dyn Error>> {
-        let destination = PathBuf::from(r"C:\downloads\archive.bin");
+        let destination = PathBuf::from("/tmp/downloads/archive.bin");
         let (endpoint, mut requests, server) =
             start_server([MockReply::Result(json!("0123456789abcdef"))]).await?;
         let client = make_client(endpoint, Duration::from_secs(1))?;
@@ -2653,7 +2653,7 @@ mod tests {
         assert_eq!(request["method"], "aria2.addUri");
         assert_eq!(request["params"][1][0], "https://example.test/archive");
         assert_eq!(request["params"][2]["out"], "archive.bin");
-        assert_eq!(request["params"][2]["dir"], r"C:\downloads");
+        assert_eq!(request["params"][2]["dir"], "/tmp/downloads");
         assert_eq!(request["params"][2]["max-connection-per-server"], "1");
         assert_eq!(request["params"][2]["max-download-limit"], "4096");
         assert_eq!(request["params"][2]["allow-overwrite"], "false");
