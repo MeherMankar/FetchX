@@ -656,15 +656,15 @@ mod tests {
 
     #[test]
     fn local_torrent_sources_round_trip_and_reject_wrong_engine_or_extension() {
-        let torrent_path = Path::new(r"C:\FetchX\legal-fixture.torrent");
+        let torrent_path = Path::new("/tmp/fetchx/legal-fixture.torrent");
         let source = DownloadSource::new_torrent_file(torrent_path, EngineKind::Aria2)
-            .expect("absolute Windows .torrent path is representable");
+            .expect("absolute .torrent path is representable");
         assert!(source.is_torrent_file());
         assert_eq!(source.torrent_file_path(), Some(torrent_path.to_path_buf()));
         assert!(DownloadSource::new_torrent_file(torrent_path, EngineKind::DirectHttp).is_err());
         assert!(
             DownloadSource::new_torrent_file(
-                Path::new(r"C:\FetchX\not-a-torrent.txt"),
+                Path::new("/tmp/fetchx/not-a-torrent.txt"),
                 EngineKind::Aria2
             )
             .is_err()
