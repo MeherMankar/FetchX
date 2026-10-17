@@ -33,6 +33,10 @@ use fetchx_downloader::{
     YtDlpEngine, YtDlpProcessRunner,
 };
 use fetchx_models::EngineKind;
+use fetchx_models::{
+    DownloadId, DownloadItem, DownloadPriority, DownloadSource, FileName, Timestamp,
+    parse_magnet_uri,
+};
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
 use fetchx_storage::{Database, SqliteDownloadRepository};
@@ -200,6 +204,42 @@ impl CoreServices {
     #[must_use]
     pub fn downloads_dir(&self) -> &std::path::Path {
         &self.downloads_dir
+    }
+
+    /// Validates and queues a magnet job through the shared aria2 runtime.
+    ///
+    /// Magnet output is isolated in a per-job directory unless the caller
+    /// explicitly supplies a destination directory.
+    pub async fn enqueue_magnet(
+        &self,
+        uri: &str,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+    ) -> Result<DownloadId, CoreServicesError> {
+        let magnet = parse_magnet_uri(uri)
+            .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        if !self.engine_runtime.is_available(EngineKind::Aria2) {
+            return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
+        }
+        let id = DownloadId::new();
+        let source = DownloadSource::new(uri, EngineKind::Aria2)
+            .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        let filename = FileName::new(magnet.suggested_filename())
+            .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        let destination = destination.unwrap_or_else(|| {
+            self.downloads_dir
+                .join(format!("torrent-{}-{id}", magnet.info_hash))
+        });
+        let created_at = Timestamp::now()
+            .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        let mut item = DownloadItem::new(id, source, filename, destination, created_at);
+        item.set_priority_at(priority, created_at)
+            .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        self.queue
+            .enqueue(item)
+            .await
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))?;
+        Ok(id)
     }
 
     // ── Shutdown ──────────────────────────────────────────────────────────
@@ -439,6 +479,10 @@ pub enum CoreServicesError {
     Database(String),
     #[error("engine initialization error: {0}")]
     Engine(String),
+    #[error("invalid magnet download request: {0}")]
+    InvalidMagnet(String),
+    #[error("required download engine is unavailable: {0:?}")]
+    UnavailableEngine(EngineKind),
     #[error("queue error: {0}")]
     Queue(String),
     #[error("configuration error: {0}")]
@@ -536,6 +580,39 @@ mod tests {
         ));
         assert!(services.config_service.load().await?.yt_dlp.enabled);
 
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_magnet_enqueue_validates_before_engine_availability()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempdir()?;
+        let services = CoreServices::start(CoreServicesConfig {
+            database_path: dir.path().join("fetchx.db"),
+            downloads_dir: dir.path().join("downloads"),
+            runtime_dir: dir.path().join("runtime"),
+        })
+        .await?;
+
+        assert!(matches!(
+            services
+                .enqueue_magnet("magnet:?dn=missing-hash", DownloadPriority::Normal, None,)
+                .await,
+            Err(super::CoreServicesError::InvalidMagnet(_))
+        ));
+        assert!(matches!(
+            services
+                .enqueue_magnet(
+                    "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                    DownloadPriority::Normal,
+                    None,
+                )
+                .await,
+            Err(super::CoreServicesError::UnavailableEngine(
+                EngineKind::Aria2
+            ))
+        ));
         services.shutdown().await?;
         Ok(())
     }

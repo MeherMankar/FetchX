@@ -183,6 +183,15 @@ class UtilsTest {
     }
 
     @Test
+    fun validateUrl_magnet_passes_to_rust_core_validation() {
+        assertNull(
+            validateUrl(
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+            ),
+        )
+    }
+
+    @Test
     fun validateUrl_missing_scheme_returns_error() {
         assertNotNull(validateUrl("example.com/file.zip"))
         assertNotNull(validateUrl("ftp://example.com/file.zip"))
@@ -198,4 +207,3 @@ class UtilsTest {
         assert(!error.contains("null")) { "Error must not contain 'null': $error" }
     }
 }
-

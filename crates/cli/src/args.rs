@@ -96,12 +96,16 @@ pub enum PluginsCommand {
 /// Options accepted by the `add` command.
 #[derive(Args, Debug)]
 pub struct AddOpts {
-    /// HTTP or HTTPS URL to download.
+    /// HTTP(S) URL or a validated magnet URI.
     pub url: String,
 
-    /// Engine to use: direct-http | aria2 | yt-dlp
+    /// Engine to use: direct-http | aria2 | yt-dlp. Magnets default to aria2.
     #[arg(short = 'e', long, value_name = "ENGINE")]
     pub engine: Option<String>,
+
+    /// Destination file for HTTP downloads or destination directory for magnets.
+    #[arg(long, value_name = "PATH")]
+    pub destination: Option<std::path::PathBuf>,
 
     /// Queue priority: low | normal | high
     #[arg(short = 'p', long, value_name = "PRIORITY", default_value = "normal")]

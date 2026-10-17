@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Url;
 
 use crate::{DownloadError, DownloadId, DownloadPriority, DownloadProgress, EngineKind, Timestamp};
 
@@ -20,6 +21,11 @@ impl DownloadSource {
         let url = url.into();
         if url.trim().is_empty() {
             return Err(DownloadSourceError::EmptyUrl);
+        }
+        if url.starts_with("magnet:")
+            && (engine != EngineKind::Aria2 || parse_magnet_uri(&url).is_err())
+        {
+            return Err(DownloadSourceError::InvalidMagnetUri);
         }
 
         Ok(Self {
@@ -93,6 +99,119 @@ impl DownloadSource {
     pub fn yt_dlp_format(&self) -> Option<&str> {
         self.yt_dlp_format.as_deref()
     }
+
+    #[must_use]
+    pub fn is_magnet(&self) -> bool {
+        self.url.starts_with("magnet:")
+    }
+}
+
+const MAX_MAGNET_URI_BYTES: usize = 16 * 1024;
+const MAX_MAGNET_TRACKERS: usize = 32;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MagnetInfo {
+    pub info_hash: String,
+    pub display_name: Option<String>,
+    pub trackers: Vec<String>,
+}
+
+impl MagnetInfo {
+    #[must_use]
+    pub fn suggested_filename(&self) -> String {
+        let name = self.display_name.as_deref().unwrap_or_default();
+        let safe_name = name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .filter(|character| {
+                !character.is_control()
+                    && !matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+            })
+            .collect::<String>()
+            .trim_matches([' ', '.'])
+            .chars()
+            .take(180)
+            .collect::<String>();
+        if safe_name.is_empty() {
+            format!("torrent-{}", self.info_hash)
+        } else {
+            safe_name
+        }
+    }
+}
+
+pub fn parse_magnet_uri(uri: &str) -> Result<MagnetInfo, DownloadSourceError> {
+    if uri.len() > MAX_MAGNET_URI_BYTES {
+        return Err(DownloadSourceError::InvalidMagnetUri);
+    }
+    let parsed = Url::parse(uri).map_err(|_| DownloadSourceError::InvalidMagnetUri)?;
+    if parsed.scheme() != "magnet"
+        || parsed.host_str().is_some()
+        || !parsed.path().is_empty()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(DownloadSourceError::InvalidMagnetUri);
+    }
+
+    let mut info_hash = None;
+    let mut display_name = None;
+    let mut trackers = Vec::new();
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            "xt" => {
+                if !value.starts_with("urn:btih:") {
+                    return Err(DownloadSourceError::InvalidMagnetUri);
+                }
+                if info_hash.is_some() {
+                    return Err(DownloadSourceError::InvalidMagnetUri);
+                }
+                let hash = &value["urn:btih:".len()..];
+                if !((hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                    || (hash.len() == 32
+                        && hash.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric()
+                                && !matches!(byte, b'0' | b'1' | b'8' | b'9')
+                        })))
+                {
+                    return Err(DownloadSourceError::InvalidMagnetUri);
+                }
+                info_hash = Some(hash.to_ascii_lowercase());
+            }
+            "dn" => {
+                if display_name.is_some() || value.trim().is_empty() || value.len() > 1024 {
+                    return Err(DownloadSourceError::InvalidMagnetUri);
+                }
+                display_name = Some(value.into_owned());
+            }
+            "tr" => {
+                if trackers.len() >= MAX_MAGNET_TRACKERS {
+                    return Err(DownloadSourceError::InvalidMagnetUri);
+                }
+                let tracker =
+                    Url::parse(&value).map_err(|_| DownloadSourceError::InvalidMagnetUri)?;
+                if !matches!(tracker.scheme(), "http" | "https" | "udp")
+                    || tracker.host_str().is_none()
+                    || !tracker.username().is_empty()
+                    || tracker.password().is_some()
+                    || tracker.fragment().is_some()
+                {
+                    return Err(DownloadSourceError::InvalidMagnetUri);
+                }
+                trackers.push(tracker.into());
+            }
+            _ => {}
+        }
+    }
+
+    Ok(MagnetInfo {
+        info_hash: info_hash.ok_or(DownloadSourceError::InvalidMagnetUri)?,
+        display_name,
+        trackers,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -101,6 +220,8 @@ pub enum DownloadSourceError {
     EmptyUrl,
     #[error("yt-dlp format must be a valid format ID for a yt-dlp source")]
     InvalidYtDlpFormat,
+    #[error("magnet URI must contain one valid BitTorrent info hash and safe optional trackers")]
+    InvalidMagnetUri,
 }
 
 #[derive(Deserialize)]
@@ -411,11 +532,53 @@ pub enum DownloadStatus {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{DownloadItem, DownloadItemError, DownloadSource, DownloadStatus, FileName};
+    use super::{
+        DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus,
+        FileName, parse_magnet_uri,
+    };
     use crate::{DownloadId, DownloadPriority, DownloadProgress, EngineKind, Timestamp};
 
     fn source() -> Result<DownloadSource, super::DownloadSourceError> {
         DownloadSource::new("https://example.com/file", EngineKind::DirectHttp)
+    }
+
+    #[test]
+    fn parses_valid_magnet_metadata() -> Result<(), DownloadSourceError> {
+        let magnet = parse_magnet_uri(
+            "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&dn=sample%20file&tr=https%3A%2F%2Ftracker.example%2Fannounce",
+        )?;
+
+        assert_eq!(magnet.info_hash, "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(magnet.display_name.as_deref(), Some("sample file"));
+        assert_eq!(magnet.trackers, ["https://tracker.example/announce"]);
+        assert!(
+            DownloadSource::new(
+                "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
+                EngineKind::Aria2,
+            )?
+            .is_magnet()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_malformed_or_unsafe_magnet_uris() {
+        for magnet in [
+            "magnet:?dn=missing-hash",
+            "magnet:?xt=urn:btih:short",
+            "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
+            "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&tr=file%3A%2F%2F%2Fetc%2Fpasswd",
+            "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&tr=https%3A%2F%2Fuser%3Apass%40tracker.example%2Fannounce",
+        ] {
+            assert!(parse_magnet_uri(magnet).is_err(), "accepted {magnet}");
+        }
+        assert!(matches!(
+            DownloadSource::new(
+                "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
+                EngineKind::DirectHttp,
+            ),
+            Err(DownloadSourceError::InvalidMagnetUri)
+        ));
     }
 
     #[test]

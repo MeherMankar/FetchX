@@ -84,8 +84,8 @@ fun AddDownloadDialog(
                         url = newValue
                         urlError = null   // clear error while user types
                     },
-                    label = { Text("URL") },
-                    placeholder = { Text("https://example.com/file.zip") },
+                    label = { Text("URL or magnet link") },
+                    placeholder = { Text("https://example.com/file.zip or magnet:?xt=urn:btih:…") },
                     isError = urlError != null,
                     supportingText = urlError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                     singleLine = true,
@@ -180,9 +180,11 @@ fun AddDownloadDialog(
 internal fun validateUrl(url: String): String? {
     val trimmed = url.trim()
     if (trimmed.isBlank()) return "URL cannot be empty"
-    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-        return "URL must start with http:// or https://"
+    if (!trimmed.startsWith("http://", ignoreCase = true) &&
+        !trimmed.startsWith("https://", ignoreCase = true) &&
+        !trimmed.startsWith("magnet:", ignoreCase = true)
+    ) {
+        return "Enter an HTTP(S) URL or magnet URI"
     }
     return null
 }
-

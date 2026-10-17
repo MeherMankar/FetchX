@@ -69,6 +69,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [formatsLoading, setFormatsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+  const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
 
   // Load engine availability once when the dialog opens.
   // No polling — one fetch on mount.
@@ -115,7 +116,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
           )
         : await addDownload({
             url,
-            engine_kind: engineKind === "direct_http" ? undefined : engineKind,
+            engine_kind: isMagnet ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
           });
 
       if (priority !== "normal") {
@@ -182,10 +183,10 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             <input
               id="add-url"
               ref={urlInputRef}
-              type="url"
+              type="text"
               inputMode="url"
               className="field-input"
-              placeholder="https://example.com/file.zip"
+              placeholder="https://example.com/file.zip or magnet:?xt=urn:btih:…"
               value={url}
               onChange={(e) => {
                 setUrl(e.target.value);
@@ -197,7 +198,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               autoFocus
             />
             <p className="field-hint">
-              HTTP and HTTPS URLs only. Credentials in URLs are not accepted.
+              {isMagnet
+                ? "Magnet links use aria2. Tracker credentials and unsafe tracker protocols are rejected."
+                : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
           </div>
 
@@ -211,13 +214,13 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               <select
                 id="add-engine"
                 className="field-select"
-                value={engineKind}
+                value={isMagnet ? "aria2" : engineKind}
                 onChange={(e) => {
                   setEngineKind(e.target.value as EngineKind);
                   setFormats(null);
                   setSelectedFormatId("");
                 }}
-                disabled={busy || formatsLoading}
+                disabled={busy || formatsLoading || isMagnet}
                 aria-describedby="add-engine-hint"
               >
                 {ENGINE_OPTIONS.map(({ kind, label }) => {
@@ -232,7 +235,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               </select>
             )}
             <p id="add-engine-hint" className="field-hint">
-              Only available engines are selectable. Configure engines in Settings.
+              {isMagnet
+                ? "Magnet links require aria2."
+                : "Only available engines are selectable. Configure engines in Settings."}
             </p>
           </div>
 

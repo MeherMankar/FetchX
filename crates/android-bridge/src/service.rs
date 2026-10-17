@@ -165,6 +165,24 @@ impl DownloadService {
         )
     }
 
+    pub fn add_magnet_download(
+        &self,
+        magnet_uri: String,
+        priority: DownloadPriorityDto,
+    ) -> Result<String, MobileApiError> {
+        self.with_inner(|inner| {
+            let id = inner
+                .runtime
+                .block_on(
+                    inner
+                        .core
+                        .enqueue_magnet(&magnet_uri, priority_from_dto(priority), None),
+                )
+                .map_err(MobileApiError::from)?;
+            Ok(id.to_string())
+        })
+    }
+
     pub fn add_media_download(
         &self,
         url: String,
@@ -741,6 +759,28 @@ mod tests {
             .expect("add_download failed");
         // Must parse as a UUID.
         uuid::Uuid::parse_str(&id).expect("returned ID is not a valid UUID");
+        svc.shutdown();
+    }
+
+    #[test]
+    fn magnet_add_validates_uri_before_reporting_aria2_availability() {
+        let (config, _dir) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+
+        assert!(matches!(
+            svc.add_magnet_download(
+                "magnet:?dn=missing-hash".to_owned(),
+                DownloadPriorityDto::Normal
+            ),
+            Err(MobileApiError::Validation(_))
+        ));
+        assert!(matches!(
+            svc.add_magnet_download(
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".to_owned(),
+                DownloadPriorityDto::Normal
+            ),
+            Err(MobileApiError::UnavailableEngine(_))
+        ));
         svc.shutdown();
     }
 

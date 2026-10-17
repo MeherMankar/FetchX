@@ -100,6 +100,12 @@ interface DownloadService {
     );
 
     [Throws=MobileApiError]
+    string add_magnet_download(
+        string magnet_uri,
+        DownloadPriorityDto priority
+    );
+
+    [Throws=MobileApiError]
     string add_media_download(
         string url,
         string filename,

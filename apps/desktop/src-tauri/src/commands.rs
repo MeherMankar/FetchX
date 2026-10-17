@@ -8,7 +8,7 @@ use fetchx_core_services::{ConfigService, CoreRepository, CoreServices, EngineRu
 use fetchx_downloader::{YtDlpFormat, validate_http_source_url};
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
-    EngineKind, FileName, Timestamp,
+    EngineKind, FileName, Timestamp, parse_magnet_uri,
 };
 use fetchx_queue::{QueueError, QueueManager};
 use fetchx_scheduler::{ScheduleError, Scheduler};
@@ -94,14 +94,55 @@ impl AppState {
         format_id: Option<String>,
         extension: Option<String>,
     ) -> Result<DownloadDto, IpcError> {
-        let canonical_url =
-            validate_http_source_url(&request.url).map_err(|_| IpcError::invalid_request())?;
-        let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
-        if extension.is_some() && (format_id.is_none() || !extension_is_safe(extension.as_deref()))
+        let magnet = if request.url.starts_with("magnet:") {
+            Some(parse_magnet_uri(&request.url).map_err(|_| IpcError::invalid_request())?)
+        } else {
+            None
+        };
+        let canonical_url = match magnet {
+            Some(_) => request.url.clone(),
+            None => {
+                validate_http_source_url(&request.url).map_err(|_| IpcError::invalid_request())?
+            }
+        };
+        let parsed_url = if magnet.is_none() {
+            Some(Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?)
+        } else {
+            None
+        };
+        if extension.is_some()
+            && (format_id.is_none() || magnet.is_some() || !extension_is_safe(extension.as_deref()))
         {
             return Err(IpcError::invalid_request());
         }
-        let filename = filename_for_url(&parsed_url);
+        // Resolve the requested engine, defaulting to DirectHttp when unspecified.
+        let engine_kind = match (magnet.is_some(), request.engine_kind) {
+            (true, None) => EngineKind::Aria2,
+            (true, Some(EngineKind::Aria2)) => EngineKind::Aria2,
+            (true, Some(_)) => return Err(IpcError::invalid_request()),
+            (false, Some(engine)) => engine,
+            (false, None) => EngineKind::DirectHttp,
+        };
+
+        // Backend validates availability — the frontend cannot bypass this check.
+        // Direct HTTP is always available; optional engines must be running.
+        if !self.engine_runtime.is_available(engine_kind) {
+            return Err(IpcError::engine_unavailable(engine_kind));
+        }
+
+        if magnet.is_some() {
+            let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+            let id = core_services
+                .enqueue_magnet(&canonical_url, DownloadPriority::Normal, None)
+                .await
+                .map_err(|_| IpcError::internal())?;
+            return self.get(id).await;
+        }
+
+        let filename = parsed_url
+            .as_ref()
+            .map(filename_for_url)
+            .ok_or_else(IpcError::invalid_request)?;
         let filename = match extension.as_deref() {
             Some(extension) => Path::new(&filename)
                 .with_extension(extension)
@@ -112,24 +153,14 @@ impl AppState {
             None => filename,
         };
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
-        let destination = self.downloads_dir.join(filename.as_str());
         let id = DownloadId::new();
-
-        // Resolve the requested engine, defaulting to DirectHttp when unspecified.
-        let engine_kind = request.engine_kind.unwrap_or(EngineKind::DirectHttp);
-
-        // Backend validates availability — the frontend cannot bypass this check.
-        // Direct HTTP is always available; optional engines must be running.
-        if !self.engine_runtime.is_available(engine_kind) {
-            return Err(IpcError::engine_unavailable(engine_kind));
-        }
-
         let source = DownloadSource::new(canonical_url, engine_kind)
             .and_then(|source| match format_id {
                 Some(format_id) => source.with_yt_dlp_format(format_id),
                 None => Ok(source),
             })
             .map_err(|_| IpcError::invalid_request())?;
+        let destination = self.downloads_dir.join(filename.as_str());
         let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
         let item = DownloadItem::new(id, source, filename, destination, created_at);
 

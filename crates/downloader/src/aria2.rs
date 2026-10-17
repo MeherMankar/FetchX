@@ -2,7 +2,8 @@ use std::{fmt, path::Path, sync::Arc, time::Duration};
 
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
+    DownloadId, DownloadItem, DownloadProgress, DownloadSource, DownloadStatus, EngineKind,
+    Timestamp,
 };
 use fetchx_storage::DownloadRepository;
 use reqwest::{Client, StatusCode, Url};
@@ -171,24 +172,36 @@ impl Aria2Client {
         if uri.len() > MAX_SOURCE_URI_BYTES {
             return Err(Aria2ClientError::InvalidUri);
         }
-        let parsed_uri = Url::parse(uri).map_err(|_| Aria2ClientError::InvalidUri)?;
-        if !matches!(parsed_uri.scheme(), "http" | "https")
-            || parsed_uri.host_str().is_none()
-            || !parsed_uri.username().is_empty()
-            || parsed_uri.password().is_some()
-            || parsed_uri.fragment().is_some()
-        {
-            return Err(Aria2ClientError::InvalidUri);
-        }
-        let (directory, filename) = aria2_destination(destination)?;
-        let mut options = json!({
-            "dir": directory,
-            "out": filename,
-            "max-connection-per-server": MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD.to_string(),
-            "split": "1",
-            "allow-overwrite": "false",
-            "auto-file-renaming": "false",
-        });
+        let mut options = if uri.starts_with("magnet:") {
+            DownloadSource::new(uri, EngineKind::Aria2)
+                .map_err(|_| Aria2ClientError::InvalidUri)?;
+            let directory = destination.to_str().ok_or(Aria2ClientError::InvalidPath)?;
+            json!({
+                "dir": directory,
+                "bt-max-peers": MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD.to_string(),
+                "allow-overwrite": "false",
+                "auto-file-renaming": "false",
+            })
+        } else {
+            let parsed_uri = Url::parse(uri).map_err(|_| Aria2ClientError::InvalidUri)?;
+            if !matches!(parsed_uri.scheme(), "http" | "https")
+                || parsed_uri.host_str().is_none()
+                || !parsed_uri.username().is_empty()
+                || parsed_uri.password().is_some()
+                || parsed_uri.fragment().is_some()
+            {
+                return Err(Aria2ClientError::InvalidUri);
+            }
+            let (directory, filename) = aria2_destination(destination)?;
+            json!({
+                "dir": directory,
+                "out": filename,
+                "max-connection-per-server": MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD.to_string(),
+                "split": "1",
+                "allow-overwrite": "false",
+                "auto-file-renaming": "false",
+            })
+        };
         if let Some(rate) = max_download_rate_bytes_per_second {
             if rate == 0 {
                 return Err(Aria2ClientError::InvalidRateLimit);
@@ -370,6 +383,55 @@ fn aria2_destination(destination: &Path) -> Result<(String, String), Aria2Client
         .to_str()
         .ok_or(Aria2ClientError::InvalidPath)?;
     Ok((directory.to_owned(), filename.to_owned()))
+}
+
+async fn validate_torrent_directory(
+    destination: &Path,
+    status: &Aria2Status,
+) -> Result<(), DownloadEngineError> {
+    let metadata = tokio::fs::symlink_metadata(destination)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    if !metadata.file_type().is_dir() {
+        return Err(DownloadEngineError::Aria2InvalidOutput);
+    }
+
+    let mut pending = vec![destination.to_path_buf()];
+    let mut total_size = 0_u64;
+    while let Some(directory) = pending.pop() {
+        let mut entries = tokio::fs::read_dir(directory)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(DownloadEngineError::Io)?
+        {
+            let path = entry.path();
+            let metadata = tokio::fs::symlink_metadata(&path)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            if metadata.file_type().is_symlink() {
+                return Err(DownloadEngineError::Aria2InvalidOutput);
+            }
+            if metadata.file_type().is_dir() {
+                pending.push(path);
+            } else if metadata.file_type().is_file() {
+                total_size = total_size
+                    .checked_add(metadata.len())
+                    .ok_or(DownloadEngineError::Aria2InvalidOutput)?;
+            } else {
+                return Err(DownloadEngineError::Aria2InvalidOutput);
+            }
+        }
+    }
+
+    if total_size != status.completed_bytes
+        || status.total_bytes.is_some_and(|total| total_size != total)
+    {
+        return Err(DownloadEngineError::Aria2InvalidOutput);
+    }
+    Ok(())
 }
 
 fn map_gid_error(error: Aria2ClientError) -> Aria2ClientError {
@@ -816,7 +878,7 @@ where
                         }
                         Aria2DownloadStatus::Complete => {
                             self.persist_progress(item, &mut expected_updated_at, &status).await?;
-                            self.validate_completed_file(item, &status).await?;
+                            self.validate_completed_output(item, &status).await?;
                             *item = self.state_machine.transition(id, DownloadStatus::Completed).await?;
                             self.gids.lock().await.remove(&id);
                             return Ok(item.clone());
@@ -928,11 +990,14 @@ where
         )
     }
 
-    async fn validate_completed_file(
+    async fn validate_completed_output(
         &self,
         item: &DownloadItem,
         status: &Aria2Status,
     ) -> Result<(), DownloadEngineError> {
+        if item.source().is_magnet() {
+            return validate_torrent_directory(item.destination(), status).await;
+        }
         let metadata = tokio::fs::symlink_metadata(item.destination())
             .await
             .map_err(DownloadEngineError::Io)?;
@@ -1127,7 +1192,8 @@ mod tests {
 
     use super::{
         AMBIGUOUS_ADD_URI_DIAGNOSTIC, Aria2Client, Aria2ClientConfig, Aria2ClientError,
-        Aria2DownloadStatus, Aria2Engine, Aria2Status, DownloadStatus, EngineKind, Timestamp,
+        Aria2DownloadStatus, Aria2Engine, Aria2Gid, Aria2Status, DownloadStatus, EngineKind,
+        Timestamp, validate_torrent_directory,
     };
     use crate::{DownloadEngine, ManagedDownloadEngine};
     use fetchx_models::DownloadItem;
@@ -1408,6 +1474,75 @@ mod tests {
                 Duration::from_secs(1)
             ),
             Err(Aria2ClientError::InvalidEndpoint)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_magnet_uses_aria2_torrent_options_and_validates_uri() -> Result<(), Box<dyn Error>>
+    {
+        let destination = PathBuf::from(r"C:\downloads\torrent-0123456789abcdef");
+        let magnet = "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&dn=fixture";
+        let (endpoint, mut requests, server) =
+            start_server([MockReply::Result(json!("0123456789abcdef"))]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let gid = client
+            .add_uri_with_rate_limit(magnet, &destination, Some(2048))
+            .await?;
+        assert_eq!(gid.as_str(), "0123456789abcdef");
+        let request = requests
+            .recv()
+            .await
+            .ok_or("missing magnet addUri request")?;
+        assert_eq!(request["method"], "aria2.addUri");
+        assert_eq!(request["params"][1][0], magnet);
+        assert_eq!(
+            request["params"][2]["dir"],
+            r"C:\downloads\torrent-0123456789abcdef"
+        );
+        assert_eq!(request["params"][2]["bt-max-peers"], "1");
+        assert_eq!(request["params"][2]["max-download-limit"], "2048");
+        assert_eq!(request["params"][2]["allow-overwrite"], "false");
+        assert!(request["params"][2].get("out").is_none());
+        server.await?;
+
+        let (endpoint, _requests, server) = start_server([]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        assert!(matches!(
+            client.add_uri("magnet:?dn=no-hash", &destination).await,
+            Err(Aria2ClientError::InvalidUri)
+        ));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_torrent_output_is_confined_to_regular_files_with_matching_size()
+    -> Result<(), Box<dyn Error>> {
+        let directory = TestDirectory::new(DownloadId::new())?;
+        let torrent_root = directory.0.join("torrent-output");
+        tokio::fs::create_dir_all(torrent_root.join("nested")).await?;
+        tokio::fs::write(torrent_root.join("first.bin"), b"one").await?;
+        tokio::fs::write(torrent_root.join("nested").join("second.bin"), b"two").await?;
+
+        let status = Aria2Status {
+            gid: Aria2Gid("0123456789abcdef".to_owned()),
+            status: Aria2DownloadStatus::Complete,
+            completed_bytes: 6,
+            total_bytes: Some(6),
+            download_speed: 0,
+            connections: 0,
+            error_code: None,
+        };
+        validate_torrent_directory(&torrent_root, &status).await?;
+
+        let mismatched = Aria2Status {
+            completed_bytes: 5,
+            ..status
+        };
+        assert!(matches!(
+            validate_torrent_directory(&torrent_root, &mismatched).await,
+            Err(crate::DownloadEngineError::Aria2InvalidOutput)
         ));
         Ok(())
     }

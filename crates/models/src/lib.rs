@@ -12,7 +12,7 @@ mod timestamp;
 
 pub use download::{
     DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus, FileName,
-    FileNameError,
+    FileNameError, MagnetInfo, parse_magnet_uri,
 };
 pub use engine::EngineKind;
 pub use error::{DownloadError, DownloadErrorCode, DownloadErrorMessageError};

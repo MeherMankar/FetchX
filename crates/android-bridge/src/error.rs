@@ -101,6 +101,12 @@ impl From<ScheduleError> for MobileApiError {
 
 impl From<CoreServicesError> for MobileApiError {
     fn from(e: CoreServicesError) -> Self {
-        MobileApiError::Runtime(e.to_string())
+        match e {
+            CoreServicesError::InvalidMagnet(message) => MobileApiError::Validation(message),
+            CoreServicesError::UnavailableEngine(engine) => {
+                MobileApiError::UnavailableEngine(format!("{engine:?}"))
+            }
+            error => MobileApiError::Runtime(error.to_string()),
+        }
     }
 }
