@@ -161,3 +161,9 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 [docs/ROADMAP.md](docs/ROADMAP.md), and [docs/AI_RULES.md](docs/AI_RULES.md).
+
+## Releases
+
+GitHub Actions builds Android, Windows, Linux, and macOS packages plus CLI
+binaries for releases. See [docs/RELEASING.md](docs/RELEASING.md) for triggers
+and optional signing configuration.

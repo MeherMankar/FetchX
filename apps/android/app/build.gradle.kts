@@ -4,6 +4,18 @@ plugins {
     alias(libs.plugins.chaquopy)
 }
 
+val releaseSigningVariables = listOf(
+    "ANDROID_KEYSTORE_PATH",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+    "ANDROID_STORE_PASSWORD"
+)
+val configuredReleaseSigningVariables =
+    releaseSigningVariables.count { !System.getenv(it).isNullOrBlank() }
+require(configuredReleaseSigningVariables == 0 || configuredReleaseSigningVariables == releaseSigningVariables.size) {
+    "Android release signing requires ANDROID_KEYSTORE_PATH, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD, and ANDROID_STORE_PASSWORD."
+}
+
 android {
     namespace = "dev.fetchx.app"
     compileSdk {
@@ -23,10 +35,24 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (configuredReleaseSigningVariables == releaseSigningVariables.size) {
+                storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH"))
+                storePassword = System.getenv("ANDROID_STORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (configuredReleaseSigningVariables == releaseSigningVariables.size) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
