@@ -401,11 +401,19 @@ impl RuntimeResourceManager {
 
     fn bandwidth_for(&self, engine: EngineKind) -> Result<BandwidthControl, QueueError> {
         let engine_limiter = self.engine_bandwidth.get(&engine).cloned();
-        let effective_external_rate = [
+        let global_download_share = self
+            .policy
+            .global_bandwidth_bytes_per_second
+            .map(|rate| rate / self.policy.max_active_downloads as u64);
+        let per_download_rate = [
             self.policy.per_download_bandwidth_bytes_per_second,
-            self.policy
-                .global_bandwidth_bytes_per_second
-                .map(|rate| rate / self.policy.max_active_downloads as u64),
+            global_download_share,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        let effective_external_rate = [
+            per_download_rate,
             self.policy.engine_bandwidth_limit(engine),
         ]
         .into_iter()
@@ -413,9 +421,7 @@ impl RuntimeResourceManager {
         .min();
         Ok(BandwidthControl {
             global: self.global_bandwidth.clone(),
-            per_download: self
-                .policy
-                .per_download_bandwidth_bytes_per_second
+            per_download: per_download_rate
                 .map(BandwidthLimiter::new)
                 .transpose()
                 .map_err(|_| QueueError::InvalidBandwidthPolicy)?
@@ -674,6 +680,11 @@ where
 {
     let pressure_active_limit = match pressure {
         ResourcePressure::Normal => config.max_active_downloads,
+        ResourcePressure::Elevated => config
+            .max_active_downloads
+            .saturating_mul(3)
+            .div_ceil(4)
+            .max(1),
         ResourcePressure::High => config.max_active_downloads.div_ceil(2).max(1),
         ResourcePressure::Critical => 0,
     };
@@ -829,11 +840,12 @@ fn allocate_resources(
             if used >= allocation_limit {
                 break;
             }
-            let target = if pressure == ResourcePressure::Normal {
-                worker.desired.max(worker.active)
-            } else {
-                worker.active.max(1)
+            let pressure_target = match pressure {
+                ResourcePressure::Normal => worker.desired,
+                ResourcePressure::Elevated => worker.desired.saturating_mul(3).div_ceil(4),
+                ResourcePressure::High | ResourcePressure::Critical => worker.active,
             };
+            let target = pressure_target.max(worker.active).max(1);
             if allocation[index] < target {
                 allocation[index] += 1;
                 used += 1;
@@ -2123,6 +2135,41 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn elevated_pressure_reduces_new_active_downloads_without_stopping_work()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, release) = setup_engine().await?;
+        let manager = QueueManager::new(
+            repository,
+            engine,
+            QueueConfig {
+                max_active_downloads: 4,
+                global_connection_limit: 16,
+            },
+        )
+        .await?;
+        manager
+            .set_resource_pressure(ResourcePressure::Elevated)
+            .await?;
+        for _ in 0..4 {
+            manager.enqueue(item()?).await?;
+        }
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if snapshot.active.len() == 3 {
+                    return Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert_eq!(snapshot.queued.len(), 1);
+        manager.shutdown().await?;
+        drop(release);
+        Ok(())
+    }
+
     #[test]
     fn external_engines_receive_a_share_of_the_global_bandwidth_ceiling() {
         let mut policy = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
@@ -2138,6 +2185,15 @@ mod tests {
             .expect("yt-dlp limits should be created");
         assert_eq!(aria2.external_download_rate_bytes_per_second, Some(1500));
         assert_eq!(yt_dlp.external_download_rate_bytes_per_second, Some(2000));
+        assert_eq!(
+            resources
+                .bandwidth_for(EngineKind::DirectHttp)
+                .expect("Direct HTTP limits should be created")
+                .per_download
+                .expect("global share limiter")
+                .bytes_per_second(),
+            2000
+        );
         assert!(Arc::ptr_eq(
             aria2.global.as_ref().expect("global limiter"),
             yt_dlp.global.as_ref().expect("global limiter"),

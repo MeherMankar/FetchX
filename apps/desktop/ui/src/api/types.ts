@@ -136,7 +136,6 @@ export interface EngineBandwidthLimitsDto {
   hls_bytes_per_second: number | null;
   aria2_bytes_per_second: number | null;
   yt_dlp_bytes_per_second: number | null;
-  ffmpeg_bytes_per_second: number | null;
 }
 
 export interface ResourcePolicyDto {
@@ -147,7 +146,6 @@ export interface ResourcePolicyDto {
   global_bandwidth_bytes_per_second: number | null;
   per_download_bandwidth_bytes_per_second: number | null;
   engine_bandwidth_limits: EngineBandwidthLimitsDto;
-  max_ffmpeg_processes: number;
 }
 
 export interface SaveAria2ConfigRequest {

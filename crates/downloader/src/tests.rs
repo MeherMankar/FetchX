@@ -21,7 +21,10 @@ use tokio::{
     time::sleep,
 };
 
-use crate::{AdaptiveConfig, DirectHttpEngine, DownloadEngineError, HttpEngineConfig};
+use crate::{
+    AdaptiveConfig, BandwidthControl, BandwidthLimiter, DirectHttpEngine, DownloadEngineError,
+    HttpEngineConfig, ManagedDownloadControl, ManagedDownloadEngine,
+};
 
 struct TestDirectory(PathBuf);
 
@@ -706,6 +709,40 @@ async fn run_download(
 }
 
 #[tokio::test]
+async fn managed_direct_http_download_observes_shared_bandwidth_control()
+-> Result<(), Box<dyn Error>> {
+    let body = vec![0x5a; 64 * 1024];
+    let (url, server) = start_scripted_server(vec![scripted_response(200, &[], &body)]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("bandwidth-limited.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+
+    let (_cancel_sender, cancellation) = watch::channel(false);
+    let (_pause_sender, pause) = watch::channel(false);
+    let (_limit_sender, connection_limit) = watch::channel(1);
+    let control = ManagedDownloadControl {
+        cancellation,
+        pause,
+        connection_limit,
+        resource_demand: None,
+        bandwidth: BandwidthControl {
+            global: Some(Arc::new(BandwidthLimiter::new(32 * 1024)?)),
+            per_download: Some(Arc::new(BandwidthLimiter::new(32 * 1024)?)),
+            ..BandwidthControl::default()
+        },
+    };
+    let start = tokio::time::Instant::now();
+    let completed = engine.download_managed(id, control).await?;
+    assert!(start.elapsed() >= Duration::from_millis(800));
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(server.await?.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
 -> Result<(), Box<dyn Error>> {
     const TOTAL: usize = 1024 * 1024;
@@ -754,6 +791,42 @@ async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
             .exists()
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn segmented_download_shares_global_bandwidth_across_workers() -> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 128 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 251) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 5, true).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("segmented-bandwidth.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_cancel_sender, cancellation) = watch::channel(false);
+    let (_pause_sender, pause) = watch::channel(false);
+    let (_limit_sender, connection_limit) = watch::channel(4);
+    let control = ManagedDownloadControl {
+        cancellation,
+        pause,
+        connection_limit,
+        resource_demand: None,
+        bandwidth: BandwidthControl {
+            global: Some(Arc::new(BandwidthLimiter::new(64 * 1024)?)),
+            per_download: Some(Arc::new(BandwidthLimiter::new(64 * 1024)?)),
+            ..BandwidthControl::default()
+        },
+    };
+
+    let start = tokio::time::Instant::now();
+    let completed = engine.download_managed(id, control).await?;
+    let report = server.await?;
+    assert!(start.elapsed() >= Duration::from_millis(800));
+    assert!(report.max_active_segments > 1);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
     Ok(())
 }
 

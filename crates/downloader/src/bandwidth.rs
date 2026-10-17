@@ -33,6 +33,10 @@ impl BandwidthLimiter {
         })
     }
 
+    pub fn bytes_per_second(&self) -> u64 {
+        self.bytes_per_second
+    }
+
     pub async fn acquire(
         &self,
         mut bytes: u64,
@@ -143,11 +147,14 @@ impl BandwidthControl {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use tokio::sync::watch;
 
-    use super::BandwidthLimiter;
+    use super::{BandwidthControl, BandwidthLimiter};
     use crate::DownloadEngineError;
 
     #[tokio::test]
@@ -160,6 +167,31 @@ mod tests {
         let second = limiter.acquire(32 * 1024, cancel, pause);
         tokio::try_join!(first, second)?;
         assert!(start.elapsed() >= Duration::from_millis(700));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn per_download_limiters_do_not_allow_concurrent_downloads_to_exceed_global_rate()
+    -> Result<(), DownloadEngineError> {
+        let global = Arc::new(BandwidthLimiter::new(16 * 1024)?);
+        let first_control = BandwidthControl {
+            global: Some(Arc::clone(&global)),
+            per_download: Some(Arc::new(BandwidthLimiter::new(16 * 1024)?)),
+            ..BandwidthControl::default()
+        };
+        let second_control = BandwidthControl {
+            global: Some(global),
+            per_download: Some(Arc::new(BandwidthLimiter::new(16 * 1024)?)),
+            ..BandwidthControl::default()
+        };
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        let (_pause_sender, pause) = watch::channel(false);
+        let start = Instant::now();
+        tokio::try_join!(
+            first_control.acquire(16 * 1024, cancellation.clone(), pause.clone()),
+            second_control.acquire(16 * 1024, cancellation, pause),
+        )?;
+        assert!(start.elapsed() >= Duration::from_millis(850));
         Ok(())
     }
 

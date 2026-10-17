@@ -468,7 +468,6 @@ function policyForProfile(
     hls_bytes_per_second: null,
     aria2_bytes_per_second: null,
     yt_dlp_bytes_per_second: null,
-    ffmpeg_bytes_per_second: null,
   };
   const profiles: Partial<Record<ResourceProfile, ResourcePolicyDto>> = {
     unlimited: {
@@ -479,7 +478,6 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: null,
       per_download_bandwidth_bytes_per_second: null,
       engine_bandwidth_limits: engineLimits,
-      max_ffmpeg_processes: 2,
     },
     normal: {
       profile,
@@ -489,7 +487,6 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: null,
       per_download_bandwidth_bytes_per_second: null,
       engine_bandwidth_limits: engineLimits,
-      max_ffmpeg_processes: 1,
     },
     limited: {
       profile,
@@ -499,7 +496,6 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: 2 * 1024 * 1024,
       per_download_bandwidth_bytes_per_second: 1024 * 1024,
       engine_bandwidth_limits: engineLimits,
-      max_ffmpeg_processes: 1,
     },
     night: {
       profile,
@@ -509,7 +505,6 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: 512 * 1024,
       per_download_bandwidth_bytes_per_second: 256 * 1024,
       engine_bandwidth_limits: engineLimits,
-      max_ffmpeg_processes: 1,
     },
   };
   return profiles[profile] ?? { ...current, profile };
@@ -555,7 +550,7 @@ function ResourcePolicySection({
 
   const updateNumber = (
     key: "max_active_downloads" | "global_connection_limit" |
-      "per_download_connection_limit" | "max_ffmpeg_processes",
+      "per_download_connection_limit",
     value: string,
   ) => {
     const parsed = Number.parseInt(value, 10);
@@ -653,18 +648,10 @@ function ResourcePolicySection({
             onChange={(event) => updateBandwidth("per_download_bandwidth_bytes_per_second", event.target.value)} />
         </div>
       </div>
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="resource-ffmpeg">Concurrent FFmpeg processes</label>
-        <div className="settings-control">
-          <input id="resource-ffmpeg" type="number" min={1} max={2}
-            className="settings-input settings-input-sm"
-            value={policy.max_ffmpeg_processes} disabled={busy}
-            onChange={(event) => updateNumber("max_ffmpeg_processes", event.target.value)} />
-        </div>
-      </div>
       <p className="settings-hint">
         HTTP and HLS use shared Rust bandwidth limits. aria2 and yt-dlp use native per-download limits where supported.
-        The queue accepts explicit pressure signals: high pressure prevents scaling up, while critical pressure blocks new work without stopping active downloads. Automatic OS-pressure detection is not wired.
+        FFmpeg processing has its own local process ceiling and is not network bandwidth limited.
+        The queue accepts explicit pressure signals: elevated pressure reduces new allocations, high pressure limits new starts, and critical pressure blocks new work without stopping active downloads. Automatic OS-pressure detection is not wired.
       </p>
       <div className="settings-actions">
         <button className="button button-primary" onClick={() => void save()} disabled={busy}>

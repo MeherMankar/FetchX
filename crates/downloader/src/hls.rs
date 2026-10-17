@@ -5,7 +5,7 @@
 //! 1. Fetch the `.m3u8` manifest (master or media playlist).
 //! 2. If master playlist: select the highest-bitrate variant.
 //! 3. Parse the media playlist to get an ordered list of segment URIs.
-//! 4. Download all segments concurrently, limited by a [`tokio::sync::Semaphore`].
+//! 4. Download all segments concurrently, bounded by engine and queue limits.
 //! 5. If `#EXT-X-KEY:METHOD=AES-128` is present, decrypt each segment after download.
 //! 6. Concatenate / remux the assembled segments into the final destination file.
 //!
@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, OpenOptions},
     io::{AsyncReadExt, AsyncWriteExt},
-    sync::{Semaphore, watch},
+    sync::watch,
     time::sleep,
 };
 use tracing::{info, warn};
@@ -423,9 +423,6 @@ where
             .config
             .segment_concurrency
             .clamp(1, MAX_SEGMENT_CONCURRENCY);
-        let semaphore = Arc::new(Semaphore::new(concurrency));
-
-        // Collect segment tasks into a JoinSet.
         let mut join_set: tokio::task::JoinSet<Result<(usize, u64), DownloadEngineError>> =
             tokio::task::JoinSet::new();
 
@@ -446,14 +443,11 @@ where
 
         let mut expected_ts = item.updated_at();
         let mut last_persist = tokio::time::Instant::now();
+        let mut next_segment = 0;
 
-        // Launch tasks for incomplete segments.
-        for (i, seg) in segments.iter().enumerate() {
-            // Check cancellation before launching each wave of tasks.
+        while next_segment < total_segs || !join_set.is_empty() {
             if *control.cancellation.borrow_and_update() {
-                // Signal all in-flight tasks to stop.
                 let _ = cancel_tx.send(true);
-                // Drain the join set.
                 while join_set.join_next().await.is_some() {}
                 return Err(DownloadEngineError::Cancelled);
             }
@@ -463,70 +457,35 @@ where
                 return Err(DownloadEngineError::Paused);
             }
 
-            if already_done[i] {
+            while next_segment < total_segs && already_done[next_segment] {
+                next_segment += 1;
+            }
+
+            let connection_limit =
+                (*control.connection_limit.borrow_and_update()).clamp(1, concurrency);
+            while next_segment < total_segs && join_set.len() < connection_limit {
+                let index = next_segment;
+                next_segment += 1;
+                let segment = segments[index].clone();
+                let path = segment_path(workspace, index);
+                let client = self.client.clone();
+                let downloaded = Arc::clone(&downloaded_bytes);
+                let cancel = cancel_tx.subscribe();
+                let bandwidth = control.bandwidth.clone();
+
+                join_set.spawn(async move {
+                    let size = download_one_segment(
+                        &client, &segment, &path, index, cancel, downloaded, bandwidth,
+                    )
+                    .await?;
+                    Ok((index, size))
+                });
+            }
+
+            if join_set.is_empty() {
                 continue;
             }
 
-            let seg = seg.clone();
-            let seg_path = segment_path(workspace, i);
-            let client = self.client.clone();
-            let sem = Arc::clone(&semaphore);
-            let dl_counter = Arc::clone(&downloaded_bytes);
-            let cancel_rx = cancel_tx.subscribe();
-            let bandwidth = control.bandwidth.clone();
-
-            join_set.spawn(async move {
-                let _permit = sem
-                    .acquire()
-                    .await
-                    .map_err(|_| DownloadEngineError::SegmentWorkerFailed)?;
-                let size = download_one_segment(
-                    &client, &seg, &seg_path, i, cancel_rx, dl_counter, bandwidth,
-                )
-                .await?;
-                Ok((i, size))
-            });
-            // Reap finished tasks eagerly to emit progress without waiting for
-            // all launches.
-            while let Some(result) = join_set.try_join_next() {
-                match result {
-                    Ok(Ok((idx, size))) => {
-                        let _ = (idx, size);
-                        completed_segs += 1;
-                    }
-                    Ok(Err(e)) => {
-                        let _ = cancel_tx.send(true);
-                        while join_set.join_next().await.is_some() {}
-                        return Err(e);
-                    }
-                    Err(_join_err) => {
-                        let _ = cancel_tx.send(true);
-                        while join_set.join_next().await.is_some() {}
-                        return Err(DownloadEngineError::SegmentWorkerFailed);
-                    }
-                }
-            }
-
-            // Throttled progress persistence.
-            let now = tokio::time::Instant::now();
-            if now.duration_since(last_persist) >= PROGRESS_PERSIST_INTERVAL {
-                let dl_now = downloaded_bytes.load(Ordering::Relaxed);
-                let _ = update_progress(
-                    &self.repository,
-                    item,
-                    &mut expected_ts,
-                    dl_now,
-                    total_bytes_estimate,
-                    None,
-                    None,
-                )
-                .await;
-                last_persist = now;
-            }
-        }
-
-        // Await remaining tasks.
-        while !join_set.is_empty() {
             let result = tokio::select! {
                 biased;
                 changed = control.cancellation.changed() => {
@@ -545,10 +504,18 @@ where
                     }
                     continue;
                 }
+                changed = control.connection_limit.changed() => {
+                    if changed.is_err() {
+                        let _ = cancel_tx.send(true);
+                        while join_set.join_next().await.is_some() {}
+                        return Err(DownloadEngineError::SegmentWorkerFailed);
+                    }
+                    continue;
+                }
                 result = join_set.join_next() => result,
             };
             let Some(result) = result else {
-                break;
+                continue;
             };
             match result {
                 Ok(Ok((_idx, _size))) => {
@@ -580,6 +547,22 @@ where
                     while join_set.join_next().await.is_some() {}
                     return Err(DownloadEngineError::SegmentWorkerFailed);
                 }
+            }
+
+            let now = tokio::time::Instant::now();
+            if now.duration_since(last_persist) >= PROGRESS_PERSIST_INTERVAL {
+                let dl_now = downloaded_bytes.load(Ordering::Relaxed);
+                let _ = update_progress(
+                    &self.repository,
+                    item,
+                    &mut expected_ts,
+                    dl_now,
+                    total_bytes_estimate,
+                    None,
+                    None,
+                )
+                .await;
+                last_persist = now;
             }
         }
 
@@ -662,7 +645,11 @@ where
         cancellation: watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let (pause_tx, pause) = watch::channel(false);
-        let (limit_tx, connection_limit) = watch::channel(1usize);
+        let (limit_tx, connection_limit) = watch::channel(
+            self.config
+                .segment_concurrency
+                .clamp(1, MAX_SEGMENT_CONCURRENCY),
+        );
         let result = self
             .download_controlled(
                 id,
@@ -1670,6 +1657,7 @@ fn next_timestamp(previous: Timestamp) -> Result<Timestamp, DownloadEngineError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BandwidthControl, BandwidthLimiter};
     use fetchx_models::{DownloadSource, FileName, Timestamp};
     use fetchx_storage::{Database, DownloadRepository};
     use std::{
@@ -1724,6 +1712,7 @@ mod tests {
     struct LocalHlsServer {
         base_url: String,
         routes: Arc<Mutex<HashMap<String, VecDeque<LocalResponse>>>>,
+        requests: Arc<Mutex<Vec<String>>>,
         task: JoinHandle<Vec<String>>,
     }
 
@@ -1750,12 +1739,13 @@ mod tests {
                 for connection in connections {
                     let _ = connection.await;
                 }
-                requests.lock().await.clone()
+                task_requests.lock().await.clone()
             });
 
             Ok(Self {
                 base_url: format!("http://{address}"),
                 routes,
+                requests,
                 task,
             })
         }
@@ -2164,6 +2154,114 @@ seg0.ts
         );
         assert_eq!(requests.len(), 3);
         assert!(!hls_workspace_path(&directory.destination(), item.id()).exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hls_fragment_download_observes_shared_bandwidth_control() -> Result<(), Box<dyn Error>>
+    {
+        let server = LocalHlsServer::start(2).await?;
+        let body = vec![0x3c; 64 * 1024];
+        server
+            .add_responses(
+                "/media.m3u8",
+                [LocalResponse::ok(media_playlist(&["a.ts"]))],
+            )
+            .await;
+        server
+            .add_responses("/a.ts", [LocalResponse::ok(&body)])
+            .await;
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/media.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 1).await?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        let (_pause_sender, pause) = watch::channel(false);
+        let (_limit_sender, connection_limit) = watch::channel(1);
+        let control = ManagedDownloadControl {
+            cancellation,
+            pause,
+            connection_limit,
+            resource_demand: None,
+            bandwidth: BandwidthControl {
+                global: Some(Arc::new(BandwidthLimiter::new(32 * 1024)?)),
+                per_download: Some(Arc::new(BandwidthLimiter::new(32 * 1024)?)),
+                ..BandwidthControl::default()
+            },
+        };
+
+        let start = tokio::time::Instant::now();
+        let completed = engine.download_managed(item.id(), control).await?;
+        assert!(start.elapsed() >= Duration::from_millis(800));
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(directory.destination()).await?, body);
+        assert!(!hls_workspace_path(&directory.destination(), item.id()).exists());
+        assert_eq!(server.finish().await?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hls_fragment_workers_observe_queue_connection_limit() -> Result<(), Box<dyn Error>> {
+        let server = LocalHlsServer::start(3).await?;
+        server
+            .add_responses(
+                "/media.m3u8",
+                [LocalResponse::ok(media_playlist(&["a.ts", "b.ts"]))],
+            )
+            .await;
+        let (first_chunk_tx, first_chunk_rx) = oneshot::channel();
+        let mut slow_response = LocalResponse::ok(vec![b'a'; 8]);
+        slow_response.chunk_size = 1;
+        slow_response.chunk_delay = Duration::from_millis(20);
+        slow_response.first_chunk = Some(first_chunk_tx);
+        server.add_responses("/a.ts", [slow_response]).await;
+        server
+            .add_responses("/b.ts", [LocalResponse::ok(b"b")])
+            .await;
+
+        let directory = TestDirectory::new()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let item = create_hls_item(
+            &database,
+            &format!("{}/media.m3u8", server.base_url),
+            &directory.destination(),
+        )
+        .await?;
+        let engine = create_hls_engine(&database, 4).await?;
+        let (cancel_sender, cancellation) = watch::channel(false);
+        let (pause_sender, pause) = watch::channel(false);
+        let (limit_sender, connection_limit) = watch::channel(1);
+        let control = ManagedDownloadControl {
+            cancellation,
+            pause,
+            connection_limit,
+            resource_demand: None,
+            bandwidth: BandwidthControl::default(),
+        };
+        let download =
+            tokio::spawn(async move { engine.download_managed(item.id(), control).await });
+
+        timeout(Duration::from_secs(2), first_chunk_rx).await??;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(
+            server.requests.lock().await.as_slice(),
+            ["/media.m3u8", "/a.ts"]
+        );
+
+        limit_sender.send(2)?;
+        let completed = timeout(Duration::from_secs(3), download).await???;
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(directory.destination()).await?,
+            b"aaaaaaaab"
+        );
+        assert_eq!(server.finish().await?.len(), 3);
+        drop((cancel_sender, pause_sender));
         Ok(())
     }
 

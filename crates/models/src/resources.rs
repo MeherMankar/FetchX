@@ -22,6 +22,7 @@ pub enum ResourceProfile {
 pub enum ResourcePressure {
     #[default]
     Normal,
+    Elevated,
     High,
     Critical,
 }
@@ -33,7 +34,6 @@ pub struct EngineBandwidthLimits {
     pub hls_bytes_per_second: Option<u64>,
     pub aria2_bytes_per_second: Option<u64>,
     pub yt_dlp_bytes_per_second: Option<u64>,
-    pub ffmpeg_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -46,7 +46,6 @@ pub struct ResourcePolicy {
     pub global_bandwidth_bytes_per_second: Option<u64>,
     pub per_download_bandwidth_bytes_per_second: Option<u64>,
     pub engine_bandwidth_limits: EngineBandwidthLimits,
-    pub max_ffmpeg_processes: usize,
 }
 
 impl Default for ResourcePolicy {
@@ -77,7 +76,6 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: None,
                 per_download_bandwidth_bytes_per_second: None,
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
-                max_ffmpeg_processes: 2,
             },
             ResourceProfile::Normal => Self {
                 profile,
@@ -87,7 +85,6 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: None,
                 per_download_bandwidth_bytes_per_second: None,
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
-                max_ffmpeg_processes: 1,
             },
             ResourceProfile::Limited => Self {
                 profile,
@@ -97,7 +94,6 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: Some(2 * 1024 * 1024),
                 per_download_bandwidth_bytes_per_second: Some(1024 * 1024),
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
-                max_ffmpeg_processes: 1,
             },
             ResourceProfile::Night => Self {
                 profile,
@@ -107,7 +103,6 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: Some(512 * 1024),
                 per_download_bandwidth_bytes_per_second: Some(256 * 1024),
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
-                max_ffmpeg_processes: 1,
             },
             ResourceProfile::Custom => Self {
                 profile,
@@ -131,9 +126,6 @@ impl ResourcePolicy {
         {
             return Err(ResourcePolicyError::PerDownloadConnectionLimit);
         }
-        if self.max_ffmpeg_processes == 0 || self.max_ffmpeg_processes > 2 {
-            return Err(ResourcePolicyError::FfmpegProcessLimit);
-        }
         for rate in [
             self.global_bandwidth_bytes_per_second,
             self.per_download_bandwidth_bytes_per_second,
@@ -141,7 +133,6 @@ impl ResourcePolicy {
             self.engine_bandwidth_limits.hls_bytes_per_second,
             self.engine_bandwidth_limits.aria2_bytes_per_second,
             self.engine_bandwidth_limits.yt_dlp_bytes_per_second,
-            self.engine_bandwidth_limits.ffmpeg_bytes_per_second,
         ]
         .into_iter()
         .flatten()
@@ -168,8 +159,6 @@ pub enum ResourcePolicyError {
     GlobalConnectionLimit,
     #[error("per-download connection limit must be between 1 and the global limit, up to 32")]
     PerDownloadConnectionLimit,
-    #[error("FFmpeg process limit must be between 1 and 2")]
-    FfmpegProcessLimit,
     #[error("bandwidth limits must be between 1 byte/s and 1 TB/s")]
     BandwidthLimit,
 }
@@ -193,6 +182,32 @@ mod tests {
         assert_eq!(normal.max_active_downloads, 3);
         assert_eq!(normal.global_connection_limit, 16);
         assert_eq!(normal.per_download_connection_limit, 8);
+        let unlimited = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
+        assert_eq!(unlimited.max_active_downloads, 8);
+        assert_eq!(unlimited.global_connection_limit, 64);
+        assert_eq!(unlimited.per_download_connection_limit, 32);
+        assert_eq!(unlimited.global_bandwidth_bytes_per_second, None);
+        let limited = ResourcePolicy::for_profile(ResourceProfile::Limited);
+        assert_eq!(limited.max_active_downloads, 2);
+        assert_eq!(limited.global_connection_limit, 8);
+        assert_eq!(limited.per_download_connection_limit, 4);
+        assert_eq!(
+            limited.global_bandwidth_bytes_per_second,
+            Some(2 * 1024 * 1024)
+        );
+        assert_eq!(
+            limited.per_download_bandwidth_bytes_per_second,
+            Some(1024 * 1024)
+        );
+        let night = ResourcePolicy::for_profile(ResourceProfile::Night);
+        assert_eq!(night.max_active_downloads, 2);
+        assert_eq!(night.global_connection_limit, 4);
+        assert_eq!(night.per_download_connection_limit, 2);
+        assert_eq!(night.global_bandwidth_bytes_per_second, Some(512 * 1024));
+        assert_eq!(
+            night.per_download_bandwidth_bytes_per_second,
+            Some(256 * 1024)
+        );
     }
 
     #[test]
@@ -226,5 +241,33 @@ mod tests {
         assert!(policy.validate().is_ok());
         assert_eq!(policy, ResourcePolicy::default());
         Ok(())
+    }
+
+    #[test]
+    fn obsolete_ffmpeg_policy_fields_are_ignored() -> Result<(), serde_json::Error> {
+        let policy: ResourcePolicy = serde_json::from_str(
+            r#"{"profile":"normal","max_ffmpeg_processes":2,"engine_bandwidth_limits":{"ffmpeg_bytes_per_second":1024}}"#,
+        )?;
+        assert_eq!(policy, ResourcePolicy::default());
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_integer_overflow_and_values_above_policy_ceilings() {
+        assert!(serde_json::from_str::<ResourcePolicy>(r#"{"max_active_downloads":-1}"#).is_err());
+        assert!(
+            serde_json::from_str::<ResourcePolicy>(
+                r#"{"max_active_downloads":18446744073709551616}"#
+            )
+            .is_err()
+        );
+        let policy = ResourcePolicy {
+            global_connection_limit: 65,
+            ..ResourcePolicy::default()
+        };
+        assert_eq!(
+            policy.validate(),
+            Err(ResourcePolicyError::GlobalConnectionLimit)
+        );
     }
 }

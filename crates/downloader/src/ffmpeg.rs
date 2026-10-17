@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use fetchx_models::ResourcePolicy;
+use fetchx_models::ResourcePressure;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::{
@@ -87,11 +87,6 @@ impl FfmpegConfig {
 
     pub fn with_max_concurrent_processes(mut self, maximum: usize) -> Self {
         self.max_concurrent_processes = maximum;
-        self
-    }
-
-    pub fn with_resource_policy(mut self, policy: &ResourcePolicy) -> Self {
-        self.max_concurrent_processes = policy.max_ffmpeg_processes;
         self
     }
 }
@@ -308,6 +303,8 @@ pub struct FfmpegProcessor {
     process_timeout: Duration,
     max_output_bytes: u64,
     process_slots: Arc<Semaphore>,
+    pressure_sender: watch::Sender<ResourcePressure>,
+    pressure: watch::Receiver<ResourcePressure>,
     runner: Arc<dyn FfmpegProcessRunner>,
 }
 
@@ -350,12 +347,15 @@ impl FfmpegProcessor {
                 cancellation,
             )
             .await?;
+        let (pressure_sender, pressure) = watch::channel(ResourcePressure::Normal);
         Ok(Self {
             ffmpeg_executable,
             ffprobe_executable,
             process_timeout: config.process_timeout,
             max_output_bytes: config.max_output_bytes,
             process_slots: Arc::new(Semaphore::new(config.max_concurrent_processes)),
+            pressure_sender,
+            pressure,
             runner,
         })
     }
@@ -366,6 +366,10 @@ impl FfmpegProcessor {
 
     pub fn ffprobe_executable(&self) -> &Path {
         &self.ffprobe_executable
+    }
+
+    pub fn set_resource_pressure(&self, pressure: ResourcePressure) {
+        self.pressure_sender.send_replace(pressure);
     }
 
     pub fn progress_channel() -> (mpsc::Sender<MediaProgress>, mpsc::Receiver<MediaProgress>) {
@@ -442,17 +446,41 @@ impl FfmpegProcessor {
         &self,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<tokio::sync::OwnedSemaphorePermit, FfmpegError> {
-        if *cancellation.borrow_and_update() {
-            return Err(FfmpegError::Cancelled);
-        }
-        tokio::select! {
-            biased;
-            _changed = cancellation.changed() => {
-                Err(FfmpegError::Cancelled)
+        let mut pressure = self.pressure.clone();
+        loop {
+            if *cancellation.borrow_and_update() {
+                return Err(FfmpegError::Cancelled);
             }
-            permit = Arc::clone(&self.process_slots).acquire_owned() => {
-                permit.map_err(|_| FfmpegError::ProcessRunner)
+            if *pressure.borrow_and_update() == ResourcePressure::Critical {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.changed() => return Err(FfmpegError::Cancelled),
+                    changed = pressure.changed() => {
+                        if changed.is_err() {
+                            return Err(FfmpegError::ProcessRunner);
+                        }
+                    }
+                }
+                continue;
             }
+            let permit = tokio::select! {
+                biased;
+                _ = cancellation.changed() => return Err(FfmpegError::Cancelled),
+                changed = pressure.changed() => {
+                    if changed.is_err() {
+                        return Err(FfmpegError::ProcessRunner);
+                    }
+                    continue;
+                }
+                permit = Arc::clone(&self.process_slots).acquire_owned() => {
+                    permit.map_err(|_| FfmpegError::ProcessRunner)?
+                }
+            };
+            if *pressure.borrow_and_update() == ResourcePressure::Critical {
+                drop(permit);
+                continue;
+            }
+            return Ok(permit);
         }
     }
 
@@ -1879,12 +1907,29 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn ffmpeg_process_ceiling_uses_resource_policy() {
-        let policy =
-            fetchx_models::ResourcePolicy::for_profile(fetchx_models::ResourceProfile::Unlimited);
-        let config = FfmpegConfig::new().with_resource_policy(&policy);
-        assert_eq!(config.max_concurrent_processes, policy.max_ffmpeg_processes);
+    #[tokio::test]
+    async fn critical_pressure_gates_new_ffmpeg_processes_until_relieved()
+    -> Result<(), Box<dyn Error>> {
+        let base = std::env::temp_dir().join(format!("fetchx-ffmpeg-pressure-{}", Uuid::new_v4()));
+        let processor = setup(FakeRunner::default(), &base).await?;
+        processor.set_resource_pressure(ResourcePressure::Critical);
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                processor.acquire_slot(cancellation.clone()),
+            )
+            .await
+            .is_err()
+        );
+        processor.set_resource_pressure(ResourcePressure::Normal);
+        let permit =
+            tokio::time::timeout(Duration::from_secs(1), processor.acquire_slot(cancellation))
+                .await??;
+        drop(permit);
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
     }
 
     #[tokio::test]
