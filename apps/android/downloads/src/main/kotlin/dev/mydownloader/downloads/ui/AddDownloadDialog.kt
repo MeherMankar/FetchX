@@ -84,8 +84,8 @@ fun AddDownloadDialog(
                         url = newValue
                         urlError = null   // clear error while user types
                     },
-                    label = { Text("URL or magnet link") },
-                    placeholder = { Text("https://example.com/file.zip or magnet:?xt=urn:btih:…") },
+                    label = { Text("URL, magnet link, or local .torrent path") },
+                    placeholder = { Text("https://example.com/file.zip, magnet URI, or /path/to/file.torrent") },
                     isError = urlError != null,
                     supportingText = urlError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                     singleLine = true,
@@ -182,9 +182,10 @@ internal fun validateUrl(url: String): String? {
     if (trimmed.isBlank()) return "URL cannot be empty"
     if (!trimmed.startsWith("http://", ignoreCase = true) &&
         !trimmed.startsWith("https://", ignoreCase = true) &&
-        !trimmed.startsWith("magnet:", ignoreCase = true)
+        !trimmed.startsWith("magnet:", ignoreCase = true) &&
+        (trimmed.contains("://") || !trimmed.endsWith(".torrent", ignoreCase = true))
     ) {
-        return "Enter an HTTP(S) URL or magnet URI"
+        return "Enter an HTTP(S) URL, magnet URI, or local .torrent path"
     }
     return null
 }

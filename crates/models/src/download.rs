@@ -27,12 +27,34 @@ impl DownloadSource {
         {
             return Err(DownloadSourceError::InvalidMagnetUri);
         }
+        if url.starts_with("torrent+file:")
+            && (engine != EngineKind::Aria2 || torrent_file_path(&url).is_none())
+        {
+            return Err(DownloadSourceError::InvalidTorrentFile);
+        }
 
         Ok(Self {
             url,
             engine,
             yt_dlp_format: None,
         })
+    }
+
+    pub fn new_torrent_file(
+        path: &std::path::Path,
+        engine: EngineKind,
+    ) -> Result<Self, DownloadSourceError> {
+        if engine != EngineKind::Aria2
+            || !path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+        {
+            return Err(DownloadSourceError::InvalidTorrentFile);
+        }
+        let file_url =
+            Url::from_file_path(path).map_err(|_| DownloadSourceError::InvalidTorrentFile)?;
+        Self::new(format!("torrent+{file_url}"), engine)
     }
 
     pub fn with_yt_dlp_format(
@@ -104,6 +126,24 @@ impl DownloadSource {
     pub fn is_magnet(&self) -> bool {
         self.url.starts_with("magnet:")
     }
+
+    #[must_use]
+    pub fn is_torrent_file(&self) -> bool {
+        self.url.starts_with("torrent+file:")
+    }
+
+    #[must_use]
+    pub fn torrent_file_path(&self) -> Option<PathBuf> {
+        torrent_file_path(&self.url)
+    }
+}
+
+fn torrent_file_path(source: &str) -> Option<PathBuf> {
+    let file_url = source.strip_prefix("torrent+")?;
+    let url = Url::parse(file_url).ok()?;
+    (url.scheme() == "file")
+        .then(|| url.to_file_path().ok())
+        .flatten()
 }
 
 const MAX_MAGNET_URI_BYTES: usize = 16 * 1024;
@@ -222,6 +262,8 @@ pub enum DownloadSourceError {
     InvalidYtDlpFormat,
     #[error("magnet URI must contain one valid BitTorrent info hash and safe optional trackers")]
     InvalidMagnetUri,
+    #[error("torrent file source must be a local .torrent file using aria2")]
+    InvalidTorrentFile,
 }
 
 #[derive(Deserialize)]

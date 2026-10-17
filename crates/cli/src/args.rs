@@ -96,14 +96,23 @@ pub enum PluginsCommand {
 /// Options accepted by the `add` command.
 #[derive(Args, Debug)]
 pub struct AddOpts {
-    /// HTTP(S) URL or a validated magnet URI.
-    pub url: String,
+    /// HTTP(S) URL or local .torrent file path.
+    #[arg(
+        value_name = "URL_OR_TORRENT",
+        required_unless_present = "magnet",
+        conflicts_with = "magnet"
+    )]
+    pub url: Option<String>,
 
-    /// Engine to use: direct-http | aria2 | yt-dlp. Magnets default to aria2.
+    /// Magnet URI. Magnet and .torrent downloads use aria2.
+    #[arg(long, value_name = "URI", conflicts_with = "url")]
+    pub magnet: Option<String>,
+
+    /// Engine to use: direct-http | aria2 | yt-dlp. Torrent downloads default to aria2.
     #[arg(short = 'e', long, value_name = "ENGINE")]
     pub engine: Option<String>,
 
-    /// Destination file for HTTP downloads or destination directory for magnets.
+    /// Destination file for HTTP downloads or destination directory for torrents.
     #[arg(long, value_name = "PATH")]
     pub destination: Option<std::path::PathBuf>,
 
@@ -162,4 +171,38 @@ pub struct ScheduleOpts {
     /// Remove an existing schedule.
     #[arg(long, conflicts_with = "at")]
     pub clear: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Cli, Command};
+
+    #[test]
+    fn add_accepts_explicit_magnet_option() {
+        let cli = Cli::try_parse_from([
+            "fetchx",
+            "add",
+            "--magnet",
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+        ])
+        .expect("--magnet should satisfy add source requirement");
+        let Command::Add(options) = cli.command else {
+            panic!("expected add command");
+        };
+        assert!(options.url.is_none());
+        assert!(options.magnet.is_some());
+    }
+
+    #[test]
+    fn add_accepts_positional_local_torrent_source() {
+        let cli = Cli::try_parse_from(["fetchx", "add", "fixture.torrent"])
+            .expect("positional torrent path should be accepted");
+        let Command::Add(options) = cli.command else {
+            panic!("expected add command");
+        };
+        assert_eq!(options.url.as_deref(), Some("fixture.torrent"));
+        assert!(options.magnet.is_none());
+    }
 }

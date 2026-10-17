@@ -1,9 +1,10 @@
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadSource, DownloadStatus, EngineKind,
-    Timestamp,
+    Timestamp, parse_torrent_metainfo,
 };
 use fetchx_storage::DownloadRepository;
 use reqwest::{Client, StatusCode, Url};
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::{
+    io::AsyncReadExt,
     sync::{Mutex, watch},
     time::{Instant, sleep_until, timeout},
 };
@@ -95,6 +97,10 @@ pub enum Aria2ClientError {
     InvalidPath,
     #[error("aria2 URI is empty or contains embedded credentials")]
     InvalidUri,
+    #[error("aria2 torrent file is missing, invalid, or exceeds the supported size")]
+    InvalidTorrentFile,
+    #[error("aria2 could not read the torrent file")]
+    TorrentFileRead,
     #[error("aria2 download rate limit must be greater than zero")]
     InvalidRateLimit,
 }
@@ -213,6 +219,62 @@ impl Aria2Client {
             Err(Aria2ClientError::Rpc { code }) => {
                 return Err(Aria2ClientError::Rpc { code });
             }
+            Err(_) => return Err(Aria2ClientError::AmbiguousAddUri),
+        };
+        Aria2Gid::new(result).map_err(|_| Aria2ClientError::AmbiguousAddUri)
+    }
+
+    pub async fn add_torrent_file_with_rate_limit(
+        &self,
+        torrent_path: &Path,
+        destination: &Path,
+        max_download_rate_bytes_per_second: Option<u64>,
+    ) -> Result<Aria2Gid, Aria2ClientError> {
+        let metadata = tokio::fs::symlink_metadata(torrent_path)
+            .await
+            .map_err(|_| Aria2ClientError::TorrentFileRead)?;
+        if !metadata.file_type().is_file()
+            || !torrent_path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+            || metadata.len() > 8 * 1024 * 1024
+        {
+            return Err(Aria2ClientError::InvalidTorrentFile);
+        }
+        let torrent_file = tokio::fs::File::open(torrent_path)
+            .await
+            .map_err(|_| Aria2ClientError::TorrentFileRead)?;
+        let mut bytes = Vec::new();
+        torrent_file
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| Aria2ClientError::TorrentFileRead)?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(Aria2ClientError::InvalidTorrentFile);
+        }
+        parse_torrent_metainfo(&bytes).map_err(|_| Aria2ClientError::InvalidTorrentFile)?;
+        let encoded = BASE64.encode(bytes);
+        let directory = destination.to_str().ok_or(Aria2ClientError::InvalidPath)?;
+        let mut options = json!({
+            "dir": directory,
+            "bt-max-peers": MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD.to_string(),
+            "allow-overwrite": "false",
+            "auto-file-renaming": "false",
+        });
+        if let Some(rate) = max_download_rate_bytes_per_second {
+            if rate == 0 {
+                return Err(Aria2ClientError::InvalidRateLimit);
+            }
+            options["max-download-limit"] = json!(rate.to_string());
+        }
+        let result: String = match self
+            .call("aria2.addTorrent", vec![json!(encoded), json!([]), options])
+            .await
+        {
+            Ok(result) => result,
+            Err(Aria2ClientError::Rpc { code }) => return Err(Aria2ClientError::Rpc { code }),
             Err(_) => return Err(Aria2ClientError::AmbiguousAddUri),
         };
         Aria2Gid::new(result).map_err(|_| Aria2ClientError::AmbiguousAddUri)
@@ -919,13 +981,23 @@ where
                 Err(error) => return Err(DownloadEngineError::Io(error)),
             }
         }
-        let gid = client
-            .add_uri_with_rate_limit(
-                item.source().url(),
-                item.destination(),
-                max_download_rate_bytes_per_second,
-            )
-            .await?;
+        let gid = if let Some(torrent_path) = item.source().torrent_file_path() {
+            client
+                .add_torrent_file_with_rate_limit(
+                    &torrent_path,
+                    item.destination(),
+                    max_download_rate_bytes_per_second,
+                )
+                .await?
+        } else {
+            client
+                .add_uri_with_rate_limit(
+                    item.source().url(),
+                    item.destination(),
+                    max_download_rate_bytes_per_second,
+                )
+                .await?
+        };
         self.gids.lock().await.insert(
             id,
             RuntimeGid {
@@ -995,7 +1067,7 @@ where
         item: &DownloadItem,
         status: &Aria2Status,
     ) -> Result<(), DownloadEngineError> {
-        if item.source().is_magnet() {
+        if item.source().is_magnet() || item.source().is_torrent_file() {
             return validate_torrent_directory(item.destination(), status).await;
         }
         let metadata = tokio::fs::symlink_metadata(item.destination())
@@ -1354,6 +1426,44 @@ mod tests {
             )
             .contains(TEST_TOKEN)
         );
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn torrent_file_submission_uses_add_torrent_and_confined_options()
+    -> Result<(), Box<dyn Error>> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let metainfo = b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:\
+                         01234567890123456789ee";
+        let root = tempfile::tempdir()?;
+        let torrent_path = root.path().join("sample.torrent");
+        tokio::fs::write(&torrent_path, metainfo).await?;
+        let destination = root.path().join("downloads");
+        let (endpoint, mut requests, server) =
+            start_server([MockReply::Result(json!("0123456789abcdef"))]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+
+        client
+            .add_torrent_file_with_rate_limit(&torrent_path, &destination, Some(8192))
+            .await?;
+
+        let request = requests.recv().await.ok_or("missing addTorrent request")?;
+        assert_eq!(request["method"], "aria2.addTorrent");
+        assert_eq!(request["params"][0], format!("token:{TEST_TOKEN}"));
+        assert_eq!(
+            BASE64.decode(request["params"][1].as_str().ok_or("missing metainfo")?)?,
+            metainfo
+        );
+        assert_eq!(request["params"][2], json!([]));
+        assert_eq!(
+            request["params"][3]["dir"],
+            destination.to_string_lossy().as_ref()
+        );
+        assert_eq!(request["params"][3]["bt-max-peers"], "1");
+        assert_eq!(request["params"][3]["max-download-limit"], "8192");
+        assert_eq!(request["params"][3]["allow-overwrite"], "false");
         server.await?;
         Ok(())
     }

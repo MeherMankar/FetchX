@@ -106,6 +106,12 @@ interface DownloadService {
     );
 
     [Throws=MobileApiError]
+    string add_torrent_file_download(
+        string torrent_path,
+        DownloadPriorityDto priority
+    );
+
+    [Throws=MobileApiError]
     string add_media_download(
         string url,
         string filename,

@@ -35,13 +35,13 @@ use fetchx_downloader::{
 use fetchx_models::EngineKind;
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, FileName, Timestamp,
-    parse_magnet_uri,
+    parse_magnet_uri, parse_torrent_metainfo,
 };
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
 use fetchx_storage::{Database, SqliteDownloadRepository};
 use thiserror::Error;
-use tokio::{fs, process::Command, sync::Mutex, time::Duration};
+use tokio::{fs, io::AsyncReadExt, process::Command, sync::Mutex, time::Duration};
 use tracing::{info, warn};
 
 pub use config::{
@@ -235,6 +235,76 @@ impl CoreServices {
         let mut item = DownloadItem::new(id, source, filename, destination, created_at);
         item.set_priority_at(priority, created_at)
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        self.queue
+            .enqueue(item)
+            .await
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))?;
+        Ok(id)
+    }
+
+    /// Validates and queues a local `.torrent` file through shared aria2.
+    ///
+    /// The download destination is a directory. If omitted, each torrent is
+    /// isolated in a directory named from its info hash and download ID.
+    pub async fn enqueue_torrent_file(
+        &self,
+        torrent_path: PathBuf,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+    ) -> Result<DownloadId, CoreServicesError> {
+        if !torrent_path
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent"))
+        {
+            return Err(CoreServicesError::InvalidTorrent(
+                "source must have a .torrent extension".to_owned(),
+            ));
+        }
+        let metadata = fs::symlink_metadata(&torrent_path)
+            .await
+            .map_err(CoreServicesError::Io)?;
+        if !metadata.file_type().is_file() || metadata.len() > 8 * 1024 * 1024 {
+            return Err(CoreServicesError::InvalidTorrent(
+                "source must be a regular torrent file no larger than 8 MiB".to_owned(),
+            ));
+        }
+        let torrent_file = fs::File::open(&torrent_path)
+            .await
+            .map_err(CoreServicesError::Io)?;
+        let mut torrent_bytes = Vec::new();
+        torrent_file
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_end(&mut torrent_bytes)
+            .await
+            .map_err(CoreServicesError::Io)?;
+        if torrent_bytes.len() > 8 * 1024 * 1024 {
+            return Err(CoreServicesError::InvalidTorrent(
+                "torrent file exceeds 8 MiB".to_owned(),
+            ));
+        }
+        let torrent = parse_torrent_metainfo(&torrent_bytes)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        if !self.engine_runtime.is_available(EngineKind::Aria2) {
+            return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
+        }
+        let torrent_path = fs::canonicalize(torrent_path)
+            .await
+            .map_err(CoreServicesError::Io)?;
+        let source = DownloadSource::new_torrent_file(&torrent_path, EngineKind::Aria2)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        let filename = FileName::new(torrent.name)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        let id = DownloadId::new();
+        let destination = destination.unwrap_or_else(|| {
+            self.downloads_dir
+                .join(format!("torrent-{}-{id}", torrent.info_hash))
+        });
+        let created_at = Timestamp::now()
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        let mut item = DownloadItem::new(id, source, filename, destination, created_at);
+        item.set_priority_at(priority, created_at)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
         self.queue
             .enqueue(item)
             .await
@@ -481,6 +551,8 @@ pub enum CoreServicesError {
     Engine(String),
     #[error("invalid magnet download request: {0}")]
     InvalidMagnet(String),
+    #[error("invalid torrent file request: {0}")]
+    InvalidTorrent(String),
     #[error("required download engine is unavailable: {0:?}")]
     UnavailableEngine(EngineKind),
     #[error("queue error: {0}")]
@@ -613,6 +685,40 @@ mod tests {
                 EngineKind::Aria2
             ))
         ));
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_torrent_enqueue_validates_metainfo_before_engine_availability()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        let malformed = root.path().join("malformed.torrent");
+        tokio::fs::write(&malformed, b"not bencode").await?;
+        assert!(matches!(
+            services
+                .enqueue_torrent_file(malformed, DownloadPriority::Normal, None)
+                .await,
+            Err(super::CoreServicesError::InvalidTorrent(_))
+        ));
+
+        let valid = root.path().join("valid.torrent");
+        tokio::fs::write(
+            &valid,
+            b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:\
+              01234567890123456789ee",
+        )
+        .await?;
+        assert!(matches!(
+            services
+                .enqueue_torrent_file(valid, DownloadPriority::Normal, None)
+                .await,
+            Err(super::CoreServicesError::UnavailableEngine(
+                EngineKind::Aria2
+            ))
+        ));
+        assert!(services.queue().snapshot().await?.items.is_empty());
         services.shutdown().await?;
         Ok(())
     }

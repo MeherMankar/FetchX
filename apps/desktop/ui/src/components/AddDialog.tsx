@@ -70,6 +70,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [error, setError] = useState<string | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
+  const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
+  const isTorrent = isMagnet || isTorrentFile;
 
   // Load engine availability once when the dialog opens.
   // No polling — one fetch on mount.
@@ -108,7 +110,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       // Pass the selected engine to the backend.
       // The backend re-validates availability — the frontend cannot bypass this check.
       // Omit engine_kind when Direct HTTP is selected to use the backend default.
-      const download = engineKind === "yt_dlp"
+      const download = engineKind === "yt_dlp" && !isTorrent
         ? await addMediaDownload(
             url,
             selectedFormatId || undefined,
@@ -116,7 +118,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
           )
         : await addDownload({
             url,
-            engine_kind: isMagnet ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
+            engine_kind: isTorrent ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
           });
 
       if (priority !== "normal") {
@@ -186,7 +188,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               type="text"
               inputMode="url"
               className="field-input"
-              placeholder="https://example.com/file.zip or magnet:?xt=urn:btih:…"
+              placeholder="https://example.com/file.zip, magnet URI, or local .torrent path"
               value={url}
               onChange={(e) => {
                 setUrl(e.target.value);
@@ -200,6 +202,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             <p className="field-hint">
               {isMagnet
                 ? "Magnet links use aria2. Tracker credentials and unsafe tracker protocols are rejected."
+                : isTorrentFile
+                  ? "Local .torrent files use aria2. Metainfo paths are validated before the job is queued."
                 : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
           </div>
@@ -214,13 +218,13 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               <select
                 id="add-engine"
                 className="field-select"
-                value={isMagnet ? "aria2" : engineKind}
+                value={isTorrent ? "aria2" : engineKind}
                 onChange={(e) => {
                   setEngineKind(e.target.value as EngineKind);
                   setFormats(null);
                   setSelectedFormatId("");
                 }}
-                disabled={busy || formatsLoading || isMagnet}
+                disabled={busy || formatsLoading || isTorrent}
                 aria-describedby="add-engine-hint"
               >
                 {ENGINE_OPTIONS.map(({ kind, label }) => {
@@ -235,8 +239,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               </select>
             )}
             <p id="add-engine-hint" className="field-hint">
-              {isMagnet
-                ? "Magnet links require aria2."
+              {isTorrent
+                ? "Magnet links and local torrent files require aria2."
                 : "Only available engines are selectable. Configure engines in Settings."}
             </p>
           </div>

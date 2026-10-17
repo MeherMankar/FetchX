@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use fetchx_core_services::CoreServices;
 use fetchx_downloader::validate_http_source_url;
 use fetchx_models::{
@@ -16,8 +18,13 @@ use crate::{
 pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
     // ── URL validation (same logic as desktop add command) ──────────────
 
-    let magnet = if opts.url.starts_with("magnet:") {
-        match parse_magnet_uri(&opts.url) {
+    let input = opts
+        .magnet
+        .as_deref()
+        .or(opts.url.as_deref())
+        .unwrap_or_default();
+    let magnet = if input.starts_with("magnet:") {
+        match parse_magnet_uri(input) {
             Ok(info) => Some(info),
             Err(error) => {
                 output::print_error(json, &format!("invalid magnet URI: {error}"));
@@ -27,10 +34,17 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
     } else {
         None
     };
-    let canonical_url = if magnet.is_some() {
-        opts.url.clone()
+    let torrent_path = (magnet.is_none()
+        && !input.contains("://")
+        && Path::new(input)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent")))
+    .then(|| Path::new(input).to_path_buf());
+    let canonical_url = if magnet.is_some() || torrent_path.is_some() {
+        input.to_owned()
     } else {
-        match validate_http_source_url(&opts.url) {
+        match validate_http_source_url(input) {
             Ok(url) => url,
             Err(error) => {
                 output::print_error(json, &format!("invalid URL: {error}"));
@@ -38,7 +52,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             }
         }
     };
-    let parsed_url = if magnet.is_none() {
+    let parsed_url = if magnet.is_none() && torrent_path.is_none() {
         match Url::parse(&canonical_url) {
             Ok(url) => Some(url),
             Err(error) => {
@@ -52,7 +66,11 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
 
     // ── Engine resolution ────────────────────────────────────────────────
 
-    let engine_kind = match resolve_engine(magnet.is_some(), opts.engine.as_deref()) {
+    let engine_kind = match resolve_engine(
+        magnet.is_some(),
+        torrent_path.is_some(),
+        opts.engine.as_deref(),
+    ) {
         Ok(e) => e,
         Err(msg) => {
             output::print_error(json, &msg);
@@ -89,6 +107,17 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             Ok(id) => id,
             Err(error) => {
                 output::print_error(json, &format!("failed to enqueue magnet: {error}"));
+                return exit::GENERAL_ERROR;
+            }
+        }
+    } else if let Some(torrent_path) = torrent_path {
+        match svc
+            .enqueue_torrent_file(torrent_path, priority, opts.destination)
+            .await
+        {
+            Ok(id) => id,
+            Err(error) => {
+                output::print_error(json, &format!("failed to enqueue torrent: {error}"));
                 return exit::GENERAL_ERROR;
             }
         }
@@ -185,14 +214,18 @@ pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
     }
 }
 
-fn resolve_engine(is_magnet: bool, engine: Option<&str>) -> Result<EngineKind, String> {
-    if is_magnet {
+fn resolve_engine(
+    is_magnet: bool,
+    is_torrent_file: bool,
+    engine: Option<&str>,
+) -> Result<EngineKind, String> {
+    if is_magnet || is_torrent_file {
         if engine.is_none() {
             return Ok(EngineKind::Aria2);
         }
         return match parse_engine(engine) {
             Ok(EngineKind::Aria2) => Ok(EngineKind::Aria2),
-            Ok(_) => Err("magnet downloads require the aria2 engine".to_owned()),
+            Ok(_) => Err("magnet and torrent downloads require the aria2 engine".to_owned()),
             Err(error) => Err(error),
         };
     }
@@ -225,12 +258,13 @@ mod tests {
 
     #[test]
     fn magnet_defaults_to_aria2_and_suggests_a_confined_name() {
-        assert_eq!(resolve_engine(true, None), Ok(EngineKind::Aria2));
+        assert_eq!(resolve_engine(true, false, None), Ok(EngineKind::Aria2));
+        assert_eq!(resolve_engine(false, true, None), Ok(EngineKind::Aria2));
         let metadata = parse_magnet_uri(
             "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=..%5C..%5Cunsafe%3Aname%3F.torrent",
         )
         .expect("valid test magnet");
         assert_eq!(metadata.suggested_filename(), "unsafename.torrent");
-        assert!(resolve_engine(true, Some("direct-http")).is_err());
+        assert!(resolve_engine(true, false, Some("direct-http")).is_err());
     }
 }

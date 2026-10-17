@@ -8,6 +8,8 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+bendy = "0.6.1"
+sha1 = "0.10.6"
 serde.workspace = true
 thiserror.workspace = true
 url.workspace = true

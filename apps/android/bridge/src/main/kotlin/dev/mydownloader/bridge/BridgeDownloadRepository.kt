@@ -119,6 +119,8 @@ class BridgeDownloadRepository(
     ): String = withContext(Dispatchers.IO) {
         if (url.trimStart().startsWith("magnet:", ignoreCase = true)) {
             service.addMagnetDownload(url.trim(), mapPriorityToDto(priority))
+        } else if (!url.contains("://") && url.trim().endsWith(".torrent", ignoreCase = true)) {
+            service.addTorrentFileDownload(url.trim(), mapPriorityToDto(priority))
         } else if (isMediaUrl(url)) {
             val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) destinationPath else "$destinationPath.mp4"
             service.addMediaDownload(url, fileName, safeDestination, mapPriorityToDto(priority), null)

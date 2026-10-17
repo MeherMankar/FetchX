@@ -236,6 +236,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bendy"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57cdd50c5215bbee87e15d24a8ab68bdc9c3602adbf43bfc831815ddbf1e62ee"
+dependencies = [
+ "rustversion",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1176,6 +1186,7 @@ dependencies = [
 name = "fetchx-downloader"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "fetchx-core",
  "fetchx-models",
  "fetchx-storage",
@@ -1183,6 +1194,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -1193,8 +1205,10 @@ dependencies = [
 name = "fetchx-models"
 version = "0.1.0"
 dependencies = [
+ "bendy",
  "serde",
  "serde_json",
+ "sha1",
  "thiserror 2.0.21",
  "url",
  "uuid",

@@ -9,6 +9,7 @@ mod progress;
 mod resources;
 mod schedule;
 mod timestamp;
+mod torrent;
 
 pub use download::{
     DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus, FileName,
@@ -24,3 +25,7 @@ pub use resources::{
 };
 pub use schedule::{DownloadSchedule, DownloadScheduleError};
 pub use timestamp::{Timestamp, TimestampError};
+pub use torrent::{
+    TorrentFile, TorrentFileSelection, TorrentMetadata, TorrentMetadataError,
+    parse_torrent_metainfo,
+};

@@ -99,24 +99,37 @@ impl AppState {
         } else {
             None
         };
-        let canonical_url = match magnet {
-            Some(_) => request.url.clone(),
-            None => {
+        let torrent_path = (magnet.is_none()
+            && !request.url.contains("://")
+            && Path::new(&request.url)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("torrent")))
+        .then(|| Path::new(&request.url).to_path_buf());
+        let canonical_url = match (magnet.is_some(), torrent_path.is_some()) {
+            (true, _) | (_, true) => request.url.clone(),
+            (false, false) => {
                 validate_http_source_url(&request.url).map_err(|_| IpcError::invalid_request())?
             }
         };
-        let parsed_url = if magnet.is_none() {
+        let parsed_url = if magnet.is_none() && torrent_path.is_none() {
             Some(Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?)
         } else {
             None
         };
         if extension.is_some()
-            && (format_id.is_none() || magnet.is_some() || !extension_is_safe(extension.as_deref()))
+            && (format_id.is_none()
+                || magnet.is_some()
+                || torrent_path.is_some()
+                || !extension_is_safe(extension.as_deref()))
         {
             return Err(IpcError::invalid_request());
         }
         // Resolve the requested engine, defaulting to DirectHttp when unspecified.
-        let engine_kind = match (magnet.is_some(), request.engine_kind) {
+        let engine_kind = match (
+            magnet.is_some() || torrent_path.is_some(),
+            request.engine_kind,
+        ) {
             (true, None) => EngineKind::Aria2,
             (true, Some(EngineKind::Aria2)) => EngineKind::Aria2,
             (true, Some(_)) => return Err(IpcError::invalid_request()),
@@ -134,6 +147,15 @@ impl AppState {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
             let id = core_services
                 .enqueue_magnet(&canonical_url, DownloadPriority::Normal, None)
+                .await
+                .map_err(|_| IpcError::internal())?;
+            return self.get(id).await;
+        }
+
+        if let Some(torrent_path) = torrent_path {
+            let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+            let id = core_services
+                .enqueue_torrent_file(torrent_path, DownloadPriority::Normal, None)
                 .await
                 .map_err(|_| IpcError::internal())?;
             return self.get(id).await;

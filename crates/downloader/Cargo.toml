@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+base64.workspace = true
 fetchx-core = { path = "../core" }
 fetchx-models = { path = "../models" }
 fetchx-storage = { path = "../storage" }
@@ -20,3 +21,5 @@ netstat2.workspace = true
 [lints]
 workspace = true
 
+[dev-dependencies]
+tempfile = "3"

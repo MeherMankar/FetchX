@@ -183,6 +183,24 @@ impl DownloadService {
         })
     }
 
+    pub fn add_torrent_file_download(
+        &self,
+        torrent_path: String,
+        priority: DownloadPriorityDto,
+    ) -> Result<String, MobileApiError> {
+        self.with_inner(|inner| {
+            let id = inner
+                .runtime
+                .block_on(inner.core.enqueue_torrent_file(
+                    PathBuf::from(torrent_path),
+                    priority_from_dto(priority),
+                    None,
+                ))
+                .map_err(MobileApiError::from)?;
+            Ok(id.to_string())
+        })
+    }
+
     pub fn add_media_download(
         &self,
         url: String,
