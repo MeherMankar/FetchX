@@ -1202,7 +1202,7 @@ mod tests {
             fs::write(&path, b"not executable")?;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
             let error = Aria2Supervisor::start_with_launcher(
-                Aria2SupervisorConfig::new(path),
+                Aria2SupervisorConfig::new(&path),
                 Arc::new(FakeLauncher::new([])),
             )
             .await
