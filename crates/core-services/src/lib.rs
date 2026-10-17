@@ -1176,6 +1176,82 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn torrent_destination_rejects_symlinks_but_accepts_configured_symlink_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir()?;
+        let downloads_dir = root.path().join("downloads");
+        let outside_dir = root.path().join("outside");
+        let real_subdirectory = downloads_dir.join("real-subdirectory");
+        tokio::fs::create_dir_all(&downloads_dir).await?;
+        tokio::fs::create_dir_all(&outside_dir).await?;
+        tokio::fs::create_dir_all(&real_subdirectory).await?;
+
+        let linked_inside = downloads_dir.join("linked-inside");
+        symlink(&real_subdirectory, &linked_inside)?;
+        let linked_destination = linked_inside.join("torrent");
+        assert!(
+            super::validate_torrent_destination(&linked_destination, &downloads_dir)
+                .await
+                .is_err(),
+            "symlinked destination ancestors inside the root must be rejected"
+        );
+        assert!(
+            !real_subdirectory.join("torrent").exists(),
+            "rejected symlink destinations must not create a path at their target"
+        );
+
+        let linked_outside = downloads_dir.join("linked-outside");
+        symlink(&outside_dir, &linked_outside)?;
+        assert!(
+            super::validate_torrent_destination(&linked_outside, &downloads_dir)
+                .await
+                .is_err(),
+            "destination symlinks escaping the root must be rejected"
+        );
+
+        let configured_root_link = root.path().join("downloads-link");
+        symlink(&downloads_dir, &configured_root_link)?;
+        let configured_destination = configured_root_link.join("torrent");
+        let validated =
+            super::validate_torrent_destination(&configured_destination, &configured_root_link)
+                .await
+                .map_err(std::io::Error::other)?;
+        assert!(validated.starts_with(tokio::fs::canonicalize(&downloads_dir).await?));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn torrent_destination_rejects_unc_and_drive_paths_outside_the_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let downloads_dir = root.path().join("downloads");
+        tokio::fs::create_dir_all(&downloads_dir).await?;
+        let unc = std::path::PathBuf::from(r"\\server\share\outside");
+        assert!(
+            super::validate_torrent_destination(&unc, &downloads_dir)
+                .await
+                .is_err()
+        );
+
+        let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        let drive_path = std::path::PathBuf::from(format!(
+            "{system_drive}\\fetchx-outside-downloads-{}",
+            fetchx_models::DownloadId::new()
+        ));
+        assert!(
+            super::validate_torrent_destination(&drive_path, &downloads_dir)
+                .await
+                .is_err()
+        );
+        assert!(!drive_path.exists());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn restart_recovers_persisted_download_state() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;

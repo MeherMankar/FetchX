@@ -27,6 +27,7 @@ pub fn validate_transition(
             | (DownloadStatus::Downloading, DownloadStatus::Cancelled)
             | (DownloadStatus::Downloading, DownloadStatus::Seeding)
             | (DownloadStatus::Downloading, DownloadStatus::Recovering)
+            | (DownloadStatus::Completed, DownloadStatus::Seeding)
             | (DownloadStatus::Paused, DownloadStatus::Downloading)
             | (DownloadStatus::Paused, DownloadStatus::Queued)
             | (DownloadStatus::Paused, DownloadStatus::Cancelled)
@@ -213,7 +214,7 @@ mod tests {
         DownloadStatus::Stopped,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 37] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 38] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
         (DownloadStatus::Queued, DownloadStatus::Paused),
         (DownloadStatus::Preparing, DownloadStatus::Paused),
@@ -243,6 +244,7 @@ mod tests {
         (DownloadStatus::MetadataAcquiring, DownloadStatus::Queued),
         (DownloadStatus::Downloading, DownloadStatus::Seeding),
         (DownloadStatus::Downloading, DownloadStatus::Recovering),
+        (DownloadStatus::Completed, DownloadStatus::Seeding),
         (DownloadStatus::Seeding, DownloadStatus::Stopped),
         (DownloadStatus::Seeding, DownloadStatus::Paused),
         (DownloadStatus::Seeding, DownloadStatus::Cancelled),
@@ -396,6 +398,51 @@ mod tests {
                 status
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn torrent_lifecycle_persists_completion_seeding_stop_and_failure()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let state_machine = DownloadStateMachine::new(repository.clone());
+
+        let downloading = item(DownloadStatus::Downloading)?;
+        let seeding_id = downloading.id();
+        repository.create(&downloading).await?;
+        state_machine
+            .transition(seeding_id, DownloadStatus::Completed)
+            .await?;
+        state_machine
+            .transition(seeding_id, DownloadStatus::Seeding)
+            .await?;
+        state_machine
+            .transition(seeding_id, DownloadStatus::Stopped)
+            .await?;
+        assert_eq!(
+            repository
+                .get(seeding_id)
+                .await?
+                .ok_or("seeding download not found")?
+                .status(),
+            DownloadStatus::Stopped
+        );
+
+        let failed = item(DownloadStatus::Downloading)?;
+        let failed_id = failed.id();
+        repository.create(&failed).await?;
+        state_machine
+            .transition(failed_id, DownloadStatus::Failed)
+            .await?;
+        assert_eq!(
+            repository
+                .get(failed_id)
+                .await?
+                .ok_or("failed download not found")?
+                .status(),
+            DownloadStatus::Failed
+        );
         Ok(())
     }
 

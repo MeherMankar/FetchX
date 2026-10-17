@@ -563,6 +563,10 @@ mod tests {
         assert_eq!(metadata.trackers, ["https://tracker.test/a"]);
         assert_eq!(metadata.info_hash.len(), 40);
 
+        let all_selection = metadata.selection_all();
+        assert_eq!(all_selection.selected_count(), 2);
+        assert_eq!(all_selection.selected_size(&metadata)?, 8);
+
         let mut selection = metadata.selection_none();
         selection.set_selected(1, true)?;
         assert_eq!(selection.selected_count(), 1);
@@ -596,6 +600,9 @@ mod tests {
             Err(TorrentMetadataError::ConflictingPaths)
         );
         for unsafe_segment in [
+            "",
+            ".",
+            "..",
             "/absolute",
             r"\rooted",
             r"\\server",

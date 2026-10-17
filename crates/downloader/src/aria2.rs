@@ -1032,6 +1032,21 @@ where
                 .await?;
             return Ok(None);
         }
+        if status.seeder == Some(true)
+            && matches!(
+                status.status,
+                Aria2DownloadStatus::Active
+                    | Aria2DownloadStatus::Waiting
+                    | Aria2DownloadStatus::Complete
+            )
+            && metadata.seed_state != TorrentSeedState::Seeding
+        {
+            metadata.seed_state = TorrentSeedState::Seeding;
+            metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+            metadata_repository
+                .update_torrent_metadata(&metadata)
+                .await?;
+        }
         self.gids.lock().await.insert(
             id,
             RuntimeGid {
@@ -1372,6 +1387,11 @@ where
                                 && (item.source().is_magnet() || item.source().is_torrent_file())
                                 && item.status() == DownloadStatus::Downloading
                             {
+                                self.validate_completed_output(item, &status).await?;
+                                *item = self
+                                    .state_machine
+                                    .transition(id, DownloadStatus::Completed)
+                                    .await?;
                                 *item = self
                                     .state_machine
                                     .transition(id, DownloadStatus::Seeding)
@@ -1388,16 +1408,26 @@ where
                         }
                         Aria2DownloadStatus::Complete => {
                             self.persist_progress(item, &mut expected_updated_at, &status).await?;
-                            // If aria2 is still seeding, transition to Seeding rather than
-                            // Completed. Download complete != torrent task stopped.
+                            self.validate_completed_output(item, &status).await?;
+                            // Record completion before entering the seeding lifecycle.
                             if status.seeder == Some(true)
                                 && (item.source().is_magnet() || item.source().is_torrent_file())
                             {
-                                *item = self.state_machine.transition(id, DownloadStatus::Seeding).await?;
+                                if item.status() == DownloadStatus::Downloading {
+                                    *item = self
+                                        .state_machine
+                                        .transition(id, DownloadStatus::Completed)
+                                        .await?;
+                                }
+                                if item.status() == DownloadStatus::Completed {
+                                    *item = self
+                                        .state_machine
+                                        .transition(id, DownloadStatus::Seeding)
+                                        .await?;
+                                }
                                 // Keep polling to track upload stats while seeding.
                                 expected_updated_at = item.updated_at();
                             } else {
-                                self.validate_completed_output(item, &status).await?;
                                 *item = self.state_machine.transition(id, DownloadStatus::Completed).await?;
                                 self.gids.lock().await.remove(&id);
                                 self.persist_torrent_gid(id, None).await?;
@@ -2740,6 +2770,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_persists_active_seeding_state_reported_by_aria2() -> Result<(), Box<dyn Error>>
+    {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let (id, item) = create_torrent_item(
+            &database,
+            &root.path().join("output"),
+            Some("0123456789abcdef"),
+        )
+        .await?;
+        let mut active_seeding = torrent_status_json("active");
+        active_seeding["seeder"] = json!("true");
+        let (endpoint, mut requests, server) =
+            start_server([MockReply::Result(active_seeding)]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let engine = Aria2Engine::new(database.downloads(), client.clone())
+            .with_torrent_metadata_repository(database.torrent_metadata());
+
+        let restored = engine
+            .restore_persisted_gid(id, &item, &client, 1)
+            .await?
+            .ok_or("active seeding GID was not restored")?;
+        assert_eq!(restored.as_str(), "0123456789abcdef");
+        assert_eq!(
+            requests.recv().await.ok_or("missing tellStatus request")?["method"],
+            "aria2.tellStatus"
+        );
+        let metadata = database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("missing torrent metadata")?;
+        assert_eq!(metadata.seed_state, TorrentSeedState::Seeding);
+        assert_eq!(metadata.aria2_gid.as_deref(), Some("0123456789abcdef"));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn recovery_fails_a_failed_gid_without_resubmitting_and_clears_it()
     -> Result<(), Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;
@@ -2889,6 +2958,104 @@ mod tests {
                 .and_then(|row| row.aria2_gid),
             Some("0123456789abcdef".to_owned())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_seeding_status_remains_seeding_across_repeated_polls()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("output");
+        tokio::fs::create_dir_all(&destination).await?;
+        tokio::fs::write(destination.join("payload.bin"), b"data").await?;
+        let (id, _) = create_torrent_item(&database, &destination, None).await?;
+
+        let complete_seeding_status = json!({
+            "gid":"0123456789abcdef",
+            "status":"complete",
+            "completedLength":"4",
+            "totalLength":"4",
+            "downloadSpeed":"0",
+            "uploadSpeed":"1",
+            "uploadLength":"1",
+            "connections":"0",
+            "numSeeders":"0",
+            "seeder":"true",
+            "infoHash":"0123456789abcdef0123456789abcdef01234567",
+            "errorCode":"0",
+            "bittorrent":{"announceList":[]}
+        });
+        let (endpoint, mut requests, server) = start_server([
+            MockReply::Result(json!("0123456789abcdef")),
+            MockReply::Result(complete_seeding_status.clone()),
+            MockReply::Result(json!([])),
+            MockReply::Result(complete_seeding_status),
+            MockReply::Result(json!([])),
+            MockReply::Result(json!("0123456789abcdef")),
+        ])
+        .await?;
+        let engine = Aria2Engine::with_poll_interval(
+            database.downloads(),
+            make_client(endpoint, Duration::from_secs(1))?,
+            Duration::from_millis(10),
+        )
+        .with_torrent_metadata_repository(database.torrent_metadata());
+        let (cancel_sender, cancellation) = watch::channel(false);
+        let download = tokio::spawn(async move { engine.download(id, cancellation).await });
+
+        let methods = [
+            "aria2.addUri",
+            "aria2.tellStatus",
+            "aria2.getPeers",
+            "aria2.tellStatus",
+        ];
+        for expected in methods {
+            let request = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await?
+                .ok_or("aria2 request channel closed")?;
+            assert_eq!(request["method"], expected);
+        }
+        assert_eq!(
+            database
+                .downloads()
+                .get(id)
+                .await?
+                .ok_or("torrent download not found")?
+                .status(),
+            DownloadStatus::Seeding
+        );
+
+        cancel_sender.send(true)?;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), download).await??,
+            Err(DownloadEngineError::Cancelled)
+        ));
+        assert_eq!(
+            database
+                .downloads()
+                .get(id)
+                .await?
+                .ok_or("torrent download not found")?
+                .status(),
+            DownloadStatus::Cancelled
+        );
+        let mut remaining = [
+            requests.recv().await.ok_or("missing second getPeers")?,
+            requests.recv().await.ok_or("missing aria2.remove")?,
+        ];
+        remaining.sort_by_key(|request| request["method"].to_string());
+        assert!(
+            remaining
+                .iter()
+                .any(|request| request["method"] == "aria2.getPeers")
+        );
+        assert!(
+            remaining
+                .iter()
+                .any(|request| request["method"] == "aria2.remove")
+        );
+        server.await?;
         Ok(())
     }
 

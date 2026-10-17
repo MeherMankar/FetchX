@@ -1787,6 +1787,22 @@ mod tests {
         ))
     }
 
+    fn mixed_workload_item(
+        engine: EngineKind,
+        source: &str,
+        filename: &str,
+    ) -> Result<DownloadItem, Box<dyn std::error::Error>> {
+        Ok(DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(source, engine)?,
+            FileName::new(filename)?,
+            std::env::temp_dir()
+                .join(format!("fetchx-queue-{}", DownloadId::new()))
+                .join(filename),
+            Timestamp::from_unix_millis(1),
+        ))
+    }
+
     async fn setup_engine() -> Result<
         (
             SqliteDownloadRepository,
@@ -2179,6 +2195,7 @@ mod tests {
         policy.max_active_downloads = 4;
         policy.global_bandwidth_bytes_per_second = Some(8000);
         policy.engine_bandwidth_limits.aria2_bytes_per_second = Some(1500);
+        policy.engine_bandwidth_limits.hls_bytes_per_second = Some(1200);
         let resources = RuntimeResourceManager::new(&policy).expect("valid resource policy");
         let aria2 = resources
             .bandwidth_for(EngineKind::Aria2)
@@ -2188,6 +2205,13 @@ mod tests {
             .expect("yt-dlp limits should be created");
         assert_eq!(aria2.external_download_rate_bytes_per_second, Some(1500));
         assert_eq!(yt_dlp.external_download_rate_bytes_per_second, Some(2000));
+        assert_eq!(
+            resources
+                .bandwidth_for(EngineKind::Hls)
+                .expect("HLS limits should be created")
+                .external_download_rate_bytes_per_second,
+            Some(1200)
+        );
         assert_eq!(
             resources
                 .bandwidth_for(EngineKind::DirectHttp)
@@ -2201,6 +2225,142 @@ mod tests {
             aria2.global.as_ref().expect("global limiter"),
             yt_dlp.global.as_ref().expect("global limiter"),
         ));
+    }
+
+    #[tokio::test]
+    async fn mixed_direct_turbo_hls_aria2_and_torrent_workload_obeys_shared_resource_limits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let (release_sender, release) = watch::channel(false);
+        let engine = Arc::new(WaitingEngine {
+            repository: repository.clone(),
+            release,
+            supports_yt_dlp_pause: true,
+            desired_connections: 8,
+        });
+        let mut policy = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
+        policy.max_active_downloads = 3;
+        policy.global_connection_limit = 5;
+        policy.per_download_connection_limit = 2;
+        policy.global_bandwidth_bytes_per_second = Some(12_000);
+        policy.per_download_bandwidth_bytes_per_second = Some(5_000);
+        policy.engine_bandwidth_limits.hls_bytes_per_second = Some(3_000);
+        policy.engine_bandwidth_limits.aria2_bytes_per_second = Some(2_000);
+        let resources = RuntimeResourceManager::new(&policy)?;
+        let direct_bandwidth = resources.bandwidth_for(EngineKind::DirectHttp)?;
+        let hls_bandwidth = resources.bandwidth_for(EngineKind::Hls)?;
+        let first_torrent_bandwidth = resources.bandwidth_for(EngineKind::Aria2)?;
+        let second_torrent_bandwidth = resources.bandwidth_for(EngineKind::Aria2)?;
+        assert_eq!(
+            direct_bandwidth
+                .per_download
+                .as_ref()
+                .map(|limiter| limiter.bytes_per_second()),
+            Some(4_000)
+        );
+        assert_eq!(
+            hls_bandwidth.external_download_rate_bytes_per_second,
+            Some(3_000)
+        );
+        assert_eq!(
+            first_torrent_bandwidth.external_download_rate_bytes_per_second,
+            Some(2_000)
+        );
+        assert_eq!(
+            second_torrent_bandwidth.external_download_rate_bytes_per_second,
+            Some(2_000)
+        );
+        assert!(Arc::ptr_eq(
+            direct_bandwidth.global.as_ref().expect("global limiter"),
+            first_torrent_bandwidth
+                .global
+                .as_ref()
+                .expect("global limiter"),
+        ));
+        assert!(!Arc::ptr_eq(
+            first_torrent_bandwidth
+                .per_download
+                .as_ref()
+                .expect("first torrent limiter"),
+            second_torrent_bandwidth
+                .per_download
+                .as_ref()
+                .expect("second torrent limiter"),
+        ));
+        let manager = QueueManager::new_with_resource_policy(repository, engine, policy).await?;
+
+        for (engine, source, filename) in [
+            (
+                EngineKind::DirectHttp,
+                "https://example.test/direct.bin",
+                "direct.bin",
+            ),
+            (
+                EngineKind::DirectHttp,
+                "https://example.test/turbo.bin",
+                "turbo.bin",
+            ),
+            (
+                EngineKind::Hls,
+                "https://example.test/video.m3u8",
+                "hls.bin",
+            ),
+            (
+                EngineKind::Aria2,
+                "https://example.test/aria.bin",
+                "aria.bin",
+            ),
+            (
+                EngineKind::Aria2,
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                "torrent-one",
+            ),
+            (
+                EngineKind::Aria2,
+                "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567",
+                "torrent-two",
+            ),
+            (
+                EngineKind::YtDlp,
+                "https://example.test/video",
+                "video.webm",
+            ),
+        ] {
+            manager
+                .enqueue(mixed_workload_item(engine, source, filename)?)
+                .await?;
+        }
+
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if snapshot.active.len() == 3 && snapshot.queued.len() == 4 {
+                    return Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert_eq!(snapshot.active.len(), 3);
+        assert_eq!(snapshot.queued.len(), 4);
+        assert!(
+            snapshot
+                .active
+                .iter()
+                .all(|download| download.allocated_connections <= 2)
+        );
+        assert!(
+            snapshot
+                .active
+                .iter()
+                .map(|download| download.allocated_connections)
+                .sum::<usize>()
+                <= 5
+        );
+        manager.shutdown().await?;
+        drop(release_sender);
+        Ok(())
     }
 
     #[tokio::test]
