@@ -21,6 +21,7 @@ use tracing::{info, warn};
 
 const MAX_ACTIVE_DOWNLOADS: usize = 32;
 const MAX_GLOBAL_CONNECTIONS: usize = 64;
+const MAX_PER_DOWNLOAD_CONNECTIONS: usize = 32;
 const DEFAULT_DESIRED_CONNECTIONS: usize = 4;
 const FAIRNESS_STARTS: u8 = 3;
 
@@ -495,7 +496,9 @@ where
             demand = resource_receiver.recv() => {
                 if let Some(demand) = demand {
                     if let Some(worker) = active.get_mut(&demand.download_id) {
-                        worker.desired = demand.desired_concurrency.clamp(1, 8);
+                        worker.desired = demand
+                            .desired_concurrency
+                            .clamp(1, MAX_PER_DOWNLOAD_CONNECTIONS);
                         worker.active = demand.active_concurrency.min(worker.desired);
                     }
                     allocate_resources(
@@ -1429,6 +1432,7 @@ mod tests {
         repository: SqliteDownloadRepository,
         release: watch::Receiver<bool>,
         supports_yt_dlp_pause: bool,
+        desired_connections: usize,
     }
 
     impl DownloadEngine for WaitingEngine {
@@ -1466,7 +1470,7 @@ mod tests {
                 .ok_or(DownloadEngineError::ResourceManagerUnavailable)?
                 .send(ResourceDemand {
                     download_id: id,
-                    desired_concurrency: 4,
+                    desired_concurrency: self.desired_connections,
                     active_concurrency: 1,
                 })
                 .await
@@ -1617,6 +1621,7 @@ mod tests {
             repository: repository.clone(),
             release,
             supports_yt_dlp_pause: true,
+            desired_connections: 4,
         });
         Ok((repository, engine, release_sender))
     }
@@ -1811,6 +1816,105 @@ mod tests {
         );
         completion??;
         manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn global_budget_bounds_extreme_workers_across_queue_and_priority_changes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let (release_sender, release) = watch::channel(false);
+        let engine = Arc::new(WaitingEngine {
+            repository: repository.clone(),
+            release,
+            supports_yt_dlp_pause: true,
+            desired_connections: 32,
+        });
+        let manager = QueueManager::new(
+            repository,
+            engine,
+            QueueConfig {
+                max_active_downloads: 3,
+                global_connection_limit: 16,
+            },
+        )
+        .await?;
+        let downloads = [item()?, item()?, item()?];
+        for download in downloads {
+            manager.enqueue(download).await?;
+        }
+
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if snapshot.active.len() == 3
+                    && snapshot
+                        .active
+                        .iter()
+                        .all(|worker| worker.desired_connections == 32)
+                {
+                    return Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert!(
+            snapshot
+                .active
+                .iter()
+                .map(|worker| worker.allocated_connections)
+                .sum::<usize>()
+                <= snapshot.global_connection_limit
+        );
+        let cancelled_id = snapshot.active[0].item.id();
+        manager
+            .set_priority(cancelled_id, DownloadPriority::Low)
+            .await?;
+
+        let mut high_priority = item()?;
+        let high_priority_id = high_priority.id();
+        high_priority.set_priority_at(DownloadPriority::High, high_priority.updated_at())?;
+        manager.enqueue(high_priority).await?;
+        manager.cancel(cancelled_id).await?;
+
+        let replacement_snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if snapshot
+                    .active
+                    .iter()
+                    .any(|worker| worker.item.id() == high_priority_id)
+                    && snapshot
+                        .active
+                        .iter()
+                        .all(|worker| worker.desired_connections == 32)
+                {
+                    return Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert_eq!(replacement_snapshot.active.len(), 3);
+        assert!(
+            replacement_snapshot
+                .active
+                .iter()
+                .map(|worker| worker.allocated_connections)
+                .sum::<usize>()
+                <= replacement_snapshot.global_connection_limit
+        );
+        assert!(
+            replacement_snapshot
+                .active
+                .iter()
+                .all(|worker| worker.desired_connections == 32)
+        );
+
+        manager.shutdown().await?;
+        drop(release_sender);
         Ok(())
     }
 
@@ -2412,6 +2516,7 @@ mod tests {
             repository: repository.clone(),
             release,
             supports_yt_dlp_pause: false,
+            desired_connections: 4,
         });
         let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
         let download = DownloadItem::new(
