@@ -367,6 +367,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_does_not_resurrect_terminal_or_stopped_downloads()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let state_machine = DownloadStateMachine::new(repository.clone());
+
+        for status in [
+            DownloadStatus::Completed,
+            DownloadStatus::Failed,
+            DownloadStatus::Cancelled,
+            DownloadStatus::Stopped,
+        ] {
+            let download = item(status)?;
+            let id = download.id();
+            repository.create(&download).await?;
+
+            assert!(
+                state_machine.recover_interrupted(id).await?.is_none(),
+                "{status:?} downloads must not be resurrected"
+            );
+            assert_eq!(
+                repository
+                    .get(id)
+                    .await?
+                    .ok_or("download not found")?
+                    .status(),
+                status
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn transition_timestamp_does_not_precede_a_future_progress_checkpoint()
     -> Result<(), Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;

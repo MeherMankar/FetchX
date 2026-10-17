@@ -831,40 +831,85 @@ async fn validate_torrent_destination(
         }
     }
 
-    // Create directory so canonicalize can succeed, but first check metadata to
-    // detect symlinks / junctions before creation.
-    if destination.exists() {
-        let meta = tokio::fs::symlink_metadata(destination)
-            .await
-            .map_err(|e| format!("destination stat error: {e}"))?;
-        if meta.file_type().is_symlink() {
-            return Err("torrent destination must not be a symlink".to_owned());
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-            if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-                return Err(
-                    "torrent destination must not be a reparse point or junction".to_owned(),
-                );
-            }
-        }
-    } else {
-        // Create directories, then check they are not a symlink.
-        tokio::fs::create_dir_all(destination)
-            .await
-            .map_err(|e| format!("cannot create torrent destination: {e}"))?;
-    }
-
-    // Canonicalize both paths and confirm containment.
-    let canonical_dest = tokio::fs::canonicalize(destination)
-        .await
-        .map_err(|e| format!("cannot canonicalize destination: {e}"))?;
     let canonical_root = tokio::fs::canonicalize(downloads_dir)
         .await
         .map_err(|e| format!("cannot canonicalize downloads dir: {e}"))?;
 
+    // Validate every existing ancestor before creating any missing directories.
+    // This prevents a rejected traversal or symlink from causing writes outside
+    // the configured root.
+    let mut ancestor = Some(destination);
+    let mut found_root = false;
+    while let Some(path) = ancestor {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => {
+                let canonical_ancestor = tokio::fs::canonicalize(path)
+                    .await
+                    .map_err(|e| format!("cannot canonicalize destination ancestor: {e}"))?;
+                if !canonical_ancestor.starts_with(&canonical_root) {
+                    return Err(format!(
+                        "torrent destination '{}' must be under downloads directory '{}'",
+                        canonical_ancestor.display(),
+                        canonical_root.display()
+                    ));
+                }
+                if canonical_ancestor == canonical_root {
+                    found_root = true;
+                    break;
+                }
+                if metadata.file_type().is_symlink() {
+                    return Err("torrent destination must not contain a symlink".to_owned());
+                }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+                    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                        return Err(
+                            "torrent destination must not contain a reparse point or junction"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("destination stat error: {error}")),
+        }
+        ancestor = path.parent();
+    }
+    if !found_root {
+        return Err(format!(
+            "torrent destination '{}' must be under downloads directory '{}'",
+            destination.display(),
+            canonical_root.display()
+        ));
+    }
+
+    tokio::fs::create_dir_all(destination)
+        .await
+        .map_err(|e| format!("cannot create torrent destination: {e}"))?;
+
+    let destination_metadata = tokio::fs::symlink_metadata(destination)
+        .await
+        .map_err(|e| format!("destination stat error: {e}"))?;
+    if !destination_metadata.is_dir() {
+        return Err("torrent destination must be a directory".to_owned());
+    }
+    if destination_metadata.file_type().is_symlink() {
+        return Err("torrent destination must not be a symlink".to_owned());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if destination_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("torrent destination must not be a reparse point or junction".to_owned());
+        }
+    }
+
+    let canonical_dest = tokio::fs::canonicalize(destination)
+        .await
+        .map_err(|e| format!("cannot canonicalize destination: {e}"))?;
     if !canonical_dest.starts_with(&canonical_root) {
         return Err(format!(
             "torrent destination '{}' must be under downloads directory '{}'",
@@ -1091,6 +1136,16 @@ mod tests {
         assert!(
             matches!(&result, Err(super::CoreServicesError::InvalidTorrent(msg)) if msg.contains("must be under")),
             "expected traversal rejection, got: {result:?}"
+        );
+
+        let outside_destination = root.path().join("outside-downloads-root");
+        let result =
+            super::validate_torrent_destination(&outside_destination, services.downloads_dir())
+                .await;
+        assert!(result.is_err());
+        assert!(
+            !outside_destination.exists(),
+            "rejected destinations must not be created outside the downloads root"
         );
         services.shutdown().await?;
         Ok(())
