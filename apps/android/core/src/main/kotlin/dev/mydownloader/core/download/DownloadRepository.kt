@@ -10,6 +10,44 @@ data class YtDlpFormat(
     val platform: String? = null,
 )
 
+data class TorrentTelemetry(
+    val downloadSpeedBytesPerSecond: Long?,
+    val uploadSpeedBytesPerSecond: Long?,
+    val downloadedBytes: Long?,
+    val uploadedBytes: Long?,
+    val peerCount: Long?,
+    val completedPeerCount: Long?,
+    val seedCount: Long?,
+    val shareRatio: Double?,
+    val seeding: Boolean?,
+    val trackerUris: List<String>?,
+)
+
+data class TorrentFile(
+    val index: Int,
+    val path: String,
+    val sizeBytes: Long,
+)
+
+data class TorrentMetadata(
+    val name: String,
+    val infoHash: String,
+    val totalSizeBytes: Long,
+    val files: List<TorrentFile>,
+)
+
+interface TorrentDownloadRepository : DownloadRepository {
+    suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata
+    suspend fun addTorrentFile(
+        torrentPath: String,
+        selectedFileIndexes: List<Int>,
+        destinationDirectory: String,
+        priority: DownloadPriority,
+    ): String
+    suspend fun torrentTelemetry(downloadId: String): TorrentTelemetry?
+    suspend fun stopTorrentSeeding(downloadId: String)
+}
+
 /**
  * Repository interface for download operations.
  *

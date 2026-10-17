@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.TorrentTelemetry
 
 /**
  * A single row in the downloads list.
@@ -38,6 +39,8 @@ fun DownloadItemRow(
     onCancel: () -> Unit,
     onRemove: () -> Unit,
     onRetry: () -> Unit,
+    torrentTelemetry: TorrentTelemetry? = null,
+    onStopSeeding: () -> Unit = {},
     onPlayFile: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -67,10 +70,12 @@ fun DownloadItemRow(
                 )
                 PriorityBadge(priority = item.priority)
             }
-
             when (val state = item.state) {
                 is DownloadState.Active -> {
                     Spacer(modifier = Modifier.height(6.dp))
+                    torrentTelemetry?.let { telemetry ->
+                        TorrentTelemetryDetails(telemetry)
+                    }
 
                     // Capture nullable properties as locals so the compiler can smart-cast them.
                     val totalBytes = state.totalBytes
@@ -175,11 +180,15 @@ fun DownloadItemRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
+                    torrentTelemetry?.let { telemetry ->
+                        TorrentTelemetryDetails(telemetry)
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
                         TextButton(onClick = onPause) { Text("Pause") }
+                        TextButton(onClick = onStopSeeding) { Text("Stop seeding") }
                         TextButton(onClick = onCancel) { Text("Cancel") }
                     }
                 }
@@ -312,6 +321,37 @@ fun DownloadItemRow(
             }
         }
     }
+}
+
+@Composable
+private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {
+    val peers = telemetry.peerCount?.toString() ?: "Unavailable"
+    val completedPeers = telemetry.completedPeerCount?.toString() ?: "Unavailable"
+    val seeds = telemetry.seedCount?.toString() ?: "Unavailable"
+    val download = telemetry.downloadSpeedBytesPerSecond?.let(::formatSpeed) ?: "Unavailable"
+    val upload = telemetry.uploadSpeedBytesPerSecond?.let(::formatSpeed) ?: "Unavailable"
+    Text(
+        text = "Peers: $peers · Complete: $completedPeers · Seeds: $seeds",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        text = "Down: $download · Up: $upload",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        text = "Uploaded: ${telemetry.uploadedBytes?.let(::formatBytes) ?: "Unavailable"} · Ratio: ${telemetry.shareRatio?.let { "%.3f".format(it) } ?: "Unavailable"}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        text = "Trackers: ${telemetry.trackerUris?.joinToString().takeUnless { it.isNullOrBlank() } ?: "Unavailable"}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+    )
 }
 
 // ── Priority badge ──────────────────────────────────────────────────────────────

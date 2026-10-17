@@ -54,6 +54,7 @@ pub async fn status(svc: &CoreServices, id_str: String, json: bool) -> ExitCode 
                             "downloaded_bytes": value.downloaded_bytes,
                             "uploaded_bytes": value.uploaded_bytes,
                             "peer_count": value.peer_count,
+                            "completed_peer_count": value.completed_peer_count,
                             "seed_count": value.seed_count,
                             "share_ratio": value.share_ratio,
                             "seeding": value.seeding,
@@ -94,6 +95,13 @@ pub async fn status(svc: &CoreServices, id_str: String, json: bool) -> ExitCode 
                         "  Peers:        {}",
                         telemetry
                             .peer_count
+                            .map(|count| count.to_string())
+                            .unwrap_or_else(|| "unavailable".to_owned())
+                    );
+                    println!(
+                        "  Complete peers:{}",
+                        telemetry
+                            .completed_peer_count
                             .map(|count| count.to_string())
                             .unwrap_or_else(|| "unavailable".to_owned())
                     );

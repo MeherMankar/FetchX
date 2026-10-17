@@ -249,6 +249,14 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                     <p>
                       {torrentInspection.name} · {formatBytes(torrentInspection.total_size)}
                     </p>
+                    <p>
+                      Selected: {selectedTorrentFiles.length} file(s) ·{" "}
+                      {formatBytes(
+                        torrentInspection.files
+                          .filter((file) => selectedTorrentFiles.includes(file.index))
+                          .reduce((total, file) => total + file.size, 0),
+                      )}
+                    </p>
                     <div className="button-row">
                       <button
                         className="button button-secondary"
@@ -265,6 +273,31 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                         Deselect all
                       </button>
                     </div>
+                    {Array.from(new Set(
+                      torrentInspection.files.flatMap((file) => {
+                        const segments = file.path.split("/");
+                        return segments.slice(0, -1).map((_, index) =>
+                          segments.slice(0, index + 1).join("/"),
+                        );
+                      }),
+                    )).map((directory) => {
+                      const indexes = torrentInspection.files
+                        .filter((file) => file.path.startsWith(`${directory}/`))
+                        .map((file) => file.index);
+                      const allSelected = indexes.every((index) => selectedTorrentFiles.includes(index));
+                      return (
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          key={directory}
+                          onClick={() => setSelectedTorrentFiles((current) => allSelected
+                            ? current.filter((index) => !indexes.includes(index))
+                            : Array.from(new Set([...current, ...indexes])).sort((a, b) => a - b))}
+                        >
+                          {allSelected ? "Deselect" : "Select"} {directory}
+                        </button>
+                      );
+                    })}
                     {torrentInspection.files.map((file) => (
                       <label className="torrent-file-option" key={file.index}>
                         <input

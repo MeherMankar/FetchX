@@ -75,10 +75,24 @@ pub struct TorrentTelemetryDto {
     pub downloaded_bytes: Option<u64>,
     pub uploaded_bytes: Option<u64>,
     pub peer_count: Option<u64>,
+    pub completed_peer_count: Option<u64>,
     pub seed_count: Option<u64>,
     pub share_ratio: Option<f64>,
     pub seeding: Option<bool>,
     pub tracker_uris: Option<Vec<String>>,
+}
+
+pub struct TorrentFileDto {
+    pub index: u32,
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+pub struct TorrentMetadataDto {
+    pub name: String,
+    pub info_hash: String,
+    pub total_size_bytes: u64,
+    pub files: Vec<TorrentFileDto>,
 }
 
 /// Event emitted by the Rust backend, forwarded to Kotlin listeners.

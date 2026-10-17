@@ -26,8 +26,8 @@ use tokio::{
 use tracing::warn;
 
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentTelemetryDto, YtDlpFormatDto,
-    event_to_dto, item_to_dto, priority_from_dto,
+    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentFileDto, TorrentMetadataDto,
+    TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto, priority_from_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -195,6 +195,59 @@ impl DownloadService {
                     PathBuf::from(torrent_path),
                     priority_from_dto(priority),
                     None,
+                ))
+                .map_err(MobileApiError::from)?;
+            Ok(id.to_string())
+        })
+    }
+
+    pub fn inspect_torrent_file(
+        &self,
+        torrent_path: String,
+    ) -> Result<TorrentMetadataDto, MobileApiError> {
+        self.with_inner(|inner| {
+            let metadata = inner
+                .runtime
+                .block_on(inner.core.inspect_torrent_file(PathBuf::from(torrent_path)))
+                .map_err(MobileApiError::from)?;
+            let files = metadata
+                .files
+                .iter()
+                .enumerate()
+                .map(|(index, file)| {
+                    Ok(TorrentFileDto {
+                        index: u32::try_from(index).map_err(|_| {
+                            MobileApiError::Validation("torrent has too many files".to_owned())
+                        })?,
+                        path: file.path.join("/"),
+                        size_bytes: file.size,
+                    })
+                })
+                .collect::<Result<Vec<_>, MobileApiError>>()?;
+            Ok(TorrentMetadataDto {
+                name: metadata.name,
+                info_hash: metadata.info_hash,
+                total_size_bytes: metadata.total_size,
+                files,
+            })
+        })
+    }
+
+    pub fn add_torrent_file_download_selected(
+        &self,
+        torrent_path: String,
+        priority: DownloadPriorityDto,
+        selected_file_indexes: Vec<u32>,
+        destination: String,
+    ) -> Result<String, MobileApiError> {
+        self.with_inner(|inner| {
+            let id = inner
+                .runtime
+                .block_on(inner.core.enqueue_torrent_file_with_selection(
+                    PathBuf::from(torrent_path),
+                    priority_from_dto(priority),
+                    Some(PathBuf::from(destination)),
+                    Some(selected_file_indexes),
                 ))
                 .map_err(MobileApiError::from)?;
             Ok(id.to_string())
@@ -489,6 +542,7 @@ impl DownloadService {
                 downloaded_bytes: value.downloaded_bytes,
                 uploaded_bytes: value.uploaded_bytes,
                 peer_count: value.peer_count,
+                completed_peer_count: value.completed_peer_count,
                 seed_count: value.seed_count,
                 share_ratio: value.share_ratio,
                 seeding: value.seeding,

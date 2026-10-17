@@ -519,6 +519,8 @@ pub struct TorrentTelemetry {
     pub downloaded_bytes: Option<u64>,
     pub uploaded_bytes: Option<u64>,
     pub peer_count: Option<u64>,
+    /// Number of connected remote peers that aria2 reports as complete seeders.
+    pub completed_peer_count: Option<u64>,
     pub seed_count: Option<u64>,
     /// Upload / download ratio. `None` when either counter is unavailable or download is zero.
     pub share_ratio: Option<f64>,

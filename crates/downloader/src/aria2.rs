@@ -8,6 +8,7 @@ use fetchx_models::{
 };
 use fetchx_storage::{
     DownloadRepository, SqliteTorrentMetadataRepository, TorrentMetadataRepository,
+    TorrentSeedState,
 };
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -415,6 +416,28 @@ impl Aria2Client {
         Ok(status)
     }
 
+    pub async fn get_peers(&self, gid: &Aria2Gid) -> Result<Vec<Aria2Peer>, Aria2ClientError> {
+        let peers: Vec<RawPeer> = self
+            .call("aria2.getPeers", vec![json!(gid.as_str())])
+            .await
+            .map_err(map_gid_error)?;
+        peers
+            .into_iter()
+            .map(|peer| {
+                let seeder = peer
+                    .seeder
+                    .as_deref()
+                    .map(|value| match value {
+                        "true" => Ok(true),
+                        "false" => Ok(false),
+                        _ => Err(Aria2ClientError::InvalidResponse),
+                    })
+                    .transpose()?;
+                Ok(Aria2Peer { seeder })
+            })
+            .collect()
+    }
+
     pub async fn pause(&self, gid: &Aria2Gid) -> Result<Aria2Gid, Aria2ClientError> {
         let result: String = self
             .call("aria2.pause", vec![json!(gid.as_str())])
@@ -772,13 +795,19 @@ impl Aria2Status {
             upload_speed_bps: self.upload_speed,
             downloaded_bytes: Some(self.completed_bytes),
             uploaded_bytes: self.uploaded_bytes,
-            peer_count: Some(self.connections as u64),
+            peer_count: None,
+            completed_peer_count: None,
             seed_count: self.num_seeders,
             share_ratio,
             seeding: self.seeder,
             tracker_uris: self.tracker_uris.clone(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Aria2Peer {
+    pub seeder: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -804,6 +833,11 @@ struct RawStatus {
     #[serde(rename = "errorCode")]
     error_code: Option<String>,
     bittorrent: Option<RawBittorrent>,
+}
+
+#[derive(Deserialize)]
+struct RawPeer {
+    seeder: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -911,7 +945,15 @@ where
         {
             return Err(DownloadEngineError::Aria2ReconciliationRequired);
         }
-        Ok(Some(status.torrent_telemetry()))
+        let peers = client.get_peers(&gid).await?;
+        let completed_peer_count = peers
+            .iter()
+            .filter(|peer| peer.seeder == Some(true))
+            .count();
+        let mut telemetry = status.torrent_telemetry();
+        telemetry.peer_count = Some(peers.len() as u64);
+        telemetry.completed_peer_count = Some(completed_peer_count as u64);
+        Ok(Some(telemetry))
     }
 
     async fn current_client(&self) -> Result<(Aria2Client, u64), DownloadEngineError> {
@@ -974,10 +1016,15 @@ where
         {
             return Err(DownloadEngineError::Aria2ReconciliationRequired);
         }
-        if matches!(
-            status.status,
-            Aria2DownloadStatus::Error | Aria2DownloadStatus::Removed
-        ) {
+        if matches!(status.status, Aria2DownloadStatus::Error) {
+            metadata.aria2_gid = None;
+            metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+            metadata_repository
+                .update_torrent_metadata(&metadata)
+                .await?;
+            return Err(DownloadEngineError::Aria2TransferFailed);
+        }
+        if status.status == Aria2DownloadStatus::Removed {
             metadata.aria2_gid = None;
             metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
             metadata_repository
@@ -1015,6 +1062,50 @@ where
         metadata_repository
             .update_torrent_metadata(&metadata)
             .await?;
+        Ok(())
+    }
+
+    async fn persist_torrent_status(
+        &self,
+        id: DownloadId,
+        client: &Aria2Client,
+        status: &Aria2Status,
+    ) -> Result<(), DownloadEngineError> {
+        let Some(repository) = &self.torrent_metadata else {
+            return Ok(());
+        };
+        let Some(mut metadata) = repository.get_torrent_metadata(id).await? else {
+            return Err(DownloadEngineError::Aria2ReconciliationRequired);
+        };
+        if status
+            .info_hash
+            .as_deref()
+            .is_some_and(|hash| !hash.eq_ignore_ascii_case(&metadata.info_hash))
+        {
+            return Err(DownloadEngineError::Aria2ReconciliationRequired);
+        }
+        let peers = client.get_peers(&status.gid).await?;
+        metadata.metadata_state = if status.info_hash.is_some() {
+            "ready".to_owned()
+        } else {
+            metadata.metadata_state
+        };
+        if status.seeder == Some(true) {
+            metadata.seed_state = TorrentSeedState::Seeding;
+        }
+        if let Some(uploaded) = status.uploaded_bytes {
+            metadata.uploaded_bytes = uploaded;
+        }
+        if let Some(speed) = status.upload_speed {
+            metadata.upload_speed_bps = speed;
+        }
+        metadata.peer_count = u64::try_from(peers.len())
+            .map_err(|_| DownloadEngineError::Aria2ReconciliationRequired)?;
+        if let Some(seed_count) = status.num_seeders {
+            metadata.seed_count = seed_count;
+        }
+        metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+        repository.update_torrent_metadata(&metadata).await?;
         Ok(())
     }
 
@@ -1109,16 +1200,42 @@ where
         };
         let mut gid = match runtime_gid.or(persisted_gid) {
             Some(gid) => {
-                if resuming_paused || item.status() == DownloadStatus::Preparing {
-                    client.unpause(&gid).await.map_err(|error| {
-                        if matches!(&error, Aria2ClientError::InvalidGid) {
-                            DownloadEngineError::Aria2ReconciliationRequired
-                        } else {
-                            error.into()
+                if (resuming_paused || item.status() == DownloadStatus::Preparing)
+                    && (item.source().is_magnet() || item.source().is_torrent_file())
+                {
+                    let status = client.tell_status(&gid).await?;
+                    if status.status == Aria2DownloadStatus::Error {
+                        self.persist_torrent_gid(id, None).await?;
+                        return Err(DownloadEngineError::Aria2TransferFailed);
+                    }
+                    if status.status == Aria2DownloadStatus::Removed {
+                        self.gids.lock().await.remove(&id);
+                        self.persist_torrent_gid(id, None).await?;
+                        None
+                    } else {
+                        if status.status == Aria2DownloadStatus::Paused {
+                            client.unpause(&gid).await.map_err(|error| {
+                                if matches!(&error, Aria2ClientError::InvalidGid) {
+                                    DownloadEngineError::Aria2ReconciliationRequired
+                                } else {
+                                    error.into()
+                                }
+                            })?;
                         }
-                    })?;
+                        Some(gid)
+                    }
+                } else {
+                    if resuming_paused || item.status() == DownloadStatus::Preparing {
+                        client.unpause(&gid).await.map_err(|error| {
+                            if matches!(&error, Aria2ClientError::InvalidGid) {
+                                DownloadEngineError::Aria2ReconciliationRequired
+                            } else {
+                                error.into()
+                            }
+                        })?;
+                    }
+                    Some(gid)
                 }
-                Some(gid)
             }
             None if item.progress().downloaded_bytes() == 0 || self.supervisor.is_some() => None,
             None => return Err(DownloadEngineError::Aria2ReconciliationRequired),
@@ -1239,6 +1356,9 @@ where
                         }
                         Err(error) => return Err(error.into()),
                     };
+                    if item.source().is_magnet() || item.source().is_torrent_file() {
+                        self.persist_torrent_status(id, &client, &status).await?;
+                    }
                     report_aria2_demand(
                         control,
                         id,
@@ -1629,7 +1749,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, error::Error, path::PathBuf, time::Duration};
+    use std::{
+        collections::VecDeque,
+        error::Error,
+        path::{Path, PathBuf},
+        time::Duration,
+    };
 
     use fetchx_core::DownloadStateMachine;
     use fetchx_models::{DownloadId, DownloadSource, FileName};
@@ -1647,8 +1772,8 @@ mod tests {
 
     use super::{
         AMBIGUOUS_ADD_URI_DIAGNOSTIC, Aria2Client, Aria2ClientConfig, Aria2ClientError,
-        Aria2DownloadStatus, Aria2Engine, Aria2Gid, Aria2Status, DownloadStatus, EngineKind,
-        Timestamp, validate_torrent_directory,
+        Aria2DownloadStatus, Aria2Engine, Aria2Gid, Aria2Status, DownloadEngineError,
+        DownloadStatus, EngineKind, Timestamp, validate_torrent_directory,
     };
     use crate::{DownloadEngine, ManagedDownloadEngine};
     use fetchx_models::DownloadItem;
@@ -2506,6 +2631,267 @@ mod tests {
         Ok(id)
     }
 
+    async fn create_torrent_item(
+        database: &Database,
+        destination: &Path,
+        gid: Option<&str>,
+    ) -> Result<(DownloadId, DownloadItem), Box<dyn Error>> {
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                EngineKind::Aria2,
+            )?,
+            FileName::new("sample")?,
+            destination.to_path_buf(),
+            now,
+        );
+        database.downloads().create(&item).await?;
+        database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(item.source().url().to_owned()),
+                local_torrent_path: None,
+                info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                torrent_name: "sample".to_owned(),
+                destination: destination.to_path_buf(),
+                metadata_state: "pending".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                aria2_gid: gid.map(str::to_owned),
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+        Ok((id, item))
+    }
+
+    fn torrent_status_json(status: &str) -> Value {
+        json!({
+            "gid":"0123456789abcdef",
+            "status":status,
+            "completedLength":"0",
+            "totalLength":"100",
+            "downloadSpeed":"0",
+            "connections":"0",
+            "infoHash":"0123456789abcdef0123456789abcdef01234567",
+            "errorCode":"0"
+        })
+    }
+
+    #[tokio::test]
+    async fn recovery_restores_active_and_completed_gids_without_unpausing_complete_tasks()
+    -> Result<(), Box<dyn Error>> {
+        for (aria_status, expected) in [
+            ("active", Aria2DownloadStatus::Active),
+            ("complete", Aria2DownloadStatus::Complete),
+        ] {
+            let database = Database::connect("sqlite::memory:").await?;
+            let root = tempfile::tempdir()?;
+            let (id, item) = create_torrent_item(
+                &database,
+                &root.path().join("output"),
+                Some("0123456789abcdef"),
+            )
+            .await?;
+            let (endpoint, mut requests, server) =
+                start_server([MockReply::Result(torrent_status_json(aria_status))]).await?;
+            let client = make_client(endpoint, Duration::from_secs(1))?;
+            let engine = Aria2Engine::new(database.downloads(), client.clone())
+                .with_torrent_metadata_repository(database.torrent_metadata());
+            let restored = engine
+                .restore_persisted_gid(id, &item, &client, 1)
+                .await?
+                .ok_or("valid GID was not restored")?;
+            assert_eq!(restored.as_str(), "0123456789abcdef");
+            assert_eq!(
+                requests.recv().await.ok_or("missing tellStatus")?["method"],
+                "aria2.tellStatus"
+            );
+            assert_eq!(
+                expected,
+                Aria2Status::try_from({
+                    let mut raw = raw_status(aria_status, "0", "100");
+                    raw.info_hash = Some("0123456789abcdef0123456789abcdef01234567".to_owned());
+                    raw
+                })?
+                .status
+            );
+            assert_eq!(
+                database
+                    .torrent_metadata()
+                    .get_torrent_metadata(id)
+                    .await?
+                    .and_then(|row| row.aria2_gid),
+                Some("0123456789abcdef".to_owned())
+            );
+            server.await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_fails_a_failed_gid_without_resubmitting_and_clears_it()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let (id, item) = create_torrent_item(
+            &database,
+            &root.path().join("output"),
+            Some("0123456789abcdef"),
+        )
+        .await?;
+        let (endpoint, mut requests, server) =
+            start_server([MockReply::Result(torrent_status_json("error"))]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let engine = Aria2Engine::new(database.downloads(), client.clone())
+            .with_torrent_metadata_repository(database.torrent_metadata());
+        assert!(matches!(
+            engine.restore_persisted_gid(id, &item, &client, 1).await,
+            Err(DownloadEngineError::Aria2TransferFailed)
+        ));
+        assert_eq!(
+            requests.recv().await.ok_or("missing tellStatus")?["method"],
+            "aria2.tellStatus"
+        );
+        assert_eq!(
+            database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .and_then(|row| row.aria2_gid),
+            None
+        );
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_clears_removed_gid_and_resubmits_with_same_download_id()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("output");
+        let (id, item) =
+            create_torrent_item(&database, &destination, Some("0123456789abcdef")).await?;
+        let (endpoint, mut requests, server) = start_server([
+            MockReply::Result(torrent_status_json("removed")),
+            MockReply::Result(json!("bbbbbbbbbbbbbbbb")),
+        ])
+        .await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let engine = Aria2Engine::new(database.downloads(), client.clone())
+            .with_torrent_metadata_repository(database.torrent_metadata());
+        assert!(
+            engine
+                .restore_persisted_gid(id, &item, &client, 1)
+                .await?
+                .is_none()
+        );
+        engine.submit_job(id, &item, &client, 1, None, None).await?;
+        assert_eq!(
+            requests.recv().await.ok_or("missing status request")?["method"],
+            "aria2.tellStatus"
+        );
+        assert_eq!(
+            requests.recv().await.ok_or("missing addUri")?["method"],
+            "aria2.addUri"
+        );
+        let metadata = database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("missing torrent metadata")?;
+        assert_eq!(metadata.download_id, id);
+        assert_eq!(metadata.aria2_gid.as_deref(), Some("bbbbbbbbbbbbbbbb"));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_clears_stale_gid_and_persists_replacement_gid() -> Result<(), Box<dyn Error>>
+    {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("output");
+        let (id, item) =
+            create_torrent_item(&database, &destination, Some("0123456789abcdef")).await?;
+        let (endpoint, mut requests, server) = start_server([
+            MockReply::RpcError(1),
+            MockReply::Result(json!("bbbbbbbbbbbbbbbb")),
+        ])
+        .await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let engine = Aria2Engine::new(database.downloads(), client.clone())
+            .with_torrent_metadata_repository(database.torrent_metadata());
+        assert!(
+            engine
+                .restore_persisted_gid(id, &item, &client, 1)
+                .await?
+                .is_none()
+        );
+        engine.submit_job(id, &item, &client, 1, None, None).await?;
+        assert_eq!(
+            requests.recv().await.ok_or("missing stale GID query")?["method"],
+            "aria2.tellStatus"
+        );
+        assert_eq!(
+            requests.recv().await.ok_or("missing replacement addUri")?["method"],
+            "aria2.addUri"
+        );
+        let metadata = database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("missing torrent metadata")?;
+        assert_eq!(metadata.download_id, id);
+        assert_eq!(metadata.aria2_gid.as_deref(), Some("bbbbbbbbbbbbbbbb"));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_preserves_gid_when_aria2_is_unavailable() -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let (id, item) = create_torrent_item(
+            &database,
+            &root.path().join("output"),
+            Some("0123456789abcdef"),
+        )
+        .await?;
+        let client = make_client(
+            "http://127.0.0.1:1/jsonrpc".to_owned(),
+            Duration::from_millis(50),
+        )?;
+        let engine = Aria2Engine::new(database.downloads(), client.clone())
+            .with_torrent_metadata_repository(database.torrent_metadata());
+        assert!(matches!(
+            engine.restore_persisted_gid(id, &item, &client, 1).await,
+            Err(DownloadEngineError::Aria2Client(
+                Aria2ClientError::Transport
+            )) | Err(DownloadEngineError::Aria2Client(Aria2ClientError::Timeout))
+        ));
+        assert_eq!(
+            database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .and_then(|row| row.aria2_gid),
+            Some("0123456789abcdef".to_owned())
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn process_generation_replaces_stale_runtime_gid() -> Result<(), Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;
@@ -2812,7 +3198,8 @@ mod tests {
         assert_eq!(telemetry.upload_speed_bps, Some(25_000));
         assert_eq!(telemetry.downloaded_bytes, Some(800_000));
         assert_eq!(telemetry.uploaded_bytes, Some(100_000));
-        assert_eq!(telemetry.peer_count, Some(8));
+        assert_eq!(telemetry.peer_count, None);
+        assert_eq!(telemetry.completed_peer_count, None);
         assert_eq!(telemetry.seed_count, Some(12));
         assert_eq!(telemetry.seeding, Some(false));
         assert_eq!(
@@ -2828,6 +3215,33 @@ mod tests {
             telemetry
                 .share_ratio
                 .is_some_and(|r| (r - 0.125).abs() < 1e-9)
+        );
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_peers_counts_only_actual_peers_and_recognizes_seeders()
+    -> Result<(), Box<dyn Error>> {
+        let (endpoint, mut requests, server) = start_server([MockReply::Result(json!([
+            {"seeder":"true"},
+            {"seeder":"false"},
+            {"seeder":"true"}
+        ]))])
+        .await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let gid = Aria2Gid::new("0123456789abcdef".to_owned())?;
+        let peers = client.get_peers(&gid).await?;
+        let request = requests.recv().await.ok_or("missing getPeers request")?;
+        assert_eq!(request["method"], "aria2.getPeers");
+        assert_eq!(request["params"][1], "0123456789abcdef");
+        assert_eq!(peers.len(), 3);
+        assert_eq!(
+            peers
+                .iter()
+                .filter(|peer| peer.seeder == Some(true))
+                .count(),
+            2
         );
         server.await?;
         Ok(())

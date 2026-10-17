@@ -13,6 +13,10 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.TorrentDownloadRepository
+import dev.fetchx.core.download.TorrentFile
+import dev.fetchx.core.download.TorrentMetadata
+import dev.fetchx.core.download.TorrentTelemetry
 import dev.fetchx.core.download.YtDlpFormat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +56,7 @@ class BridgeDownloadRepository(
     private val service: DownloadService,
     private val externalScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
-) : DownloadRepository {
+) : TorrentDownloadRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
@@ -159,8 +163,58 @@ class BridgeDownloadRepository(
             }
     }
 
-    suspend fun getTorrentTelemetry(downloadId: String): TorrentTelemetryDto? =
-        withContext(Dispatchers.IO) { service.getTorrentTelemetry(downloadId) }
+    override suspend fun torrentTelemetry(downloadId: String): TorrentTelemetry? =
+        withContext(Dispatchers.IO) {
+            service.getTorrentTelemetry(downloadId)?.let { telemetry ->
+                TorrentTelemetry(
+                    downloadSpeedBytesPerSecond = telemetry.downloadSpeedBps?.toLong(),
+                    uploadSpeedBytesPerSecond = telemetry.uploadSpeedBps?.toLong(),
+                    downloadedBytes = telemetry.downloadedBytes?.toLong(),
+                    uploadedBytes = telemetry.uploadedBytes?.toLong(),
+                    peerCount = telemetry.peerCount?.toLong(),
+                    completedPeerCount = telemetry.completedPeerCount?.toLong(),
+                    seedCount = telemetry.seedCount?.toLong(),
+                    shareRatio = telemetry.shareRatio,
+                    seeding = telemetry.seeding,
+                    trackerUris = telemetry.trackerUris,
+                )
+            }
+        }
+
+    override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =
+        withContext(Dispatchers.IO) {
+            service.inspectTorrentFile(torrentPath).let { metadata ->
+                TorrentMetadata(
+                    name = metadata.name,
+                    infoHash = metadata.infoHash,
+                    totalSizeBytes = metadata.totalSizeBytes.toLong(),
+                    files = metadata.files.map { file ->
+                        TorrentFile(
+                            index = file.index.toInt(),
+                            path = file.path,
+                            sizeBytes = file.sizeBytes.toLong(),
+                        )
+                    },
+                )
+            }
+        }
+
+    override suspend fun addTorrentFile(
+        torrentPath: String,
+        selectedFileIndexes: List<Int>,
+        destinationDirectory: String,
+        priority: DownloadPriority,
+    ): String = withContext(Dispatchers.IO) {
+        service.addTorrentFileDownloadSelected(
+            torrentPath,
+            mapPriorityToDto(priority),
+            selectedFileIndexes.map(Int::toUInt),
+            destinationDirectory,
+        )
+    }
+
+    override suspend fun stopTorrentSeeding(downloadId: String) =
+        withContext(Dispatchers.IO) { service.stopTorrentSeeding(downloadId) }
 
     override suspend fun pauseDownload(downloadId: String) =
         withContext(Dispatchers.IO) { service.pauseDownload(downloadId) }

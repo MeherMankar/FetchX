@@ -7,15 +7,20 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.TorrentDownloadRepository
+import dev.fetchx.core.download.TorrentTelemetry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 /**
  * UI state for the Downloads screen.
@@ -63,6 +68,9 @@ class DownloadsViewModel(
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
         )
+
+    private val _torrentTelemetry = MutableStateFlow<Map<String, TorrentTelemetry>>(emptyMap())
+    val torrentTelemetry: StateFlow<Map<String, TorrentTelemetry>> = _torrentTelemetry.asStateFlow()
 
     /** All downloads, sorted newest-first. */
     val allDownloads: StateFlow<List<DownloadItem>> = downloads
@@ -125,6 +133,35 @@ class DownloadsViewModel(
             initialValue = emptyList(),
         )
 
+    init {
+        val torrentRepository = repository as? TorrentDownloadRepository
+        if (torrentRepository != null) {
+            viewModelScope.launch {
+                downloads.collectLatest { items ->
+                    while (true) {
+                        val snapshots = mutableMapOf<String, TorrentTelemetry>()
+                        for (item in items) {
+                            if (!item.engine.equals("aria2", ignoreCase = true)) continue
+                            try {
+                                torrentRepository.torrentTelemetry(item.id)?.let {
+                                    snapshots[item.id] = it
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                _uiState.update {
+                                    it.copy(error = "Torrent telemetry is temporarily unavailable.")
+                                }
+                            }
+                        }
+                        _torrentTelemetry.value = snapshots
+                        delay(TORRENT_TELEMETRY_POLL_MILLIS)
+                    }
+                }
+            }
+        }
+    }
+
     // ── Actions ────────────────────────────────────────────────────────────
 
     /**
@@ -136,16 +173,28 @@ class DownloadsViewModel(
         fileName: String,
         destinationPath: String,
         priority: DownloadPriority,
+        selectedTorrentFileIndexes: List<Int>? = null,
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                repository.addDownload(
-                    url = url,
-                    fileName = fileName,
-                    destinationPath = destinationPath,
-                    priority = priority,
-                )
+                if (selectedTorrentFileIndexes != null) {
+                    val torrentRepository = repository as? TorrentDownloadRepository
+                        ?: throw UnsupportedOperationException("Torrent selection is unavailable")
+                    torrentRepository.addTorrentFile(
+                        torrentPath = url,
+                        selectedFileIndexes = selectedTorrentFileIndexes,
+                        destinationDirectory = destinationPath.substringBeforeLast('/'),
+                        priority = priority,
+                    )
+                } else {
+                    repository.addDownload(
+                        url = url,
+                        fileName = fileName,
+                        destinationPath = destinationPath,
+                        priority = priority,
+                    )
+                }
                 _uiState.update { it.copy(isLoading = false) }
             } catch (e: Exception) {
                 val userMessage = mapAddDownloadError(e)
@@ -182,6 +231,18 @@ class DownloadsViewModel(
     fun setPriority(downloadId: String, priority: DownloadPriority) {
         performAction("update priority") { repository.setPriority(downloadId, priority) }
     }
+
+    fun stopTorrentSeeding(downloadId: String) {
+        val torrentRepository = repository as? TorrentDownloadRepository ?: run {
+            _uiState.update { it.copy(error = "Torrent controls are unavailable.") }
+            return
+        }
+        performAction("stop seeding") { torrentRepository.stopTorrentSeeding(downloadId) }
+    }
+
+    suspend fun inspectTorrentFile(torrentPath: String) =
+        (repository as? TorrentDownloadRepository)?.inspectTorrentFile(torrentPath)
+            ?: throw UnsupportedOperationException("Torrent inspection is unavailable")
 
     // ── Internal helpers ──────────────────────────────────────────────────
 
@@ -245,5 +306,10 @@ class DownloadsViewModel(
             }
             return DownloadsViewModel(repository, bridgeAvailable) as T
         }
+
+    }
+
+    private companion object {
+        const val TORRENT_TELEMETRY_POLL_MILLIS = 2_000L
     }
 }

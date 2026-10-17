@@ -39,10 +39,24 @@ dictionary TorrentTelemetryDto {
     u64? downloaded_bytes;
     u64? uploaded_bytes;
     u64? peer_count;
+    u64? completed_peer_count;
     u64? seed_count;
     f64? share_ratio;
     boolean? seeding;
     sequence<string>? tracker_uris;
+};
+
+dictionary TorrentFileDto {
+    u32 index;
+    string path;
+    u64 size_bytes;
+};
+
+dictionary TorrentMetadataDto {
+    string name;
+    string info_hash;
+    u64 total_size_bytes;
+    sequence<TorrentFileDto> files;
 };
 
 enum DownloadStatusDto {
@@ -125,6 +139,17 @@ interface DownloadService {
     string add_torrent_file_download(
         string torrent_path,
         DownloadPriorityDto priority
+    );
+
+    [Throws=MobileApiError]
+    TorrentMetadataDto inspect_torrent_file(string torrent_path);
+
+    [Throws=MobileApiError]
+    string add_torrent_file_download_selected(
+        string torrent_path,
+        DownloadPriorityDto priority,
+        sequence<u32> selected_file_indexes,
+        string destination
     );
 
     [Throws=MobileApiError]

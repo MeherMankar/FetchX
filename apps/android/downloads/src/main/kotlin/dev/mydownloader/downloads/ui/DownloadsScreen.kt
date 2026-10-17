@@ -66,6 +66,7 @@ fun DownloadsScreen(
     val completedDownloads by viewModel.completedDownloads.collectAsStateWithLifecycle()
     val failedDownloads by viewModel.failedDownloads.collectAsStateWithLifecycle()
     val cancelledDownloads by viewModel.cancelledDownloads.collectAsStateWithLifecycle()
+    val torrentTelemetry by viewModel.torrentTelemetry.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -192,6 +193,8 @@ fun DownloadsScreen(
                             onCancel = { viewModel.cancel(item.id) },
                             onRemove = { viewModel.remove(item.id) },
                             onRetry = { viewModel.retry(item.id) },
+                            torrentTelemetry = torrentTelemetry[item.id],
+                            onStopSeeding = { viewModel.stopTorrentSeeding(item.id) },
                             onPlayFile = if ((item.state is dev.fetchx.core.download.DownloadState.Completed ||
                                 item.state is dev.fetchx.core.download.DownloadState.Stopped) &&
                                 isVideoFile(item.fileName)) {
@@ -208,8 +211,15 @@ fun DownloadsScreen(
     if (showAddDialog) {
         AddDownloadDialog(
             downloadsDir = downloadsDir,
-            onAdd = { url, fileName, destinationPath, priority ->
-                viewModel.addDownload(url, fileName, destinationPath, priority)
+            onInspectTorrent = viewModel::inspectTorrentFile,
+            onAdd = { url, fileName, destinationPath, priority, selectedTorrentFileIndexes ->
+                viewModel.addDownload(
+                    url,
+                    fileName,
+                    destinationPath,
+                    priority,
+                    selectedTorrentFileIndexes,
+                )
                 showAddDialog = false
             },
             onDismiss = { showAddDialog = false },

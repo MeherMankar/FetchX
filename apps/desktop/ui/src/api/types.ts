@@ -62,6 +62,7 @@ export interface TorrentTelemetry {
   downloaded_bytes: number | null;
   uploaded_bytes: number | null;
   peer_count: number | null;
+  completed_peer_count: number | null;
   seed_count: number | null;
   share_ratio: number | null;
   seeding: boolean | null;

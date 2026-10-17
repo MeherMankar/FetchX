@@ -132,6 +132,8 @@ export function DetailPanel({
                 <dl className="detail-dl">
                   <dt>Peers</dt>
                   <dd>{torrentTelemetry.peer_count ?? "Unavailable"}</dd>
+                  <dt>Completed peers</dt>
+                  <dd>{torrentTelemetry.completed_peer_count ?? "Unavailable"}</dd>
                   <dt>Seeds</dt>
                   <dd>{torrentTelemetry.seed_count ?? "Unavailable"}</dd>
                   <dt>Download</dt>
