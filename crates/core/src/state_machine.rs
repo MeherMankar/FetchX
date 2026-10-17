@@ -20,6 +20,7 @@ pub fn validate_transition(
             | (DownloadStatus::Preparing, DownloadStatus::Failed)
             | (DownloadStatus::Preparing, DownloadStatus::Cancelled)
             | (DownloadStatus::Preparing, DownloadStatus::Paused)
+            | (DownloadStatus::Preparing, DownloadStatus::MetadataAcquiring)
             | (DownloadStatus::Downloading, DownloadStatus::Queued)
             | (DownloadStatus::Downloading, DownloadStatus::Paused)
             | (DownloadStatus::Downloading, DownloadStatus::Completed)
@@ -27,6 +28,7 @@ pub fn validate_transition(
             | (DownloadStatus::Downloading, DownloadStatus::Cancelled)
             | (DownloadStatus::Downloading, DownloadStatus::Seeding)
             | (DownloadStatus::Downloading, DownloadStatus::Recovering)
+            | (DownloadStatus::Downloading, DownloadStatus::MetadataAcquiring)
             | (DownloadStatus::Completed, DownloadStatus::Seeding)
             | (DownloadStatus::Paused, DownloadStatus::Downloading)
             | (DownloadStatus::Paused, DownloadStatus::Queued)
@@ -37,6 +39,7 @@ pub fn validate_transition(
             | (DownloadStatus::MetadataAcquiring, DownloadStatus::Downloading)
             | (DownloadStatus::MetadataAcquiring, DownloadStatus::Failed)
             | (DownloadStatus::MetadataAcquiring, DownloadStatus::Cancelled)
+            | (DownloadStatus::MetadataAcquiring, DownloadStatus::Paused)
             | (DownloadStatus::MetadataAcquiring, DownloadStatus::Queued)
             | (DownloadStatus::Seeding, DownloadStatus::Stopped)
             | (DownloadStatus::Seeding, DownloadStatus::Paused)
@@ -214,7 +217,7 @@ mod tests {
         DownloadStatus::Stopped,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 38] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 41] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
         (DownloadStatus::Queued, DownloadStatus::Paused),
         (DownloadStatus::Preparing, DownloadStatus::Paused),
@@ -229,6 +232,7 @@ mod tests {
         (DownloadStatus::Downloading, DownloadStatus::Cancelled),
         (DownloadStatus::Preparing, DownloadStatus::Failed),
         (DownloadStatus::Preparing, DownloadStatus::Cancelled),
+        (DownloadStatus::Preparing, DownloadStatus::MetadataAcquiring),
         (DownloadStatus::Queued, DownloadStatus::Cancelled),
         (DownloadStatus::Paused, DownloadStatus::Cancelled),
         (DownloadStatus::Failed, DownloadStatus::Preparing),
@@ -236,9 +240,14 @@ mod tests {
         // Torrent lifecycle.
         (DownloadStatus::Queued, DownloadStatus::MetadataAcquiring),
         (
+            DownloadStatus::Downloading,
+            DownloadStatus::MetadataAcquiring,
+        ),
+        (
             DownloadStatus::MetadataAcquiring,
             DownloadStatus::Downloading,
         ),
+        (DownloadStatus::MetadataAcquiring, DownloadStatus::Paused),
         (DownloadStatus::MetadataAcquiring, DownloadStatus::Failed),
         (DownloadStatus::MetadataAcquiring, DownloadStatus::Cancelled),
         (DownloadStatus::MetadataAcquiring, DownloadStatus::Queued),

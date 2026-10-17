@@ -7,7 +7,8 @@ pub mod error;
 // Re-export DTO types at the crate root so the UniFFI scaffolding can find them.
 pub use dto::{
     CoreConfig, DownloadEventDto, DownloadInfoDto, DownloadPriorityDto, DownloadProgressDto,
-    DownloadStatusDto, TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto,
+    DownloadStatusDto, TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto,
+    TorrentTelemetryDto, YtDlpFormatDto,
 };
 pub use error::MobileApiError;
 

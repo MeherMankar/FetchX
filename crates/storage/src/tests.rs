@@ -3,7 +3,8 @@ use std::{error::Error, path::PathBuf};
 
 use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
-    DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+    DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, TorrentFile,
+    TorrentMetadata,
 };
 
 use crate::{
@@ -51,7 +52,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(database.pool())
             .await?;
-    assert_eq!(migration_count, 7);
+    assert_eq!(migration_count, 8);
 
     Ok(())
 }
@@ -409,10 +410,12 @@ fn torrent_row(download_id: DownloadId) -> TorrentMetadataRow {
         local_torrent_path: Some(PathBuf::from("/tmp/test.torrent")),
         info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
         torrent_name: "Test Torrent".to_owned(),
+        torrent_metadata: None,
         destination: PathBuf::from("/downloads/test"),
         metadata_state: "ready".to_owned(),
         selected_file_indexes: vec![0, 1, 2],
         selected_total_bytes: 1024,
+        selection_confirmed: true,
         aria2_gid: None,
         seed_state: TorrentSeedState::Downloading,
         uploaded_bytes: 0,
@@ -463,6 +466,18 @@ async fn torrent_metadata_update_and_gid_lookup() -> Result<(), Box<dyn Error>> 
 
     let updated = TorrentMetadataRow {
         aria2_gid: Some("aaaaaaaaaaaaaaaa".to_owned()),
+        torrent_metadata: Some(TorrentMetadata {
+            info_hash: row.info_hash.clone(),
+            name: row.torrent_name.clone(),
+            total_size: 1024,
+            files: vec![TorrentFile {
+                path: vec!["root".to_owned(), "file.bin".to_owned()],
+                size: 1024,
+            }],
+            trackers: vec!["https://tracker.test/announce".to_owned()],
+            piece_length: 16_384,
+            piece_count: 1,
+        }),
         uploaded_bytes: 512,
         peer_count: 3,
         seed_count: 7,
@@ -479,6 +494,7 @@ async fn torrent_metadata_update_and_gid_lookup() -> Result<(), Box<dyn Error>> 
     assert_eq!(reloaded.aria2_gid.as_deref(), Some("aaaaaaaaaaaaaaaa"));
     assert_eq!(reloaded.seed_state, TorrentSeedState::Seeding);
     assert_eq!(reloaded.peer_count, 3);
+    assert_eq!(reloaded.torrent_metadata, updated.torrent_metadata);
 
     // Look up by GID.
     let by_gid = tm_repo
@@ -506,10 +522,12 @@ async fn torrent_metadata_magnet_row_insert_and_delete() -> Result<(), Box<dyn E
         local_torrent_path: None,
         info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
         torrent_name: "Magnet Torrent".to_owned(),
+        torrent_metadata: None,
         destination: PathBuf::from("/downloads/magnet"),
         metadata_state: "pending".to_owned(),
         selected_file_indexes: vec![],
         selected_total_bytes: 0,
+        selection_confirmed: false,
         aria2_gid: None,
         seed_state: TorrentSeedState::Downloading,
         uploaded_bytes: 0,

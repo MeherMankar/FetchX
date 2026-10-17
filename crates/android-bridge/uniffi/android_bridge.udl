@@ -57,6 +57,17 @@ dictionary TorrentMetadataDto {
     string info_hash;
     u64 total_size_bytes;
     sequence<TorrentFileDto> files;
+    sequence<string> trackers;
+    u64 piece_length;
+    u64 piece_count;
+};
+
+dictionary TorrentDownloadMetadataDto {
+    string metadata_state;
+    TorrentMetadataDto? metadata;
+    sequence<u32> selected_file_indexes;
+    u64 selected_total_bytes;
+    boolean selection_confirmed;
 };
 
 enum DownloadStatusDto {
@@ -143,6 +154,21 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     TorrentMetadataDto inspect_torrent_file(string torrent_path);
+
+    [Throws=MobileApiError]
+    TorrentDownloadMetadataDto? get_torrent_download_metadata(string id);
+
+    [Throws=MobileApiError]
+    void select_torrent_files(string id, sequence<u32> selected_file_indexes);
+
+    [Throws=MobileApiError]
+    void set_torrent_file_selected(string id, u32 file_index, boolean selected);
+
+    [Throws=MobileApiError]
+    void set_torrent_selection_all(string id, boolean selected);
+
+    [Throws=MobileApiError]
+    void set_torrent_directory_selected(string id, string directory, boolean selected);
 
     [Throws=MobileApiError]
     string add_torrent_file_download_selected(

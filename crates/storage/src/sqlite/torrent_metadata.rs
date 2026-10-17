@@ -24,6 +24,12 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
     async fn create_torrent_metadata(&self, row: &TorrentMetadataRow) -> Result<(), StorageError> {
         let indexes = serde_json::to_string(&row.selected_file_indexes)
             .map_err(|_| StorageError::invalid_data("selected_file_indexes", "invalid JSON"))?;
+        let torrent_metadata = row
+            .torrent_metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| StorageError::invalid_data("torrent_metadata_json", "invalid JSON"))?;
         let magnet_uri = row.magnet_uri.as_deref();
         let local_path = row
             .local_torrent_path
@@ -37,10 +43,11 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         sqlx::query(
             "INSERT INTO torrent_metadata (
                 download_id, source_type, magnet_uri, local_torrent_path, info_hash,
-                torrent_name, destination, metadata_state, selected_file_indexes,
-                selected_total_bytes, aria2_gid, seed_state, uploaded_bytes, upload_speed_bps,
-                peer_count, seed_count, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                torrent_name, torrent_metadata_json, destination, metadata_state,
+                selected_file_indexes, selected_total_bytes, selection_confirmed,
+                aria2_gid, seed_state, uploaded_bytes, upload_speed_bps, peer_count,
+                seed_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.download_id.to_string())
         .bind(source_type_to_str(row.source_type))
@@ -48,6 +55,7 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         .bind(local_path)
         .bind(&row.info_hash)
         .bind(&row.torrent_name)
+        .bind(torrent_metadata)
         .bind(destination)
         .bind(&row.metadata_state)
         .bind(&indexes)
@@ -55,6 +63,7 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
             "selected_total_bytes",
             row.selected_total_bytes,
         )?)
+        .bind(i64::from(row.selection_confirmed))
         .bind(&row.aria2_gid)
         .bind(seed_state_to_str(row.seed_state))
         .bind(to_sqlite_integer("uploaded_bytes", row.uploaded_bytes)?)
@@ -77,6 +86,12 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
     async fn update_torrent_metadata(&self, row: &TorrentMetadataRow) -> Result<(), StorageError> {
         let indexes = serde_json::to_string(&row.selected_file_indexes)
             .map_err(|_| StorageError::invalid_data("selected_file_indexes", "invalid JSON"))?;
+        let torrent_metadata = row
+            .torrent_metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| StorageError::invalid_data("torrent_metadata_json", "invalid JSON"))?;
         let magnet_uri = row.magnet_uri.as_deref();
         let local_path = row
             .local_torrent_path
@@ -90,8 +105,9 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         let result = sqlx::query(
             "UPDATE torrent_metadata SET
                 source_type = ?, magnet_uri = ?, local_torrent_path = ?, info_hash = ?,
-                torrent_name = ?, destination = ?, metadata_state = ?, selected_file_indexes = ?,
-                selected_total_bytes = ?, aria2_gid = ?, seed_state = ?, uploaded_bytes = ?,
+                torrent_name = ?, torrent_metadata_json = ?, destination = ?, metadata_state = ?,
+                selected_file_indexes = ?, selected_total_bytes = ?, selection_confirmed = ?,
+                aria2_gid = ?, seed_state = ?, uploaded_bytes = ?,
                 upload_speed_bps = ?, peer_count = ?, seed_count = ?, updated_at = ?
              WHERE download_id = ?",
         )
@@ -100,6 +116,7 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         .bind(local_path)
         .bind(&row.info_hash)
         .bind(&row.torrent_name)
+        .bind(torrent_metadata)
         .bind(destination)
         .bind(&row.metadata_state)
         .bind(&indexes)
@@ -107,6 +124,7 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
             "selected_total_bytes",
             row.selected_total_bytes,
         )?)
+        .bind(i64::from(row.selection_confirmed))
         .bind(&row.aria2_gid)
         .bind(seed_state_to_str(row.seed_state))
         .bind(to_sqlite_integer("uploaded_bytes", row.uploaded_bytes)?)
@@ -177,8 +195,9 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
 
 const SELECT_COLUMNS: &str =
     "SELECT download_id, source_type, magnet_uri, local_torrent_path, info_hash,
-                    torrent_name, destination, metadata_state, selected_file_indexes,
-                    selected_total_bytes, aria2_gid, seed_state, uploaded_bytes, upload_speed_bps,
+                    torrent_name, torrent_metadata_json, destination, metadata_state,
+                    selected_file_indexes, selected_total_bytes, selection_confirmed,
+                    aria2_gid, seed_state, uploaded_bytes, upload_speed_bps,
                     peer_count, seed_count, created_at, updated_at
              FROM torrent_metadata";
 
@@ -198,6 +217,12 @@ fn row_to_metadata(row: SqliteRow) -> Result<TorrentMetadataRow, StorageError> {
     let local_torrent_path: Option<String> = row.try_get("local_torrent_path")?;
     let info_hash: String = row.try_get("info_hash")?;
     let torrent_name: String = row.try_get("torrent_name")?;
+    let torrent_metadata_json: Option<String> = row.try_get("torrent_metadata_json")?;
+    let torrent_metadata: Option<fetchx_models::TorrentMetadata> = torrent_metadata_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|_| StorageError::invalid_data("torrent_metadata_json", "invalid JSON"))?;
     let destination: String = row.try_get("destination")?;
     let metadata_state: String = row.try_get("metadata_state")?;
     let indexes_text: String = row.try_get("selected_file_indexes")?;
@@ -205,6 +230,17 @@ fn row_to_metadata(row: SqliteRow) -> Result<TorrentMetadataRow, StorageError> {
         .map_err(|_| StorageError::invalid_data("selected_file_indexes", "invalid JSON"))?;
     let selected_total_bytes =
         from_sqlite_integer("selected_total_bytes", row.try_get("selected_total_bytes")?)?;
+    let selection_confirmed: i64 = row.try_get("selection_confirmed")?;
+    let selection_confirmed = match selection_confirmed {
+        0 => false,
+        1 => true,
+        _ => {
+            return Err(StorageError::invalid_data(
+                "selection_confirmed",
+                "invalid boolean value",
+            ));
+        }
+    };
     let aria2_gid: Option<String> = row.try_get("aria2_gid")?;
     let seed_state = seed_state_from_str(row.try_get("seed_state")?)?;
     let uploaded_bytes = from_sqlite_integer("uploaded_bytes", row.try_get("uploaded_bytes")?)?;
@@ -228,10 +264,12 @@ fn row_to_metadata(row: SqliteRow) -> Result<TorrentMetadataRow, StorageError> {
         local_torrent_path: local_torrent_path.map(PathBuf::from),
         info_hash,
         torrent_name,
+        torrent_metadata,
         destination: PathBuf::from(destination),
         metadata_state,
         selected_file_indexes,
         selected_total_bytes,
+        selection_confirmed,
         aria2_gid,
         seed_state,
         uploaded_bytes,

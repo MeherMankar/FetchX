@@ -1,11 +1,22 @@
 import { useEffect, useState } from "react";
 
-import { getTorrentTelemetry } from "../api/downloads";
+import {
+  getTorrentDownloadMetadata,
+  getTorrentTelemetry,
+  selectTorrentFiles,
+  setTorrentDirectorySelected,
+  setTorrentFileSelected,
+  setTorrentSelectionAll,
+} from "../api/downloads";
 import type { Download, DownloadSchedule } from "../api/types";
 import { formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTime, formatSpeed } from "../lib/format";
 import { canSchedule, canChangePriority, canPause, canResume, canCancel, canRetry } from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
-import type { DownloadPriority, TorrentTelemetry } from "../api/types";
+import type {
+  DownloadPriority,
+  TorrentDownloadMetadata,
+  TorrentTelemetry,
+} from "../api/types";
 
 const ENGINE_LABELS: Record<string, string> = {
   direct_http: "Direct HTTP",
@@ -52,32 +63,66 @@ export function DetailPanel({
     && (download.url.startsWith("magnet:") || download.url.startsWith("torrent+file:"));
   const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
   const [torrentTelemetryError, setTorrentTelemetryError] = useState<string | null>(null);
+  const [torrentMetadata, setTorrentMetadata] = useState<TorrentDownloadMetadata | null>(null);
+  const [torrentMetadataError, setTorrentMetadataError] = useState<string | null>(null);
 
   useEffect(() => {
     setTorrentTelemetry(null);
     setTorrentTelemetryError(null);
+    setTorrentMetadata(null);
+    setTorrentMetadataError(null);
     if (!isTorrent) return;
 
     let active = true;
-    let interval: number | undefined;
     const refresh = async () => {
-      try {
-        const telemetry = await getTorrentTelemetry(download.id);
-        if (active) setTorrentTelemetry(telemetry);
-      } catch (cause) {
-        if (active) {
-          setTorrentTelemetryError(cause instanceof Error ? cause.message : String(cause));
-          if (interval !== undefined) window.clearInterval(interval);
-        }
+      const [telemetryResult, metadataResult] = await Promise.allSettled([
+        getTorrentTelemetry(download.id),
+        getTorrentDownloadMetadata(download.id),
+      ]);
+      if (!active) return;
+
+      if (telemetryResult.status === "fulfilled") {
+        setTorrentTelemetry(telemetryResult.value);
+        setTorrentTelemetryError(null);
+      } else {
+        setTorrentTelemetryError(
+          telemetryResult.reason instanceof Error
+            ? telemetryResult.reason.message
+            : String(telemetryResult.reason),
+        );
+      }
+      if (metadataResult.status === "fulfilled") {
+        setTorrentMetadata(metadataResult.value);
+        setTorrentMetadataError(null);
+      } else {
+        setTorrentMetadataError(
+          metadataResult.reason instanceof Error
+            ? metadataResult.reason.message
+            : String(metadataResult.reason),
+        );
       }
     };
     void refresh();
-    interval = window.setInterval(() => void refresh(), 2000);
+    const interval = window.setInterval(() => void refresh(), 2000);
     return () => {
       active = false;
-      if (interval !== undefined) window.clearInterval(interval);
+      window.clearInterval(interval);
     };
   }, [download.id, isTorrent]);
+
+  const updateMagnetSelection = async (update: () => Promise<void>) => {
+    try {
+      await update();
+      setTorrentMetadata(await getTorrentDownloadMetadata(download.id));
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const magnetSelectionPending = isTorrent
+    && download.url.startsWith("magnet:")
+    && download.status === "metadata_acquiring"
+    && torrentMetadata?.metadata !== null;
 
   return (
     <aside className="detail-panel" aria-label="Download details">
@@ -125,9 +170,10 @@ export function DetailPanel({
         {isTorrent && (
           <section className="detail-section">
             <p className="detail-section-title">Torrent</p>
-            {torrentTelemetryError ? (
+            {torrentTelemetryError && (
               <p className="detail-error-message">{torrentTelemetryError}</p>
-            ) : torrentTelemetry ? (
+            )}
+            {torrentTelemetry ? (
               <>
                 <dl className="detail-dl">
                   <dt>Peers</dt>
@@ -161,6 +207,102 @@ export function DetailPanel({
               </>
             ) : (
               <p className="field-hint">Live telemetry is unavailable until aria2 reports the task.</p>
+            )}
+            {magnetSelectionPending && torrentMetadata?.metadata && (
+              <section className="detail-section">
+                <p className="detail-section-title">
+                  Magnet files · {formatBytes(torrentMetadata.selected_total_bytes)} selected
+                </p>
+                <p className="field-hint">
+                  {torrentMetadata.metadata.name} · {formatBytes(torrentMetadata.metadata.total_size)}
+                </p>
+                {Array.from(new Set(torrentMetadata.metadata.files.flatMap((file) => {
+                  const directories: string[][] = [];
+                  for (let index = 1; index < file.path.length; index += 1) {
+                    directories.push(file.path.slice(0, index));
+                  }
+                  return directories.map((directory) => directory.join("/"));
+                }))).map((directory) => (
+                  <div className="detail-actions" key={directory}>
+                    <span>{directory}</span>
+                    <button
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => void updateMagnetSelection(
+                        () => setTorrentDirectorySelected(download.id, directory, true),
+                      )}
+                    >
+                      Select folder
+                    </button>
+                    <button
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => void updateMagnetSelection(
+                        () => setTorrentDirectorySelected(download.id, directory, false),
+                      )}
+                    >
+                      Deselect folder
+                    </button>
+                  </div>
+                ))}
+                <div className="detail-actions">
+                  <button
+                    className="button button-secondary"
+                    disabled={busy}
+                    onClick={() => void updateMagnetSelection(
+                      () => setTorrentSelectionAll(download.id, true),
+                    )}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    disabled={busy}
+                    onClick={() => void updateMagnetSelection(
+                      () => setTorrentSelectionAll(download.id, false),
+                    )}
+                  >
+                    Select none
+                  </button>
+                </div>
+                {torrentMetadata.metadata.files.map((file, index) => {
+                  const path = file.path.join("/");
+                  const selected = torrentMetadata.selected_file_indexes.includes(index);
+                  return (
+                    <label className="detail-row" key={`${path}:${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={busy}
+                        onChange={(event) => void updateMagnetSelection(
+                          () => setTorrentFileSelected(
+                            download.id,
+                            index,
+                            event.currentTarget.checked,
+                          ),
+                        )}
+                      />
+                      <span>{path}</span>
+                      <span>{formatBytes(file.size)}</span>
+                    </label>
+                  );
+                })}
+                <button
+                  className="button button-primary"
+                  disabled={busy || torrentMetadata.selected_file_indexes.length === 0}
+                  onClick={() => void updateMagnetSelection(
+                    () => selectTorrentFiles(
+                      download.id,
+                      torrentMetadata.selected_file_indexes,
+                    ),
+                  )}
+                >
+                  Start selected files
+                </button>
+              </section>
+            )}
+            {torrentMetadataError && (
+              <p className="detail-error-message">{torrentMetadataError}</p>
             )}
           </section>
         )}

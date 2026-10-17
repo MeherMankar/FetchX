@@ -123,6 +123,9 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
                     commands::torrent::status(&svc, id, cli.json).await
                 }
                 TorrentCommand::Files { id } => commands::torrent::files(&svc, id, cli.json).await,
+                TorrentCommand::Select { id, files } => {
+                    commands::torrent::select_files(&svc, id, files, cli.json).await
+                }
                 TorrentCommand::StopSeeding { id } => {
                     commands::torrent::stop_seeding(&svc, id, cli.json).await
                 }

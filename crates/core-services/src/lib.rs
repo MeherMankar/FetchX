@@ -102,9 +102,11 @@ struct TorrentMetadataParams {
     local_torrent_path: Option<PathBuf>,
     info_hash: String,
     torrent_name: String,
+    torrent_metadata: Option<TorrentMetadata>,
     destination: PathBuf,
     selected_file_indexes: Vec<u32>,
     selected_total_bytes: u64,
+    selection_confirmed: bool,
     created_at: Timestamp,
 }
 
@@ -255,9 +257,11 @@ impl CoreServices {
             local_torrent_path,
             info_hash,
             torrent_name,
+            torrent_metadata,
             destination,
             selected_file_indexes,
             selected_total_bytes,
+            selection_confirmed,
             created_at,
         } = params;
         let row = TorrentMetadataRow {
@@ -267,6 +271,7 @@ impl CoreServices {
             local_torrent_path,
             info_hash,
             torrent_name,
+            torrent_metadata,
             destination,
             metadata_state: if source_type == TorrentSourceType::Magnet {
                 "pending".to_owned()
@@ -275,6 +280,7 @@ impl CoreServices {
             },
             selected_file_indexes,
             selected_total_bytes,
+            selection_confirmed,
             aria2_gid: None,
             seed_state: TorrentSeedState::Downloading,
             uploaded_bytes: 0,
@@ -355,6 +361,14 @@ impl CoreServices {
         let destination = validate_torrent_destination(&destination, &self.downloads_dir)
             .await
             .map_err(|e| CoreServicesError::InvalidMagnet(e.to_string()))?;
+        let metadata_directory = destination
+            .parent()
+            .ok_or_else(|| CoreServicesError::InvalidMagnet("invalid destination".to_owned()))?
+            .join(format!(".fetchx-metadata-{id}"));
+        let metadata_directory =
+            validate_torrent_destination(&metadata_directory, &self.downloads_dir)
+                .await
+                .map_err(CoreServicesError::InvalidMagnet)?;
         let created_at = Timestamp::now()
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
         let mut item = DownloadItem::new(id, source, filename, destination.clone(), created_at);
@@ -366,12 +380,16 @@ impl CoreServices {
                 id,
                 source_type: TorrentSourceType::Magnet,
                 magnet_uri: Some(uri.to_owned()),
-                local_torrent_path: None,
                 info_hash: magnet.info_hash.clone(),
                 torrent_name: magnet.suggested_filename(),
+                torrent_metadata: None,
+                local_torrent_path: Some(
+                    metadata_directory.join(format!("{}.torrent", magnet.info_hash)),
+                ),
                 destination,
                 selected_file_indexes: Vec::new(),
                 selected_total_bytes: 0,
+                selection_confirmed: false,
                 created_at,
             },
         )
@@ -450,7 +468,7 @@ impl CoreServices {
         let selected_total_size = selection
             .selected_size(&torrent)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
-        let filename = FileName::new(torrent.name)
+        let filename = FileName::new(torrent.name.clone())
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
         let created_at = Timestamp::now()
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
@@ -473,9 +491,11 @@ impl CoreServices {
                 local_torrent_path: Some(torrent_path),
                 info_hash: torrent_info_hash_for_meta,
                 torrent_name: torrent_name_for_meta,
+                torrent_metadata: Some(torrent.clone()),
                 destination,
                 selected_file_indexes: selected_indexes,
                 selected_total_bytes: selected_total_size,
+                selection_confirmed: true,
                 created_at,
             },
         )
@@ -527,6 +547,217 @@ impl CoreServices {
             .await
             .map_err(|e| CoreServicesError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    /// Returns metadata and the persisted selection once aria2 has acquired a magnet's metainfo.
+    pub async fn torrent_download_metadata(
+        &self,
+        id: DownloadId,
+    ) -> Result<Option<fetchx_models::TorrentDownloadMetadata>, CoreServicesError> {
+        let row = self
+            .database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?;
+        Ok(row.map(|row| fetchx_models::TorrentDownloadMetadata {
+            metadata_state: row.metadata_state,
+            metadata: row.torrent_metadata,
+            selected_file_indexes: row.selected_file_indexes,
+            selected_total_bytes: row.selected_total_bytes,
+            selection_confirmed: row.selection_confirmed,
+        }))
+    }
+
+    /// Persists a zero-based magnet file selection for the queued metadata-ready task.
+    ///
+    /// An empty selection deliberately leaves the task waiting; select one or more
+    /// files later to begin the transfer.
+    pub async fn select_torrent_files(
+        &self,
+        id: DownloadId,
+        selected_file_indexes: Vec<u32>,
+    ) -> Result<(), CoreServicesError> {
+        let mut seen = std::collections::HashSet::with_capacity(selected_file_indexes.len());
+        if selected_file_indexes
+            .iter()
+            .any(|index| !seen.insert(*index))
+        {
+            return Err(CoreServicesError::InvalidTorrent(
+                "file selection contains duplicate indexes".to_owned(),
+            ));
+        }
+        let metadata = self
+            .database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?
+            .and_then(|row| row.torrent_metadata);
+        let metadata = metadata.ok_or_else(|| {
+            CoreServicesError::InvalidTorrent("torrent metadata is not ready".to_owned())
+        })?;
+        let indexes = selected_file_indexes
+            .iter()
+            .map(|index| {
+                usize::try_from(*index)
+                    .map_err(|_| CoreServicesError::InvalidTorrent("invalid file index".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let selection = TorrentFileSelection::from_indices(metadata.files.len(), indexes)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        self.save_magnet_selection(id, selection, true).await
+    }
+
+    pub async fn set_torrent_selection_all(
+        &self,
+        id: DownloadId,
+        selected: bool,
+    ) -> Result<(), CoreServicesError> {
+        let repository = self.database.torrent_metadata();
+        let row = repository
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?
+            .ok_or_else(|| CoreServicesError::InvalidTorrent("torrent not found".to_owned()))?;
+        let metadata = row.torrent_metadata.as_ref().ok_or_else(|| {
+            CoreServicesError::InvalidTorrent("torrent metadata is missing".into())
+        })?;
+        let selection = if selected {
+            metadata.selection_all()
+        } else {
+            metadata.selection_none()
+        };
+        self.save_magnet_selection(id, selection, false).await
+    }
+
+    pub async fn set_torrent_file_selected(
+        &self,
+        id: DownloadId,
+        file_index: u32,
+        selected: bool,
+    ) -> Result<(), CoreServicesError> {
+        let repository = self.database.torrent_metadata();
+        let row = repository
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?
+            .ok_or_else(|| CoreServicesError::InvalidTorrent("torrent not found".to_owned()))?;
+        let metadata = row.torrent_metadata.as_ref().ok_or_else(|| {
+            CoreServicesError::InvalidTorrent("torrent metadata is missing".into())
+        })?;
+        let indexes = row
+            .selected_file_indexes
+            .iter()
+            .map(|index| {
+                usize::try_from(*index)
+                    .map_err(|_| CoreServicesError::InvalidTorrent("invalid file index".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut selection = TorrentFileSelection::from_indices(metadata.files.len(), indexes)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        selection
+            .set_selected(
+                usize::try_from(file_index)
+                    .map_err(|_| CoreServicesError::InvalidTorrent("invalid file index".into()))?,
+                selected,
+            )
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        self.save_magnet_selection(id, selection, false).await
+    }
+
+    pub async fn set_torrent_directory_selected(
+        &self,
+        id: DownloadId,
+        directory: String,
+        selected: bool,
+    ) -> Result<(), CoreServicesError> {
+        let repository = self.database.torrent_metadata();
+        let row = repository
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?
+            .ok_or_else(|| CoreServicesError::InvalidTorrent("torrent not found".to_owned()))?;
+        let metadata = row.torrent_metadata.as_ref().ok_or_else(|| {
+            CoreServicesError::InvalidTorrent("torrent metadata is missing".into())
+        })?;
+        let directory = directory
+            .split(['/', '\\'])
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if directory.is_empty() || directory.iter().any(String::is_empty) {
+            return Err(CoreServicesError::InvalidTorrent(
+                "invalid torrent directory selection".to_owned(),
+            ));
+        }
+        let indexes = row
+            .selected_file_indexes
+            .iter()
+            .map(|index| {
+                usize::try_from(*index)
+                    .map_err(|_| CoreServicesError::InvalidTorrent("invalid file index".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut selection = TorrentFileSelection::from_indices(metadata.files.len(), indexes)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        selection
+            .select_directory(metadata, &directory, selected)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        self.save_magnet_selection(id, selection, false).await
+    }
+
+    async fn save_magnet_selection(
+        &self,
+        id: DownloadId,
+        selection: TorrentFileSelection,
+        confirmed: bool,
+    ) -> Result<(), CoreServicesError> {
+        let repository = self.database.torrent_metadata();
+        let mut row = repository
+            .get_torrent_metadata(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?
+            .ok_or_else(|| CoreServicesError::InvalidTorrent("torrent not found".to_owned()))?;
+        if row.source_type != TorrentSourceType::Magnet
+            || row.metadata_state != "ready"
+            || row.torrent_metadata.is_none()
+        {
+            return Err(CoreServicesError::InvalidTorrent(
+                "magnet metadata is not ready".to_owned(),
+            ));
+        }
+        let item = self
+            .repository
+            .get(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?
+            .ok_or_else(|| CoreServicesError::InvalidTorrent("download not found".to_owned()))?;
+        if item.status() != fetchx_models::DownloadStatus::MetadataAcquiring {
+            return Err(CoreServicesError::InvalidTorrent(
+                "file selection is only available while awaiting magnet selection".to_owned(),
+            ));
+        }
+        let metadata = row.torrent_metadata.as_ref().ok_or_else(|| {
+            CoreServicesError::InvalidTorrent("torrent metadata is missing".into())
+        })?;
+        row.selected_total_bytes = selection
+            .selected_size(metadata)
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
+        row.selected_file_indexes = selection
+            .selected_indices()
+            .map(u32::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                CoreServicesError::InvalidTorrent("torrent contains too many files".to_owned())
+            })?;
+        row.selection_confirmed = confirmed;
+        row.updated_at = Timestamp::now()
+            .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?
+            .max(row.updated_at);
+        repository
+            .update_torrent_metadata(&row)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))
     }
 
     // ── Shutdown ──────────────────────────────────────────────────────────
@@ -953,11 +1184,15 @@ mod tests {
 
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSource,
-        DownloadStatus, EngineKind, FileName, Timestamp,
+        DownloadStatus, EngineKind, FileName, Timestamp, TorrentFile, TorrentMetadata,
     };
-    use fetchx_storage::DownloadRepository;
+    use fetchx_storage::{
+        DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
+        TorrentSourceType,
+    };
 
     use super::{CoreServices, CoreServicesConfig, EngineAvailability};
+    use fetchx_core::DownloadStateMachine;
 
     fn config(root: &std::path::Path) -> CoreServicesConfig {
         CoreServicesConfig {
@@ -1069,6 +1304,135 @@ mod tests {
                 EngineKind::Aria2
             ))
         ));
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn magnet_file_selection_uses_shared_model_and_persists_size_and_indexes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=sample";
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(magnet, EngineKind::Aria2)?,
+            FileName::new("sample")?,
+            services.downloads_dir().join("sample"),
+            now,
+        );
+        services.repository.create(&item).await?;
+        DownloadStateMachine::new(services.repository.clone())
+            .transition(id, DownloadStatus::MetadataAcquiring)
+            .await?;
+        let torrent = TorrentMetadata {
+            info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            name: "sample".to_owned(),
+            total_size: 10,
+            files: vec![
+                TorrentFile {
+                    path: vec!["root".to_owned(), "dir".to_owned(), "one.bin".to_owned()],
+                    size: 3,
+                },
+                TorrentFile {
+                    path: vec![
+                        "root".to_owned(),
+                        "dir".to_owned(),
+                        "sub".to_owned(),
+                        "two.bin".to_owned(),
+                    ],
+                    size: 5,
+                },
+                TorrentFile {
+                    path: vec!["root".to_owned(), "other.bin".to_owned()],
+                    size: 2,
+                },
+            ],
+            trackers: vec!["https://tracker.test/announce".to_owned()],
+            piece_length: 16_384,
+            piece_count: 1,
+        };
+        services
+            .database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet.to_owned()),
+                local_torrent_path: Some(root.path().join("sample.torrent")),
+                info_hash: torrent.info_hash.clone(),
+                torrent_name: torrent.name.clone(),
+                torrent_metadata: Some(torrent),
+                destination: item.destination().to_path_buf(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                selection_confirmed: false,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        let exposed = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("torrent metadata missing")?;
+        assert_eq!(exposed.metadata_state, "ready");
+        assert_eq!(
+            exposed.metadata.as_ref().map(|value| value.files.len()),
+            Some(3)
+        );
+        assert!(!exposed.selection_confirmed);
+
+        services
+            .set_torrent_directory_selected(id, "root/dir".to_owned(), true)
+            .await?;
+        let selected = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("torrent metadata missing after selection")?;
+        assert_eq!(selected.selected_file_indexes, [0, 1]);
+        assert_eq!(selected.selected_total_bytes, 8);
+        assert!(!selected.selection_confirmed);
+        services.select_torrent_files(id, vec![0, 1]).await?;
+        let confirmed = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("torrent metadata missing after selection confirmation")?;
+        assert!(confirmed.selection_confirmed);
+
+        services.set_torrent_file_selected(id, 0, false).await?;
+        let selected = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("torrent metadata missing after file deselection")?;
+        assert_eq!(selected.selected_file_indexes, [1]);
+        assert_eq!(selected.selected_total_bytes, 5);
+
+        services.set_torrent_selection_all(id, false).await?;
+        let none = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("torrent metadata missing after deselect all")?;
+        assert!(none.selected_file_indexes.is_empty());
+        assert_eq!(none.selected_total_bytes, 0);
+        assert!(services.select_torrent_files(id, vec![3]).await.is_err());
+        assert!(services.select_torrent_files(id, vec![0, 0]).await.is_err());
+        services.set_torrent_selection_all(id, true).await?;
+        let all = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("torrent metadata missing after select all")?;
+        assert_eq!(all.selected_file_indexes, [0, 1, 2]);
+        assert_eq!(all.selected_total_bytes, 10);
         services.shutdown().await?;
         Ok(())
     }

@@ -93,6 +93,17 @@ pub struct TorrentMetadataDto {
     pub info_hash: String,
     pub total_size_bytes: u64,
     pub files: Vec<TorrentFileDto>,
+    pub trackers: Vec<String>,
+    pub piece_length: u64,
+    pub piece_count: u64,
+}
+
+pub struct TorrentDownloadMetadataDto {
+    pub metadata_state: String,
+    pub metadata: Option<TorrentMetadataDto>,
+    pub selected_file_indexes: Vec<u32>,
+    pub selected_total_bytes: u64,
+    pub selection_confirmed: bool,
 }
 
 /// Event emitted by the Rust backend, forwarded to Kotlin listeners.

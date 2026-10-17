@@ -2,6 +2,7 @@ use std::{future::Future, path::PathBuf};
 
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, Timestamp,
+    TorrentMetadata,
 };
 
 use crate::StorageError;
@@ -92,10 +93,12 @@ pub struct TorrentMetadataRow {
     pub local_torrent_path: Option<PathBuf>,
     pub info_hash: String,
     pub torrent_name: String,
+    pub torrent_metadata: Option<TorrentMetadata>,
     pub destination: PathBuf,
     pub metadata_state: String,
     pub selected_file_indexes: Vec<u32>,
     pub selected_total_bytes: u64,
+    pub selection_confirmed: bool,
     pub aria2_gid: Option<String>,
     pub seed_state: TorrentSeedState,
     pub uploaded_bytes: u64,

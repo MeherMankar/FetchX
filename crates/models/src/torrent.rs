@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use bendy::decoding::{Decoder, Object};
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use thiserror::Error;
 
@@ -9,14 +10,14 @@ const MAX_TORRENT_FILES: usize = 100_000;
 const MAX_TORRENT_NAME_BYTES: usize = 1024;
 const MAX_PATH_SEGMENT_BYTES: usize = 255;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TorrentFile {
     /// Path relative to the torrent's root directory.
     pub path: Vec<String>,
     pub size: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TorrentMetadata {
     pub info_hash: String,
     pub name: String,
@@ -25,6 +26,15 @@ pub struct TorrentMetadata {
     pub trackers: Vec<String>,
     pub piece_length: u64,
     pub piece_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TorrentDownloadMetadata {
+    pub metadata_state: String,
+    pub metadata: Option<TorrentMetadata>,
+    pub selected_file_indexes: Vec<u32>,
+    pub selected_total_bytes: u64,
+    pub selection_confirmed: bool,
 }
 
 impl TorrentMetadata {

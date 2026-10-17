@@ -183,34 +183,44 @@ pub async fn files(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
         }
     };
 
-    let meta = svc
-        .database
-        .torrent_metadata()
-        .get_torrent_metadata(id)
-        .await;
-
-    match meta {
-        Ok(Some(row)) => {
+    match svc.torrent_download_metadata(id).await {
+        Ok(Some(value)) => {
             if json {
                 output::print_json_ok(&serde_json::json!({
                     "ok": true,
                     "download_id": id.to_string(),
-                    "selected_file_indexes": row.selected_file_indexes,
-                    "selected_total_bytes": row.selected_total_bytes,
+                    "metadata_state": value.metadata_state,
+                    "metadata": value.metadata,
+                    "selected_file_indexes": value.selected_file_indexes,
+                    "selected_file_count": value.selected_file_indexes.len(),
+                    "selected_total_bytes": value.selected_total_bytes,
+                    "selection_confirmed": value.selection_confirmed,
                 }));
             } else {
                 println!("Torrent files for {id}:");
-                if row.selected_file_indexes.is_empty() {
-                    println!("  (no file selection recorded — all files selected)");
-                } else {
-                    for idx in &row.selected_file_indexes {
-                        println!("  [{idx}]");
+                println!("  Metadata: {}", value.metadata_state);
+                if let Some(metadata) = value.metadata {
+                    println!("  Name: {}", metadata.name);
+                    println!("  Total size: {}", output::fmt_bytes(metadata.total_size));
+                    for (index, file) in metadata.files.iter().enumerate() {
+                        let selected = value.selected_file_indexes.contains(&(index as u32));
+                        println!(
+                            "  [{}] {} · {}{}",
+                            index + 1,
+                            file.path.join("/"),
+                            output::fmt_bytes(file.size),
+                            if selected { " · selected" } else { "" },
+                        );
                     }
+                } else {
+                    println!("  File list is not available yet.");
                 }
+                println!("  Selected files: {}", value.selected_file_indexes.len());
                 println!(
                     "  Selected size: {}",
-                    output::fmt_bytes(row.selected_total_bytes)
+                    output::fmt_bytes(value.selected_total_bytes)
                 );
+                println!("  Selection confirmed: {}", value.selection_confirmed);
             }
             exit::SUCCESS
         }
@@ -219,8 +229,97 @@ pub async fn files(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
             exit::NOT_FOUND
         }
         Err(e) => {
-            output::print_error(json, &format!("storage error: {e}"));
+            output::print_error(json, &format!("torrent metadata error: {e}"));
             exit::GENERAL_ERROR
+        }
+    }
+}
+
+pub async fn select_files(
+    svc: &CoreServices,
+    id_str: String,
+    expression: String,
+    json: bool,
+) -> ExitCode {
+    let id = match parse_id(&id_str) {
+        Ok(id) => id,
+        Err(_) => {
+            output::print_error(json, "invalid download ID format");
+            return exit::INVALID_ARGS;
+        }
+    };
+    let Some(current) = (match svc.torrent_download_metadata(id).await {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            output::print_error(json, &format!("torrent metadata error: {error}"));
+            return exit::GENERAL_ERROR;
+        }
+    }) else {
+        output::print_error(json, &format!("no torrent metadata for {id}"));
+        return exit::NOT_FOUND;
+    };
+    let Some(metadata) = current.metadata else {
+        output::print_error(json, "torrent metadata is not ready yet");
+        return exit::INVALID_ARGS;
+    };
+    let selection_result = if expression == "none" {
+        svc.set_torrent_selection_all(id, false).await
+    } else {
+        let indexes = if expression == "all" {
+            (0..metadata.files.len())
+                .map(u32::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| "torrent has too many files".to_owned())
+        } else if let Some(directory) = expression.strip_prefix("dir:") {
+            match svc
+                .set_torrent_directory_selected(id, directory.to_owned(), true)
+                .await
+            {
+                Ok(()) => svc
+                    .torrent_download_metadata(id)
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|value| {
+                        value
+                            .ok_or_else(|| "torrent metadata not found".to_owned())
+                            .map(|value| value.selected_file_indexes)
+                    }),
+                Err(error) => Err(error.to_string()),
+            }
+        } else {
+            expression
+                .split(',')
+                .map(|part| {
+                    let one_based = part.trim().parse::<u32>().map_err(|_| {
+                        "indexes must be positive comma-separated integers".to_owned()
+                    })?;
+                    one_based
+                        .checked_sub(1)
+                        .ok_or_else(|| "indexes are 1-based and must be positive".to_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        match indexes {
+            Ok(indexes) => svc.select_torrent_files(id, indexes).await,
+            Err(error) => Err(fetchx_core_services::CoreServicesError::InvalidTorrent(
+                error,
+            )),
+        }
+    };
+    match selection_result {
+        Ok(()) => {
+            if json {
+                output::print_json_ok(
+                    &serde_json::json!({"ok": true, "download_id": id.to_string()}),
+                );
+            } else {
+                println!("Torrent selection saved for {id}");
+            }
+            exit::SUCCESS
+        }
+        Err(error) => {
+            output::print_error(json, &format!("invalid torrent selection: {error}"));
+            exit::INVALID_ARGS
         }
     }
 }

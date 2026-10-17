@@ -210,6 +210,47 @@ impl Aria2Client {
         bt_max_peers: Option<usize>,
         select_file: Option<&[u32]>,
     ) -> Result<Aria2Gid, Aria2ClientError> {
+        self.add_uri_with_options_internal(
+            uri,
+            destination,
+            max_download_rate_bytes_per_second,
+            max_upload_rate_bytes_per_second,
+            bt_max_peers,
+            select_file,
+            false,
+        )
+        .await
+    }
+
+    pub async fn add_magnet_metadata(
+        &self,
+        uri: &str,
+        metadata_directory: &Path,
+        max_download_rate_bytes_per_second: Option<u64>,
+    ) -> Result<Aria2Gid, Aria2ClientError> {
+        self.add_uri_with_options_internal(
+            uri,
+            metadata_directory,
+            max_download_rate_bytes_per_second,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn add_uri_with_options_internal(
+        &self,
+        uri: &str,
+        destination: &Path,
+        max_download_rate_bytes_per_second: Option<u64>,
+        max_upload_rate_bytes_per_second: Option<u64>,
+        bt_max_peers: Option<usize>,
+        select_file: Option<&[u32]>,
+        metadata_only: bool,
+    ) -> Result<Aria2Gid, Aria2ClientError> {
         if uri.len() > MAX_SOURCE_URI_BYTES {
             return Err(Aria2ClientError::InvalidUri);
         }
@@ -260,14 +301,16 @@ impl Aria2Client {
             }
         }
         if let Some(indexes) = select_file {
-            if !indexes.is_empty() {
-                let select_str = indexes
-                    .iter()
-                    .map(|i| (i + 1).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
+            if let Some(select_str) = aria2_select_file(indexes)? {
                 options["select-file"] = json!(select_str);
             }
+        }
+        if metadata_only {
+            if !uri.starts_with("magnet:") {
+                return Err(Aria2ClientError::InvalidUri);
+            }
+            options["bt-metadata-only"] = json!("true");
+            options["bt-save-metadata"] = json!("true");
         }
         let result: String = match self.call("aria2.addUri", vec![json!([uri]), options]).await {
             Ok(result) => result,
@@ -369,12 +412,7 @@ impl Aria2Client {
             options["max-upload-limit"] = json!(rate.to_string());
         }
         if let Some(indexes) = select_file {
-            if !indexes.is_empty() {
-                let select_str = indexes
-                    .iter()
-                    .map(|i| (i + 1).to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
+            if let Some(select_str) = aria2_select_file(indexes)? {
                 options["select-file"] = json!(select_str);
             }
         }
@@ -460,6 +498,18 @@ impl Aria2Client {
             .await
             .map_err(map_gid_error)?;
         ensure_gid_matches(Aria2Gid::new(result)?, gid)
+    }
+
+    pub async fn remove_download_result(&self, gid: &Aria2Gid) -> Result<(), Aria2ClientError> {
+        let removed: bool = self
+            .call("aria2.removeDownloadResult", vec![json!(gid.as_str())])
+            .await
+            .map_err(map_gid_error)?;
+        if removed {
+            Ok(())
+        } else {
+            Err(Aria2ClientError::InvalidGid)
+        }
     }
 
     pub async fn force_remove(&self, gid: &Aria2Gid) -> Result<Aria2Gid, Aria2ClientError> {
@@ -584,6 +634,37 @@ fn aria2_destination(destination: &Path) -> Result<(String, String), Aria2Client
     Ok((directory.to_owned(), filename.to_owned()))
 }
 
+async fn read_magnet_metainfo(
+    path: &Path,
+    expected_info_hash: &str,
+) -> Result<Option<fetchx_models::TorrentMetadata>, DownloadEngineError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > 8 * 1024 * 1024 {
+        return Err(DownloadEngineError::Aria2InvalidOutput);
+    }
+    let mut bytes = Vec::new();
+    tokio::fs::File::open(path)
+        .await
+        .map_err(DownloadEngineError::Io)?
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    if bytes.len() > 8 * 1024 * 1024 {
+        return Err(DownloadEngineError::Aria2InvalidOutput);
+    }
+    let torrent =
+        parse_torrent_metainfo(&bytes).map_err(|_| DownloadEngineError::Aria2InvalidOutput)?;
+    if !torrent.info_hash.eq_ignore_ascii_case(expected_info_hash) {
+        return Err(DownloadEngineError::Aria2ReconciliationRequired);
+    }
+    Ok(Some(torrent))
+}
+
 async fn validate_torrent_directory(
     destination: &Path,
     status: &Aria2Status,
@@ -638,6 +719,29 @@ fn map_gid_error(error: Aria2ClientError) -> Aria2ClientError {
         Aria2ClientError::Rpc { code: 1 } => Aria2ClientError::InvalidGid,
         error => error,
     }
+}
+
+fn aria2_select_file(indexes: &[u32]) -> Result<Option<String>, Aria2ClientError> {
+    let mut normalized = indexes
+        .iter()
+        .map(|index| {
+            index
+                .checked_add(1)
+                .ok_or(Aria2ClientError::InvalidResponse)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    normalized.sort_unstable();
+    normalized.dedup();
+    if normalized.len() != indexes.len() {
+        return Err(Aria2ClientError::InvalidResponse);
+    }
+    Ok((!normalized.is_empty()).then(|| {
+        normalized
+            .into_iter()
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }))
 }
 
 fn ensure_gid_matches(result: Aria2Gid, expected: &Aria2Gid) -> Result<Aria2Gid, Aria2ClientError> {
@@ -1100,11 +1204,6 @@ where
             return Err(DownloadEngineError::Aria2ReconciliationRequired);
         }
         let peers = client.get_peers(&status.gid).await?;
-        metadata.metadata_state = if status.info_hash.is_some() {
-            "ready".to_owned()
-        } else {
-            metadata.metadata_state
-        };
         if status.seeder == Some(true) {
             metadata.seed_state = TorrentSeedState::Seeding;
         }
@@ -1121,6 +1220,350 @@ where
         }
         metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
         repository.update_torrent_metadata(&metadata).await?;
+        Ok(())
+    }
+
+    async fn prepare_magnet_download(
+        &self,
+        id: DownloadId,
+        item: &mut DownloadItem,
+        mut client: Aria2Client,
+        mut generation: u64,
+        mut gid: Option<Aria2Gid>,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<(Aria2Client, u64, Aria2Gid), DownloadEngineError> {
+        let repository = self
+            .torrent_metadata
+            .as_ref()
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+        let mut metadata = repository
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+        let metainfo_path = metadata
+            .local_torrent_path
+            .clone()
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+
+        if metadata.metadata_state == "pending" {
+            if let Some(torrent) = read_magnet_metainfo(&metainfo_path, &metadata.info_hash).await?
+            {
+                metadata.torrent_name = torrent.name.clone();
+                metadata.torrent_metadata = Some(torrent);
+                metadata.metadata_state = "ready".to_owned();
+                metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+                repository.update_torrent_metadata(&metadata).await?;
+            }
+        }
+
+        if metadata.metadata_state == "pending" {
+            if item.status() != DownloadStatus::MetadataAcquiring {
+                *item = self
+                    .state_machine
+                    .transition(id, DownloadStatus::MetadataAcquiring)
+                    .await?;
+            }
+            let mut active_gid = match gid.take() {
+                Some(gid) => gid,
+                None => {
+                    self.submit_magnet_metadata_job(
+                        id,
+                        &client,
+                        generation,
+                        control.bandwidth.external_download_rate_bytes_per_second,
+                    )
+                    .await?
+                }
+            };
+            let mut active_generation = generation;
+            loop {
+                if *control.cancellation.borrow_and_update() {
+                    client.remove(&active_gid).await?;
+                    return Err(DownloadEngineError::Cancelled);
+                }
+                if *control.pause.borrow_and_update() {
+                    client.pause(&active_gid).await?;
+                    return Err(DownloadEngineError::Paused);
+                }
+                if let Some(supervisor) = &self.supervisor {
+                    let (current_client, current_generation) = supervisor.client_runtime().await?;
+                    if current_generation != active_generation {
+                        active_gid = self
+                            .submit_magnet_metadata_job(
+                                id,
+                                &current_client,
+                                current_generation,
+                                control.bandwidth.external_download_rate_bytes_per_second,
+                            )
+                            .await?;
+                        client = current_client;
+                        generation = current_generation;
+                        active_generation = current_generation;
+                    }
+                }
+                if let Some(torrent) =
+                    read_magnet_metainfo(&metainfo_path, &metadata.info_hash).await?
+                {
+                    metadata.torrent_name = torrent.name.clone();
+                    metadata.torrent_metadata = Some(torrent);
+                    metadata.metadata_state = "ready".to_owned();
+                    metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+                    repository.update_torrent_metadata(&metadata).await?;
+                    self.remove_metadata_task(id, &client, &active_gid).await?;
+                    break;
+                }
+                match client.tell_status(&active_gid).await {
+                    Ok(status) => match status.status {
+                        Aria2DownloadStatus::Active | Aria2DownloadStatus::Waiting => {}
+                        Aria2DownloadStatus::Paused => {
+                            return Err(DownloadEngineError::Paused);
+                        }
+                        Aria2DownloadStatus::Complete => {
+                            if let Some(torrent) =
+                                read_magnet_metainfo(&metainfo_path, &metadata.info_hash).await?
+                            {
+                                metadata.torrent_name = torrent.name.clone();
+                                metadata.torrent_metadata = Some(torrent);
+                                metadata.metadata_state = "ready".to_owned();
+                                metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+                                repository.update_torrent_metadata(&metadata).await?;
+                                self.remove_metadata_task(id, &client, &active_gid).await?;
+                                break;
+                            }
+                            return Err(DownloadEngineError::Aria2InvalidOutput);
+                        }
+                        Aria2DownloadStatus::Error => {
+                            return Err(DownloadEngineError::Aria2TransferFailed);
+                        }
+                        Aria2DownloadStatus::Removed => {
+                            self.gids.lock().await.remove(&id);
+                            self.persist_torrent_gid(id, None).await?;
+                            active_gid = self
+                                .submit_magnet_metadata_job(
+                                    id,
+                                    &client,
+                                    generation,
+                                    control.bandwidth.external_download_rate_bytes_per_second,
+                                )
+                                .await?;
+                        }
+                    },
+                    Err(Aria2ClientError::InvalidGid) => {
+                        self.gids.lock().await.remove(&id);
+                        self.persist_torrent_gid(id, None).await?;
+                        active_gid = self
+                            .submit_magnet_metadata_job(
+                                id,
+                                &client,
+                                generation,
+                                control.bandwidth.external_download_rate_bytes_per_second,
+                            )
+                            .await?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+                tokio::select! {
+                    biased;
+                    changed = control.cancellation.changed() => {
+                        if changed.is_err() || *control.cancellation.borrow_and_update() {
+                            client.remove(&active_gid).await?;
+                            return Err(DownloadEngineError::Cancelled);
+                        }
+                    }
+                    changed = control.pause.changed() => {
+                        if changed.is_err() || *control.pause.borrow_and_update() {
+                            client.pause(&active_gid).await?;
+                            return Err(DownloadEngineError::Paused);
+                        }
+                    }
+                    _ = tokio::time::sleep(self.poll_interval) => {}
+                }
+            }
+        }
+
+        if metadata.metadata_state == "ready" {
+            if let Some(metadata_gid) = gid.take() {
+                self.remove_metadata_task(id, &client, &metadata_gid)
+                    .await?;
+            }
+            if item.status() != DownloadStatus::MetadataAcquiring {
+                *item = self
+                    .state_machine
+                    .transition(id, DownloadStatus::MetadataAcquiring)
+                    .await?;
+            }
+            metadata = self.wait_for_magnet_selection(id, control).await?;
+            metadata.metadata_state = "downloading".to_owned();
+            metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+            repository.update_torrent_metadata(&metadata).await?;
+            let torrent_path = metadata
+                .local_torrent_path
+                .as_deref()
+                .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+            let gid = client
+                .add_torrent_file_with_options(
+                    torrent_path,
+                    item.destination(),
+                    control.bandwidth.external_download_rate_bytes_per_second,
+                    Some(&metadata.selected_file_indexes),
+                )
+                .await?;
+            self.gids.lock().await.insert(
+                id,
+                RuntimeGid {
+                    generation,
+                    gid: gid.clone(),
+                },
+            );
+            return Ok((client, generation, gid));
+        }
+
+        if metadata.metadata_state == "downloading" {
+            if let Some(gid) = gid {
+                return Ok((client, generation, gid));
+            }
+            let torrent_path = metadata
+                .local_torrent_path
+                .as_deref()
+                .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+            if metadata.selected_file_indexes.is_empty() {
+                return Err(DownloadEngineError::Aria2ReconciliationRequired);
+            }
+            let gid = client
+                .add_torrent_file_with_options(
+                    torrent_path,
+                    item.destination(),
+                    control.bandwidth.external_download_rate_bytes_per_second,
+                    Some(&metadata.selected_file_indexes),
+                )
+                .await?;
+            self.persist_torrent_gid(id, Some(&gid)).await?;
+            self.gids.lock().await.insert(
+                id,
+                RuntimeGid {
+                    generation,
+                    gid: gid.clone(),
+                },
+            );
+            return Ok((client, generation, gid));
+        }
+
+        Err(DownloadEngineError::Aria2ReconciliationRequired)
+    }
+
+    async fn submit_magnet_metadata_job(
+        &self,
+        id: DownloadId,
+        client: &Aria2Client,
+        generation: u64,
+        max_download_rate_bytes_per_second: Option<u64>,
+    ) -> Result<Aria2Gid, DownloadEngineError> {
+        let metadata = self
+            .torrent_metadata
+            .as_ref()
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+        let uri = metadata
+            .magnet_uri
+            .as_deref()
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+        let metadata_directory = metadata
+            .local_torrent_path
+            .as_deref()
+            .and_then(Path::parent)
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+        let gid = client
+            .add_magnet_metadata(uri, metadata_directory, max_download_rate_bytes_per_second)
+            .await?;
+        self.persist_torrent_gid(id, Some(&gid)).await?;
+        self.gids.lock().await.insert(
+            id,
+            RuntimeGid {
+                generation,
+                gid: gid.clone(),
+            },
+        );
+        let mut updated = metadata;
+        updated.metadata_state = "pending".to_owned();
+        updated.updated_at = Timestamp::now()?.max(updated.updated_at);
+        self.torrent_metadata
+            .as_ref()
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?
+            .update_torrent_metadata(&updated)
+            .await?;
+        self.persist_torrent_gid(id, Some(&gid)).await?;
+        Ok(gid)
+    }
+
+    async fn wait_for_magnet_selection(
+        &self,
+        id: DownloadId,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<fetchx_storage::TorrentMetadataRow, DownloadEngineError> {
+        let repository = self
+            .torrent_metadata
+            .as_ref()
+            .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+        loop {
+            if *control.cancellation.borrow_and_update() {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow_and_update() {
+                return Err(DownloadEngineError::Paused);
+            }
+            let metadata = repository
+                .get_torrent_metadata(id)
+                .await?
+                .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
+            if metadata.metadata_state != "ready" || metadata.torrent_metadata.is_none() {
+                return Err(DownloadEngineError::Aria2ReconciliationRequired);
+            }
+            if metadata.selection_confirmed && !metadata.selected_file_indexes.is_empty() {
+                return Ok(metadata);
+            }
+            tokio::select! {
+                biased;
+                changed = control.cancellation.changed() => {
+                    if changed.is_err() || *control.cancellation.borrow_and_update() {
+                        return Err(DownloadEngineError::Cancelled);
+                    }
+                }
+                changed = control.pause.changed() => {
+                    if changed.is_err() || *control.pause.borrow_and_update() {
+                        return Err(DownloadEngineError::Paused);
+                    }
+                }
+                _ = tokio::time::sleep(self.poll_interval) => {}
+            }
+        }
+    }
+
+    async fn remove_metadata_task(
+        &self,
+        id: DownloadId,
+        client: &Aria2Client,
+        gid: &Aria2Gid,
+    ) -> Result<(), DownloadEngineError> {
+        match client.tell_status(gid).await {
+            Ok(status) => match status.status {
+                Aria2DownloadStatus::Active
+                | Aria2DownloadStatus::Waiting
+                | Aria2DownloadStatus::Paused => {
+                    client.remove(gid).await?;
+                }
+                Aria2DownloadStatus::Complete
+                | Aria2DownloadStatus::Error
+                | Aria2DownloadStatus::Removed => {
+                    client.remove_download_result(gid).await?;
+                }
+            },
+            Err(Aria2ClientError::InvalidGid) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.gids.lock().await.remove(&id);
+        self.persist_torrent_gid(id, None).await?;
         Ok(())
     }
 
@@ -1255,7 +1698,14 @@ where
             None if item.progress().downloaded_bytes() == 0 || self.supervisor.is_some() => None,
             None => return Err(DownloadEngineError::Aria2ReconciliationRequired),
         };
-        if gid.is_none() {
+        if item.source().is_magnet() {
+            let (updated_client, updated_generation, magnet_gid) = self
+                .prepare_magnet_download(id, item, client.clone(), generation, gid, control)
+                .await?;
+            client = updated_client;
+            generation = updated_generation;
+            gid = Some(magnet_gid);
+        } else if gid.is_none() {
             gid = Some(
                 self.submit_job(
                     id,
@@ -1269,7 +1719,10 @@ where
             );
         }
         let mut gid = gid.ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
-        if item.status() == DownloadStatus::Preparing {
+        if matches!(
+            item.status(),
+            DownloadStatus::Preparing | DownloadStatus::MetadataAcquiring
+        ) {
             *item = self
                 .state_machine
                 .transition(id, DownloadStatus::Downloading)
@@ -2041,12 +2494,14 @@ mod tests {
                 source_type: TorrentSourceType::TorrentFile,
                 magnet_uri: None,
                 local_torrent_path: Some(torrent_path),
-                info_hash: parsed.info_hash,
-                torrent_name: parsed.name,
+                info_hash: parsed.info_hash.clone(),
+                torrent_name: parsed.name.clone(),
+                torrent_metadata: Some(parsed.clone()),
                 destination: item.destination().to_path_buf(),
                 metadata_state: "ready".to_owned(),
                 selected_file_indexes: vec![0],
                 selected_total_bytes: 1,
+                selection_confirmed: true,
                 aria2_gid: None,
                 seed_state: TorrentSeedState::Downloading,
                 uploaded_bytes: 0,
@@ -2585,6 +3040,225 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn aria2_file_selection_mapping_validates_zero_based_indexes() {
+        assert_eq!(
+            super::aria2_select_file(&[0, 2, 4]).expect("valid file selection"),
+            Some("1,3,5".to_owned())
+        );
+        assert_eq!(
+            super::aria2_select_file(&[]).expect("empty selection"),
+            None
+        );
+        assert!(super::aria2_select_file(&[1, 1]).is_err());
+        assert!(super::aria2_select_file(&[u32::MAX]).is_err());
+    }
+
+    #[tokio::test]
+    async fn magnet_metadata_submission_uses_metadata_only_rpc_options()
+    -> Result<(), Box<dyn Error>> {
+        let (endpoint, mut requests, server) =
+            start_server([MockReply::Result(json!("0123456789abcdef"))]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let directory = tempfile::tempdir()?;
+        client
+            .add_magnet_metadata(
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                directory.path(),
+                Some(4096),
+            )
+            .await?;
+        let request = requests.recv().await.ok_or("missing metadata addUri")?;
+        assert_eq!(request["method"], "aria2.addUri");
+        assert_eq!(
+            request["params"][1][0],
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+        );
+        assert_eq!(request["params"][2]["bt-metadata-only"], "true");
+        assert_eq!(request["params"][2]["bt-save-metadata"], "true");
+        assert_eq!(request["params"][2]["max-download-limit"], "4096");
+        assert_eq!(
+            request["params"][2]["dir"],
+            directory.path().to_string_lossy().as_ref()
+        );
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn magnet_metadata_acquisition_parses_persists_selection_and_submits_selected_indexes()
+    -> Result<(), Box<dyn Error>> {
+        let metainfo = b"d4:infod6:lengthi4e4:name1:x12:piece lengthi16384e6:pieces20:\
+                         01234567890123456789ee";
+        let torrent = fetchx_models::parse_torrent_metainfo(metainfo)?;
+        let root = tempfile::tempdir()?;
+        let metainfo_path = root.path().join("metadata").join("sample.torrent");
+        tokio::fs::create_dir_all(
+            metainfo_path
+                .parent()
+                .ok_or("metadata path has no parent")?,
+        )
+        .await?;
+        let destination = root.path().join("downloads");
+        tokio::fs::create_dir_all(&destination).await?;
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let magnet_uri = format!("magnet:?xt=urn:btih:{}", torrent.info_hash);
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(&magnet_uri, EngineKind::Aria2)?,
+            FileName::new(torrent.name.clone())?,
+            destination,
+            now,
+        );
+        let database = Database::connect("sqlite::memory:").await?;
+        database.downloads().create(&item).await?;
+        database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet_uri),
+                local_torrent_path: Some(metainfo_path.clone()),
+                info_hash: torrent.info_hash.clone(),
+                torrent_name: torrent.name.clone(),
+                torrent_metadata: None,
+                destination: item.destination().to_path_buf(),
+                metadata_state: "pending".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                selection_confirmed: false,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        let (endpoint, mut requests, server) = start_server([
+            MockReply::Delayed(Duration::from_millis(200), json!("0123456789abcdef")),
+            MockReply::Result(status_json("active", "0", "4")),
+            MockReply::Result(json!("0123456789abcdef")),
+            MockReply::Result(json!("fedcba9876543210")),
+            MockReply::Result(json!("fedcba9876543210")),
+        ])
+        .await?;
+        let engine = Aria2Engine::with_poll_interval(
+            database.downloads(),
+            make_client(endpoint, Duration::from_secs(2))?,
+            Duration::from_secs(1),
+        )
+        .with_torrent_metadata_repository(database.torrent_metadata());
+        let (cancel_sender, cancellation) = watch::channel(false);
+        let download = tokio::spawn(async move { engine.download(id, cancellation).await });
+
+        let metadata_add = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await?
+            .ok_or("missing metadata addUri request")?;
+        assert_eq!(metadata_add["method"], "aria2.addUri");
+        assert_eq!(metadata_add["params"][2]["bt-metadata-only"], "true");
+        assert_eq!(metadata_add["params"][2]["bt-save-metadata"], "true");
+        tokio::fs::write(&metainfo_path, metainfo).await?;
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let row = database.torrent_metadata().get_torrent_metadata(id).await?;
+                if row.is_some_and(|row| row.metadata_state == "ready") {
+                    return Ok::<(), Box<dyn Error>>(());
+                }
+                let item = database
+                    .downloads()
+                    .get(id)
+                    .await?
+                    .ok_or("magnet download disappeared")?;
+                if item.status() == DownloadStatus::Failed {
+                    return Err(format!(
+                        "magnet metadata acquisition failed: {:?}",
+                        item.error().map(|error| error.message())
+                    )
+                    .into());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let mut row = database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("magnet metadata row disappeared")?;
+        assert_eq!(
+            row.torrent_metadata
+                .as_ref()
+                .map(|value| value.info_hash.as_str()),
+            Some(torrent.info_hash.as_str())
+        );
+        assert_eq!(
+            row.torrent_metadata.as_ref().map(|value| value.files.len()),
+            Some(1)
+        );
+        row.selected_file_indexes = vec![0];
+        row.selected_total_bytes = 4;
+        row.selection_confirmed = true;
+        database
+            .torrent_metadata()
+            .update_torrent_metadata(&row)
+            .await?;
+
+        let mut observed = Vec::new();
+        loop {
+            let request = match tokio::time::timeout(Duration::from_secs(3), requests.recv()).await
+            {
+                Ok(Some(request)) => request,
+                Ok(None) => {
+                    return Err("aria2 request channel closed during metadata handoff".into());
+                }
+                Err(_) => {
+                    let item = database.downloads().get(id).await?;
+                    let metadata = database.torrent_metadata().get_torrent_metadata(id).await?;
+                    let item_state = item.as_ref().map(DownloadItem::status);
+                    let item_error =
+                        item.and_then(|item| item.error().map(|error| error.message().to_owned()));
+                    let metadata_state = metadata.as_ref().map(|row| row.metadata_state.clone());
+                    let selection =
+                        metadata.map(|row| (row.selected_file_indexes, row.selection_confirmed));
+                    return Err(format!(
+                        "timed out waiting for selected torrent submission: {observed:?}; \
+                         status={:?}, error={:?}, metadata_state={:?}, selection={:?}",
+                        item_state, item_error, metadata_state, selection,
+                    )
+                    .into());
+                }
+            };
+            let method = request["method"].as_str().ok_or("missing aria2 method")?;
+            observed.push(method.to_owned());
+            if method == "aria2.addTorrent" {
+                assert_eq!(request["params"][2], json!([]));
+                assert_eq!(request["params"][3]["select-file"], "1");
+                break;
+            }
+        }
+        assert!(observed.iter().any(|method| method == "aria2.remove"));
+        cancel_sender.send(true)?;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(3), download)
+                .await
+                .map_err(|_| "download did not cancel after metadata selection")??,
+            Err(DownloadEngineError::Cancelled)
+        ));
+        let remove_download = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+            .await
+            .map_err(|_| "cancellation did not remove selected aria2 task")?
+            .ok_or("missing cancellation aria2.remove request")?;
+        assert_eq!(remove_download["method"], "aria2.remove");
+        server.await?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn status_response_must_match_the_requested_gid() -> Result<(), Box<dyn Error>> {
         let (endpoint, _requests, server) =
@@ -2688,10 +3362,12 @@ mod tests {
                 local_torrent_path: None,
                 info_hash: "0123456789abcdef0123456789abcdef01234567".to_owned(),
                 torrent_name: "sample".to_owned(),
+                torrent_metadata: None,
                 destination: destination.to_path_buf(),
                 metadata_state: "pending".to_owned(),
                 selected_file_indexes: Vec::new(),
                 selected_total_bytes: 0,
+                selection_confirmed: false,
                 aria2_gid: gid.map(str::to_owned),
                 seed_state: TorrentSeedState::Downloading,
                 uploaded_bytes: 0,
@@ -2966,10 +3642,50 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let root = tempfile::tempdir()?;
+        let torrent_path = root.path().join("sample.torrent");
+        let metainfo = b"d4:infod6:lengthi4e4:name1:x12:piece lengthi16384e6:pieces20:\
+                         01234567890123456789ee";
+        tokio::fs::write(&torrent_path, metainfo).await?;
+        let parsed = fetchx_models::parse_torrent_metainfo(metainfo)?;
+        let info_hash = parsed.info_hash.clone();
         let destination = root.path().join("output");
         tokio::fs::create_dir_all(&destination).await?;
-        tokio::fs::write(destination.join("payload.bin"), b"data").await?;
-        let (id, _) = create_torrent_item(&database, &destination, None).await?;
+        tokio::fs::write(destination.join("x"), b"data").await?;
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new_torrent_file(&torrent_path, EngineKind::Aria2)?,
+            FileName::new("x")?,
+            destination.clone(),
+            now,
+        );
+        database.downloads().create(&item).await?;
+        database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::TorrentFile,
+                magnet_uri: None,
+                local_torrent_path: Some(torrent_path),
+                info_hash: info_hash.clone(),
+                torrent_name: parsed.name.clone(),
+                torrent_metadata: Some(parsed),
+                destination: destination.clone(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: vec![0],
+                selected_total_bytes: 4,
+                selection_confirmed: true,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
 
         let complete_seeding_status = json!({
             "gid":"0123456789abcdef",
@@ -2982,7 +3698,7 @@ mod tests {
             "connections":"0",
             "numSeeders":"0",
             "seeder":"true",
-            "infoHash":"0123456789abcdef0123456789abcdef01234567",
+            "infoHash":info_hash,
             "errorCode":"0",
             "bittorrent":{"announceList":[]}
         });
@@ -3004,18 +3720,32 @@ mod tests {
         let (cancel_sender, cancellation) = watch::channel(false);
         let download = tokio::spawn(async move { engine.download(id, cancellation).await });
 
-        let methods = [
-            "aria2.addUri",
-            "aria2.tellStatus",
-            "aria2.getPeers",
-            "aria2.tellStatus",
-        ];
-        for expected in methods {
+        let mut observed_methods: Vec<String> = Vec::new();
+        while observed_methods
+            .iter()
+            .filter(|method| method.as_str() == "aria2.tellStatus")
+            .count()
+            < 2
+            || observed_methods
+                .iter()
+                .filter(|method| method.as_str() == "aria2.getPeers")
+                .count()
+                < 2
+        {
             let request = tokio::time::timeout(Duration::from_secs(2), requests.recv())
-                .await?
+                .await
+                .map_err(|_| {
+                    format!("timed out waiting for repeated seeding polls: {observed_methods:?}")
+                })?
                 .ok_or("aria2 request channel closed")?;
-            assert_eq!(request["method"], expected);
+            observed_methods.push(
+                request["method"]
+                    .as_str()
+                    .ok_or("missing aria2 RPC method")?
+                    .to_owned(),
+            );
         }
+        assert_eq!(observed_methods[0], "aria2.addTorrent");
         assert_eq!(
             database
                 .downloads()
@@ -3040,21 +3770,10 @@ mod tests {
                 .status(),
             DownloadStatus::Cancelled
         );
-        let mut remaining = [
-            requests.recv().await.ok_or("missing second getPeers")?,
-            requests.recv().await.ok_or("missing aria2.remove")?,
-        ];
-        remaining.sort_by_key(|request| request["method"].to_string());
-        assert!(
-            remaining
-                .iter()
-                .any(|request| request["method"] == "aria2.getPeers")
-        );
-        assert!(
-            remaining
-                .iter()
-                .any(|request| request["method"] == "aria2.remove")
-        );
+        let remove_request = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await?
+            .ok_or("missing aria2.remove")?;
+        assert_eq!(remove_request["method"], "aria2.remove");
         server.await?;
         Ok(())
     }

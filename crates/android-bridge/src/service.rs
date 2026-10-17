@@ -26,8 +26,9 @@ use tokio::{
 use tracing::warn;
 
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentFileDto, TorrentMetadataDto,
-    TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto, priority_from_dto,
+    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentDownloadMetadataDto, TorrentFileDto,
+    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto,
+    priority_from_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -229,7 +230,111 @@ impl DownloadService {
                 info_hash: metadata.info_hash,
                 total_size_bytes: metadata.total_size,
                 files,
+                trackers: metadata.trackers,
+                piece_length: metadata.piece_length,
+                piece_count: u64::try_from(metadata.piece_count).map_err(|_| {
+                    MobileApiError::Validation("torrent has too many pieces".to_owned())
+                })?,
             })
+        })
+    }
+
+    pub fn get_torrent_download_metadata(
+        &self,
+        id: String,
+    ) -> Result<Option<TorrentDownloadMetadataDto>, MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            let metadata = inner
+                .runtime
+                .block_on(inner.core.torrent_download_metadata(download_id))
+                .map_err(MobileApiError::from)?;
+            metadata
+                .map(|value| {
+                    Ok(TorrentDownloadMetadataDto {
+                        metadata_state: value.metadata_state,
+                        metadata: value.metadata.map(torrent_metadata_to_dto).transpose()?,
+                        selected_file_indexes: value.selected_file_indexes,
+                        selected_total_bytes: value.selected_total_bytes,
+                        selection_confirmed: value.selection_confirmed,
+                    })
+                })
+                .transpose()
+        })
+    }
+
+    pub fn select_torrent_files(
+        &self,
+        id: String,
+        selected_file_indexes: Vec<u32>,
+    ) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(
+                    inner
+                        .core
+                        .select_torrent_files(download_id, selected_file_indexes),
+                )
+                .map_err(MobileApiError::from)
+        })
+    }
+
+    pub fn set_torrent_file_selected(
+        &self,
+        id: String,
+        file_index: u32,
+        selected: bool,
+    ) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(
+                    inner
+                        .core
+                        .set_torrent_file_selected(download_id, file_index, selected),
+                )
+                .map_err(MobileApiError::from)
+        })
+    }
+
+    pub fn set_torrent_selection_all(
+        &self,
+        id: String,
+        selected: bool,
+    ) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.set_torrent_selection_all(download_id, selected))
+                .map_err(MobileApiError::from)
+        })
+    }
+
+    pub fn set_torrent_directory_selected(
+        &self,
+        id: String,
+        directory: String,
+        selected: bool,
+    ) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.set_torrent_directory_selected(
+                    download_id,
+                    directory,
+                    selected,
+                ))
+                .map_err(MobileApiError::from)
         })
     }
 
@@ -780,6 +885,35 @@ fn format_to_dto(format: YtDlpFormat) -> YtDlpFormatDto {
         title: format.title,
         platform: format.platform,
     }
+}
+
+fn torrent_metadata_to_dto(
+    metadata: fetchx_models::TorrentMetadata,
+) -> Result<TorrentMetadataDto, MobileApiError> {
+    let files = metadata
+        .files
+        .into_iter()
+        .enumerate()
+        .map(|(index, file)| {
+            Ok(TorrentFileDto {
+                index: u32::try_from(index).map_err(|_| {
+                    MobileApiError::Validation("torrent has too many files".to_owned())
+                })?,
+                path: file.path.join("/"),
+                size_bytes: file.size,
+            })
+        })
+        .collect::<Result<Vec<_>, MobileApiError>>()?;
+    Ok(TorrentMetadataDto {
+        name: metadata.name,
+        info_hash: metadata.info_hash,
+        total_size_bytes: metadata.total_size,
+        files,
+        trackers: metadata.trackers,
+        piece_length: metadata.piece_length,
+        piece_count: u64::try_from(metadata.piece_count)
+            .map_err(|_| MobileApiError::Validation("too many torrent pieces".to_owned()))?,
+    })
 }
 
 fn unique_destination_path(path: &Path) -> PathBuf {

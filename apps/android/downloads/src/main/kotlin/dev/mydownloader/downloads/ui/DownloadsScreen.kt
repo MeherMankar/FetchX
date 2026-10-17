@@ -67,6 +67,7 @@ fun DownloadsScreen(
     val failedDownloads by viewModel.failedDownloads.collectAsStateWithLifecycle()
     val cancelledDownloads by viewModel.cancelledDownloads.collectAsStateWithLifecycle()
     val torrentTelemetry by viewModel.torrentTelemetry.collectAsStateWithLifecycle()
+    val torrentMetadata by viewModel.torrentMetadata.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -194,6 +195,19 @@ fun DownloadsScreen(
                             onRemove = { viewModel.remove(item.id) },
                             onRetry = { viewModel.retry(item.id) },
                             torrentTelemetry = torrentTelemetry[item.id],
+                            torrentMetadata = torrentMetadata[item.id],
+                            onTorrentFileSelected = { index, selected ->
+                                viewModel.setTorrentFileSelected(item.id, index, selected)
+                            },
+                            onTorrentSelectionAll = { selected ->
+                                viewModel.setTorrentSelectionAll(item.id, selected)
+                            },
+                            onTorrentDirectorySelected = { directory, selected ->
+                                viewModel.setTorrentDirectorySelected(item.id, directory, selected)
+                            },
+                            onSelectTorrentFiles = { indexes ->
+                                viewModel.selectTorrentFiles(item.id, indexes)
+                            },
                             onStopSeeding = { viewModel.stopTorrentSeeding(item.id) },
                             onPlayFile = if ((item.state is dev.fetchx.core.download.DownloadState.Completed ||
                                 item.state is dev.fetchx.core.download.DownloadState.Stopped) &&

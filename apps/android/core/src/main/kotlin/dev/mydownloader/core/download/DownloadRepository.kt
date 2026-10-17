@@ -34,9 +34,21 @@ data class TorrentMetadata(
     val infoHash: String,
     val totalSizeBytes: Long,
     val files: List<TorrentFile>,
+    val trackers: List<String> = emptyList(),
+    val pieceLength: Long = 0,
+    val pieceCount: Long = 0,
+)
+
+data class TorrentDownloadMetadata(
+    val metadataState: String,
+    val metadata: TorrentMetadata?,
+    val selectedFileIndexes: List<Int>,
+    val selectedTotalBytes: Long,
+    val selectionConfirmed: Boolean,
 )
 
 interface TorrentDownloadRepository : DownloadRepository {
+    suspend fun addMagnet(magnetUri: String, priority: DownloadPriority): String
     suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata
     suspend fun addTorrentFile(
         torrentPath: String,
@@ -45,6 +57,11 @@ interface TorrentDownloadRepository : DownloadRepository {
         priority: DownloadPriority,
     ): String
     suspend fun torrentTelemetry(downloadId: String): TorrentTelemetry?
+    suspend fun torrentDownloadMetadata(downloadId: String): TorrentDownloadMetadata?
+    suspend fun selectTorrentFiles(downloadId: String, fileIndexes: List<Int>)
+    suspend fun setTorrentFileSelected(downloadId: String, fileIndex: Int, selected: Boolean)
+    suspend fun setTorrentSelectionAll(downloadId: String, selected: Boolean)
+    suspend fun setTorrentDirectorySelected(downloadId: String, directory: String, selected: Boolean)
     suspend fun stopTorrentSeeding(downloadId: String)
 }
 

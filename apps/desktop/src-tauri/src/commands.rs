@@ -970,6 +970,92 @@ pub async fn get_torrent_metadata(
     }))
 }
 
+#[tauri::command]
+pub async fn get_torrent_download_metadata(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<fetchx_models::TorrentDownloadMetadata>, IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .torrent_download_metadata(download_id)
+        .await
+        .map_err(|_| IpcError::internal())
+}
+
+#[tauri::command]
+pub async fn select_torrent_files(
+    state: State<'_, AppState>,
+    id: String,
+    file_indexes: Vec<u32>,
+) -> Result<(), IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .select_torrent_files(download_id, file_indexes)
+        .await
+        .map_err(|_| IpcError::invalid_request())
+}
+
+#[tauri::command]
+pub async fn set_torrent_file_selected(
+    state: State<'_, AppState>,
+    id: String,
+    file_index: u32,
+    selected: bool,
+) -> Result<(), IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .set_torrent_file_selected(download_id, file_index, selected)
+        .await
+        .map_err(|_| IpcError::invalid_request())
+}
+
+#[tauri::command]
+pub async fn set_torrent_selection_all(
+    state: State<'_, AppState>,
+    id: String,
+    selected: bool,
+) -> Result<(), IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .set_torrent_selection_all(download_id, selected)
+        .await
+        .map_err(|_| IpcError::invalid_request())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_torrent_directory_selected(
+    state: State<'_, AppState>,
+    id: String,
+    directory: String,
+    selected: bool,
+) -> Result<(), IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .set_torrent_directory_selected(download_id, directory, selected)
+        .await
+        .map_err(|_| IpcError::invalid_request())
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn inspect_torrent_file(
     state: State<'_, AppState>,

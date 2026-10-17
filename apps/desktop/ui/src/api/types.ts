@@ -76,6 +76,22 @@ export interface TorrentInspection {
   files: Array<{ index: number; path: string; size: number }>;
 }
 
+export interface TorrentDownloadMetadata {
+  metadata_state: string;
+  metadata: {
+    info_hash: string;
+    name: string;
+    total_size: number;
+    files: Array<{ path: string[]; size: number }>;
+    trackers: string[];
+    piece_length: number;
+    piece_count: number;
+  } | null;
+  selected_file_indexes: number[];
+  selected_total_bytes: number;
+  selection_confirmed: boolean;
+}
+
 export interface YtDlpFormat {
   format_id: string;
   label: string;

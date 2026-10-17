@@ -7,6 +7,7 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentTelemetry
 import kotlinx.coroutines.CancellationException
@@ -15,7 +16,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -71,6 +71,8 @@ class DownloadsViewModel(
 
     private val _torrentTelemetry = MutableStateFlow<Map<String, TorrentTelemetry>>(emptyMap())
     val torrentTelemetry: StateFlow<Map<String, TorrentTelemetry>> = _torrentTelemetry.asStateFlow()
+    private val _torrentMetadata = MutableStateFlow<Map<String, TorrentDownloadMetadata>>(emptyMap())
+    val torrentMetadata: StateFlow<Map<String, TorrentDownloadMetadata>> = _torrentMetadata.asStateFlow()
 
     /** All downloads, sorted newest-first. */
     val allDownloads: StateFlow<List<DownloadItem>> = downloads
@@ -140,6 +142,7 @@ class DownloadsViewModel(
                 downloads.collectLatest { items ->
                     while (true) {
                         val snapshots = mutableMapOf<String, TorrentTelemetry>()
+                        val metadataSnapshots = mutableMapOf<String, TorrentDownloadMetadata>()
                         for (item in items) {
                             if (!item.engine.equals("aria2", ignoreCase = true)) continue
                             try {
@@ -153,8 +156,22 @@ class DownloadsViewModel(
                                     it.copy(error = "Torrent telemetry is temporarily unavailable.")
                                 }
                             }
+                            if (item.url.startsWith("magnet:", ignoreCase = true)) {
+                                try {
+                                    torrentRepository.torrentDownloadMetadata(item.id)?.let {
+                                        metadataSnapshots[item.id] = it
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    _uiState.update {
+                                        it.copy(error = "Torrent metadata is temporarily unavailable.")
+                                    }
+                                }
+                            }
                         }
                         _torrentTelemetry.value = snapshots
+                        _torrentMetadata.value = metadataSnapshots
                         delay(TORRENT_TELEMETRY_POLL_MILLIS)
                     }
                 }
@@ -178,7 +195,11 @@ class DownloadsViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                if (selectedTorrentFileIndexes != null) {
+                if (url.startsWith("magnet:", ignoreCase = true)) {
+                    val torrentRepository = repository as? TorrentDownloadRepository
+                        ?: throw UnsupportedOperationException("Magnet downloads are unavailable")
+                    torrentRepository.addMagnet(url, priority)
+                } else if (selectedTorrentFileIndexes != null) {
                     val torrentRepository = repository as? TorrentDownloadRepository
                         ?: throw UnsupportedOperationException("Torrent selection is unavailable")
                     torrentRepository.addTorrentFile(
@@ -230,6 +251,34 @@ class DownloadsViewModel(
 
     fun setPriority(downloadId: String, priority: DownloadPriority) {
         performAction("update priority") { repository.setPriority(downloadId, priority) }
+    }
+
+    fun setTorrentFileSelected(downloadId: String, fileIndex: Int, selected: Boolean) {
+        val torrentRepository = repository as? TorrentDownloadRepository ?: return
+        performAction("update torrent selection") {
+            torrentRepository.setTorrentFileSelected(downloadId, fileIndex, selected)
+        }
+    }
+
+    fun setTorrentSelectionAll(downloadId: String, selected: Boolean) {
+        val torrentRepository = repository as? TorrentDownloadRepository ?: return
+        performAction("update torrent selection") {
+            torrentRepository.setTorrentSelectionAll(downloadId, selected)
+        }
+    }
+
+    fun setTorrentDirectorySelected(downloadId: String, directory: String, selected: Boolean) {
+        val torrentRepository = repository as? TorrentDownloadRepository ?: return
+        performAction("update torrent selection") {
+            torrentRepository.setTorrentDirectorySelected(downloadId, directory, selected)
+        }
+    }
+
+    fun selectTorrentFiles(downloadId: String, indexes: List<Int>) {
+        val torrentRepository = repository as? TorrentDownloadRepository ?: return
+        performAction("start selected torrent files") {
+            torrentRepository.selectTorrentFiles(downloadId, indexes)
+        }
     }
 
     fun stopTorrentSeeding(downloadId: String) {

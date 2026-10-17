@@ -8,6 +8,8 @@ import dev.fetchx.bridge.uniffi.DownloadPriorityDto
 import dev.fetchx.bridge.uniffi.DownloadService
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
 import dev.fetchx.bridge.uniffi.TorrentTelemetryDto
+import dev.fetchx.bridge.uniffi.TorrentMetadataDto
+import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.DownloadEvent
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
@@ -161,6 +163,53 @@ class BridgeDownloadRepository(
                     format.platform,
                 )
             }
+        }
+
+    override suspend fun addMagnet(
+        magnetUri: String,
+        priority: DownloadPriority,
+    ): String = withContext(Dispatchers.IO) {
+        service.addMagnetDownload(magnetUri, mapPriorityToDto(priority))
+    }
+
+    override suspend fun torrentDownloadMetadata(
+        downloadId: String,
+    ): TorrentDownloadMetadata? = withContext(Dispatchers.IO) {
+        service.getTorrentDownloadMetadata(downloadId)?.let { value ->
+            TorrentDownloadMetadata(
+                metadataState = value.metadataState,
+                metadata = value.metadata?.let(::mapTorrentMetadata),
+                selectedFileIndexes = value.selectedFileIndexes.map(UInt::toInt),
+                selectedTotalBytes = value.selectedTotalBytes.toLong(),
+                selectionConfirmed = value.selectionConfirmed,
+            )
+        }
+    }
+
+    override suspend fun selectTorrentFiles(downloadId: String, fileIndexes: List<Int>) =
+        withContext(Dispatchers.IO) {
+            service.selectTorrentFiles(downloadId, fileIndexes.map(Int::toUInt))
+        }
+
+    override suspend fun setTorrentFileSelected(
+        downloadId: String,
+        fileIndex: Int,
+        selected: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        service.setTorrentFileSelected(downloadId, fileIndex.toUInt(), selected)
+    }
+
+    override suspend fun setTorrentSelectionAll(downloadId: String, selected: Boolean) =
+        withContext(Dispatchers.IO) {
+            service.setTorrentSelectionAll(downloadId, selected)
+        }
+
+    override suspend fun setTorrentDirectorySelected(
+        downloadId: String,
+        directory: String,
+        selected: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        service.setTorrentDirectorySelected(downloadId, directory, selected)
     }
 
     override suspend fun torrentTelemetry(downloadId: String): TorrentTelemetry? =
@@ -183,20 +232,7 @@ class BridgeDownloadRepository(
 
     override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =
         withContext(Dispatchers.IO) {
-            service.inspectTorrentFile(torrentPath).let { metadata ->
-                TorrentMetadata(
-                    name = metadata.name,
-                    infoHash = metadata.infoHash,
-                    totalSizeBytes = metadata.totalSizeBytes.toLong(),
-                    files = metadata.files.map { file ->
-                        TorrentFile(
-                            index = file.index.toInt(),
-                            path = file.path,
-                            sizeBytes = file.sizeBytes.toLong(),
-                        )
-                    },
-                )
-            }
+            mapTorrentMetadata(service.inspectTorrentFile(torrentPath))
         }
 
     override suspend fun addTorrentFile(
@@ -377,3 +413,19 @@ internal fun isMediaUrl(url: String): Boolean {
     }
     return host.contains("youtube.com") || host == "youtu.be"
 }
+
+private fun mapTorrentMetadata(metadata: TorrentMetadataDto) = TorrentMetadata(
+    name = metadata.name,
+    infoHash = metadata.infoHash,
+    totalSizeBytes = metadata.totalSizeBytes.toLong(),
+    files = metadata.files.map { file ->
+        TorrentFile(
+            index = file.index.toInt(),
+            path = file.path,
+            sizeBytes = file.sizeBytes.toLong(),
+        )
+    },
+    trackers = metadata.trackers,
+    pieceLength = metadata.pieceLength.toLong(),
+    pieceCount = metadata.pieceCount.toLong(),
+)

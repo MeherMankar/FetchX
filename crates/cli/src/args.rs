@@ -200,6 +200,14 @@ pub enum TorrentCommand {
         /// Download ID.
         id: String,
     },
+    /// Set a magnet file selection (1-based indexes, `all`, `none`, or `dir:path`).
+    Select {
+        /// Download ID.
+        id: String,
+        /// Selection expression, for example `all`, `none`, `1,3`, or `dir:folder`.
+        #[arg(long, value_name = "SELECTION")]
+        files: String,
+    },
     /// Stop seeding after a completed torrent download.
     StopSeeding {
         /// Download ID.
@@ -211,7 +219,7 @@ pub enum TorrentCommand {
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command};
+    use super::{Cli, Command, TorrentCommand};
 
     #[test]
     fn add_accepts_explicit_magnet_option() {
@@ -238,5 +246,46 @@ mod tests {
         };
         assert_eq!(options.url.as_deref(), Some("fixture.torrent"));
         assert!(options.magnet.is_none());
+    }
+
+    #[test]
+    fn torrent_select_accepts_file_selection_expression() {
+        let cli = Cli::try_parse_from([
+            "fetchx",
+            "torrent",
+            "select",
+            "download-id",
+            "--files",
+            "dir:folder",
+        ])
+        .expect("torrent selection command should parse");
+        let Command::Torrent(options) = cli.command else {
+            panic!("expected torrent command");
+        };
+        assert!(matches!(
+            options.command,
+            TorrentCommand::Select { id, files }
+                if id == "download-id" && files == "dir:folder"
+        ));
+    }
+
+    #[test]
+    fn torrent_select_accepts_one_based_file_indexes() {
+        let cli = Cli::try_parse_from([
+            "fetchx",
+            "torrent",
+            "select",
+            "download-id",
+            "--files",
+            "1,3",
+        ])
+        .expect("torrent file indexes should parse");
+        let Command::Torrent(options) = cli.command else {
+            panic!("expected torrent command");
+        };
+        assert!(matches!(
+            options.command,
+            TorrentCommand::Select { files, .. } if files == "1,3"
+        ));
     }
 }

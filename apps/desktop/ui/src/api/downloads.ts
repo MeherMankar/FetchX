@@ -12,6 +12,7 @@ import type {
   ScheduleDownloadRequest,
   SetPriorityRequest,
   TorrentInspection,
+  TorrentDownloadMetadata,
   TorrentTelemetry,
   YtDlpFormat,
 } from "./types";
@@ -105,6 +106,49 @@ export function getQueueSnapshot(): Promise<QueueSnapshot> {
 
 export function getTorrentTelemetry(downloadId: string): Promise<TorrentTelemetry | null> {
   return invoke<TorrentTelemetry | null>("get_torrent_telemetry", { id: downloadId });
+}
+
+export function getTorrentDownloadMetadata(
+  downloadId: string,
+): Promise<TorrentDownloadMetadata | null> {
+  return invoke<TorrentDownloadMetadata | null>("get_torrent_download_metadata", {
+    id: downloadId,
+  });
+}
+
+export function selectTorrentFiles(downloadId: string, fileIndexes: number[]): Promise<void> {
+  return invoke<void>("select_torrent_files", { id: downloadId, file_indexes: fileIndexes });
+}
+
+export function setTorrentFileSelected(
+  downloadId: string,
+  fileIndex: number,
+  selected: boolean,
+): Promise<void> {
+  return invoke<void>("set_torrent_file_selected", {
+    id: downloadId,
+    file_index: fileIndex,
+    selected,
+  });
+}
+
+export function setTorrentSelectionAll(
+  downloadId: string,
+  selected: boolean,
+): Promise<void> {
+  return invoke<void>("set_torrent_selection_all", { id: downloadId, selected });
+}
+
+export function setTorrentDirectorySelected(
+  downloadId: string,
+  directory: string,
+  selected: boolean,
+): Promise<void> {
+  return invoke<void>("set_torrent_directory_selected", {
+    id: downloadId,
+    directory,
+    selected,
+  });
 }
 
 export function stopTorrentSeeding(downloadId: string): Promise<void> {

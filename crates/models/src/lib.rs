@@ -26,6 +26,6 @@ pub use resources::{
 pub use schedule::{DownloadSchedule, DownloadScheduleError};
 pub use timestamp::{Timestamp, TimestampError};
 pub use torrent::{
-    TorrentFile, TorrentFileSelection, TorrentMetadata, TorrentMetadataError, TorrentTelemetry,
-    parse_torrent_metainfo,
+    TorrentDownloadMetadata, TorrentFile, TorrentFileSelection, TorrentMetadata,
+    TorrentMetadataError, TorrentTelemetry, parse_torrent_metainfo,
 };
