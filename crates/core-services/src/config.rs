@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use fetchx_models::ResourcePolicy;
 use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
@@ -20,6 +21,8 @@ pub struct EngineConfig {
     pub direct_http: DirectHttpConfig,
     pub aria2: Aria2Config,
     pub yt_dlp: YtDlpConfig,
+    #[serde(default)]
+    pub resource_policy: ResourcePolicy,
 }
 
 impl Default for EngineConfig {
@@ -29,6 +32,7 @@ impl Default for EngineConfig {
             direct_http: DirectHttpConfig::default(),
             aria2: Aria2Config::default(),
             yt_dlp: YtDlpConfig::default(),
+            resource_policy: ResourcePolicy::default(),
         }
     }
 }
@@ -104,6 +108,8 @@ pub enum ConfigError {
     SecretTooLong,
     #[error("aria2 RPC secret must not contain whitespace")]
     SecretHasWhitespace,
+    #[error("resource policy is invalid: {0}")]
+    ResourcePolicy(String),
     #[error("configuration serialisation failed: {0}")]
     Serialization(String),
     #[error("configuration storage failed: {0}")]
@@ -116,6 +122,9 @@ impl EngineConfig {
             return Err(ConfigError::UnsupportedVersion(self.version));
         }
         self.aria2.validate()?;
+        self.resource_policy
+            .validate()
+            .map_err(|error| ConfigError::ResourcePolicy(error.to_string()))?;
         Ok(())
     }
 }
@@ -208,6 +217,26 @@ mod tests {
                 .expect("reset config loads")
                 .aria2
                 .enabled
+        );
+    }
+
+    #[tokio::test]
+    async fn resource_policy_survives_configuration_restart() {
+        let service = service().await;
+        let mut config = service.load().await.expect("defaults should load");
+        config.resource_policy =
+            fetchx_models::ResourcePolicy::for_profile(fetchx_models::ResourceProfile::Night);
+        service
+            .save(&config)
+            .await
+            .expect("resource profile should persist");
+        assert_eq!(
+            service
+                .load()
+                .await
+                .expect("resource profile should load")
+                .resource_policy,
+            config.resource_policy
         );
     }
 

@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use fetchx_models::ResourcePolicy;
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::{
@@ -86,6 +87,11 @@ impl FfmpegConfig {
 
     pub fn with_max_concurrent_processes(mut self, maximum: usize) -> Self {
         self.max_concurrent_processes = maximum;
+        self
+    }
+
+    pub fn with_resource_policy(mut self, policy: &ResourcePolicy) -> Self {
+        self.max_concurrent_processes = policy.max_ffmpeg_processes;
         self
     }
 }
@@ -1871,6 +1877,14 @@ mod tests {
             ));
         }
         Ok(())
+    }
+
+    #[test]
+    fn ffmpeg_process_ceiling_uses_resource_policy() {
+        let policy =
+            fetchx_models::ResourcePolicy::for_profile(fetchx_models::ResourceProfile::Unlimited);
+        let config = FfmpegConfig::new().with_resource_policy(&policy);
+        assert_eq!(config.max_concurrent_processes, policy.max_ffmpeg_processes);
     }
 
     #[tokio::test]

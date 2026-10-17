@@ -126,6 +126,28 @@ export interface EngineConfigDto {
   direct_http: DirectHttpConfigDto;
   aria2: Aria2ConfigDto;
   yt_dlp: YtDlpConfigDto;
+  resource_policy: ResourcePolicyDto;
+}
+
+export type ResourceProfile = "unlimited" | "normal" | "limited" | "night" | "custom";
+
+export interface EngineBandwidthLimitsDto {
+  direct_http_bytes_per_second: number | null;
+  hls_bytes_per_second: number | null;
+  aria2_bytes_per_second: number | null;
+  yt_dlp_bytes_per_second: number | null;
+  ffmpeg_bytes_per_second: number | null;
+}
+
+export interface ResourcePolicyDto {
+  profile: ResourceProfile;
+  max_active_downloads: number;
+  global_connection_limit: number;
+  per_download_connection_limit: number;
+  global_bandwidth_bytes_per_second: number | null;
+  per_download_bandwidth_bytes_per_second: number | null;
+  engine_bandwidth_limits: EngineBandwidthLimitsDto;
+  max_ffmpeg_processes: number;
 }
 
 export interface SaveAria2ConfigRequest {
@@ -144,6 +166,7 @@ export interface SaveYtDlpConfigRequest {
 export interface SaveEngineConfigRequest {
   aria2: SaveAria2ConfigRequest;
   yt_dlp: SaveYtDlpConfigRequest;
+  resource_policy: ResourcePolicyDto;
 }
 
 export interface DiagnosticResult {

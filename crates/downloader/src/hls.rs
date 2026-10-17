@@ -39,7 +39,8 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::{
-    DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
+    BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
+    ManagedDownloadEngine,
     retry::{RetryPolicy, retry_after_delay},
 };
 
@@ -472,14 +473,17 @@ where
             let sem = Arc::clone(&semaphore);
             let dl_counter = Arc::clone(&downloaded_bytes);
             let cancel_rx = cancel_tx.subscribe();
+            let bandwidth = control.bandwidth.clone();
 
             join_set.spawn(async move {
                 let _permit = sem
                     .acquire()
                     .await
                     .map_err(|_| DownloadEngineError::SegmentWorkerFailed)?;
-                let size = download_one_segment(&client, &seg, &seg_path, i, cancel_rx, dl_counter)
-                    .await?;
+                let size = download_one_segment(
+                    &client, &seg, &seg_path, i, cancel_rx, dl_counter, bandwidth,
+                )
+                .await?;
                 Ok((i, size))
             });
             // Reap finished tasks eagerly to emit progress without waiting for
@@ -667,6 +671,7 @@ where
                     pause,
                     connection_limit,
                     resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
                 },
             )
             .await;
@@ -702,6 +707,7 @@ async fn download_one_segment(
     segment_index: usize,
     mut cancel: watch::Receiver<bool>,
     downloaded_bytes: Arc<AtomicU64>,
+    bandwidth: BandwidthControl,
 ) -> Result<u64, DownloadEngineError> {
     let url = Url::parse(&seg.uri).map_err(|_| DownloadEngineError::InvalidUrl)?;
 
@@ -721,6 +727,7 @@ async fn download_one_segment(
             segment_index,
             &mut cancel,
             &downloaded_bytes,
+            &bandwidth,
         )
         .await
         {
@@ -781,6 +788,7 @@ async fn try_download_segment(
     _segment_index: usize,
     cancel: &mut watch::Receiver<bool>,
     downloaded_bytes: &AtomicU64,
+    bandwidth: &BandwidthControl,
 ) -> Result<u64, SegmentAttemptError> {
     // Remove stale partial file so we always start fresh per attempt.
     match tokio::fs::remove_file(path).await {
@@ -882,6 +890,21 @@ async fn try_download_segment(
                 error: DownloadEngineError::ContentLengthExceeded {
                     expected: MAX_SEGMENT_SIZE,
                 },
+                retry_after: None,
+            });
+        }
+
+        if let Err(error) = bandwidth
+            .acquire(chunk_len, cancel.clone(), cancel.clone())
+            .await
+        {
+            file.sync_all().await.map_err(|error| SegmentAttemptError {
+                error: DownloadEngineError::Io(error),
+                retry_after: None,
+            })?;
+            let _ = tokio::fs::remove_file(path).await;
+            return Err(SegmentAttemptError {
+                error,
                 retry_after: None,
             });
         }

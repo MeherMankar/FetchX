@@ -3,7 +3,7 @@ use std::future::Future;
 use fetchx_models::{DownloadId, DownloadItem, EngineKind};
 use tokio::sync::{mpsc, watch};
 
-use crate::DownloadEngineError;
+use crate::{BandwidthControl, DownloadEngineError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResourceDemand {
@@ -17,6 +17,7 @@ pub struct ManagedDownloadControl {
     pub pause: watch::Receiver<bool>,
     pub connection_limit: watch::Receiver<usize>,
     pub resource_demand: Option<mpsc::Sender<ResourceDemand>>,
+    pub bandwidth: BandwidthControl,
 }
 
 /// Replaceable async engine interface shared by concrete download backends.

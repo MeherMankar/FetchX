@@ -1427,6 +1427,7 @@ mod tests {
                         pause,
                         connection_limit,
                         resource_demand: None,
+                        bandwidth: crate::BandwidthControl::default(),
                     },
                 )
                 .await

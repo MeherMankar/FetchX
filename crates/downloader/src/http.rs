@@ -36,7 +36,7 @@ use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, Adap
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 use crate::retry::{RetryPolicy, retry_after_delay};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
-use crate::{DownloadEngine, DownloadEngineError};
+use crate::{BandwidthControl, DownloadEngine, DownloadEngineError};
 
 const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
 const MAX_SEGMENT_ATTEMPTS: u8 = 4;
@@ -228,6 +228,7 @@ where
                     pause,
                     connection_limit,
                     resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
                 },
                 false,
             )
@@ -754,6 +755,7 @@ where
             &self.client,
             &control.cancellation,
             &stop_receiver,
+            &control.bandwidth,
             &downloaded,
         );
         let remaining_segments = segments
@@ -826,6 +828,7 @@ where
                             &self.client,
                             &control.cancellation,
                             &stop_receiver,
+                            &control.bandwidth,
                             &downloaded,
                         );
                     }
@@ -900,6 +903,7 @@ where
                         &self.client,
                         &control.cancellation,
                         &stop_receiver,
+                        &control.bandwidth,
                         &downloaded,
                     );
                     report_resource_demand(
@@ -988,6 +992,7 @@ where
                             &self.client,
                             &control.cancellation,
                             &stop_receiver,
+                            &control.bandwidth,
                             &downloaded,
                         );
                         report_resource_demand(
@@ -1197,6 +1202,14 @@ where
                     return Err(DownloadEngineError::ContentLengthExceeded { expected });
                 }
 
+                control
+                    .bandwidth
+                    .acquire(
+                        chunk_size,
+                        control.cancellation.clone(),
+                        control.pause.clone(),
+                    )
+                    .await?;
                 file.write_all(&chunk)
                     .await
                     .map_err(DownloadEngineError::Io)?;
@@ -1418,6 +1431,7 @@ fn spawn_segment_workers(
     client: &Client,
     cancellation: &watch::Receiver<bool>,
     stop: &watch::Receiver<bool>,
+    bandwidth: &BandwidthControl,
     downloaded: &Arc<AtomicU64>,
 ) {
     while tasks.len() < target_concurrency {
@@ -1430,6 +1444,7 @@ fn spawn_segment_workers(
         let validator = validator.to_owned();
         let mut cancellation = cancellation.clone();
         let mut stop = stop.clone();
+        let bandwidth = bandwidth.clone();
         let downloaded = Arc::clone(downloaded);
         tasks.spawn(async move {
             let result = segments::download_segment(
@@ -1440,6 +1455,7 @@ fn spawn_segment_workers(
                 &client,
                 &mut cancellation,
                 &mut stop,
+                &bandwidth,
                 &downloaded,
             )
             .await;

@@ -33,7 +33,7 @@ use fetchx_downloader::{
     YtDlpEngine, YtDlpProcessRunner,
 };
 use fetchx_models::EngineKind;
-use fetchx_queue::{DownloadEventBus, EventRepository, QueueConfig, QueueManager};
+use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
 use fetchx_storage::{Database, SqliteDownloadRepository};
 use thiserror::Error;
@@ -155,10 +155,10 @@ impl CoreServices {
         .await?;
 
         // Queue + Scheduler
-        let scheduler = match Scheduler::start(
+        let scheduler = match Scheduler::start_with_resource_policy(
             repository.clone(),
             engine_runtime.dispatcher.clone(),
-            QueueConfig::default(),
+            engine_config.resource_policy.clone(),
         )
         .await
         {

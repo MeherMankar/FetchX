@@ -94,6 +94,8 @@ pub enum Aria2ClientError {
     InvalidPath,
     #[error("aria2 URI is empty or contains embedded credentials")]
     InvalidUri,
+    #[error("aria2 download rate limit must be greater than zero")]
+    InvalidRateLimit,
 }
 
 #[derive(Clone)]
@@ -157,6 +159,15 @@ impl Aria2Client {
         uri: &str,
         destination: &Path,
     ) -> Result<Aria2Gid, Aria2ClientError> {
+        self.add_uri_with_rate_limit(uri, destination, None).await
+    }
+
+    pub async fn add_uri_with_rate_limit(
+        &self,
+        uri: &str,
+        destination: &Path,
+        max_download_rate_bytes_per_second: Option<u64>,
+    ) -> Result<Aria2Gid, Aria2ClientError> {
         if uri.len() > MAX_SOURCE_URI_BYTES {
             return Err(Aria2ClientError::InvalidUri);
         }
@@ -170,7 +181,7 @@ impl Aria2Client {
             return Err(Aria2ClientError::InvalidUri);
         }
         let (directory, filename) = aria2_destination(destination)?;
-        let options = json!({
+        let mut options = json!({
             "dir": directory,
             "out": filename,
             "max-connection-per-server": MAX_CONNECTIONS_PER_ARIA2_DOWNLOAD.to_string(),
@@ -178,6 +189,12 @@ impl Aria2Client {
             "allow-overwrite": "false",
             "auto-file-renaming": "false",
         });
+        if let Some(rate) = max_download_rate_bytes_per_second {
+            if rate == 0 {
+                return Err(Aria2ClientError::InvalidRateLimit);
+            }
+            options["max-download-limit"] = json!(rate.to_string());
+        }
         let result: String = match self.call("aria2.addUri", vec![json!([uri]), options]).await {
             Ok(result) => result,
             Err(Aria2ClientError::Rpc { code }) => {
@@ -668,7 +685,16 @@ where
             None => return Err(DownloadEngineError::Aria2ReconciliationRequired),
         };
         if gid.is_none() {
-            gid = Some(self.submit_job(id, item, &client, generation).await?);
+            gid = Some(
+                self.submit_job(
+                    id,
+                    item,
+                    &client,
+                    generation,
+                    control.bandwidth.external_download_rate_bytes_per_second,
+                )
+                .await?,
+            );
         }
         let mut gid = gid.ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
         if item.status() == DownloadStatus::Preparing {
@@ -700,7 +726,15 @@ where
                     restart_attempts += 1;
                     client = updated_client;
                     generation = updated_generation;
-                    gid = self.submit_job(id, item, &client, generation).await?;
+                    gid = self
+                        .submit_job(
+                            id,
+                            item,
+                            &client,
+                            generation,
+                            control.bandwidth.external_download_rate_bytes_per_second,
+                        )
+                        .await?;
                     pause_sent = false;
                 }
             }
@@ -749,7 +783,15 @@ where
                             }
                             client = updated_client;
                             generation = updated_generation;
-                            gid = self.submit_job(id, item, &client, generation).await?;
+                            gid = self
+                                .submit_job(
+                                    id,
+                                    item,
+                                    &client,
+                                    generation,
+                                    control.bandwidth.external_download_rate_bytes_per_second,
+                                )
+                                .await?;
                             pause_sent = false;
                             continue;
                         }
@@ -801,6 +843,7 @@ where
         item: &DownloadItem,
         client: &Aria2Client,
         generation: u64,
+        max_download_rate_bytes_per_second: Option<u64>,
     ) -> Result<Aria2Gid, DownloadEngineError> {
         if self.supervisor.is_some() && item.progress().downloaded_bytes() > 0 {
             let mut control_file = item.destination().as_os_str().to_owned();
@@ -815,7 +858,11 @@ where
             }
         }
         let gid = client
-            .add_uri(item.source().url(), item.destination())
+            .add_uri_with_rate_limit(
+                item.source().url(),
+                item.destination(),
+                max_download_rate_bytes_per_second,
+            )
             .await?;
         self.gids.lock().await.insert(
             id,
@@ -1014,6 +1061,7 @@ where
                     pause,
                     connection_limit,
                     resource_demand: None,
+                    bandwidth: crate::BandwidthControl::default(),
                 },
             )
             .await;
@@ -1327,7 +1375,7 @@ mod tests {
             start_server([MockReply::Result(json!("0123456789abcdef"))]).await?;
         let client = make_client(endpoint, Duration::from_secs(1))?;
         let gid = client
-            .add_uri("https://example.test/archive", &destination)
+            .add_uri_with_rate_limit("https://example.test/archive", &destination, Some(4096))
             .await?;
         assert_eq!(gid.as_str(), "0123456789abcdef");
         let request = requests.recv().await.ok_or("missing addUri request")?;
@@ -1336,6 +1384,7 @@ mod tests {
         assert_eq!(request["params"][2]["out"], "archive.bin");
         assert_eq!(request["params"][2]["dir"], r"C:\downloads");
         assert_eq!(request["params"][2]["max-connection-per-server"], "1");
+        assert_eq!(request["params"][2]["max-download-limit"], "4096");
         assert_eq!(request["params"][2]["allow-overwrite"], "false");
         server.await?;
 
@@ -1396,6 +1445,7 @@ mod tests {
                         pause,
                         connection_limit,
                         resource_demand: None,
+                        bandwidth: crate::BandwidthControl::default(),
                     },
                 )
                 .await
@@ -1499,6 +1549,7 @@ mod tests {
                         pause,
                         connection_limit,
                         resource_demand: None,
+                        bandwidth: crate::BandwidthControl::default(),
                     },
                 )
                 .await
@@ -1564,6 +1615,7 @@ mod tests {
                         pause,
                         connection_limit,
                         resource_demand: None,
+                        bandwidth: crate::BandwidthControl::default(),
                     },
                 )
                 .await
@@ -1758,8 +1810,8 @@ mod tests {
         .await?;
         let client = make_client(endpoint, Duration::from_secs(1))?;
         let engine = Aria2Engine::new(database.downloads(), client.clone());
-        engine.submit_job(id, &item, &client, 4).await?;
-        engine.submit_job(id, &item, &client, 5).await?;
+        engine.submit_job(id, &item, &client, 4, None).await?;
+        engine.submit_job(id, &item, &client, 5, None).await?;
         let current = engine
             .gid_for_generation(id, 5)
             .await

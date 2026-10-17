@@ -14,6 +14,7 @@ use std::{path::PathBuf, time::Duration};
 use fetchx_core_services::{
     Aria2Config, ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
 };
+use fetchx_models::{ResourcePolicy, ResourceProfile};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::{fs, process::Command};
@@ -34,6 +35,7 @@ use crate::commands::AppState;
 pub struct SaveEngineConfigRequest {
     pub aria2: SaveAria2ConfigRequest,
     pub yt_dlp: SaveYtDlpConfigRequest,
+    pub resource_policy: Option<ResourcePolicy>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -62,6 +64,7 @@ pub struct EngineConfigDto {
     pub direct_http: DirectHttpConfigDto,
     pub aria2: Aria2ConfigDto,
     pub yt_dlp: YtDlpConfigDto,
+    pub resource_policy: ResourcePolicy,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -109,6 +112,7 @@ impl From<&EngineConfig> for EngineConfigDto {
                     .as_deref()
                     .map(|p| p.to_string_lossy().into_owned()),
             },
+            resource_policy: cfg.resource_policy.clone(),
         }
     }
 }
@@ -288,6 +292,12 @@ pub async fn save_engine_config(
         Some(p) if !p.trim().is_empty() => Some(validate_executable_path(p).await?),
         _ => None,
     };
+    if let Some(resource_policy) = request.resource_policy {
+        cfg.resource_policy = match resource_policy.profile {
+            ResourceProfile::Custom => resource_policy,
+            profile => ResourcePolicy::for_profile(profile),
+        };
+    }
 
     state
         .config_service

@@ -8,8 +8,8 @@ use std::{
 
 use fetchx_downloader::ManagedDownloadEngine;
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadSchedule, DownloadScheduleError, DownloadStatus, Timestamp,
-    TimestampError,
+    DownloadId, DownloadItem, DownloadSchedule, DownloadScheduleError, DownloadStatus,
+    ResourcePolicy, Timestamp, TimestampError,
 };
 use fetchx_queue::{QueueConfig, QueueError, QueueManager};
 use fetchx_storage::{DownloadRepository, StorageError};
@@ -98,15 +98,36 @@ where
     where
         E: ManagedDownloadEngine + 'static,
     {
+        let mut policy = ResourcePolicy::default();
+        policy.max_active_downloads = queue_config.max_active_downloads;
+        policy.global_connection_limit = queue_config.global_connection_limit;
+        policy.per_download_connection_limit = policy
+            .per_download_connection_limit
+            .min(queue_config.global_connection_limit);
+        Self::start_with_resource_policy(repository, engine, policy).await
+    }
+
+    pub async fn start_with_resource_policy<E>(
+        repository: R,
+        engine: Arc<E>,
+        resource_policy: ResourcePolicy,
+    ) -> Result<Self, ScheduleError>
+    where
+        E: ManagedDownloadEngine + 'static,
+    {
         let schedules = repository.list_schedules().await?;
         let deferred = schedules
             .iter()
             .filter(|schedule| schedule.enabled())
             .map(|schedule| schedule.download_id())
             .collect::<HashSet<_>>();
-        let queue =
-            QueueManager::new_with_deferred(repository.clone(), engine, queue_config, deferred)
-                .await?;
+        let queue = QueueManager::new_with_deferred_policy(
+            repository.clone(),
+            engine,
+            resource_policy,
+            deferred,
+        )
+        .await?;
         let (commands, receiver) = mpsc::channel(128);
         let actor_queue = queue.clone();
         let actor_repository = repository.clone();

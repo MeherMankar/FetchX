@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::{
-    DownloadEngineError,
+    BandwidthControl, DownloadEngineError,
     http::response_validator,
     retry::{RetryPolicy, retry_after_delay},
 };
@@ -133,6 +133,7 @@ pub(super) async fn download_segment(
     client: &Client,
     cancellation: &mut watch::Receiver<bool>,
     stop: &mut watch::Receiver<bool>,
+    bandwidth: &BandwidthControl,
     global_downloaded: &AtomicU64,
 ) -> Result<SegmentResult, DownloadEngineError> {
     if segment.state == SegmentState::Complete {
@@ -351,6 +352,13 @@ pub(super) async fn download_segment(
                 || next_segment_bytes > segment.expected_length
             {
                 return Err(segment_error(segment));
+            }
+            if let Err(error) = bandwidth
+                .acquire(chunk_size, cancellation.clone(), stop.clone())
+                .await
+            {
+                file.sync_all().await.map_err(DownloadEngineError::Io)?;
+                return Err(error);
             }
             file.write_all(&chunk)
                 .await

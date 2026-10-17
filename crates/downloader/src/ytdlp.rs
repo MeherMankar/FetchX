@@ -26,8 +26,8 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::{
-    DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
-    ResourceDemand,
+    BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
+    ManagedDownloadEngine, ResourceDemand,
 };
 
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -363,7 +363,15 @@ where
         }
         let workspace = workspace_path(item.destination(), id);
         prepare_workspace(&workspace).await?;
-        let arguments = build_arguments(&workspace, url.as_str(), item.source().yt_dlp_format());
+        if control.bandwidth.external_download_rate_bytes_per_second == Some(0) {
+            return Err(DownloadEngineError::InvalidConfiguration);
+        }
+        let arguments = build_arguments(
+            &workspace,
+            url.as_str(),
+            item.source().yt_dlp_format(),
+            control.bandwidth.external_download_rate_bytes_per_second,
+        );
         report_resource_demand(control, id, 1, 0).await?;
 
         if item.status() == DownloadStatus::Preparing {
@@ -737,6 +745,7 @@ where
                     pause,
                     connection_limit,
                     resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
                 },
             )
             .await;
@@ -863,7 +872,12 @@ fn is_unknown(value: &str) -> bool {
     value.is_empty() || matches!(value, "NA" | "None" | "none" | "N/A")
 }
 
-fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -> Vec<OsString> {
+fn build_arguments(
+    workspace: &Path,
+    url: &str,
+    selected_format: Option<&str>,
+    max_download_rate_bytes_per_second: Option<u64>,
+) -> Vec<OsString> {
     let selected_format = selected_format.unwrap_or("bestvideo*+bestaudio/best");
     let mut arguments = vec![
         "--ignore-config".into(),
@@ -890,6 +904,10 @@ fn build_arguments(workspace: &Path, url: &str, selected_format: Option<&str>) -
     let mut home_path = OsString::from("home:");
     home_path.push(workspace.as_os_str());
     arguments.push(home_path);
+    if let Some(rate) = max_download_rate_bytes_per_second {
+        arguments.push("--limit-rate".into());
+        arguments.push(rate.to_string().into());
+    }
     arguments.extend([
         "--output".into(),
         "%(id)s.%(ext)s".into(),
@@ -1803,12 +1821,18 @@ mod tests {
             Path::new("workspace"),
             "https://example.test/video",
             Some("137"),
+            Some(4096),
         );
         let format_index = args
             .iter()
             .position(|argument| argument == OsStr::new("--format"))
             .expect("format option is present");
         assert_eq!(args[format_index + 1], OsStr::new("137"));
+        let limit_index = args
+            .iter()
+            .position(|argument| argument == OsStr::new("--limit-rate"))
+            .expect("rate limit option is present");
+        assert_eq!(args[limit_index + 1], OsStr::new("4096"));
     }
 
     #[tokio::test]
@@ -1933,6 +1957,7 @@ mod tests {
                 pause,
                 connection_limit,
                 resource_demand: None,
+                bandwidth: BandwidthControl::default(),
             },
         );
         tokio::pin!(download);

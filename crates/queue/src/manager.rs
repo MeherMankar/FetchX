@@ -1,15 +1,17 @@
 use std::{
+    cmp::Reverse,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
 
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_downloader::{
-    DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand,
+    BandwidthControl, BandwidthLimiter, DownloadEngineError, ManagedDownloadControl,
+    ManagedDownloadEngine, ResourceDemand,
 };
 use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadStatus,
-    EngineKind,
+    EngineKind, ResourcePolicy, ResourcePressure,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
@@ -21,7 +23,6 @@ use tracing::{info, warn};
 
 const MAX_ACTIVE_DOWNLOADS: usize = 32;
 const MAX_GLOBAL_CONNECTIONS: usize = 64;
-const MAX_PER_DOWNLOAD_CONNECTIONS: usize = 32;
 const DEFAULT_DESIRED_CONNECTIONS: usize = 4;
 const FAIRNESS_STARTS: u8 = 3;
 
@@ -68,6 +69,7 @@ pub struct QueueSnapshot {
     pub paused: Vec<DownloadId>,
     pub active: Vec<ActiveDownload>,
     pub global_connection_limit: usize,
+    pub resource_pressure: ResourcePressure,
 }
 
 #[derive(Debug, Error)]
@@ -95,6 +97,8 @@ pub enum QueueError {
     ResourceLimitInUse,
     #[error("queue resource invariant was violated")]
     ResourceInvariant,
+    #[error("resource bandwidth policy is invalid")]
+    InvalidBandwidthPolicy,
     #[error("download state transition failed: {0}")]
     StateMachine(#[from] StateMachineError),
     #[error("download persistence failed: {0}")]
@@ -127,7 +131,13 @@ impl QueueManager {
         R: DownloadRepository + Clone + 'static,
         E: ManagedDownloadEngine + 'static,
     {
-        Self::new_with_deferred(repository, engine, config, HashSet::new()).await
+        let mut policy = ResourcePolicy::default();
+        policy.max_active_downloads = config.max_active_downloads;
+        policy.global_connection_limit = config.global_connection_limit;
+        policy.per_download_connection_limit = policy
+            .per_download_connection_limit
+            .min(config.global_connection_limit);
+        Self::new_with_deferred_policy(repository, engine, policy, HashSet::new()).await
     }
 
     /// Starts the queue while keeping the specified persisted downloads out of
@@ -142,7 +152,40 @@ impl QueueManager {
         R: DownloadRepository + Clone + 'static,
         E: ManagedDownloadEngine + 'static,
     {
-        config.validate()?;
+        let mut policy = ResourcePolicy::default();
+        policy.max_active_downloads = config.max_active_downloads;
+        policy.global_connection_limit = config.global_connection_limit;
+        policy.per_download_connection_limit = policy
+            .per_download_connection_limit
+            .min(config.global_connection_limit);
+        Self::new_with_deferred_policy(repository, engine, policy, deferred).await
+    }
+
+    pub async fn new_with_resource_policy<R, E>(
+        repository: R,
+        engine: Arc<E>,
+        policy: ResourcePolicy,
+    ) -> Result<Self, QueueError>
+    where
+        R: DownloadRepository + Clone + 'static,
+        E: ManagedDownloadEngine + 'static,
+    {
+        Self::new_with_deferred_policy(repository, engine, policy, HashSet::new()).await
+    }
+
+    pub async fn new_with_deferred_policy<R, E>(
+        repository: R,
+        engine: Arc<E>,
+        policy: ResourcePolicy,
+        deferred: HashSet<DownloadId>,
+    ) -> Result<Self, QueueError>
+    where
+        R: DownloadRepository + Clone + 'static,
+        E: ManagedDownloadEngine + 'static,
+    {
+        policy
+            .validate()
+            .map_err(|_| QueueError::InvalidConfiguration)?;
         let state_machine = DownloadStateMachine::new(repository.clone());
         let mut items = repository.list().await?;
         for item in &mut items {
@@ -171,7 +214,7 @@ impl QueueManager {
         let actor = tokio::spawn(run_actor(
             repository,
             engine,
-            config,
+            policy,
             entries,
             next_sequence,
             deferred,
@@ -250,6 +293,14 @@ impl QueueManager {
             .await
     }
 
+    pub async fn set_resource_pressure(
+        &self,
+        pressure: ResourcePressure,
+    ) -> Result<(), QueueError> {
+        self.request(|reply| Command::SetResourcePressure { pressure, reply })
+            .await
+    }
+
     pub async fn snapshot(&self) -> Result<QueueSnapshot, QueueError> {
         self.request(|reply| Command::Snapshot { reply }).await
     }
@@ -300,6 +351,78 @@ impl QueueManager {
         } else {
             QueueError::Stopped
         }
+    }
+}
+
+struct RuntimeResourceManager {
+    policy: ResourcePolicy,
+    global_bandwidth: Option<Arc<BandwidthLimiter>>,
+    engine_bandwidth: HashMap<EngineKind, Arc<BandwidthLimiter>>,
+}
+
+impl RuntimeResourceManager {
+    fn new(policy: &ResourcePolicy) -> Result<Self, QueueError> {
+        let limiter = |rate: Option<u64>| {
+            rate.map(BandwidthLimiter::new)
+                .transpose()
+                .map(|limiter| limiter.map(Arc::new))
+                .map_err(|_| QueueError::InvalidBandwidthPolicy)
+        };
+        let global_bandwidth = limiter(policy.global_bandwidth_bytes_per_second)?;
+        let mut engine_bandwidth = HashMap::new();
+        for (engine, rate) in [
+            (
+                EngineKind::DirectHttp,
+                policy.engine_bandwidth_limits.direct_http_bytes_per_second,
+            ),
+            (
+                EngineKind::Hls,
+                policy.engine_bandwidth_limits.hls_bytes_per_second,
+            ),
+            (
+                EngineKind::Aria2,
+                policy.engine_bandwidth_limits.aria2_bytes_per_second,
+            ),
+            (
+                EngineKind::YtDlp,
+                policy.engine_bandwidth_limits.yt_dlp_bytes_per_second,
+            ),
+        ] {
+            if let Some(limiter) = limiter(rate)? {
+                engine_bandwidth.insert(engine, limiter);
+            }
+        }
+        Ok(Self {
+            policy: policy.clone(),
+            global_bandwidth,
+            engine_bandwidth,
+        })
+    }
+
+    fn bandwidth_for(&self, engine: EngineKind) -> Result<BandwidthControl, QueueError> {
+        let engine_limiter = self.engine_bandwidth.get(&engine).cloned();
+        let effective_external_rate = [
+            self.policy.per_download_bandwidth_bytes_per_second,
+            self.policy
+                .global_bandwidth_bytes_per_second
+                .map(|rate| rate / self.policy.max_active_downloads as u64),
+            self.policy.engine_bandwidth_limit(engine),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        Ok(BandwidthControl {
+            global: self.global_bandwidth.clone(),
+            per_download: self
+                .policy
+                .per_download_bandwidth_bytes_per_second
+                .map(BandwidthLimiter::new)
+                .transpose()
+                .map_err(|_| QueueError::InvalidBandwidthPolicy)?
+                .map(Arc::new),
+            engine: engine_limiter,
+            external_download_rate_bytes_per_second: effective_external_rate,
+        })
     }
 }
 
@@ -371,6 +494,10 @@ enum Command {
         limit: usize,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
+    SetResourcePressure {
+        pressure: ResourcePressure,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
     Snapshot {
         reply: oneshot::Sender<Result<QueueSnapshot, QueueError>>,
     },
@@ -382,7 +509,7 @@ enum Command {
 async fn run_actor<R, E>(
     repository: R,
     engine: Arc<E>,
-    mut config: QueueConfig,
+    policy: ResourcePolicy,
     mut entries: HashMap<DownloadId, Entry>,
     mut next_sequence: u64,
     mut deferred: HashSet<DownloadId>,
@@ -393,6 +520,12 @@ where
     E: ManagedDownloadEngine + 'static,
 {
     let state_machine = DownloadStateMachine::new(repository.clone());
+    let mut config = QueueConfig {
+        max_active_downloads: policy.max_active_downloads,
+        global_connection_limit: policy.global_connection_limit,
+    };
+    config.validate()?;
+    let resources = RuntimeResourceManager::new(&policy)?;
     let (resource_sender, mut resource_receiver) = mpsc::channel::<ResourceDemand>(256);
     let mut active = HashMap::<DownloadId, ActiveWorker>::new();
     let mut workers = JoinSet::<(DownloadId, Result<DownloadItem, DownloadEngineError>)>::new();
@@ -400,6 +533,7 @@ where
     let mut last_priority = None;
     let mut consecutive_priority_starts = 0_u8;
     let mut stopping = false;
+    let mut pressure = ResourcePressure::Normal;
     let mut shutdown_waiters = Vec::<oneshot::Sender<Result<(), QueueError>>>::new();
 
     loop {
@@ -413,6 +547,8 @@ where
                 &mut workers,
                 &mut task_downloads,
                 &resource_sender,
+                &resources,
+                pressure,
                 &mut last_priority,
                 &mut consecutive_priority_starts,
             )
@@ -424,6 +560,7 @@ where
             &entries,
             &deferred,
             config.max_active_downloads,
+            pressure,
         );
 
         if stopping && active.is_empty() {
@@ -450,6 +587,7 @@ where
                     &mut deferred,
                     &mut active,
                     &mut stopping,
+                    &mut pressure,
                     &mut shutdown_waiters,
                     &mut next_sequence,
                 ).await?;
@@ -459,6 +597,7 @@ where
                     &entries,
                     &deferred,
                     config.max_active_downloads,
+                    pressure,
                 );
             }
             joined = workers.join_next_with_id(), if !workers.is_empty() => {
@@ -498,7 +637,7 @@ where
                     if let Some(worker) = active.get_mut(&demand.download_id) {
                         worker.desired = demand
                             .desired_concurrency
-                            .clamp(1, MAX_PER_DOWNLOAD_CONNECTIONS);
+                            .clamp(1, resources.policy.per_download_connection_limit);
                         worker.active = demand.active_concurrency.min(worker.desired);
                     }
                     allocate_resources(
@@ -507,6 +646,7 @@ where
                         &entries,
                         &deferred,
                         config.max_active_downloads,
+                        pressure,
                     );
                 }
             }
@@ -524,13 +664,20 @@ async fn start_eligible<E>(
     workers: &mut JoinSet<(DownloadId, Result<DownloadItem, DownloadEngineError>)>,
     task_downloads: &mut HashMap<TaskId, DownloadId>,
     resource_sender: &mpsc::Sender<ResourceDemand>,
+    resources: &RuntimeResourceManager,
+    pressure: ResourcePressure,
     last_priority: &mut Option<DownloadPriority>,
     consecutive_priority_starts: &mut u8,
 ) -> Result<(), QueueError>
 where
     E: ManagedDownloadEngine + 'static,
 {
-    while active.len() < config.max_active_downloads
+    let pressure_active_limit = match pressure {
+        ResourcePressure::Normal => config.max_active_downloads,
+        ResourcePressure::High => config.max_active_downloads.div_ceil(2).max(1),
+        ResourcePressure::Critical => 0,
+    };
+    while active.len() < pressure_active_limit
         && used_connections(active) < config.global_connection_limit
     {
         let Some(id) = choose_next(
@@ -544,6 +691,7 @@ where
         };
         let entry = entries.get(&id).ok_or(QueueError::ResourceInvariant)?;
         let priority = entry.item.priority();
+        let bandwidth = resources.bandwidth_for(entry.item.source().engine())?;
         match last_priority {
             Some(previous) if *previous == priority => {
                 *consecutive_priority_starts = consecutive_priority_starts.saturating_add(1);
@@ -569,6 +717,7 @@ where
                         pause,
                         connection_limit: limit_receiver,
                         resource_demand: Some(resource_demand),
+                        bandwidth,
                     },
                 )
                 .await;
@@ -582,7 +731,8 @@ where
                 cancellation: cancellation_sender,
                 pause: pause_sender,
                 connection_limit,
-                desired: DEFAULT_DESIRED_CONNECTIONS,
+                desired: DEFAULT_DESIRED_CONNECTIONS
+                    .min(resources.policy.per_download_connection_limit),
                 active: 0,
                 allocated: 1,
                 sequence,
@@ -646,6 +796,7 @@ fn allocate_resources(
     entries: &HashMap<DownloadId, Entry>,
     deferred: &HashSet<DownloadId>,
     max_active_downloads: usize,
+    pressure: ResourcePressure,
 ) {
     let active_count = active.len();
     let queued_count = entries
@@ -658,7 +809,12 @@ fn allocate_resources(
         .count();
     let reserved_for_queued = queued_count.min(max_active_downloads.saturating_sub(active_count));
     let mut workers = active.iter_mut().collect::<Vec<_>>();
-    workers.sort_by_key(|(_, worker)| worker.sequence);
+    workers.sort_by_key(|(id, worker)| {
+        let priority = entries
+            .get(id)
+            .map_or(DownloadPriority::Normal, |entry| entry.item.priority());
+        (Reverse(priority), worker.sequence)
+    });
     let mut allocation = workers
         .iter()
         .map(|(_, worker)| worker.active.max(1))
@@ -673,7 +829,11 @@ fn allocate_resources(
             if used >= allocation_limit {
                 break;
             }
-            let target = worker.desired.max(worker.active);
+            let target = if pressure == ResourcePressure::Normal {
+                worker.desired.max(worker.active)
+            } else {
+                worker.active.max(1)
+            };
             if allocation[index] < target {
                 allocation[index] += 1;
                 used += 1;
@@ -703,6 +863,7 @@ async fn handle_command<R, E>(
     deferred: &mut HashSet<DownloadId>,
     active: &mut HashMap<DownloadId, ActiveWorker>,
     stopping: &mut bool,
+    pressure: &mut ResourcePressure,
     shutdown_waiters: &mut Vec<oneshot::Sender<Result<(), QueueError>>>,
     next_sequence: &mut u64,
 ) -> Result<(), QueueError>
@@ -1021,6 +1182,13 @@ where
             };
             let _ = reply.send(result);
         }
+        Command::SetResourcePressure {
+            pressure: requested,
+            reply,
+        } => {
+            *pressure = requested;
+            let _ = reply.send(Ok(()));
+        }
         Command::Snapshot { reply } => {
             let result = async {
                 let items = repository.list().await?;
@@ -1064,6 +1232,7 @@ where
                     paused,
                     active: active_items,
                     global_connection_limit: config.global_connection_limit,
+                    resource_pressure: *pressure,
                 })
             }
             .await;
@@ -1413,7 +1582,7 @@ mod tests {
     };
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus, EngineKind,
-        FileName, Timestamp,
+        FileName, ResourcePolicy, ResourcePressure, ResourceProfile, Timestamp,
     };
     use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
     use tokio::{
@@ -1424,8 +1593,8 @@ mod tests {
     };
 
     use super::{
-        ActiveWorker, Entry, QueueConfig, QueueError, QueueManager, allocate_resources,
-        choose_next, used_connections,
+        ActiveWorker, Entry, QueueConfig, QueueError, QueueManager, RuntimeResourceManager,
+        allocate_resources, choose_next, used_connections,
     };
 
     struct WaitingEngine {
@@ -1831,15 +2000,10 @@ mod tests {
             supports_yt_dlp_pause: true,
             desired_connections: 32,
         });
-        let manager = QueueManager::new(
-            repository,
-            engine,
-            QueueConfig {
-                max_active_downloads: 3,
-                global_connection_limit: 16,
-            },
-        )
-        .await?;
+        let mut policy = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
+        policy.max_active_downloads = 3;
+        policy.global_connection_limit = 48;
+        let manager = QueueManager::new_with_resource_policy(repository, engine, policy).await?;
         let downloads = [item()?, item()?, item()?];
         for download in downloads {
             manager.enqueue(download).await?;
@@ -1916,6 +2080,68 @@ mod tests {
         manager.shutdown().await?;
         drop(release_sender);
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn critical_pressure_blocks_new_work_and_high_pressure_limits_starts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, release) = setup_engine().await?;
+        let manager = QueueManager::new(
+            repository,
+            engine,
+            QueueConfig {
+                max_active_downloads: 4,
+                global_connection_limit: 16,
+            },
+        )
+        .await?;
+        manager
+            .set_resource_pressure(ResourcePressure::Critical)
+            .await?;
+        for _ in 0..4 {
+            manager.enqueue(item()?).await?;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(manager.snapshot().await?.active.is_empty());
+
+        manager
+            .set_resource_pressure(ResourcePressure::High)
+            .await?;
+        let snapshot = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if snapshot.active.len() == 2 {
+                    return Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert_eq!(snapshot.queued.len(), 2);
+        manager.shutdown().await?;
+        drop(release);
+        Ok(())
+    }
+
+    #[test]
+    fn external_engines_receive_a_share_of_the_global_bandwidth_ceiling() {
+        let mut policy = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
+        policy.max_active_downloads = 4;
+        policy.global_bandwidth_bytes_per_second = Some(8000);
+        policy.engine_bandwidth_limits.aria2_bytes_per_second = Some(1500);
+        let resources = RuntimeResourceManager::new(&policy).expect("valid resource policy");
+        let aria2 = resources
+            .bandwidth_for(EngineKind::Aria2)
+            .expect("aria2 limits should be created");
+        let yt_dlp = resources
+            .bandwidth_for(EngineKind::YtDlp)
+            .expect("yt-dlp limits should be created");
+        assert_eq!(aria2.external_download_rate_bytes_per_second, Some(1500));
+        assert_eq!(yt_dlp.external_download_rate_bytes_per_second, Some(2000));
+        assert!(Arc::ptr_eq(
+            aria2.global.as_ref().expect("global limiter"),
+            yt_dlp.global.as_ref().expect("global limiter"),
+        ));
     }
 
     #[tokio::test]
@@ -2667,7 +2893,14 @@ mod tests {
                 },
             ),
         ]);
-        allocate_resources(&mut workers, 3, &HashMap::new(), &HashSet::new(), 2);
+        allocate_resources(
+            &mut workers,
+            3,
+            &HashMap::new(),
+            &HashSet::new(),
+            2,
+            ResourcePressure::Normal,
+        );
         assert_eq!(*limit_rx1.borrow(), 2);
         assert_eq!(*limit_rx2.borrow(), 1);
         assert_eq!(used_connections(&workers), 3);

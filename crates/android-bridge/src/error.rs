@@ -34,6 +34,9 @@ impl From<QueueError> for MobileApiError {
             QueueError::InvalidConfiguration => {
                 MobileApiError::Validation("invalid queue configuration".to_string())
             }
+            QueueError::InvalidBandwidthPolicy => {
+                MobileApiError::Validation("invalid bandwidth policy".to_string())
+            }
             QueueError::Stopped => {
                 MobileApiError::Runtime("queue manager has shut down".to_string())
             }

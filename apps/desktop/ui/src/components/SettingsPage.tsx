@@ -14,6 +14,8 @@ import type {
   EngineInstanceStatus,
   EngineStatus,
   SaveAria2ConfigRequest,
+  ResourcePolicyDto,
+  ResourceProfile,
   SaveYtDlpConfigRequest,
 } from "../api/types";
 import { errorMessage } from "../lib/format";
@@ -117,6 +119,7 @@ function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProp
           enabled: cfg.yt_dlp.enabled,
           executable_path: cfg.yt_dlp.executable_path,
         },
+        resource_policy: cfg.resource_policy,
       });
       onSaved(updated);
     } catch (cause) {
@@ -310,6 +313,7 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
           rpc_secret_update: null,
         },
         yt_dlp: req,
+        resource_policy: cfg.resource_policy,
       });
       onSaved(updated);
     } catch (cause) {
@@ -451,6 +455,226 @@ function RuntimeStatusBadge({ status }: { status: EngineInstanceStatus | null })
 // Root SettingsPage
 // ---------------------------------------------------------------------------
 
+function isResourceProfile(value: string): value is ResourceProfile {
+  return ["unlimited", "normal", "limited", "night", "custom"].includes(value);
+}
+
+function policyForProfile(
+  profile: ResourceProfile,
+  current: ResourcePolicyDto,
+): ResourcePolicyDto {
+  const engineLimits = {
+    direct_http_bytes_per_second: null,
+    hls_bytes_per_second: null,
+    aria2_bytes_per_second: null,
+    yt_dlp_bytes_per_second: null,
+    ffmpeg_bytes_per_second: null,
+  };
+  const profiles: Partial<Record<ResourceProfile, ResourcePolicyDto>> = {
+    unlimited: {
+      profile,
+      max_active_downloads: 8,
+      global_connection_limit: 64,
+      per_download_connection_limit: 32,
+      global_bandwidth_bytes_per_second: null,
+      per_download_bandwidth_bytes_per_second: null,
+      engine_bandwidth_limits: engineLimits,
+      max_ffmpeg_processes: 2,
+    },
+    normal: {
+      profile,
+      max_active_downloads: 3,
+      global_connection_limit: 16,
+      per_download_connection_limit: 8,
+      global_bandwidth_bytes_per_second: null,
+      per_download_bandwidth_bytes_per_second: null,
+      engine_bandwidth_limits: engineLimits,
+      max_ffmpeg_processes: 1,
+    },
+    limited: {
+      profile,
+      max_active_downloads: 2,
+      global_connection_limit: 8,
+      per_download_connection_limit: 4,
+      global_bandwidth_bytes_per_second: 2 * 1024 * 1024,
+      per_download_bandwidth_bytes_per_second: 1024 * 1024,
+      engine_bandwidth_limits: engineLimits,
+      max_ffmpeg_processes: 1,
+    },
+    night: {
+      profile,
+      max_active_downloads: 2,
+      global_connection_limit: 4,
+      per_download_connection_limit: 2,
+      global_bandwidth_bytes_per_second: 512 * 1024,
+      per_download_bandwidth_bytes_per_second: 256 * 1024,
+      engine_bandwidth_limits: engineLimits,
+      max_ffmpeg_processes: 1,
+    },
+  };
+  return profiles[profile] ?? { ...current, profile };
+}
+
+function ResourcePolicySection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [policy, setPolicy] = useState<ResourcePolicyDto>(cfg.resource_policy);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setPolicy(cfg.resource_policy), [cfg.resource_policy]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        aria2: {
+          enabled: cfg.aria2.enabled,
+          executable_path: cfg.aria2.executable_path,
+          rpc_port: cfg.aria2.rpc_port,
+          rpc_secret_update: null,
+        },
+        yt_dlp: {
+          enabled: cfg.yt_dlp.enabled,
+          executable_path: cfg.yt_dlp.executable_path,
+        },
+        resource_policy: policy,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateNumber = (
+    key: "max_active_downloads" | "global_connection_limit" |
+      "per_download_connection_limit" | "max_ffmpeg_processes",
+    value: string,
+  ) => {
+    const parsed = Number.parseInt(value, 10);
+    setPolicy((current) => ({
+      ...current,
+      profile: "custom",
+      [key]: Number.isFinite(parsed) ? parsed : 0,
+    }));
+  };
+
+  const updateBandwidth = (
+    key: "global_bandwidth_bytes_per_second" |
+      "per_download_bandwidth_bytes_per_second",
+    value: string,
+  ) => {
+    const parsed = value === "" ? null : Number.parseInt(value, 10);
+    setPolicy((current) => ({
+      ...current,
+      profile: "custom",
+      [key]: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+    }));
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="resources-heading">
+      <div className="settings-section-header">
+        <h3 id="resources-heading" className="settings-section-title">Resource policy</h3>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-profile">Profile</label>
+        <div className="settings-control">
+          <select
+            id="resource-profile"
+            className="settings-input"
+            value={policy.profile}
+            disabled={busy}
+            onChange={(event) => {
+              const profile = event.target.value;
+              if (isResourceProfile(profile)) {
+                setPolicy((current) => policyForProfile(profile, current));
+              }
+            }}
+          >
+            <option value="unlimited">Unlimited (bounded safety ceilings)</option>
+            <option value="normal">Normal</option>
+            <option value="limited">Limited</option>
+            <option value="night">Night</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-active">Maximum active downloads</label>
+        <div className="settings-control">
+          <input id="resource-active" type="number" min={1} max={32}
+            className="settings-input settings-input-sm"
+            value={policy.max_active_downloads} disabled={busy}
+            onChange={(event) => updateNumber("max_active_downloads", event.target.value)} />
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-global-connections">Global connections</label>
+        <div className="settings-control">
+          <input id="resource-global-connections" type="number" min={1} max={64}
+            className="settings-input settings-input-sm"
+            value={policy.global_connection_limit} disabled={busy}
+            onChange={(event) => updateNumber("global_connection_limit", event.target.value)} />
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-download-connections">Connections per download</label>
+        <div className="settings-control">
+          <input id="resource-download-connections" type="number" min={1} max={32}
+            className="settings-input settings-input-sm"
+            value={policy.per_download_connection_limit} disabled={busy}
+            onChange={(event) => updateNumber("per_download_connection_limit", event.target.value)} />
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-global-bandwidth">Global bandwidth (bytes/s)</label>
+        <div className="settings-control">
+          <input id="resource-global-bandwidth" type="number" min={1}
+            className="settings-input settings-input-sm"
+            value={policy.global_bandwidth_bytes_per_second ?? ""} disabled={busy}
+            onChange={(event) => updateBandwidth("global_bandwidth_bytes_per_second", event.target.value)} />
+          <p className="settings-hint">Leave empty for unlimited.</p>
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-download-bandwidth">Bandwidth per download (bytes/s)</label>
+        <div className="settings-control">
+          <input id="resource-download-bandwidth" type="number" min={1}
+            className="settings-input settings-input-sm"
+            value={policy.per_download_bandwidth_bytes_per_second ?? ""} disabled={busy}
+            onChange={(event) => updateBandwidth("per_download_bandwidth_bytes_per_second", event.target.value)} />
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="resource-ffmpeg">Concurrent FFmpeg processes</label>
+        <div className="settings-control">
+          <input id="resource-ffmpeg" type="number" min={1} max={2}
+            className="settings-input settings-input-sm"
+            value={policy.max_ffmpeg_processes} disabled={busy}
+            onChange={(event) => updateNumber("max_ffmpeg_processes", event.target.value)} />
+        </div>
+      </div>
+      <p className="settings-hint">
+        HTTP and HLS use shared Rust bandwidth limits. aria2 and yt-dlp use native per-download limits where supported.
+        The queue accepts explicit pressure signals: high pressure prevents scaling up, while critical pressure blocks new work without stopping active downloads. Automatic OS-pressure detection is not wired.
+      </p>
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save resource policy"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
@@ -527,13 +751,14 @@ export function SettingsPage() {
       )}
 
       <div className="settings-notice" role="note">
-        <strong>Note:</strong> Changing engine settings takes effect for new downloads.
-        Existing active downloads continue using their assigned engine. Disabling an
-        engine does not cancel downloads already in progress.
+        <strong>Note:</strong> Saved engine and resource-policy settings take effect
+        after restarting FetchX. Active downloads keep their existing runtime
+        settings. Disabling an engine does not cancel downloads already in progress.
       </div>
 
       {cfg && (
         <>
+          <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <DirectHttpSection runtimeStatus={runtimeStatus?.direct_http ?? null} />
           <Aria2Section
             cfg={cfg}

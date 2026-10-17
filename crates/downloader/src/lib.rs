@@ -2,6 +2,7 @@
 
 mod adaptive;
 mod aria2;
+mod bandwidth;
 mod dispatcher;
 mod engine;
 mod error;
@@ -18,6 +19,7 @@ pub use aria2::{
     Aria2Client, Aria2ClientConfig, Aria2ClientError, Aria2DownloadStatus, Aria2Engine, Aria2Gid,
     Aria2Status, Aria2Version,
 };
+pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::EngineDispatcher;
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
