@@ -89,6 +89,8 @@ Phases 1-20P (Completed)
 20R Bandwidth / Resource Policies  20B-C Content  20B-D Advanced Tracking
         |                          Filtering           |
 20S BitTorrent / Magnet                 \             /
+        |
+20T Download Reliability Hardening
         |                          20B-E Fingerprinting Protection
 21A Remote Protocol                          |
         |                          20B-F Browser Security Hardening
@@ -1250,6 +1252,34 @@ Support via EngineDispatcher abstraction:
 
 **Windows requirements:** Windows UI surfaces torrent/magnet add dialog; same queue.
 **Android requirements:** Android UI (AddDownloadDialog) surfaces torrent/magnet input; same queue via Bridge.
+
+---
+
+### Phase 20T -- Download Reliability Hardening (HIGH)
+
+**Status: IMPLEMENTATION COMPLETE; AUTOMATED VALIDATION PASS; LIVE-ENGINE VALIDATION PARTIAL.**
+
+Hardened HLS progress checkpoint persistence and yt-dlp output finalization recovery.
+Progress persistence now reports concurrent lifecycle changes rather than silently
+discarding them, and yt-dlp can reconcile a validated output after a crash between
+publishing the file and persisting `Completed`. CLI, desktop, and Android remain
+adapters over shared Rust/CoreServices; this phase does not add a headless server
+or remote-fetch implementation.
+
+**Validation:**
+- [x] Workspace Rust check, serial workspace tests, and strict Clippy
+- [x] Desktop UI build and Windows desktop/CLI Rust builds
+- [x] Android debug unit tests, APK assembly, and install/launch on a connected arm64 device
+- [x] Deterministic HTTP, HLS, segmented/Turbo, aria2/torrent, yt-dlp, and FFmpeg regression tests
+- [ ] Validate live aria2/BitTorrent workflows with a real daemon
+- [ ] Exercise the live torrent lifecycle on-device (aria2 daemon unavailable)
+- [ ] Validate Tauri packaging and real external-engine workflows
+
+This phase remains **PARTIAL** until the unavailable live aria2 workflow and
+Tauri packaging checks can be run. Android install/launch passed, but on-device
+live torrent validation is blocked by the unavailable aria2 daemon. The available
+automated tests do not demonstrate real process-restart recovery or race-proof
+filesystem confinement.
 
 ---
 

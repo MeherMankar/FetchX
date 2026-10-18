@@ -89,7 +89,11 @@ android {
 
 chaquopy {
     defaultConfig {
-        version = "3.14"
+        version = "3.13"
+        buildPython = if (System.getenv("pythonLocation") != null)
+            listOf("${System.getenv("pythonLocation")}/bin/python3.13")
+        else
+            null
         pip {
             install("yt-dlp==2026.8.19")
         }

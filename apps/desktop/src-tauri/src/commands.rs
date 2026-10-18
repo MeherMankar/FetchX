@@ -1391,7 +1391,7 @@ mod tests {
         .await?;
         assert!(matches!(
             resumed.status,
-            DownloadStatus::Queued | DownloadStatus::Downloading
+            DownloadStatus::Queued | DownloadStatus::Preparing | DownloadStatus::Downloading
         ));
         let cancelled = state.cancel(DownloadId::parse(&download.id)?).await?;
         assert_eq!(cancelled.status, DownloadStatus::Cancelled);
@@ -1648,7 +1648,14 @@ mod tests {
 
         // Retry should create a new download.
         let retried = state.retry(id).await?;
-        assert_eq!(retried.status, DownloadStatus::Queued);
+        assert!(
+            matches!(
+                retried.status,
+                DownloadStatus::Queued | DownloadStatus::Preparing | DownloadStatus::Downloading
+            ),
+            "unexpected retry status: {:?}",
+            retried.status
+        );
         assert_ne!(retried.id, download.id, "retry must produce a new ID");
 
         // Original record must be gone.

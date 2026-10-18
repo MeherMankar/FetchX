@@ -80,6 +80,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Python 3.13 (required by Chaquopy)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Install Android NDK r27
         run: |
           echo "y" | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "ndk;27.2.12479018"

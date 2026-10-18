@@ -67,6 +67,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Python 3.13 (required by Chaquopy)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Install Android NDK r27
         run: |
           echo "y" | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "ndk;27.2.12479018"
@@ -113,6 +118,7 @@ jobs:
 
       - name: Generate UniFFI Kotlin bindings
         run: |
+          chmod +x apps/android/gradlew
           cd apps/android
           ./gradlew :bridge:generateUniFfiKotlinBindings
 
@@ -174,6 +180,10 @@ jobs:
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/desktop/ui
 
       - name: Build Tauri app (Windows .exe + .msi)
         run: cargo tauri build
@@ -243,6 +253,10 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/desktop/ui
+
       - name: Build Tauri app (Linux .deb + AppImage)
         run: cargo tauri build
         working-directory: apps/desktop/src-tauri
@@ -293,6 +307,10 @@ jobs:
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/desktop/ui
 
       - name: Build Tauri app (macOS .dmg)
         run: cargo tauri build
