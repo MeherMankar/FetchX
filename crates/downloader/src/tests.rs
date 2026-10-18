@@ -310,6 +310,10 @@ async fn start_segment_server(
         SegmentServerMode::Fail
             | SegmentServerMode::ShortBody
             | SegmentServerMode::FailAboveConcurrency(_)
+            | SegmentServerMode::WrongStart
+            | SegmentServerMode::WrongEnd
+            | SegmentServerMode::WrongTotal
+            | SegmentServerMode::IgnoreRange
     ) {
         Duration::from_secs(10)
     } else {
