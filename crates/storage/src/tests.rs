@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{error::Error, path::PathBuf};
+use std::{error::Error, path::Path, path::PathBuf, time::Duration};
 
 use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
@@ -18,6 +18,20 @@ async fn close_database(database: Database) {
     let pool = database.pool().clone();
     drop(database);
     pool.close().await;
+}
+
+async fn remove_database_file(path: &Path) -> std::io::Result<()> {
+    let mut attempts = 0;
+    loop {
+        match std::fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if cfg!(windows) && error.raw_os_error() == Some(32) && attempts < 20 => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn item(id: DownloadId, with_error: bool) -> Result<DownloadItem, Box<dyn Error>> {
@@ -74,7 +88,7 @@ async fn connect_path_preserves_special_path_characters() -> Result<(), Box<dyn 
     let database = Database::connect_path(&path).await?;
     assert!(database.downloads().list().await?.is_empty());
     close_database(database).await;
-    std::fs::remove_file(path)?;
+    remove_database_file(&path).await?;
     Ok(())
 }
 
@@ -307,7 +321,7 @@ async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
         drop(repository);
         close_database(database).await;
     }
-    std::fs::remove_file(path)?;
+    remove_database_file(&path).await?;
     Ok(())
 }
 
