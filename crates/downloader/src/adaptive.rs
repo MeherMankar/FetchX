@@ -108,7 +108,9 @@ impl AdaptiveController {
     }
 
     pub fn desired_concurrency(&self, remaining_segments: usize) -> usize {
-        self.desired_concurrency.min(remaining_segments)
+        self.desired_concurrency
+            .min(self.config.max_concurrency)
+            .min(remaining_segments)
     }
 
     pub fn observe(
@@ -221,8 +223,8 @@ impl AdaptiveController {
             return (AdaptiveDecision::Maintain, None);
         }
 
-        let from = self.desired_concurrency;
-        let to = from + 1;
+        let from = self.desired_concurrency.min(self.config.max_concurrency);
+        let to = from.saturating_add(1).min(self.config.max_concurrency);
         self.desired_concurrency = to;
         self.probe = Some(Probe {
             baseline_bytes_per_second: baseline,
@@ -314,6 +316,21 @@ mod tests {
     #[test]
     fn starts_at_configured_initial_concurrency() {
         let controller = AdaptiveController::new(config());
+        assert_eq!(controller.desired_concurrency(8), 4);
+    }
+
+    #[test]
+    fn never_exceeds_configured_max_concurrency() {
+        let mut controller = AdaptiveController::new(AdaptiveConfig {
+            max_concurrency: 4,
+            initial_concurrency: 4,
+            ..config()
+        });
+        assert_eq!(controller.desired_concurrency(8), 4);
+        assert_eq!(
+            controller.observe(sample(100, 4, 8)).0,
+            AdaptiveDecision::Maintain
+        );
         assert_eq!(controller.desired_concurrency(8), 4);
     }
 
