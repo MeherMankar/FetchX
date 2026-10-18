@@ -883,6 +883,7 @@ mod tests {
             Timestamp::from_unix_millis(Timestamp::now()?.as_unix_millis() + 60_000);
         save_schedule(&repository, waiting.id(), waiting_schedule, true).await?;
         let (scheduler, started, _completion) = start(repository.clone(), 1).await?;
+        wait_started(&started, 1).await?;
 
         for item in [&completed, &cancelled, &failed] {
             assert!(matches!(
