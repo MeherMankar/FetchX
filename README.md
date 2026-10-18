@@ -1,8 +1,9 @@
-# MyDownloader
+# FetchX
 
-MyDownloader is the foundation of a cross-platform download manager. The long-term
-goal is to provide a desktop application and CLI, with a Rust core that can support
-download queues, resumability, external engines, and other download-manager features.
+FetchX is a cross-platform download manager with Android and desktop applications,
+a command-line interface, and a shared Rust core. It supports resumable and
+segmented HTTP downloads, persistent queues and schedules, and optional media and
+torrent download engines.
 
 ## Development status
 
@@ -165,5 +166,20 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 ## Releases
 
 GitHub Actions builds Android, Windows, Linux, and macOS packages plus CLI
-binaries for releases. See [docs/RELEASING.md](docs/RELEASING.md) for triggers
-and optional signing configuration.
+binaries. To create a draft release manually, run **Actions → Release → Run
+workflow** and enter an app version such as `alpha.0.0.1`, `1.2.3`, or `v1.2.3`.
+The workflow adds the `v` prefix for the release tag and uses the entered version
+for the Android APK's displayed version. Its Android version code is generated
+from the workflow run number. Desktop and CLI package versions still come from
+their project manifests.
+
+The manual workflow lets you select which platform packages to build; all are
+enabled by default. Tag-triggered releases build every platform. See
+[docs/RELEASING.md](docs/RELEASING.md) for signing and release review details.
+
+## License
+
+FetchX is licensed under the Apache License 2.0. It permits use, modification,
+and distribution, including commercial use, subject to its terms. See
+[LICENSE](LICENSE) for the full license. Third-party components and bundled
+assets may have separate licenses and notices.
