@@ -53,7 +53,7 @@ import java.io.File
  * Downloads while preserving the shared navigation back stack.
  */
 @Composable
-fun AppNavigation(initialUrl: String? = null) {
+fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null)) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -63,11 +63,27 @@ fun AppNavigation(initialUrl: String? = null) {
     var tabsRequest by remember { mutableLongStateOf(0L) }
     var showBrowserMenu by remember { mutableStateOf(false) }
     // URL to navigate to on startup (from ACTION_VIEW intent)
-    var pendingUrl by remember { mutableStateOf(initialUrl) }
+    var pendingUrl by remember { mutableStateOf(if (initialUrl?.startsWith("magnet:") == true) null else initialUrl) }
+    // Magnet URI to add as download (from ACTION_VIEW magnet: intent)
+    var pendingMagnet by remember { mutableStateOf(if (initialUrl?.startsWith("magnet:") == true) initialUrl else null) }
+
+    // Observe new intents arriving via onNewIntent (activity already running).
+    val newIntentUrl = pendingIntentUrl.value
+    if (newIntentUrl != null) {
+        pendingIntentUrl.value = null   // consume it
+        if (newIntentUrl.startsWith("magnet:", ignoreCase = true)) {
+            pendingMagnet = newIntentUrl
+        } else {
+            pendingUrl = newIntentUrl
+        }
+    }
 
     // Browser theme seed — updated by BrowserScreen when user picks a color
     var browserThemeSeed by remember { mutableLongStateOf(0xFF4F8EF7L) }
     val seedColor = remember(browserThemeSeed) { Color(browserThemeSeed) }
+
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     val repo = BridgeInitializer.repositoryOrNull()
     val bridgeAvailable = repo != null
@@ -76,8 +92,24 @@ fun AppNavigation(initialUrl: String? = null) {
         DownloadsViewModel.Factory(repository, bridgeAvailable)
     }
 
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
+    // If app was launched with a magnet: URI, submit it as a download once bridge is ready.
+    val magnetToSubmit = pendingMagnet
+    if (magnetToSubmit != null && bridgeAvailable) {
+        pendingMagnet = null
+        coroutineScope.launch {
+            try {
+                (repository as? dev.fetchx.core.download.TorrentDownloadRepository)
+                    ?.addMagnet(magnetToSubmit, DownloadPriority.DEFAULT)
+                Toast.makeText(context, "Magnet download added", Toast.LENGTH_SHORT).show()
+                navController.navigate(Screen.Downloads.route) { launchSingleTop = true }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                Toast.makeText(context, e.message ?: "Could not add magnet download", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     val browserVersionName = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }

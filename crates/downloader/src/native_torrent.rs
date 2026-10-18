@@ -34,6 +34,12 @@ pub struct NativeTorrentConfig {
     pub listen_port: u16,
     /// Maximum number of connected peers per torrent. Caps socket usage.
     pub max_connections_per_torrent: usize,
+    /// Directory for librqbit session working files. Must be writable.
+    /// Defaults to `std::env::temp_dir()/fetchx-librqbit-session` but
+    /// on Android this must be set to the app's private files directory
+    /// (e.g. `context.filesDir`) because `/data/local/tmp` is not writable
+    /// by app sandboxes.
+    pub session_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for NativeTorrentConfig {
@@ -41,6 +47,7 @@ impl Default for NativeTorrentConfig {
         Self {
             listen_port: 6881,
             max_connections_per_torrent: 20,
+            session_dir: None,
         }
     }
 }
@@ -70,7 +77,13 @@ where
         // Use a temporary directory as the session's output folder — each
         // torrent supplies its own output folder via `AddTorrentOptions`, so
         // this is never used for actual writes.
-        let placeholder_dir = std::env::temp_dir().join("fetchx-librqbit-session");
+        // Use the configured session dir, or fall back to temp_dir.
+        // On Android, std::env::temp_dir() is /data/local/tmp which is NOT
+        // writable by the app sandbox — callers must set session_dir explicitly.
+        let placeholder_dir = config.session_dir
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir())
+            .join("fetchx-librqbit-session");
         tokio::fs::create_dir_all(&placeholder_dir)
             .await
             .map_err(DownloadEngineError::Io)?;
@@ -78,11 +91,11 @@ where
         let listen_addr: std::net::SocketAddr = format!("0.0.0.0:{}", config.listen_port)
             .parse()
             .map_err(|_| {
-            DownloadEngineError::NativeTorrent(format!(
-                "invalid listen port: {}",
-                config.listen_port
-            ))
-        })?;
+                DownloadEngineError::NativeTorrent(format!(
+                    "invalid listen port: {}",
+                    config.listen_port
+                ))
+            })?;
 
         let session_opts = SessionOptions {
             listen: Some(ListenerOptions {

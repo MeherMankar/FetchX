@@ -46,7 +46,7 @@ use fetchx_storage::{
 };
 use thiserror::Error;
 use tokio::{fs, io::AsyncReadExt, process::Command, sync::Mutex, time::Duration};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub use config::{
     Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, NativeTorrentConfig,
@@ -1056,10 +1056,12 @@ async fn init_native_torrent(
     let native_cfg = DownloaderNativeTorrentConfig {
         listen_port: config.native_torrent.listen_port,
         max_connections_per_torrent: 20,
+        session_dir: config.native_torrent.session_dir.clone(),
     };
     match NativeTorrentEngine::new(repository, native_cfg).await {
         Ok(engine) => {
             let engine = Arc::new(engine);
+            info!("NativeTorrentEngine initialized successfully");
             (
                 Some(engine),
                 EngineAvailability::Available {
@@ -1067,12 +1069,15 @@ async fn init_native_torrent(
                 },
             )
         }
-        Err(e) => (
-            None,
-            EngineAvailability::Unavailable {
-                reason: e.to_string(),
-            },
-        ),
+        Err(e) => {
+            error!("NativeTorrentEngine failed to initialize: {e}");
+            (
+                None,
+                EngineAvailability::Unavailable {
+                    reason: e.to_string(),
+                },
+            )
+        }
     }
 }
 

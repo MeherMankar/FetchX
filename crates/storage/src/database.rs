@@ -80,6 +80,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             Cow::Borrowed(include_str!("../../../migrations/0008_magnet_metadata.sql")),
             false,
         ),
+        Migration::new(
+            9,
+            Cow::Borrowed("native_torrent_engine"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0009_native_torrent_engine.sql"
+            )),
+            false,
+        ),
     ]),
     ..Migrator::DEFAULT
 });

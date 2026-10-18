@@ -326,6 +326,11 @@ class DownloadsViewModel(
                 "Download could not be added. Please check the URL and try again."
             else
                 "Download could not be added. Please try again."
+        e is UnsupportedOperationException ->
+            "Magnet and torrent downloads are not available on this device."
+        e.message?.contains("UnavailableEngine", ignoreCase = true) == true ||
+                e.message?.contains("unavailable", ignoreCase = true) == true ->
+            "Magnet and torrent downloads require aria2, which is not available on this device."
         e.message?.contains("url", ignoreCase = true) == true ||
                 e.message?.contains("invalid", ignoreCase = true) == true ->
             "Download could not be added. Please check the URL and try again."

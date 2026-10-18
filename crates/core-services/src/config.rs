@@ -104,6 +104,11 @@ pub struct NativeTorrentConfig {
     pub enabled: bool,
     /// TCP listen port for incoming BitTorrent connections. Default: 6881.
     pub listen_port: u16,
+    /// Working directory for the librqbit session. Must be app-writable.
+    /// On Android this must be set to the app's private files directory
+    /// since /data/local/tmp is not writable by the app sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for NativeTorrentConfig {
@@ -111,6 +116,7 @@ impl Default for NativeTorrentConfig {
         Self {
             enabled: false,
             listen_port: 6881,
+            session_dir: None,
         }
     }
 }

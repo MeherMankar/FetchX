@@ -77,12 +77,22 @@ object BridgeInitializer {
             val runtimeDir = File(dataDir, "runtime")
             runtimeDir.mkdirs()
 
+            // Use aria2c if already extracted from a previous run (fast path, no I/O).
+            // If not yet extracted, trigger background extraction for the next launch.
+            // This avoids 69 MB asset decompression during bridge init on first run.
+            // NOTE: On Android 10+, SELinux blocks execute_no_trans for binaries in
+            // app data directories. aria2c bundling is disabled; NativeTorrent is used instead.
+            val aria2Path: String? = null
+            Log.i(TAG, "aria2c bundling disabled — using NativeTorrent engine")
+            // Background extraction disabled (SELinux blocks execution from /data/data/)
+            // Aria2Bundler.extractAsync(context) { ... }
+
             val config = CoreConfig(
                 databasePath = File(dataDir, "fetchx.db").absolutePath,
                 downloadsDir = dlDir.absolutePath,
                 runtimeDir = runtimeDir.absolutePath,
                 ytDlpExecutablePath = null,
-                aria2ExecutablePath = null,
+                aria2ExecutablePath = aria2Path,
             )
 
             try {

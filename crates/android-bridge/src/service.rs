@@ -93,6 +93,15 @@ impl DownloadService {
             // configured — aria2c cannot be bundled due to OOM on startup.
             if !engine_config.aria2.enabled {
                 engine_config.native_torrent.enabled = true;
+                // Set the session dir to the app's private files directory.
+                // std::env::temp_dir() returns /data/local/tmp on Android which
+                // is not writable by the app sandbox.
+                let runtime_parent = PathBuf::from(&config.runtime_dir)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from(&config.runtime_dir));
+                engine_config.native_torrent.session_dir =
+                    Some(runtime_parent.join("native-torrent-session"));
             }
             engine_config
         };
