@@ -15,6 +15,9 @@ val configuredReleaseSigningVariables =
 require(configuredReleaseSigningVariables == 0 || configuredReleaseSigningVariables == releaseSigningVariables.size) {
     "Android release signing requires ANDROID_KEYSTORE_PATH, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD, and ANDROID_STORE_PASSWORD."
 }
+val ciArm64Only = providers.gradleProperty("ciArm64Only").orNull == "true"
+val appVersion = providers.gradleProperty("appVersion").orElse("0.0.0-dev").get().removePrefix("v")
+val appVersionCode = providers.gradleProperty("appVersionCode").orElse("1").get().toInt()
 
 android {
     namespace = "dev.fetchx.app"
@@ -28,10 +31,14 @@ android {
         applicationId = "dev.fetchx.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-20A"
+        versionCode = appVersionCode
+        versionName = appVersion
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += if (ciArm64Only) {
+                listOf("arm64-v8a")
+            } else {
+                listOf("arm64-v8a", "x86_64")
+            }
         }
     }
 
@@ -67,6 +74,12 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // Store bundled native binaries (aria2c) uncompressed so AssetFileDescriptor
+    // can report their true size and they can be extracted correctly at runtime.
+    androidResources {
+        noCompress += listOf("aria2c-arm64-v8a", "aria2c-x86_64", "aria2c-armeabi-v7a")
     }
 
     kotlin {
