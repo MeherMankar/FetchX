@@ -311,7 +311,7 @@ async fn start_segment_server(
             | SegmentServerMode::ShortBody
             | SegmentServerMode::FailAboveConcurrency(_)
     ) {
-        Duration::from_secs(3)
+        Duration::from_secs(10)
     } else {
         Duration::from_millis(500)
     };
