@@ -65,11 +65,13 @@ async fn connect_path_preserves_special_path_characters() -> Result<(), Box<dyn 
         std::process::id(),
         special_characters
     ));
-    {
+    let pool = {
         let database = Database::connect_path(&path).await?;
         assert!(database.downloads().list().await?.is_empty());
-        database.pool().close().await;
-    }
+        database.pool().clone()
+    };
+    pool.close().await;
+    drop(pool);
     std::fs::remove_file(path)?;
     Ok(())
 }
