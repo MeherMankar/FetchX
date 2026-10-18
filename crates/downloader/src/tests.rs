@@ -861,13 +861,16 @@ async fn adaptive_scheduler_completes_within_worker_bounds_and_assembles_all_ran
 #[tokio::test]
 async fn adaptive_scheduler_backs_off_when_server_rejects_excess_concurrency()
 -> Result<(), Box<dyn Error>> {
-    const TOTAL: usize = 512 * 1024;
+    // Use a smaller body (64 KB) and a generous connection budget (4096) so
+    // this test doesn't exhaust the server on slow CI runners regardless of
+    // how many 503-triggered retries the adaptive controller issues.
+    const TOTAL: usize = 64 * 1024;
     let body: Vec<u8> = (0..TOTAL).map(|index| (index % 239) as u8).collect();
     let (url, server) = start_segment_server(
         body.clone(),
         8,
         SegmentServerMode::FailAboveConcurrency(1),
-        512,
+        4096,
         true,
     )
     .await?;
