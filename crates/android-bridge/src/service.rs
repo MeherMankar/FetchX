@@ -89,6 +89,11 @@ impl DownloadService {
                 engine_config.aria2.enabled = true;
                 engine_config.aria2.executable_path = Some(PathBuf::from(path));
             }
+            // Enable native torrent engine on Android when no aria2 binary is
+            // configured — aria2c cannot be bundled due to OOM on startup.
+            if !engine_config.aria2.enabled {
+                engine_config.native_torrent.enabled = true;
+            }
             engine_config
         };
 

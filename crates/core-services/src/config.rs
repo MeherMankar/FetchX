@@ -22,6 +22,8 @@ pub struct EngineConfig {
     pub aria2: Aria2Config,
     pub yt_dlp: YtDlpConfig,
     #[serde(default)]
+    pub native_torrent: NativeTorrentConfig,
+    #[serde(default)]
     pub resource_policy: ResourcePolicy,
 }
 
@@ -32,6 +34,7 @@ impl Default for EngineConfig {
             direct_http: DirectHttpConfig::default(),
             aria2: Aria2Config::default(),
             yt_dlp: YtDlpConfig::default(),
+            native_torrent: NativeTorrentConfig::default(),
             resource_policy: ResourcePolicy::default(),
         }
     }
@@ -94,6 +97,22 @@ impl Aria2Config {
 pub struct YtDlpConfig {
     pub enabled: bool,
     pub executable_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct NativeTorrentConfig {
+    pub enabled: bool,
+    /// TCP listen port for incoming BitTorrent connections. Default: 6881.
+    pub listen_port: u16,
+}
+
+impl Default for NativeTorrentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_port: 6881,
+        }
+    }
 }
 
 // ── Validation ────────────────────────────────────────────────────────────

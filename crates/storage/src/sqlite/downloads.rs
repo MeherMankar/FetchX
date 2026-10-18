@@ -485,6 +485,7 @@ fn engine_to_str(value: EngineKind) -> &'static str {
         EngineKind::Aria2 => "aria2",
         EngineKind::YtDlp => "yt_dlp",
         EngineKind::Hls => "hls",
+        EngineKind::NativeTorrent => "native_torrent",
     }
 }
 
@@ -494,6 +495,7 @@ fn engine_from_str(value: &str) -> Result<EngineKind, StorageError> {
         "aria2" => Ok(EngineKind::Aria2),
         "yt_dlp" => Ok(EngineKind::YtDlp),
         "hls" => Ok(EngineKind::Hls),
+        "native_torrent" => Ok(EngineKind::NativeTorrent),
         _ => Err(StorageError::invalid_data(
             "engine_kind",
             "unknown engine kind",

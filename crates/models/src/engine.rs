@@ -12,6 +12,10 @@ pub enum EngineKind {
     /// Native parallel HLS downloader (fetches all segments concurrently).
     #[serde(rename = "hls")]
     Hls,
+    /// Native Rust BitTorrent engine (librqbit). Used on Android where aria2c
+    /// cannot be bundled. Handles magnet URIs and .torrent files natively.
+    #[serde(rename = "native_torrent")]
+    NativeTorrent,
 }
 
 #[cfg(test)]
@@ -25,6 +29,7 @@ mod tests {
             (EngineKind::Aria2, "\"aria2\""),
             (EngineKind::YtDlp, "\"yt_dlp\""),
             (EngineKind::Hls, "\"hls\""),
+            (EngineKind::NativeTorrent, "\"native_torrent\""),
         ] {
             let serialized = serde_json::to_string(&engine)?;
             assert_eq!(serialized, expected);

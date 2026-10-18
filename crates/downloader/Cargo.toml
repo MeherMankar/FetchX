@@ -9,6 +9,7 @@ base64.workspace = true
 fetchx-core = { path = "../core" }
 fetchx-models = { path = "../models" }
 fetchx-storage = { path = "../storage" }
+librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

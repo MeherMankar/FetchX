@@ -105,6 +105,8 @@ pub enum DownloadEngineError {
     Aria2Supervisor(#[from] Aria2SupervisorError),
     #[error("yt-dlp operation failed: {0}")]
     YtDlp(#[from] YtDlpError),
+    #[error("native torrent engine error: {0}")]
+    NativeTorrent(String),
 }
 
 impl DownloadEngineError {
@@ -196,6 +198,10 @@ impl DownloadEngineError {
             Self::YtDlp(_) => (
                 DownloadErrorCode::Engine,
                 "The yt-dlp download could not be completed safely.".to_owned(),
+            ),
+            Self::NativeTorrent(_) => (
+                DownloadErrorCode::Engine,
+                "The native torrent download could not be completed safely.".to_owned(),
             ),
             Self::Cancelled => (
                 DownloadErrorCode::Internal,

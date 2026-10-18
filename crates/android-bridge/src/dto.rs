@@ -185,6 +185,7 @@ pub fn item_to_dto(item: &DownloadItem) -> DownloadInfoDto {
         EngineKind::Aria2 => "aria2",
         EngineKind::YtDlp => "yt_dlp",
         EngineKind::Hls => "hls",
+        EngineKind::NativeTorrent => "native_torrent",
     };
     let error_message = item.error().map(|e| e.message().to_string());
 

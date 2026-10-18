@@ -11,4 +11,5 @@ pub enum EngineAvailability {
 pub struct EngineRuntimeStatus {
     pub aria2: EngineAvailability,
     pub yt_dlp: EngineAvailability,
+    pub native_torrent: EngineAvailability,
 }

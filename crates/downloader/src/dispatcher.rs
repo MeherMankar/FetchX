@@ -8,7 +8,8 @@ use tokio::sync::watch;
 
 use crate::{
     Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, HlsEngine,
-    ManagedDownloadControl, ManagedDownloadEngine, YtDlpEngine, YtDlpFormat, is_hls_url,
+    ManagedDownloadControl, ManagedDownloadEngine, NativeTorrentEngine, YtDlpEngine, YtDlpFormat,
+    is_hls_url,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -18,6 +19,7 @@ pub struct EngineDispatcher<R> {
     aria2: Arc<Aria2Engine<R>>,
     yt_dlp: Option<Arc<YtDlpEngine<R>>>,
     hls: Option<Arc<HlsEngine<R>>>,
+    native_torrent: Option<Arc<NativeTorrentEngine<R>>>,
     probe_client: Client,
 }
 
@@ -36,6 +38,7 @@ where
             aria2,
             yt_dlp: None,
             hls: None,
+            native_torrent: None,
             probe_client: Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -50,6 +53,11 @@ where
 
     pub fn with_hls(mut self, engine: Arc<HlsEngine<R>>) -> Self {
         self.hls = Some(engine);
+        self
+    }
+
+    pub fn with_native_torrent(mut self, engine: Arc<NativeTorrentEngine<R>>) -> Self {
+        self.native_torrent = Some(engine);
         self
     }
 
@@ -141,6 +149,10 @@ where
                 Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
+            EngineKind::NativeTorrent => match &self.native_torrent {
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 }
@@ -167,6 +179,10 @@ where
                 Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
+            EngineKind::NativeTorrent => match &self.native_torrent {
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 
@@ -176,7 +192,10 @@ where
                 .yt_dlp
                 .as_ref()
                 .is_some_and(|engine| engine.supports_active_pause(EngineKind::YtDlp)),
-            EngineKind::DirectHttp | EngineKind::Aria2 | EngineKind::Hls => true,
+            EngineKind::DirectHttp
+            | EngineKind::Aria2
+            | EngineKind::Hls
+            | EngineKind::NativeTorrent => true,
         }
     }
 
@@ -188,6 +207,10 @@ where
         async move {
             match self.engine_for(id).await? {
                 EngineKind::Aria2 => self.aria2.cancel_inactive(id).await,
+                EngineKind::NativeTorrent => match &self.native_torrent {
+                    Some(engine) => engine.cancel_inactive(id).await,
+                    None => Ok(()),
+                },
                 EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls => Ok(()),
             }
         }

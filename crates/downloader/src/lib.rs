@@ -9,6 +9,7 @@ mod error;
 mod ffmpeg;
 mod hls;
 mod http;
+mod native_torrent;
 mod retry;
 mod segments;
 mod supervisor;
@@ -31,6 +32,7 @@ pub use ffmpeg::{
 };
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 pub use http::{DirectHttpEngine, HttpEngineConfig, validate_http_source_url};
+pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
 pub use supervisor::{
     Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,
     Aria2SupervisorState, ProcessExit, SupervisedProcess,

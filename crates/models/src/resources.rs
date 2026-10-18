@@ -34,6 +34,7 @@ pub struct EngineBandwidthLimits {
     pub hls_bytes_per_second: Option<u64>,
     pub aria2_bytes_per_second: Option<u64>,
     pub yt_dlp_bytes_per_second: Option<u64>,
+    pub native_torrent_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,6 +64,9 @@ impl ResourcePolicy {
             crate::EngineKind::Hls => self.engine_bandwidth_limits.hls_bytes_per_second,
             crate::EngineKind::Aria2 => self.engine_bandwidth_limits.aria2_bytes_per_second,
             crate::EngineKind::YtDlp => self.engine_bandwidth_limits.yt_dlp_bytes_per_second,
+            crate::EngineKind::NativeTorrent => {
+                self.engine_bandwidth_limits.native_torrent_bytes_per_second
+            }
         }
     }
 
@@ -133,6 +137,7 @@ impl ResourcePolicy {
             self.engine_bandwidth_limits.hls_bytes_per_second,
             self.engine_bandwidth_limits.aria2_bytes_per_second,
             self.engine_bandwidth_limits.yt_dlp_bytes_per_second,
+            self.engine_bandwidth_limits.native_torrent_bytes_per_second,
         ]
         .into_iter()
         .flatten()

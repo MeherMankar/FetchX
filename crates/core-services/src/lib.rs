@@ -29,8 +29,9 @@ use std::{path::PathBuf, sync::Arc};
 
 use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
-    DirectHttpEngine, EngineDispatcher, HlsEngine, YtDlpConfig as DownloaderYtDlpConfig,
-    YtDlpEngine, YtDlpProcessRunner,
+    DirectHttpEngine, EngineDispatcher, HlsEngine,
+    NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine,
+    YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
 };
 use fetchx_models::EngineKind;
 use fetchx_models::{
@@ -48,7 +49,8 @@ use tokio::{fs, io::AsyncReadExt, process::Command, sync::Mutex, time::Duration}
 use tracing::{info, warn};
 
 pub use config::{
-    Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, YtDlpConfig,
+    Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, NativeTorrentConfig,
+    YtDlpConfig,
 };
 pub use engine_status::{EngineAvailability, EngineRuntimeStatus};
 
@@ -238,11 +240,29 @@ impl CoreServices {
         &self,
         id: DownloadId,
     ) -> Result<Option<fetchx_models::TorrentTelemetry>, CoreServicesError> {
-        self.engine_runtime
-            .aria2_engine
-            .torrent_telemetry(id)
+        // Determine which engine owns this download.
+        let engine_kind = self
+            .repository
+            .get(id)
             .await
-            .map_err(|error| CoreServicesError::Engine(error.to_string()))
+            .map_err(|e| CoreServicesError::Database(e.to_string()))?
+            .map(|item| item.source().engine());
+
+        match engine_kind {
+            Some(EngineKind::NativeTorrent) => {
+                if let Some(engine) = &self.engine_runtime.native_torrent_engine {
+                    Ok(engine.torrent_telemetry(id).await)
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => self
+                .engine_runtime
+                .aria2_engine
+                .torrent_telemetry(id)
+                .await
+                .map_err(|error| CoreServicesError::Engine(error.to_string())),
+        }
     }
 
     /// Creates a durable torrent metadata row after a torrent download is queued.
@@ -334,7 +354,7 @@ impl CoreServices {
         Ok(id)
     }
 
-    /// Validates and queues a magnet job through the shared aria2 runtime.
+    /// Validates and queues a magnet job through the shared torrent runtime.
     ///
     /// Magnet output is isolated in a per-job directory unless the caller
     /// explicitly supplies a destination directory.
@@ -346,11 +366,15 @@ impl CoreServices {
     ) -> Result<DownloadId, CoreServicesError> {
         let magnet = parse_magnet_uri(uri)
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
-        if !self.engine_runtime.is_available(EngineKind::Aria2) {
+        let torrent_engine = if self.engine_runtime.is_available(EngineKind::Aria2) {
+            EngineKind::Aria2
+        } else if self.engine_runtime.is_available(EngineKind::NativeTorrent) {
+            EngineKind::NativeTorrent
+        } else {
             return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
-        }
+        };
         let id = DownloadId::new();
-        let source = DownloadSource::new(uri, EngineKind::Aria2)
+        let source = DownloadSource::new(uri, torrent_engine)
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
         let filename = FileName::new(magnet.suggested_filename())
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
@@ -441,10 +465,14 @@ impl CoreServices {
         let destination = validate_torrent_destination(&destination, &self.downloads_dir)
             .await
             .map_err(|e| CoreServicesError::InvalidTorrent(e.to_string()))?;
-        if !self.engine_runtime.is_available(EngineKind::Aria2) {
+        let torrent_engine = if self.engine_runtime.is_available(EngineKind::Aria2) {
+            EngineKind::Aria2
+        } else if self.engine_runtime.is_available(EngineKind::NativeTorrent) {
+            EngineKind::NativeTorrent
+        } else {
             return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
-        }
-        let source = DownloadSource::new_torrent_file(&torrent_path, EngineKind::Aria2)
+        };
+        let source = DownloadSource::new_torrent_file(&torrent_path, torrent_engine)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
         let torrent_name_for_meta = torrent.name.clone();
         let torrent_info_hash_for_meta = torrent.info_hash.clone();
@@ -792,6 +820,7 @@ pub struct EngineRuntime {
     pub dispatcher: Arc<EngineDispatcher<CoreRepository>>,
     pub aria2_engine: Arc<Aria2Engine<CoreRepository>>,
     pub aria2_supervisor: Option<Arc<Aria2Supervisor>>,
+    pub native_torrent_engine: Option<Arc<NativeTorrentEngine<CoreRepository>>>,
     pub status: EngineRuntimeStatus,
 }
 
@@ -825,9 +854,12 @@ impl EngineRuntime {
             init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await;
         let (yt_dlp_engine, ytdlp_avail) =
             init_ytdlp(repository.clone(), config, ytdlp_runner).await;
+        let (native_torrent_engine, native_torrent_avail) =
+            init_native_torrent(repository.clone(), config).await;
 
         log_avail("aria2", &aria2_avail);
         log_avail("yt-dlp", &ytdlp_avail);
+        log_avail("native-torrent", &native_torrent_avail);
         info!(engine = "hls", "engine ready");
 
         let mut dispatcher =
@@ -836,14 +868,19 @@ impl EngineRuntime {
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
+        if let Some(ref engine) = native_torrent_engine {
+            dispatcher = dispatcher.with_native_torrent(Arc::clone(engine));
+        }
 
         Ok(Self {
             dispatcher: Arc::new(dispatcher),
             aria2_engine,
             aria2_supervisor,
+            native_torrent_engine,
             status: EngineRuntimeStatus {
                 aria2: aria2_avail,
                 yt_dlp: ytdlp_avail,
+                native_torrent: native_torrent_avail,
             },
         })
     }
@@ -855,6 +892,10 @@ impl EngineRuntime {
                 .map_err(|error| CoreServicesError::Shutdown(error.to_string()))?;
             info!("aria2 supervisor shut down");
         }
+        if let Some(engine) = &self.native_torrent_engine {
+            engine.session().stop().await;
+            info!("native torrent session stopped");
+        }
         Ok(())
     }
 
@@ -864,6 +905,12 @@ impl EngineRuntime {
             EngineKind::DirectHttp | EngineKind::Hls => true,
             EngineKind::Aria2 => matches!(self.status.aria2, EngineAvailability::Available { .. }),
             EngineKind::YtDlp => matches!(self.status.yt_dlp, EngineAvailability::Available { .. }),
+            EngineKind::NativeTorrent => {
+                matches!(
+                    self.status.native_torrent,
+                    EngineAvailability::Available { .. }
+                )
+            }
         }
     }
 }
@@ -983,6 +1030,41 @@ async fn init_ytdlp(
             (
                 Some(Arc::new(engine)),
                 EngineAvailability::Available { version },
+            )
+        }
+        Err(e) => (
+            None,
+            EngineAvailability::Unavailable {
+                reason: e.to_string(),
+            },
+        ),
+    }
+}
+
+// ── native-torrent init ───────────────────────────────────────────────────
+
+async fn init_native_torrent(
+    repository: CoreRepository,
+    config: &EngineConfig,
+) -> (
+    Option<Arc<NativeTorrentEngine<CoreRepository>>>,
+    EngineAvailability,
+) {
+    if !config.native_torrent.enabled {
+        return (None, EngineAvailability::Disabled);
+    }
+    let native_cfg = DownloaderNativeTorrentConfig {
+        listen_port: config.native_torrent.listen_port,
+        max_connections_per_torrent: 20,
+    };
+    match NativeTorrentEngine::new(repository, native_cfg).await {
+        Ok(engine) => {
+            let engine = Arc::new(engine);
+            (
+                Some(engine),
+                EngineAvailability::Available {
+                    version: "9.0.1".to_owned(),
+                },
             )
         }
         Err(e) => (

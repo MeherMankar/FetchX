@@ -22,13 +22,12 @@ impl DownloadSource {
         if url.trim().is_empty() {
             return Err(DownloadSourceError::EmptyUrl);
         }
-        if url.starts_with("magnet:")
-            && (engine != EngineKind::Aria2 || parse_magnet_uri(&url).is_err())
-        {
+        let is_torrent_engine = matches!(engine, EngineKind::Aria2 | EngineKind::NativeTorrent);
+        if url.starts_with("magnet:") && (!is_torrent_engine || parse_magnet_uri(&url).is_err()) {
             return Err(DownloadSourceError::InvalidMagnetUri);
         }
         if url.starts_with("torrent+file:")
-            && (engine != EngineKind::Aria2 || torrent_file_path(&url).is_none())
+            && (!is_torrent_engine || torrent_file_path(&url).is_none())
         {
             return Err(DownloadSourceError::InvalidTorrentFile);
         }
@@ -44,7 +43,8 @@ impl DownloadSource {
         path: &std::path::Path,
         engine: EngineKind,
     ) -> Result<Self, DownloadSourceError> {
-        if engine != EngineKind::Aria2
+        let is_torrent_engine = matches!(engine, EngineKind::Aria2 | EngineKind::NativeTorrent);
+        if !is_torrent_engine
             || !path
                 .extension()
                 .and_then(std::ffi::OsStr::to_str)
@@ -262,7 +262,7 @@ pub enum DownloadSourceError {
     InvalidYtDlpFormat,
     #[error("magnet URI must contain one valid BitTorrent info hash and safe optional trackers")]
     InvalidMagnetUri,
-    #[error("torrent file source must be a local .torrent file using aria2")]
+    #[error("torrent file source must be a local .torrent file using a torrent engine")]
     InvalidTorrentFile,
 }
 
