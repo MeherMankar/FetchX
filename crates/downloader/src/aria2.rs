@@ -1169,18 +1169,16 @@ where
         let Some(metadata_repository) = &self.torrent_metadata else {
             return Ok(());
         };
-        let Some(mut metadata) = metadata_repository.get_torrent_metadata(id).await? else {
+        let updated = metadata_repository
+            .set_torrent_aria2_gid(id, gid.map(Aria2Gid::as_str), Timestamp::now()?)
+            .await?;
+        if !updated {
             return if gid.is_some() {
                 Err(DownloadEngineError::Aria2ReconciliationRequired)
             } else {
                 Ok(())
             };
-        };
-        metadata.aria2_gid = gid.map(|gid| gid.as_str().to_owned());
-        metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
-        metadata_repository
-            .update_torrent_metadata(&metadata)
-            .await?;
+        }
         Ok(())
     }
 

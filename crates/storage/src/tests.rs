@@ -509,6 +509,46 @@ async fn torrent_metadata_update_and_gid_lookup() -> Result<(), Box<dyn Error>> 
 }
 
 #[tokio::test]
+async fn torrent_gid_update_preserves_concurrent_selection_changes() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let dl = item(DownloadId::new(), false)?;
+    database.downloads().create(&dl).await?;
+    let row = torrent_row(dl.id());
+    let repository = database.torrent_metadata();
+    repository.create_torrent_metadata(&row).await?;
+
+    let mut selected = row.clone();
+    selected.selected_file_indexes = vec![0];
+    selected.selected_total_bytes = 1024;
+    selected.selection_confirmed = true;
+    selected.updated_at = Timestamp::from_unix_millis(1_700_000_001_000);
+    repository.update_torrent_metadata(&selected).await?;
+
+    assert!(
+        repository
+            .set_torrent_aria2_gid(
+                dl.id(),
+                None,
+                Timestamp::from_unix_millis(1_700_000_002_000),
+            )
+            .await?
+    );
+    let reloaded = repository
+        .get_torrent_metadata(dl.id())
+        .await?
+        .ok_or("torrent metadata row missing after GID update")?;
+    assert_eq!(reloaded.selected_file_indexes, [0]);
+    assert_eq!(reloaded.selected_total_bytes, 1024);
+    assert!(reloaded.selection_confirmed);
+    assert_eq!(reloaded.aria2_gid, None);
+    assert_eq!(
+        reloaded.updated_at,
+        Timestamp::from_unix_millis(1_700_000_002_000)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn torrent_metadata_magnet_row_insert_and_delete() -> Result<(), Box<dyn Error>> {
     let database = Database::connect("sqlite::memory:").await?;
     let dl_repo = database.downloads();

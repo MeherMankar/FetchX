@@ -144,6 +144,26 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         Ok(())
     }
 
+    async fn set_torrent_aria2_gid(
+        &self,
+        id: DownloadId,
+        gid: Option<&str>,
+        updated_at: Timestamp,
+    ) -> Result<bool, StorageError> {
+        let updated_at = to_sqlite_integer("updated_at", updated_at.as_unix_millis())?;
+        let result = sqlx::query(
+            "UPDATE torrent_metadata
+             SET aria2_gid = ?, updated_at = MAX(updated_at, ?)
+             WHERE download_id = ?",
+        )
+        .bind(gid)
+        .bind(updated_at)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() != 0)
+    }
+
     async fn get_torrent_metadata(
         &self,
         id: DownloadId,

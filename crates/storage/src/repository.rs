@@ -138,6 +138,14 @@ pub trait TorrentMetadataRepository: Send + Sync {
         row: &TorrentMetadataRow,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
+    /// Updates only the persisted aria2 GID and timestamp, preserving concurrent metadata edits.
+    fn set_torrent_aria2_gid(
+        &self,
+        id: DownloadId,
+        gid: Option<&str>,
+        updated_at: Timestamp,
+    ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+
     /// Finds one torrent metadata row by download identifier.
     fn get_torrent_metadata(
         &self,

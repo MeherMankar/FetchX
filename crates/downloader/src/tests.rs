@@ -305,12 +305,16 @@ async fn start_segment_server(
     let active = Arc::new(AtomicUsize::new(0));
     let max_active = Arc::new(AtomicUsize::new(0));
     let no_range_requests = Arc::new(AtomicUsize::new(0));
-    let accept_idle_timeout =
-        if matches!(mode, SegmentServerMode::Fail | SegmentServerMode::ShortBody) {
-            Duration::from_secs(3)
-        } else {
-            Duration::from_millis(500)
-        };
+    let accept_idle_timeout = if matches!(
+        mode,
+        SegmentServerMode::Fail
+            | SegmentServerMode::ShortBody
+            | SegmentServerMode::FailAboveConcurrency(_)
+    ) {
+        Duration::from_secs(3)
+    } else {
+        Duration::from_millis(500)
+    };
     let task = tokio::spawn(async move {
         let mut connections = Vec::with_capacity(total_connections);
         while connections.len() < total_connections {
