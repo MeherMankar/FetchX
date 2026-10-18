@@ -1269,17 +1269,17 @@ or remote-fetch implementation.
 **Validation:**
 - [x] Workspace Rust check, serial workspace tests, and strict Clippy
 - [x] Desktop UI build and Windows desktop/CLI Rust builds
-- [x] Android debug unit tests, APK assembly, and install/launch on a connected arm64 device
+- [x] Android debug unit tests, APK assembly, install/launch, UniFFI bridge initialization, and process-restart recovery on a connected arm64 device
 - [x] Deterministic HTTP, HLS, segmented/Turbo, aria2/torrent, yt-dlp, and FFmpeg regression tests
 - [ ] Validate live aria2/BitTorrent workflows with a real daemon
 - [ ] Exercise the live torrent lifecycle on-device (aria2 daemon unavailable)
 - [ ] Validate Tauri packaging and real external-engine workflows
 
 This phase remains **PARTIAL** until the unavailable live aria2 workflow and
-Tauri packaging checks can be run. Android install/launch passed, but on-device
-live torrent validation is blocked by the unavailable aria2 daemon. The available
-automated tests do not demonstrate real process-restart recovery or race-proof
-filesystem confinement.
+Tauri packaging checks can be run. Android bridge startup, Downloads UI, and
+process restart were verified on-device; live torrent validation is blocked by
+the unavailable aria2 daemon. The available automated tests do not demonstrate
+real daemon-restart recovery or race-proof filesystem confinement.
 
 ---
 

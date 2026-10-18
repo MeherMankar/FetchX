@@ -542,8 +542,6 @@ pub struct TorrentTelemetry {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::{TorrentMetadataError, parse_torrent_metainfo};
     use crate::{DownloadSource, EngineKind};
 
@@ -656,15 +654,16 @@ mod tests {
 
     #[test]
     fn local_torrent_sources_round_trip_and_reject_wrong_engine_or_extension() {
-        let torrent_path = Path::new("/tmp/fetchx/legal-fixture.torrent");
-        let source = DownloadSource::new_torrent_file(torrent_path, EngineKind::Aria2)
+        let torrent_path = std::env::temp_dir().join("fetchx-legal-fixture.torrent");
+        assert!(torrent_path.is_absolute());
+        let source = DownloadSource::new_torrent_file(&torrent_path, EngineKind::Aria2)
             .expect("absolute .torrent path is representable");
         assert!(source.is_torrent_file());
-        assert_eq!(source.torrent_file_path(), Some(torrent_path.to_path_buf()));
-        assert!(DownloadSource::new_torrent_file(torrent_path, EngineKind::DirectHttp).is_err());
+        assert_eq!(source.torrent_file_path(), Some(torrent_path.clone()));
+        assert!(DownloadSource::new_torrent_file(&torrent_path, EngineKind::DirectHttp).is_err());
         assert!(
             DownloadSource::new_torrent_file(
-                Path::new("/tmp/fetchx/not-a-torrent.txt"),
+                &torrent_path.with_extension("txt"),
                 EngineKind::Aria2
             )
             .is_err()
