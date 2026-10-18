@@ -124,7 +124,7 @@ jobs:
       - name: Generate UniFFI bindings + build debug APK
         run: |
           cd apps/android
-          ./gradlew :bridge:generateUniFfiKotlinBindings assembleDebug
+          ./gradlew :bridge:generateUniFfiKotlinBindings assembleDebug -PciArm64Only=true
 
       - name: Upload debug APK (CI artifact)
         uses: actions/upload-artifact@v4
