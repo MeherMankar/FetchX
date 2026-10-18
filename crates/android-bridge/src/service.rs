@@ -1013,7 +1013,13 @@ mod tests {
 
     #[test]
     fn magnet_add_validates_uri_before_reporting_aria2_availability() {
-        let (config, _dir) = make_config();
+        let (mut config, dir) = make_config();
+        config.aria2_executable_path = Some(
+            dir.path()
+                .join("missing-aria2")
+                .to_string_lossy()
+                .into_owned(),
+        );
         let svc = DownloadService::new(config, None).expect("service creation failed");
 
         assert!(matches!(
