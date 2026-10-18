@@ -650,6 +650,7 @@ impl IpcError {
             EngineKind::YtDlp => {
                 "yt-dlp is currently unavailable. Please check Settings → Download Engines."
             }
+            EngineKind::NativeTorrent => "The native torrent engine is currently unavailable.",
             EngineKind::DirectHttp | EngineKind::Hls => {
                 // DirectHttp and Hls are always available; this branch should not be reached.
                 "The requested download engine is not available."
@@ -1881,6 +1882,7 @@ mod tests {
             fetchx_models::EngineKind::Aria2,
             fetchx_models::EngineKind::YtDlp,
             fetchx_models::EngineKind::DirectHttp,
+            fetchx_models::EngineKind::NativeTorrent,
         ] {
             let err = IpcError::engine_unavailable(kind);
             let json = serde_json::to_string(&err).unwrap();
