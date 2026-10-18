@@ -1071,6 +1071,9 @@ async fn validate_torrent_destination(
     // the configured root.
     let mut ancestor = Some(destination);
     let mut found_root = false;
+    // Collect path components that do not yet exist so we can re-verify them
+    // after create_dir_all to close the TOCTOU window.
+    let mut missing_components: Vec<std::path::PathBuf> = Vec::new();
     while let Some(path) = ancestor {
         match tokio::fs::symlink_metadata(path).await {
             Ok(metadata) => {
@@ -1103,7 +1106,10 @@ async fn validate_torrent_destination(
                     }
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // This component does not exist yet — record it for post-creation check.
+                missing_components.push(path.to_path_buf());
+            }
             Err(error) => return Err(format!("destination stat error: {error}")),
         }
         ancestor = path.parent();
@@ -1119,6 +1125,27 @@ async fn validate_torrent_destination(
     tokio::fs::create_dir_all(destination)
         .await
         .map_err(|e| format!("cannot create torrent destination: {e}"))?;
+
+    // Re-verify every component we just created to close the TOCTOU window.
+    // An attacker could have planted a junction/symlink at a not-yet-existing
+    // path component between the ancestor walk above and create_dir_all.
+    for component in &missing_components {
+        match tokio::fs::canonicalize(component).await {
+            Ok(canonical) if canonical.starts_with(&canonical_root) => {}
+            Ok(canonical) => {
+                // Escape detected: clean up and reject.
+                let _ = tokio::fs::remove_dir_all(destination).await;
+                return Err(format!(
+                    "torrent destination component '{}' escaped confinement root",
+                    canonical.display()
+                ));
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(destination).await;
+                return Err(format!("cannot verify created component: {e}"));
+            }
+        }
+    }
 
     let destination_metadata = tokio::fs::symlink_metadata(destination)
         .await
@@ -1585,6 +1612,44 @@ mod tests {
                 .await
                 .map_err(std::io::Error::other)?;
         assert!(validated.starts_with(tokio::fs::canonicalize(&downloads_dir).await?));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn torrent_destination_junction_escape_is_caught_after_creation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir()?;
+        let downloads_dir = root.path().join("downloads");
+        let outside_dir = root.path().join("outside");
+        tokio::fs::create_dir_all(&downloads_dir).await?;
+        tokio::fs::create_dir_all(&outside_dir).await?;
+
+        // Simulate a TOCTOU attack: plant a symlink pointing outside the root
+        // at a path component that was NotFound during the ancestor walk.
+        // We do this by creating the symlink directly at a not-yet-existing
+        // intermediate path inside the downloads dir so validate_torrent_destination
+        // sees it as missing during the walk but then follows it on create_dir_all.
+        let intermediate = downloads_dir.join("intermediate");
+        // intermediate does not exist yet — this is what the ancestor walk would see
+        symlink(&outside_dir, &intermediate)?;
+
+        // The destination is nested under the symlinked intermediate.
+        let destination = intermediate.join("malicious");
+
+        let result =
+            super::validate_torrent_destination(&destination, &downloads_dir).await;
+        assert!(
+            result.is_err(),
+            "TOCTOU symlink escape must be caught after create_dir_all, got: {result:?}"
+        );
+        // The outside directory must not have been permanently polluted.
+        assert!(
+            !outside_dir.join("malicious").exists(),
+            "escaped directory must have been cleaned up"
+        );
         Ok(())
     }
 

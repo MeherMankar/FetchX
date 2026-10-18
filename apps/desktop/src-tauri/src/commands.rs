@@ -338,7 +338,40 @@ impl AppState {
             return Err(IpcError::engine_unavailable(original_engine));
         }
 
-        let canonical_url = validate_http_source_url(item.source().url())
+        let source = item.source();
+        let url = source.url();
+
+        // Dispatch based on source type, mirroring the `add` command logic.
+        if url.starts_with("magnet:") {
+            // Re-enqueue as magnet via CoreServices.
+            let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+            let new_id = core_services
+                .enqueue_magnet(url, fetchx_models::DownloadPriority::Normal, None)
+                .await
+                .map_err(|_| IpcError::internal())?;
+            return self.get(new_id).await;
+        }
+
+        if source.is_torrent_file() {
+            // Re-enqueue as torrent file via CoreServices.
+            let torrent_path = source
+                .torrent_file_path()
+                .ok_or_else(IpcError::invalid_request)?;
+            let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+            let new_id = core_services
+                .enqueue_torrent_file_with_selection(
+                    torrent_path,
+                    fetchx_models::DownloadPriority::Normal,
+                    None,
+                    None,
+                )
+                .await
+                .map_err(|_| IpcError::internal())?;
+            return self.get(new_id).await;
+        }
+
+        // HTTP/HTTPS source — validate and re-enqueue as before.
+        let canonical_url = validate_http_source_url(url)
             .map_err(|_| IpcError::invalid_request())?;
         let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
         let filename = filename_for_url(&parsed_url);
