@@ -371,8 +371,8 @@ impl AppState {
         }
 
         // HTTP/HTTPS source — validate and re-enqueue as before.
-        let canonical_url = validate_http_source_url(url)
-            .map_err(|_| IpcError::invalid_request())?;
+        let canonical_url =
+            validate_http_source_url(url).map_err(|_| IpcError::invalid_request())?;
         let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
         let filename = filename_for_url(&parsed_url);
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;

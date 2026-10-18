@@ -1639,8 +1639,7 @@ mod tests {
         // The destination is nested under the symlinked intermediate.
         let destination = intermediate.join("malicious");
 
-        let result =
-            super::validate_torrent_destination(&destination, &downloads_dir).await;
+        let result = super::validate_torrent_destination(&destination, &downloads_dir).await;
         assert!(
             result.is_err(),
             "TOCTOU symlink escape must be caught after create_dir_all, got: {result:?}"
