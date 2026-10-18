@@ -486,11 +486,13 @@ async fn serve_segment_connection(
     }
     headers.push_str("\r\n");
     if stream.write_all(headers.as_bytes()).await.is_ok() {
-        for chunk in response_body.chunks(16 * 1024) {
+        let chunks = response_body.chunks(16 * 1024);
+        let chunk_count = chunks.len();
+        for (index, chunk) in chunks.enumerate() {
             if stream.write_all(chunk).await.is_err() {
                 break;
             }
-            if delayed {
+            if delayed && index + 1 < chunk_count {
                 sleep(Duration::from_millis(1)).await;
             }
         }
@@ -776,7 +778,11 @@ async fn segmented_download_uses_four_ranges_and_assembles_exact_content()
         );
     }
     assert!(report.max_active_segments > 1);
-    assert!(report.max_active_segments <= 4);
+    assert!(
+        report.max_active_segments <= 4,
+        "observed {} active ranged requests",
+        report.max_active_segments
+    );
     assert_ne!(report.completion_order.first(), Some(&0));
     assert_eq!(tokio::fs::read(&destination).await?, body);
     assert_eq!(tokio::fs::metadata(destination).await?.len(), TOTAL as u64);
@@ -854,7 +860,11 @@ async fn adaptive_scheduler_completes_within_worker_bounds_and_assembles_all_ran
 
     assert_eq!(ranges.len(), 8);
     assert!(report.max_active_segments >= 2);
-    assert!(report.max_active_segments <= 4);
+    assert!(
+        report.max_active_segments <= 4,
+        "observed {} active ranged requests",
+        report.max_active_segments
+    );
     assert_ne!(report.completion_order.first(), Some(&0));
     assert_eq!(tokio::fs::read(destination).await?, body);
     assert_eq!(completed.status(), DownloadStatus::Completed);

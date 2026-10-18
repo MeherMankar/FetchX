@@ -9,7 +9,12 @@ SHA-256 checksum files and creates a **draft** GitHub Release for review.
 - Push a version tag such as `v1.2.3`.
 - Or run **Actions → Release → Run workflow** and enter a version such as
   `1.2.3`. The workflow creates the corresponding `v1.2.3` tag at the selected
-  commit and creates a draft release.
+  commit and creates a draft release. The manual run form includes switches
+  for Android, Windows, Linux, and macOS builds; all are enabled by default.
+  Disabling a platform also skips its CLI binary build (Windows, Linux, or
+  macOS). At least one platform must be selected to publish a draft release.
+
+Tag-triggered releases always build every platform.
 
 The workflow does not update version fields in the project manifests. Update
 the Android, Cargo, and Tauri version values in the source before building a

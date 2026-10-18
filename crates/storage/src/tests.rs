@@ -14,6 +14,12 @@ use crate::{
 
 static TEMP_DATABASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+async fn close_database(database: Database) {
+    let pool = database.pool().clone();
+    drop(database);
+    pool.close().await;
+}
+
 fn item(id: DownloadId, with_error: bool) -> Result<DownloadItem, Box<dyn Error>> {
     let source = DownloadSource::new("https://example.test/archive.zip", EngineKind::DirectHttp)?;
     let filename = FileName::new("archive.zip")?;
@@ -65,13 +71,9 @@ async fn connect_path_preserves_special_path_characters() -> Result<(), Box<dyn 
         std::process::id(),
         special_characters
     ));
-    let pool = {
-        let database = Database::connect_path(&path).await?;
-        assert!(database.downloads().list().await?.is_empty());
-        database.pool().clone()
-    };
-    pool.close().await;
-    drop(pool);
+    let database = Database::connect_path(&path).await?;
+    assert!(database.downloads().list().await?.is_empty());
+    close_database(database).await;
     std::fs::remove_file(path)?;
     Ok(())
 }
@@ -258,12 +260,11 @@ async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
         std::process::id(),
         TEMP_DATABASE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let url = format!("sqlite://{}", path.to_string_lossy().replace('\\', "/"));
     let scheduled_item;
     let unscheduled_item;
     let expected_schedule;
     {
-        let database = Database::connect(&url).await?;
+        let database = Database::connect_path(&path).await?;
         let repository = database.downloads();
         scheduled_item = item(DownloadId::new(), false)?;
         unscheduled_item = item(DownloadId::new(), false)?;
@@ -276,9 +277,11 @@ async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
             Timestamp::from_unix_millis(1_700_000_000_000),
         );
         repository.save_schedule(&expected_schedule).await?;
+        drop(repository);
+        close_database(database).await;
     }
     {
-        let database = Database::connect(&url).await?;
+        let database = Database::connect_path(&path).await?;
         let repository = database.downloads();
         assert_eq!(
             repository.get_schedule(scheduled_item.id()).await?,
@@ -286,9 +289,11 @@ async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
         );
         assert_eq!(repository.get_schedule(unscheduled_item.id()).await?, None);
         assert!(repository.delete_schedule(scheduled_item.id()).await?);
+        drop(repository);
+        close_database(database).await;
     }
     {
-        let database = Database::connect(&url).await?;
+        let database = Database::connect_path(&path).await?;
         let repository = database.downloads();
         assert_eq!(repository.get_schedule(scheduled_item.id()).await?, None);
         assert_eq!(
@@ -299,7 +304,8 @@ async fn schedules_survive_database_reopen_and_deleted_schedules_stay_deleted()
             repository.get(unscheduled_item.id()).await?,
             Some(unscheduled_item)
         );
-        database.pool().close().await;
+        drop(repository);
+        close_database(database).await;
     }
     std::fs::remove_file(path)?;
     Ok(())
