@@ -144,7 +144,7 @@ class DownloadsViewModel(
                         val snapshots = mutableMapOf<String, TorrentTelemetry>()
                         val metadataSnapshots = mutableMapOf<String, TorrentDownloadMetadata>()
                         for (item in items) {
-                            if (!item.engine.equals("aria2", ignoreCase = true)) continue
+                            if (!item.engine.equals("aria2", ignoreCase = true) && !item.engine.equals("native_torrent", ignoreCase = true)) continue
                             try {
                                 torrentRepository.torrentTelemetry(item.id)?.let {
                                     snapshots[item.id] = it

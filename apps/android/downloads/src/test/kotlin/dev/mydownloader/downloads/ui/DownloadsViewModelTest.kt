@@ -1,12 +1,18 @@
 package dev.fetchx.downloads.ui
 
+import androidx.lifecycle.viewModelScope
 import dev.fetchx.core.download.DownloadEvent
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.TorrentDownloadMetadata
+import dev.fetchx.core.download.TorrentDownloadRepository
+import dev.fetchx.core.download.TorrentMetadata
+import dev.fetchx.core.download.TorrentTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -274,6 +281,48 @@ class DownloadsViewModelTest {
         vm.clearError()
         assertNull(vm.uiState.value.error)
     }
+
+    // ── 15. native_torrent telemetry is polled ─────────────────────────────
+
+    @Test
+    fun nativeTorrentTelemetryIsPolled() = runTest {
+        val fakeTelemetry = TorrentTelemetry(
+            downloadSpeedBytesPerSecond = 512_000L,
+            uploadSpeedBytesPerSecond = 128_000L,
+            downloadedBytes = 1_048_576L,
+            uploadedBytes = 65_536L,
+            peerCount = 8L,
+            completedPeerCount = 3L,
+            seedCount = 5L,
+            shareRatio = 0.5,
+            seeding = false,
+            trackerUris = listOf("udp://tracker.example.com:6969"),
+        )
+        val repo = FakeTorrentDownloadRepository(telemetryByDownloadId = mapOf("nt-1" to fakeTelemetry))
+        val vm = DownloadsViewModel(repo)
+
+        // Subscribe to both downloads and torrentTelemetry so WhileSubscribed flows activate
+        // and the init-block collectLatest can receive the emission.
+        val job1 = backgroundScope.launch(testDispatcher) { vm.downloads.collect { } }
+        val job2 = backgroundScope.launch(testDispatcher) { vm.torrentTelemetry.collect { } }
+
+        val nativeTorrentItem = makeItem("nt-1", DownloadState.Active(512, 1024, 100, 5, 1))
+            .copy(engine = "native_torrent", url = "magnet:?xt=urn:btih:abc123")
+        repo.emit(listOf(nativeTorrentItem))
+
+        // Allow the polling coroutine to run at least one iteration before the delay(2000).
+        advanceTimeBy(100)
+
+        val telemetryMap = vm.torrentTelemetry.value
+        assertNotNull(telemetryMap["nt-1"], "Expected telemetry for native_torrent download 'nt-1'")
+        assertEquals(512_000L, telemetryMap["nt-1"]!!.downloadSpeedBytesPerSecond)
+        assertEquals(8L, telemetryMap["nt-1"]!!.peerCount)
+
+        // Cancel viewModelScope to stop the infinite polling loop so runTest can drain cleanly.
+        vm.viewModelScope.cancel()
+        job1.cancel()
+        job2.cancel()
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -361,4 +410,65 @@ private class FakeDownloadRepository : DownloadRepository {
     override suspend fun scheduleDownload(downloadId: String, startAtMillis: Long) = Unit
 
     override suspend fun getDownload(downloadId: String): DownloadItem? = null
+}
+
+// ── Fake TorrentDownloadRepository ────────────────────────────────────────────
+
+private class FakeTorrentDownloadRepository(
+    private val telemetryByDownloadId: Map<String, TorrentTelemetry> = emptyMap(),
+) : TorrentDownloadRepository {
+
+    private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
+    private val _events = MutableSharedFlow<DownloadEvent>()
+
+    fun emit(items: List<DownloadItem>) {
+        _downloads.value = items
+    }
+
+    override fun observeDownloads(): Flow<List<DownloadItem>> = _downloads.asStateFlow()
+
+    override fun observeEvents(): Flow<DownloadEvent> = _events.asSharedFlow()
+
+    override suspend fun addDownload(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        mimeType: String?,
+        totalBytes: Long?,
+        referrer: String?,
+    ): String = url.hashCode().toString()
+
+    override suspend fun pauseDownload(downloadId: String) = Unit
+    override suspend fun resumeDownload(downloadId: String) = Unit
+    override suspend fun cancelDownload(downloadId: String, deleteFile: Boolean) = Unit
+    override suspend fun removeDownload(downloadId: String, deleteFile: Boolean) = Unit
+    override suspend fun retryDownload(downloadId: String): String = downloadId
+    override suspend fun setPriority(downloadId: String, priority: DownloadPriority) = Unit
+    override suspend fun scheduleDownload(downloadId: String, startAtMillis: Long) = Unit
+    override suspend fun getDownload(downloadId: String): DownloadItem? = null
+
+    override suspend fun addMagnet(magnetUri: String, priority: DownloadPriority): String =
+        magnetUri.hashCode().toString()
+
+    override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =
+        TorrentMetadata("fake", "abc123", 0L, emptyList())
+
+    override suspend fun addTorrentFile(
+        torrentPath: String,
+        selectedFileIndexes: List<Int>,
+        destinationDirectory: String,
+        priority: DownloadPriority,
+    ): String = torrentPath.hashCode().toString()
+
+    override suspend fun torrentTelemetry(downloadId: String): TorrentTelemetry? =
+        telemetryByDownloadId[downloadId]
+
+    override suspend fun torrentDownloadMetadata(downloadId: String): TorrentDownloadMetadata? = null
+
+    override suspend fun selectTorrentFiles(downloadId: String, fileIndexes: List<Int>) = Unit
+    override suspend fun setTorrentFileSelected(downloadId: String, fileIndex: Int, selected: Boolean) = Unit
+    override suspend fun setTorrentSelectionAll(downloadId: String, selected: Boolean) = Unit
+    override suspend fun setTorrentDirectorySelected(downloadId: String, directory: String, selected: Boolean) = Unit
+    override suspend fun stopTorrentSeeding(downloadId: String) = Unit
 }

@@ -76,12 +76,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // Store bundled native binaries (aria2c) uncompressed so AssetFileDescriptor
-    // can report their true size and they can be extracted correctly at runtime.
-    androidResources {
-        noCompress += listOf("aria2c-arm64-v8a", "aria2c-x86_64", "aria2c-armeabi-v7a")
-    }
-
     kotlin {
         compilerOptions {
             jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
