@@ -40,6 +40,7 @@ import dev.fetchx.browser.BrowserScreen
 import dev.fetchx.core.download.NoOpDownloadRepository
 import dev.fetchx.downloads.ui.DownloadsScreen
 import dev.fetchx.downloads.ui.DownloadsViewModel
+import dev.fetchx.downloads.ui.TorrentDetailScreen
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
@@ -151,6 +152,9 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 DownloadsScreen(
                     viewModel = viewModel(factory = vmFactory),
                     downloadsDir = downloadsDir,
+                    onOpenTorrentDetail = { id ->
+                        navController.navigate(Screen.TorrentDetail.route(id))
+                    },
                     onPlayFile = { path ->
                         val file = java.io.File(path)
                         val uri = try {
@@ -272,6 +276,14 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
             }
             composable(Screen.Storage.route) {
                 StorageScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Screen.TorrentDetail.ROUTE_PATTERN) { backStackEntry ->
+                val downloadId = backStackEntry.arguments?.getString("downloadId") ?: ""
+                TorrentDetailScreen(
+                    downloadId = downloadId,
+                    viewModel = viewModel(factory = vmFactory),
+                    onBack = { navController.popBackStack() },
+                )
             }
         }
     }

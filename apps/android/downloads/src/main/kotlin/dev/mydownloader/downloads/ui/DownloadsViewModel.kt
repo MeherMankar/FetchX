@@ -69,6 +69,14 @@ class DownloadsViewModel(
             initialValue = emptyList(),
         )
 
+    private val _selectedDownloadId = MutableStateFlow<String?>(null)
+
+    /**
+     * The download ID currently shown in [TorrentDetailScreen], or null when no detail
+     * screen is active. Updated by the NavGraph before navigating to the detail route.
+     */
+    val selectedDownloadId: StateFlow<String?> = _selectedDownloadId.asStateFlow()
+
     private val _torrentTelemetry = MutableStateFlow<Map<String, TorrentTelemetry>>(emptyMap())
     val torrentTelemetry: StateFlow<Map<String, TorrentTelemetry>> = _torrentTelemetry.asStateFlow()
     private val _torrentMetadata = MutableStateFlow<Map<String, TorrentDownloadMetadata>>(emptyMap())
@@ -292,6 +300,17 @@ class DownloadsViewModel(
     suspend fun inspectTorrentFile(torrentPath: String) =
         (repository as? TorrentDownloadRepository)?.inspectTorrentFile(torrentPath)
             ?: throw UnsupportedOperationException("Torrent inspection is unavailable")
+
+    /**
+     * Look up a single download item from the current in-memory list.
+     * Returns null when the download is not found (e.g. it was removed).
+     */
+    fun getDownloadItem(id: String): DownloadItem? = downloads.value.firstOrNull { it.id == id }
+
+    /** Record which download is currently shown in [TorrentDetailScreen]. */
+    fun setSelectedDownloadId(id: String?) {
+        _selectedDownloadId.value = id
+    }
 
     // ── Internal helpers ──────────────────────────────────────────────────
 

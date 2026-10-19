@@ -13,6 +13,14 @@ sealed class Screen(val route: String) {
     /** Read-only breakdown of FetchX-owned storage. */
     data object Storage : Screen("storage")
 
+    /** Detail screen for a torrent download (file tree, telemetry, actions). */
+    data class TorrentDetail(val downloadId: String) : Screen("torrent-detail/$downloadId") {
+        companion object {
+            const val ROUTE_PATTERN = "torrent-detail/{downloadId}"
+            fun route(id: String) = "torrent-detail/$id"
+        }
+    }
+
     // Phase 20I: History/Bookmarks screen
     // data object History : Screen("history")
 

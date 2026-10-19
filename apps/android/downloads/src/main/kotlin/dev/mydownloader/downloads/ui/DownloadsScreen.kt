@@ -58,6 +58,7 @@ fun DownloadsScreen(
     viewModel: DownloadsViewModel,
     downloadsDir: String = "",
     onPlayFile: (String) -> Unit = {},
+    onOpenTorrentDetail: (String) -> Unit = {},
 ) {
     // Collect all state flows with lifecycle awareness.
     val allDownloads by viewModel.allDownloads.collectAsStateWithLifecycle()
@@ -213,6 +214,11 @@ fun DownloadsScreen(
                                 item.state is dev.fetchx.core.download.DownloadState.Stopped) &&
                                 isVideoFile(item.fileName)) {
                                 { onPlayFile(item.destinationPath) }
+                            } else null,
+                            onOpenDetail = if (item.state is dev.fetchx.core.download.DownloadState.MetadataAcquiring ||
+                                item.state is dev.fetchx.core.download.DownloadState.Active ||
+                                item.state is dev.fetchx.core.download.DownloadState.Seeding) {
+                                { onOpenTorrentDetail(item.id) }
                             } else null,
                         )
                     }

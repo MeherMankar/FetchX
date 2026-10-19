@@ -1,5 +1,6 @@
 package dev.fetchx.downloads.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -49,6 +49,7 @@ fun DownloadItemRow(
     onSelectTorrentFiles: (List<Int>) -> Unit = {},
     onStopSeeding: () -> Unit = {},
     onPlayFile: (() -> Unit)? = null,
+    onOpenDetail: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Card(
@@ -167,65 +168,23 @@ fun DownloadItemRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(onClick = onCancel) { Text("Cancel") }
-                    torrentMetadata?.metadata?.let { metadata ->
+                    torrentMetadata?.metadata?.let { meta ->
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "${metadata.name} · ${formatBytes(torrentMetadata.selectedTotalBytes)} selected",
+                            text = "${meta.name} · ${formatBytes(torrentMetadata.selectedTotalBytes)} selected",
                             style = MaterialTheme.typography.labelMedium,
                         )
-                        Row {
-                            TextButton(onClick = { onTorrentSelectionAll(true) }) {
-                                Text("Select all")
-                            }
-                            TextButton(onClick = { onTorrentSelectionAll(false) }) {
-                                Text("Select none")
-                            }
-                        }
-                        metadata.files.forEach { file ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Checkbox(
-                                    checked = file.index in torrentMetadata.selectedFileIndexes,
-                                    onCheckedChange = {
-                                        onTorrentFileSelected(file.index, it)
-                                    },
-                                )
-                                Text(
-                                    text = file.path,
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(formatBytes(file.sizeBytes), style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                        val directories = metadata.files
-                            .flatMap { file ->
-                                val segments = file.path.split('/')
-                                (1 until segments.size).map { segments.take(it).joinToString("/") }
-                            }
-                            .distinct()
-                        directories.forEach { directory ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(directory, modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    onTorrentDirectorySelected(directory, true)
-                                }) { Text("Select") }
-                                TextButton(onClick = {
-                                    onTorrentDirectorySelected(directory, false)
-                                }) { Text("Deselect") }
-                            }
-                        }
-                        TextButton(
-                            enabled = torrentMetadata.selectedFileIndexes.isNotEmpty(),
-                            onClick = {
-                                onSelectTorrentFiles(torrentMetadata.selectedFileIndexes)
-                            },
-                        ) {
-                            Text("Start selected files")
-                        }
                     }
+                    if (onOpenDetail != null) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Tap to select files",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onOpenDetail),
+                        )
+                    }
+                    TextButton(onClick = onCancel) { Text("Cancel") }
                 }
 
                 is DownloadState.Recovering -> {
