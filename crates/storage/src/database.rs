@@ -89,6 +89,15 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             )),
             false,
         ),
+        Migration::new(
+            10,
+            Cow::Borrowed("add_ftp_sftp_metalink_engines"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0010_add_ftp_sftp_metalink_engines.sql"
+            )),
+            false,
+        ),
     ]),
     ..Migrator::DEFAULT
 });

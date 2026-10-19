@@ -32,6 +32,17 @@ impl DownloadSource {
             return Err(DownloadSourceError::InvalidTorrentFile);
         }
 
+        // Scheme-engine consistency checks for FTP/FTPS/SFTP.
+        if url.starts_with("ftp://") && engine != EngineKind::Ftp {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        if url.starts_with("ftps://") && engine != EngineKind::Ftps {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        if url.starts_with("sftp://") && engine != EngineKind::Sftp {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+
         Ok(Self {
             url,
             engine,
@@ -264,6 +275,8 @@ pub enum DownloadSourceError {
     InvalidMagnetUri,
     #[error("torrent file source must be a local .torrent file using a torrent engine")]
     InvalidTorrentFile,
+    #[error("URL scheme does not match the selected download engine")]
+    SchemeMismatch,
 }
 
 #[derive(Deserialize)]
@@ -664,6 +677,66 @@ mod tests {
         assert!(
             serde_json::from_str::<DownloadSource>(r#"{"url":" ","engine":"direct_http"}"#)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn ftp_ftps_sftp_scheme_engine_consistency() {
+        // Correct pairings must succeed.
+        assert!(DownloadSource::new("ftp://files.example.com/file.bin", EngineKind::Ftp).is_ok());
+        assert!(DownloadSource::new("ftps://files.example.com/file.bin", EngineKind::Ftps).is_ok());
+        assert!(DownloadSource::new("sftp://host.example.com/file.bin", EngineKind::Sftp).is_ok());
+
+        // ftp:// with a non-FTP engine must be rejected.
+        assert_eq!(
+            DownloadSource::new("ftp://files.example.com/file.bin", EngineKind::DirectHttp),
+            Err(DownloadSourceError::SchemeMismatch)
+        );
+        assert_eq!(
+            DownloadSource::new("ftp://files.example.com/file.bin", EngineKind::Ftps),
+            Err(DownloadSourceError::SchemeMismatch)
+        );
+
+        // ftps:// with a non-FTPS engine must be rejected.
+        assert_eq!(
+            DownloadSource::new("ftps://files.example.com/file.bin", EngineKind::Ftp),
+            Err(DownloadSourceError::SchemeMismatch)
+        );
+        assert_eq!(
+            DownloadSource::new("ftps://files.example.com/file.bin", EngineKind::DirectHttp),
+            Err(DownloadSourceError::SchemeMismatch)
+        );
+
+        // sftp:// with a non-SFTP engine must be rejected.
+        assert_eq!(
+            DownloadSource::new("sftp://host.example.com/file.bin", EngineKind::DirectHttp),
+            Err(DownloadSourceError::SchemeMismatch)
+        );
+        assert_eq!(
+            DownloadSource::new("sftp://host.example.com/file.bin", EngineKind::Ftp),
+            Err(DownloadSourceError::SchemeMismatch)
+        );
+    }
+
+    #[test]
+    fn metalink_url_with_metalink_engine_succeeds() {
+        // .metalink and .meta4 URLs are regular HTTP(S) paths at this layer;
+        // DownloadSource::new does not restrict them — engine dispatch upgrades
+        // DirectHttp to Metalink in the dispatcher. A Metalink engine can also
+        // be set explicitly.
+        assert!(
+            DownloadSource::new(
+                "https://example.com/release.meta4",
+                EngineKind::Metalink
+            )
+            .is_ok()
+        );
+        assert!(
+            DownloadSource::new(
+                "https://example.com/release.metalink",
+                EngineKind::Metalink
+            )
+            .is_ok()
         );
     }
 

@@ -72,7 +72,7 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
         sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
             .fetch_one(database.pool())
             .await?;
-    assert_eq!(migration_count, 9);
+    assert_eq!(migration_count, 10);
 
     Ok(())
 }

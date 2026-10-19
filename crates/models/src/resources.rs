@@ -35,6 +35,10 @@ pub struct EngineBandwidthLimits {
     pub aria2_bytes_per_second: Option<u64>,
     pub yt_dlp_bytes_per_second: Option<u64>,
     pub native_torrent_bytes_per_second: Option<u64>,
+    /// Shared bandwidth limit for FTP and FTPS engines.
+    pub ftp_bytes_per_second: Option<u64>,
+    pub sftp_bytes_per_second: Option<u64>,
+    pub metalink_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -67,6 +71,12 @@ impl ResourcePolicy {
             crate::EngineKind::NativeTorrent => {
                 self.engine_bandwidth_limits.native_torrent_bytes_per_second
             }
+            // FTP and FTPS share the same per-engine bandwidth limit.
+            crate::EngineKind::Ftp | crate::EngineKind::Ftps => {
+                self.engine_bandwidth_limits.ftp_bytes_per_second
+            }
+            crate::EngineKind::Sftp => self.engine_bandwidth_limits.sftp_bytes_per_second,
+            crate::EngineKind::Metalink => self.engine_bandwidth_limits.metalink_bytes_per_second,
         }
     }
 
@@ -138,6 +148,9 @@ impl ResourcePolicy {
             self.engine_bandwidth_limits.aria2_bytes_per_second,
             self.engine_bandwidth_limits.yt_dlp_bytes_per_second,
             self.engine_bandwidth_limits.native_torrent_bytes_per_second,
+            self.engine_bandwidth_limits.ftp_bytes_per_second,
+            self.engine_bandwidth_limits.sftp_bytes_per_second,
+            self.engine_bandwidth_limits.metalink_bytes_per_second,
         ]
         .into_iter()
         .flatten()
@@ -245,6 +258,13 @@ mod tests {
         let policy: ResourcePolicy = serde_json::from_str(r#"{"profile":"normal"}"#)?;
         assert!(policy.validate().is_ok());
         assert_eq!(policy, ResourcePolicy::default());
+        // New bandwidth fields must default to None when deserializing old payloads.
+        assert_eq!(policy.engine_bandwidth_limits.ftp_bytes_per_second, None);
+        assert_eq!(policy.engine_bandwidth_limits.sftp_bytes_per_second, None);
+        assert_eq!(
+            policy.engine_bandwidth_limits.metalink_bytes_per_second,
+            None
+        );
         Ok(())
     }
 
