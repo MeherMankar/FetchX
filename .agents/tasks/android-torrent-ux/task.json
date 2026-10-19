@@ -1,0 +1,7 @@
+{
+  "task_id": "task-android-torrent-ux",
+  "task_description": "Complete the Android torrent UX: fix the NativeTorrent telemetry bug, remove dead aria2c code, add browser magnet-link interception, build a dedicated torrent detail/file-selection screen, and wire notification taps to deep-link into downloads.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}
