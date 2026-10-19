@@ -47,6 +47,9 @@ class TabManager(
     /** Callback invoked when an external app URI scheme (mailto:, tel:, intent:, etc.) is requested. */
     var onExternalUriRequested: ((String) -> Unit)? = null
 
+    /** Callback invoked when a magnet: URI is intercepted; takes priority over [onExternalUriRequested]. */
+    var onMagnetRequested: ((String) -> Unit)? = null
+
     // ──Public API ─────────────────────────────────────────────────────────
 
     /** Restores tabs from a saved snapshot and selects the active tab. */
@@ -309,6 +312,16 @@ class TabManager(
                 request: GeckoSession.NavigationDelegate.LoadRequest,
             ): GeckoResult<AllowOrDeny>? {
                 val url = request.uri
+                if (url.lowercase().startsWith("magnet:")) {
+                    Log.i(TAG, "Intercepting magnet URI")
+                    val handler = onMagnetRequested
+                    if (handler != null) {
+                        handler(url)
+                    } else {
+                        onExternalUriRequested?.invoke(url)
+                    }
+                    return GeckoResult.fromValue(AllowOrDeny.DENY)
+                }
                 if (isExternalScheme(url)) {
                     Log.i(TAG, "Handling external URI scheme")
                     onExternalUriRequested?.invoke(url)

@@ -115,6 +115,8 @@ data class BrowserUiState(
     val mediaQueueError: String? = null,
     val isQueueingMedia: Boolean = false,
     val pendingDownload: PendingDownload? = null,
+    val magnetQueued: String? = null,
+    val magnetError: String? = null,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
     val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
@@ -189,6 +191,7 @@ class BrowserViewModel internal constructor(
                 _uiState.update { it.copy(pendingDownload = PendingDownload(url, filename)) }
             }
             newTm.onExternalUriRequested = ::openExternalUri
+            newTm.onMagnetRequested = ::onMagnetRequested
             val restoredTabs = loadSavedTabs()
             val restoredActiveId = loadSavedActiveTabId()
             newTm.restoreHistory(loadSavedHistory())
@@ -276,6 +279,35 @@ class BrowserViewModel internal constructor(
 
     fun clearPendingDownload() {
         _uiState.update { it.copy(pendingDownload = null) }
+    }
+
+    /**
+     * Invoked when a magnet: URI is intercepted by GeckoView.
+     * Submits the magnet to the download engine and updates [BrowserUiState.magnetQueued] on
+     * success or [BrowserUiState.magnetError] on failure.
+     */
+    fun onMagnetRequested(magnetUri: String) {
+        val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
+            Log.w(TAG, "onMagnetRequested: bridge not initialized")
+            _uiState.update { it.copy(magnetError = "The download service is not ready.") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                repo.addMagnet(magnetUri, dev.fetchx.core.download.DownloadPriority.NORMAL)
+                Log.i(TAG, "Magnet download queued")
+                _uiState.update { it.copy(magnetQueued = magnetUri, magnetError = null) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to queue magnet download", e)
+                _uiState.update { it.copy(magnetError = e.message ?: "Could not queue magnet download.") }
+            }
+        }
+    }
+
+    fun clearMagnetState() {
+        _uiState.update { it.copy(magnetQueued = null, magnetError = null) }
     }
 
     // ──Navigation ─────────────────────────────────────────────────────────

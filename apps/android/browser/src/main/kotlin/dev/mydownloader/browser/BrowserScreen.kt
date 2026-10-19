@@ -98,6 +98,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -259,6 +264,33 @@ fun BrowserScreen(
         }
     }
 
+    // Magnet download feedback snackbar
+    val magnetSnackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(uiState.magnetQueued, uiState.magnetError) {
+        val queued = uiState.magnetQueued
+        val error = uiState.magnetError
+        when {
+            queued != null -> {
+                val result = magnetSnackbarHostState.showSnackbar(
+                    message = "Magnet download added",
+                    actionLabel = "Downloads",
+                    duration = SnackbarDuration.Short,
+                )
+                if (result == SnackbarResult.ActionPerformed) {
+                    onNavigateToDownloads()
+                }
+                viewModel.clearMagnetState()
+            }
+            error != null -> {
+                magnetSnackbarHostState.showSnackbar(
+                    message = error,
+                    duration = SnackbarDuration.Short,
+                )
+                viewModel.clearMagnetState()
+            }
+        }
+    }
+
     val onNavigate = {
         val intent = viewModel.submitSearch(urlFieldValue.text)
         if (intent !is SearchIntent.LocalSearch && intent != SearchIntent.Empty) {
@@ -272,6 +304,7 @@ fun BrowserScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(magnetSnackbarHostState) },
         topBar = {
             if (!uiState.compactMode) {
                 Column {
