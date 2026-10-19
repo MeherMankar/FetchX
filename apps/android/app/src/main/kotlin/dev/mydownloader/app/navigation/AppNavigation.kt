@@ -45,6 +45,8 @@ import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.LaunchedEffect
 import java.io.File
 
 /**
@@ -54,7 +56,7 @@ import java.io.File
  * Downloads while preserving the shared navigation back stack.
  */
 @Composable
-fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null)) {
+fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null), pendingDownloadId: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null)) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -77,6 +79,15 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
         } else {
             pendingUrl = newIntentUrl
         }
+    }
+
+    // Pending download ID from notification tap — consumed below in a LaunchedEffect
+    // once the ViewModel is available to look up the download's engine.
+    var pendingOpenDownloadId by remember { mutableStateOf<String?>(null) }
+    val newDownloadId = pendingDownloadId.value
+    if (newDownloadId != null) {
+        pendingDownloadId.value = null        // consume from activity state
+        pendingOpenDownloadId = newDownloadId // hand off to local state for LaunchedEffect
     }
 
     // Browser theme seed — updated by BrowserScreen when user picks a color
@@ -116,6 +127,25 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     }
     val downloadsDir: String = context.getExternalFilesDir(null)?.absolutePath
         ?: "${context.filesDir.absolutePath}/downloads"
+
+    // Handle notification deep-link: navigate to Downloads, then to TorrentDetailScreen
+    // for torrent downloads (engine == "native_torrent" or "aria2").
+    val openDownloadId = pendingOpenDownloadId
+    if (openDownloadId != null) {
+        LaunchedEffect(openDownloadId) {
+            pendingOpenDownloadId = null     // consume before any suspension
+            navController.navigate(Screen.Downloads.route) { launchSingleTop = true }
+            // Look up the item in the first available snapshot to decide engine.
+            val snapshot = repository.observeDownloads().first()
+            val item = snapshot.firstOrNull { it.id == openDownloadId }
+            val engine = item?.engine ?: ""
+            val isTorrent = engine.equals("native_torrent", ignoreCase = true) ||
+                engine.equals("aria2", ignoreCase = true)
+            if (isTorrent) {
+                navController.navigate(Screen.TorrentDetail.route(openDownloadId))
+            }
+        }
+    }
 
     Scaffold(
         bottomBar = {

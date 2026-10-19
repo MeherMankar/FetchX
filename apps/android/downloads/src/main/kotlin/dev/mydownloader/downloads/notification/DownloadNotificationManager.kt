@@ -1,7 +1,9 @@
 package dev.fetchx.downloads.notification
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -32,11 +34,35 @@ class DownloadNotificationManager(
         const val CHANNEL_COMPLETE = "fetchx_downloads_complete"
         const val CHANNEL_FAILED   = "fetchx_downloads_failed"
         const val FOREGROUND_SUMMARY_ID = 1_000_000
+
+        /** Action sent by notification taps so MainActivity can open the correct download. */
+        const val ACTION_OPEN_DOWNLOAD = "dev.fetchx.app.OPEN_DOWNLOAD"
+        /** Intent extra carrying the download ID string. */
+        const val EXTRA_DOWNLOAD_ID    = "dev.fetchx.app.EXTRA_DOWNLOAD_ID"
     }
 
     private val nm = NotificationManagerCompat.from(context)
 
     init { createChannels() }
+
+    /**
+     * Builds a [PendingIntent] that sends [ACTION_OPEN_DOWNLOAD] to MainActivity,
+     * carrying the download ID so AppNavigation can deep-link to the right screen.
+     */
+    private fun openDownloadIntent(downloadId: String): PendingIntent {
+        // Use the stable notification ID as requestCode to get per-download PendingIntents.
+        return PendingIntent.getActivity(
+            context,
+            stableId(downloadId),
+            Intent(ACTION_OPEN_DOWNLOAD).apply {
+                // Explicit class — avoids needing a manifest intent-filter for the action.
+                setClassName(context.packageName, "${context.packageName}.MainActivity")
+                putExtra(EXTRA_DOWNLOAD_ID, downloadId)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
 
     private fun createChannels() {
         nm.createNotificationChannel(
@@ -69,6 +95,7 @@ class DownloadNotificationManager(
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(notificationTitle(item, "Download in progress"))
             .setContentText(text)
+            .setContentIntent(openDownloadIntent(item.id))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -82,6 +109,7 @@ class DownloadNotificationManager(
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(notificationTitle(item, "Torrent task"))
             .setContentText(status)
+            .setContentIntent(openDownloadIntent(item.id))
             .setOngoing(ongoing)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -93,6 +121,7 @@ class DownloadNotificationManager(
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(notificationTitle(item, "Download queued"))
             .setContentText("Queued")
+            .setContentIntent(openDownloadIntent(item.id))
             .setOngoing(true).setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
         safeNotify(stableId(item.id), b.build())
@@ -103,6 +132,7 @@ class DownloadNotificationManager(
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(notificationTitle(item, "Download paused"))
             .setContentText("Paused")
+            .setContentIntent(openDownloadIntent(item.id))
             .setOngoing(false).setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
         safeNotify(stableId(item.id), b.build())
@@ -116,6 +146,7 @@ class DownloadNotificationManager(
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(notificationTitle(item, genericTitle))
             .setContentText(if (privacySettings.showDownloadFilenamesInNotifications()) "Download complete$size" else "Download completed")
+            .setContentIntent(openDownloadIntent(item.id))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         safeNotify(stableId(item.id), b.build())
@@ -128,6 +159,7 @@ class DownloadNotificationManager(
             .setSmallIcon(android.R.drawable.stat_notify_error)
             .setContentTitle(notificationTitle(item, "Download failed"))
             .setContentText(if (privacySettings.showDownloadFilenamesInNotifications()) "Download failed: $reason" else "Download failed")
+            .setContentIntent(openDownloadIntent(item.id))
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         safeNotify(stableId(item.id), b.build())

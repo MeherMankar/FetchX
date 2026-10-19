@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
 import dev.fetchx.app.navigation.AppNavigation
 import dev.fetchx.app.ui.theme.FetchXTheme
+import dev.fetchx.downloads.notification.DownloadNotificationManager
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -22,6 +23,10 @@ import kotlinx.coroutines.launch
  *       -a android.intent.action.VIEW -d "https://example.com"
  *   adb shell am start -a android.intent.action.VIEW \
  *       -d "magnet:?xt=..." dev.fetchx.app.debug/dev.fetchx.app.MainActivity
+ *
+ * Also handles ACTION_OPEN_DOWNLOAD intents fired by notification taps:
+ *   Intent(DownloadNotificationManager.ACTION_OPEN_DOWNLOAD)
+ *       .putExtra(DownloadNotificationManager.EXTRA_DOWNLOAD_ID, id)
  */
 class MainActivity : ComponentActivity() {
 
@@ -29,25 +34,47 @@ class MainActivity : ComponentActivity() {
     // via onNewIntent (when the activity is already running).
     private val pendingIntentUrl = mutableStateOf<String?>(null)
 
+    // Shared state for notification deep-links: carries the download ID to open.
+    private val pendingDownloadId = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val initialUrl = intent?.takeIf { it.action == Intent.ACTION_VIEW }
-            ?.dataString
-        pendingIntentUrl.value = initialUrl
 
-        // Direct magnet submission from onCreate (handles cold-start with magnet intent).
-        if (initialUrl?.startsWith("magnet:", ignoreCase = true) == true) {
-            android.util.Log.i("FetchXApp", "onCreate: magnet intent detected: $initialUrl")
-            submitMagnetWhenReady(initialUrl)
-        }
+        handleIncomingIntent(intent)
 
         setContent {
             FetchXTheme {
                 AppNavigation(
-                    initialUrl = initialUrl,
+                    initialUrl = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString
+                        ?.takeUnless { it.startsWith("magnet:", ignoreCase = true) },
                     pendingIntentUrl = pendingIntentUrl,
+                    pendingDownloadId = pendingDownloadId,
                 )
+            }
+        }
+    }
+
+    /**
+     * Dispatches an incoming intent to the correct pending-state bucket so that
+     * AppNavigation can observe and react to it without coupling to Android lifecycle.
+     */
+    private fun handleIncomingIntent(i: Intent?) {
+        when (i?.action) {
+            DownloadNotificationManager.ACTION_OPEN_DOWNLOAD -> {
+                val id = i.getStringExtra(DownloadNotificationManager.EXTRA_DOWNLOAD_ID)
+                if (id != null) {
+                    android.util.Log.i("FetchXApp", "handleIntent: open download id=$id")
+                    pendingDownloadId.value = id
+                }
+            }
+            Intent.ACTION_VIEW -> {
+                val url = i.dataString ?: return
+                android.util.Log.i("FetchXApp", "handleIntent: ACTION_VIEW url=$url")
+                pendingIntentUrl.value = url
+                if (url.startsWith("magnet:", ignoreCase = true)) {
+                    submitMagnetWhenReady(url)
+                }
             }
         }
     }
@@ -68,7 +95,7 @@ class MainActivity : ComponentActivity() {
                     }
                     return@launch
                 }
-                kotlinx.coroutines.delay(500)
+                delay(500)
                 waited += 500
             }
             android.util.Log.e("FetchXApp", "submitMagnet: bridge not ready after 30s")
@@ -78,16 +105,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val url = intent.takeIf { it.action == Intent.ACTION_VIEW }?.dataString
-        if (url != null) {
-            android.util.Log.i("FetchXApp", "onNewIntent: received URL: $url")
-            pendingIntentUrl.value = url
-
-            // For magnet links, also try direct submission via bridge as a fallback.
-            if (url.startsWith("magnet:", ignoreCase = true)) {
-                submitMagnetWhenReady(url)
-            }
-        }
+        handleIncomingIntent(intent)
     }
 }
 
