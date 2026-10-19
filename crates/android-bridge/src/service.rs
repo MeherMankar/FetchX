@@ -170,14 +170,15 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
-        self.add_download_for_engine(
-            url,
-            filename,
-            destination,
-            priority,
-            EngineKind::DirectHttp,
-            None,
-        )
+        // Auto-detect engine from URL scheme.
+        let engine = if url.starts_with("ftps://") {
+            EngineKind::Ftps
+        } else if url.starts_with("ftp://") {
+            EngineKind::Ftp
+        } else {
+            EngineKind::DirectHttp
+        };
+        self.add_download_for_engine(url, filename, destination, priority, engine, None)
     }
 
     pub fn add_magnet_download(

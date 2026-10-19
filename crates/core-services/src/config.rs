@@ -24,6 +24,8 @@ pub struct EngineConfig {
     #[serde(default)]
     pub native_torrent: NativeTorrentConfig,
     #[serde(default)]
+    pub ftp: FtpConfig,
+    #[serde(default)]
     pub resource_policy: ResourcePolicy,
 }
 
@@ -35,6 +37,7 @@ impl Default for EngineConfig {
             aria2: Aria2Config::default(),
             yt_dlp: YtDlpConfig::default(),
             native_torrent: NativeTorrentConfig::default(),
+            ftp: FtpConfig::default(),
             resource_policy: ResourcePolicy::default(),
         }
     }
@@ -117,6 +120,27 @@ impl Default for NativeTorrentConfig {
             enabled: false,
             listen_port: 6881,
             session_dir: None,
+        }
+    }
+}
+
+// ── FTP / FTPS config ─────────────────────────────────────────────────────────
+
+/// Configuration for the FTP / FTPS engine.
+///
+/// FTP and FTPS are always-available (pure Rust, no binary dependency).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FtpConfig {
+    pub enabled: bool,
+    /// Use PASV (passive) mode. Default: `true`.
+    pub passive_mode: bool,
+}
+
+impl Default for FtpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            passive_mode: true,
         }
     }
 }

@@ -87,6 +87,11 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         magnet.is_some(),
         torrent_path.is_some(),
         opts.engine.as_deref(),
+        if magnet.is_none() && torrent_path.is_none() {
+            Some(&canonical_url)
+        } else {
+            None
+        },
     ) {
         Ok(e) => e,
         Err(msg) => {
@@ -230,8 +235,10 @@ pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
         "direct-http" | "direct_http" | "http" => Ok(EngineKind::DirectHttp),
         "aria2" => Ok(EngineKind::Aria2),
         "yt-dlp" | "yt_dlp" | "ytdlp" => Ok(EngineKind::YtDlp),
+        "ftp" => Ok(EngineKind::Ftp),
+        "ftps" => Ok(EngineKind::Ftps),
         other => Err(format!(
-            "unknown engine `{other}`. Valid: direct-http, aria2, yt-dlp"
+            "unknown engine `{other}`. Valid: direct-http, aria2, yt-dlp, ftp, ftps"
         )),
     }
 }
@@ -240,6 +247,7 @@ fn resolve_engine(
     is_magnet: bool,
     is_torrent_file: bool,
     engine: Option<&str>,
+    url: Option<&str>,
 ) -> Result<EngineKind, String> {
     if is_magnet || is_torrent_file {
         if engine.is_none() {
@@ -250,6 +258,17 @@ fn resolve_engine(
             Ok(_) => Err("magnet and torrent downloads require the aria2 engine".to_owned()),
             Err(error) => Err(error),
         };
+    }
+    // Auto-detect from URL scheme when no explicit --engine flag is given.
+    if engine.is_none() {
+        if let Some(u) = url {
+            if u.starts_with("ftp://") {
+                return Ok(EngineKind::Ftp);
+            }
+            if u.starts_with("ftps://") {
+                return Ok(EngineKind::Ftps);
+            }
+        }
     }
     parse_engine(engine)
 }
@@ -300,14 +319,29 @@ mod tests {
 
     #[test]
     fn magnet_defaults_to_aria2_and_suggests_a_confined_name() {
-        assert_eq!(resolve_engine(true, false, None), Ok(EngineKind::Aria2));
-        assert_eq!(resolve_engine(false, true, None), Ok(EngineKind::Aria2));
+        assert_eq!(resolve_engine(true, false, None, None), Ok(EngineKind::Aria2));
+        assert_eq!(resolve_engine(false, true, None, None), Ok(EngineKind::Aria2));
         let metadata = parse_magnet_uri(
             "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=..%5C..%5Cunsafe%3Aname%3F.torrent",
         )
         .expect("valid test magnet");
         assert_eq!(metadata.suggested_filename(), "unsafename.torrent");
-        assert!(resolve_engine(true, false, Some("direct-http")).is_err());
+        assert!(resolve_engine(true, false, Some("direct-http"), None).is_err());
+
+        // FTP/FTPS scheme auto-detection.
+        assert_eq!(
+            resolve_engine(false, false, None, Some("ftp://host/file.bin")),
+            Ok(EngineKind::Ftp)
+        );
+        assert_eq!(
+            resolve_engine(false, false, None, Some("ftps://host/file.bin")),
+            Ok(EngineKind::Ftps)
+        );
+        // Explicit --engine flag overrides auto-detection.
+        assert_eq!(
+            resolve_engine(false, false, Some("direct-http"), Some("ftp://host/file.bin")),
+            Ok(EngineKind::DirectHttp)
+        );
     }
 
     #[test]

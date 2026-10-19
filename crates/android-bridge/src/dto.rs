@@ -186,6 +186,10 @@ pub fn item_to_dto(item: &DownloadItem) -> DownloadInfoDto {
         EngineKind::YtDlp => "yt_dlp",
         EngineKind::Hls => "hls",
         EngineKind::NativeTorrent => "native_torrent",
+        EngineKind::Ftp => "ftp",
+        EngineKind::Ftps => "ftps",
+        EngineKind::Sftp => "sftp",
+        EngineKind::Metalink => "metalink",
     };
     let error_message = item.error().map(|e| e.message().to_string());
 

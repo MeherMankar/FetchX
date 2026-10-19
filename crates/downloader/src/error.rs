@@ -107,6 +107,24 @@ pub enum DownloadEngineError {
     YtDlp(#[from] YtDlpError),
     #[error("native torrent engine error: {0}")]
     NativeTorrent(String),
+    #[error("FTP error: {0}")]
+    FtpError(String),
+    #[error("FTP path contains directory traversal sequence")]
+    FtpPathTraversal,
+    #[error("FTP authentication requires credentials not stored in URL")]
+    FtpCredentialRequired,
+    #[error("SFTP error: {0}")]
+    SftpError(String),
+    #[error("SFTP host key is not recognised: {host}")]
+    SftpUnknownHostKey { host: String },
+    #[error("Metalink error: {0}")]
+    MetalinkError(String),
+    #[error("Metalink checksum mismatch: algorithm={algorithm} expected={expected} actual={actual}")]
+    MetalinkChecksumMismatch {
+        algorithm: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl DownloadEngineError {
@@ -202,6 +220,18 @@ impl DownloadEngineError {
             Self::NativeTorrent(_) => (
                 DownloadErrorCode::Engine,
                 "The native torrent download could not be completed safely.".to_owned(),
+            ),
+            Self::FtpError(_) | Self::FtpPathTraversal | Self::FtpCredentialRequired => (
+                DownloadErrorCode::Engine,
+                "The FTP download could not be completed.".to_owned(),
+            ),
+            Self::SftpError(_) | Self::SftpUnknownHostKey { .. } => (
+                DownloadErrorCode::Engine,
+                "The SFTP download could not be completed.".to_owned(),
+            ),
+            Self::MetalinkError(_) | Self::MetalinkChecksumMismatch { .. } => (
+                DownloadErrorCode::Engine,
+                "The Metalink download could not be completed.".to_owned(),
             ),
             Self::Cancelled => (
                 DownloadErrorCode::Internal,

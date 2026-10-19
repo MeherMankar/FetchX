@@ -387,6 +387,22 @@ impl RuntimeResourceManager {
                 EngineKind::YtDlp,
                 policy.engine_bandwidth_limits.yt_dlp_bytes_per_second,
             ),
+            (
+                EngineKind::Ftp,
+                policy.engine_bandwidth_limits.ftp_bytes_per_second,
+            ),
+            (
+                EngineKind::Ftps,
+                policy.engine_bandwidth_limits.ftp_bytes_per_second,
+            ),
+            (
+                EngineKind::Sftp,
+                policy.engine_bandwidth_limits.sftp_bytes_per_second,
+            ),
+            (
+                EngineKind::Metalink,
+                policy.engine_bandwidth_limits.metalink_bytes_per_second,
+            ),
         ] {
             if let Some(limiter) = limiter(rate)? {
                 engine_bandwidth.insert(engine, limiter);

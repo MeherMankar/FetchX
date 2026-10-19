@@ -13,6 +13,8 @@ librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+suppaftp = { version = "6.3.0", default-features = false, features = ["rustls"] }
+webpki-roots = "1"
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

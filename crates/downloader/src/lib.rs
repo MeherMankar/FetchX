@@ -7,6 +7,7 @@ mod dispatcher;
 mod engine;
 mod error;
 mod ffmpeg;
+mod ftp;
 mod hls;
 mod http;
 mod native_torrent;
@@ -30,6 +31,7 @@ pub use ffmpeg::{
     MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaProgress, MediaStream,
     MediaStreamKind, TranscodePreset,
 };
+pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 pub use http::{DirectHttpEngine, HttpEngineConfig, validate_http_source_url};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};

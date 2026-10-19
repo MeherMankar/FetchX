@@ -7,7 +7,7 @@ use reqwest::{Client, Url, header::CONTENT_TYPE};
 use tokio::sync::watch;
 
 use crate::{
-    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, HlsEngine,
+    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
     ManagedDownloadControl, ManagedDownloadEngine, NativeTorrentEngine, YtDlpEngine, YtDlpFormat,
     is_hls_url,
 };
@@ -20,6 +20,7 @@ pub struct EngineDispatcher<R> {
     yt_dlp: Option<Arc<YtDlpEngine<R>>>,
     hls: Option<Arc<HlsEngine<R>>>,
     native_torrent: Option<Arc<NativeTorrentEngine<R>>>,
+    ftp: Option<Arc<FtpEngine<R>>>,
     probe_client: Client,
 }
 
@@ -39,6 +40,7 @@ where
             yt_dlp: None,
             hls: None,
             native_torrent: None,
+            ftp: None,
             probe_client: Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -58,6 +60,11 @@ where
 
     pub fn with_native_torrent(mut self, engine: Arc<NativeTorrentEngine<R>>) -> Self {
         self.native_torrent = Some(engine);
+        self
+    }
+
+    pub fn with_ftp(mut self, engine: Arc<FtpEngine<R>>) -> Self {
+        self.ftp = Some(engine);
         self
     }
 
@@ -153,6 +160,13 @@ where
                 Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
+            EngineKind::Ftp | EngineKind::Ftps => match &self.ftp {
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+            EngineKind::Sftp | EngineKind::Metalink => {
+                Err(DownloadEngineError::EngineNotAvailable)
+            }
         }
     }
 }
@@ -183,6 +197,13 @@ where
                 Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
+            EngineKind::Ftp | EngineKind::Ftps => match &self.ftp {
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+            EngineKind::Sftp | EngineKind::Metalink => {
+                Err(DownloadEngineError::EngineNotAvailable)
+            }
         }
     }
 
@@ -195,7 +216,11 @@ where
             EngineKind::DirectHttp
             | EngineKind::Aria2
             | EngineKind::Hls
-            | EngineKind::NativeTorrent => true,
+            | EngineKind::NativeTorrent
+            | EngineKind::Ftp
+            | EngineKind::Ftps
+            | EngineKind::Sftp
+            | EngineKind::Metalink => true,
         }
     }
 
@@ -211,7 +236,13 @@ where
                     Some(engine) => engine.cancel_inactive(id).await,
                     None => Ok(()),
                 },
-                EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls => Ok(()),
+                EngineKind::DirectHttp
+                | EngineKind::YtDlp
+                | EngineKind::Hls
+                | EngineKind::Ftp
+                | EngineKind::Ftps
+                | EngineKind::Sftp
+                | EngineKind::Metalink => Ok(()),
             }
         }
     }

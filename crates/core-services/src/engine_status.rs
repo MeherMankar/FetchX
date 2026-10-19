@@ -12,4 +12,6 @@ pub struct EngineRuntimeStatus {
     pub aria2: EngineAvailability,
     pub yt_dlp: EngineAvailability,
     pub native_torrent: EngineAvailability,
+    /// FTP and FTPS are always-available (pure Rust, no external binary).
+    pub ftp: EngineAvailability,
 }

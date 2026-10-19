@@ -599,6 +599,117 @@ fn adaptive_segmented_config(minimum_size: u64) -> HttpEngineConfig {
     }
 }
 
+/// Starts a minimal in-process FTP server that serves a single file at any
+/// path, supporting the subset of FTP commands that `FtpEngine` uses:
+/// `USER`, `PASS`, `TYPE`, `PASV`, `SIZE`, `REST`, `RETR`, `QUIT`.
+///
+/// Returns the bound `SocketAddr` (for building the `ftp://` URL) and a
+/// `JoinHandle` that resolves when the server has handled one connection.
+pub(crate) async fn start_ftp_server(
+    content: Vec<u8>,
+) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+
+    let handle = tokio::spawn(async move {
+        let Ok((mut ctrl, _)) = listener.accept().await else {
+            return;
+        };
+
+        // 220 Welcome
+        if ctrl.write_all(b"220 FetchX-test FTP ready\r\n").await.is_err() {
+            return;
+        }
+
+        let mut rest_offset: u64 = 0;
+        let mut pasv_addr: Option<std::net::SocketAddr> = None;
+
+        let mut buf = vec![0u8; 4096];
+        loop {
+            let n = match ctrl.read(&mut buf).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            let cmd = String::from_utf8_lossy(&buf[..n]).trim().to_ascii_uppercase();
+
+            if cmd.starts_with("USER") {
+                let _ = ctrl.write_all(b"331 Password required\r\n").await;
+            } else if cmd.starts_with("PASS") {
+                let _ = ctrl.write_all(b"230 Logged in\r\n").await;
+            } else if cmd.starts_with("TYPE") {
+                let _ = ctrl.write_all(b"200 Type set\r\n").await;
+            } else if cmd.starts_with("SIZE") {
+                let _ = ctrl
+                    .write_all(format!("213 {}\r\n", content.len()).as_bytes())
+                    .await;
+            } else if cmd.starts_with("REST") {
+                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                rest_offset = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let _ = ctrl.write_all(b"350 Rest offset accepted\r\n").await;
+            } else if cmd.starts_with("PASV") {
+                // Open a data listener on a random port.
+                let data_listener = match TcpListener::bind("127.0.0.1:0").await {
+                    Ok(l) => l,
+                    Err(_) => {
+                        let _ = ctrl.write_all(b"425 Can't open data connection\r\n").await;
+                        continue;
+                    }
+                };
+                let data_addr = match data_listener.local_addr() {
+                    Ok(a) => a,
+                    Err(_) => continue,
+                };
+                pasv_addr = Some(data_addr);
+                // PASV response encodes addr as h1,h2,h3,h4,p1,p2
+                let port = data_addr.port();
+                let p1 = port >> 8;
+                let p2 = port & 0xFF;
+                let response = format!("227 Entering Passive Mode (127,0,0,1,{p1},{p2})\r\n");
+                let _ = ctrl.write_all(response.as_bytes()).await;
+
+                // Accept the data connection in a background task.
+                let content_clone = content.clone();
+                let rest = rest_offset;
+                tokio::spawn(async move {
+                    let Ok((mut data_stream, _)) =
+                        tokio::time::timeout(std::time::Duration::from_secs(5), data_listener.accept()).await
+                            .ok()
+                            .and_then(|r| r.ok()) // flatten Result
+                            .map(|v| Ok::<_, std::io::Error>(v))
+                            .unwrap_or_else(|| Err(std::io::Error::other("accept timeout")))
+                            .map(|v| Ok::<_, std::io::Error>(v))
+                            .unwrap_or_else(|_| Err(std::io::Error::other("error")))
+                            .map(|v| Ok(v))
+                            .unwrap_or_else(|_e: std::io::Error| Err(()))
+                    else {
+                        return;
+                    };
+                    let slice = if rest as usize <= content_clone.len() {
+                        &content_clone[rest as usize..]
+                    } else {
+                        &[]
+                    };
+                    let _ = data_stream.write_all(slice).await;
+                    let _ = data_stream.flush().await;
+                });
+            } else if cmd.starts_with("RETR") {
+                let _ = ctrl.write_all(b"150 Opening data connection\r\n").await;
+                // Wait a moment for the data to be sent by the PASV task.
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let _ = ctrl.write_all(b"226 Transfer complete\r\n").await;
+                let _ = pasv_addr.take(); // Reset for next RETR
+            } else if cmd.starts_with("QUIT") {
+                let _ = ctrl.write_all(b"221 Goodbye\r\n").await;
+                return;
+            } else {
+                let _ = ctrl.write_all(b"502 Command not implemented\r\n").await;
+            }
+        }
+    });
+
+    Ok((addr, handle))
+}
+
 async fn serve_connection(mut stream: TcpStream, response: &mut ServerResponse) -> bool {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -1915,8 +2026,10 @@ async fn rejects_invalid_urls_and_existing_destinations() -> Result<(), Box<dyn 
 #[tokio::test]
 async fn unsupported_schemes_and_embedded_credentials_are_rejected() -> Result<(), Box<dyn Error>> {
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    // FTP URLs can no longer be created with the DirectHttp engine (FEAT-001
+    // introduced SchemeMismatch validation in DownloadSource).  Only test the
+    // embedded-credentials case which still applies to HTTP URLs.
     for (url, expected) in [
-        ("ftp://example.test/file", "unsupported"),
         ("http://user:password@example.test/file", "credentials"),
     ] {
         let item = make_item(url, &directory.destination("rejected.bin"))?;
@@ -1926,8 +2039,7 @@ async fn unsupported_schemes_and_embedded_credentials_are_rejected() -> Result<(
         let result = engine.download(id, receiver).await;
         assert!(matches!(
             (result, expected),
-            (Err(DownloadEngineError::UnsupportedScheme), "unsupported")
-                | (Err(DownloadEngineError::EmbeddedCredentials), "credentials")
+            (Err(DownloadEngineError::EmbeddedCredentials), "credentials")
         ));
         assert_eq!(
             database

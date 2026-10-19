@@ -29,7 +29,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
-    DirectHttpEngine, EngineDispatcher, HlsEngine,
+    DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine,
     NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine,
     YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
 };
@@ -49,8 +49,8 @@ use tokio::{fs, io::AsyncReadExt, process::Command, sync::Mutex, time::Duration}
 use tracing::{error, info, warn};
 
 pub use config::{
-    Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, NativeTorrentConfig,
-    YtDlpConfig,
+    Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, FtpConfig,
+    NativeTorrentConfig, YtDlpConfig,
 };
 pub use engine_status::{EngineAvailability, EngineRuntimeStatus};
 
@@ -821,6 +821,7 @@ pub struct EngineRuntime {
     pub aria2_engine: Arc<Aria2Engine<CoreRepository>>,
     pub aria2_supervisor: Option<Arc<Aria2Supervisor>>,
     pub native_torrent_engine: Option<Arc<NativeTorrentEngine<CoreRepository>>>,
+    pub ftp_engine: Arc<FtpEngine<CoreRepository>>,
     pub status: EngineRuntimeStatus,
 }
 
@@ -862,9 +863,22 @@ impl EngineRuntime {
         log_avail("native-torrent", &native_torrent_avail);
         info!(engine = "hls", "engine ready");
 
+        // FTP/FTPS engine — always available (pure Rust, no binary dep).
+        let ftp_engine = Arc::new(FtpEngine::new(repository.clone()));
+        let ftp_avail = if config.ftp.enabled {
+            info!(engine = "ftp", version = "suppaftp/6.3.0", "engine ready");
+            EngineAvailability::Available {
+                version: "suppaftp/6.3.0".to_owned(),
+            }
+        } else {
+            info!(engine = "ftp", "engine disabled");
+            EngineAvailability::Disabled
+        };
+
         let mut dispatcher =
             EngineDispatcher::new(repository, direct_http, Arc::clone(&aria2_engine))
-                .with_hls(hls_engine);
+                .with_hls(hls_engine)
+                .with_ftp(Arc::clone(&ftp_engine));
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
@@ -877,10 +891,12 @@ impl EngineRuntime {
             aria2_engine,
             aria2_supervisor,
             native_torrent_engine,
+            ftp_engine,
             status: EngineRuntimeStatus {
                 aria2: aria2_avail,
                 yt_dlp: ytdlp_avail,
                 native_torrent: native_torrent_avail,
+                ftp: ftp_avail,
             },
         })
     }
@@ -911,6 +927,11 @@ impl EngineRuntime {
                     EngineAvailability::Available { .. }
                 )
             }
+            EngineKind::Ftp | EngineKind::Ftps => {
+                matches!(self.status.ftp, EngineAvailability::Available { .. })
+            }
+            // SFTP and Metalink engines are not yet implemented; always unavailable.
+            EngineKind::Sftp | EngineKind::Metalink => false,
         }
     }
 }
