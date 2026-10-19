@@ -26,8 +26,10 @@
 # Agent task artefacts — keep plan/report docs, exclude JSON state files
 /.agents/tasks/**/*.json
 /.agents/
+.agents
 
 # Python compiled files
 __pycache__/
 *.py[cod]
 *.pyd
+*.txt

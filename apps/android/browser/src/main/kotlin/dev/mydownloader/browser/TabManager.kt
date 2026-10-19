@@ -230,17 +230,6 @@ class TabManager(
 
     // ──Internal helpers ───────────────────────────────────────────────────
 
-    private fun isExternalScheme(uri: String): Boolean {
-        val lower = uri.lowercase()
-        return lower.startsWith("mailto:") ||
-            lower.startsWith("tel:") ||
-            lower.startsWith("sms:") ||
-            lower.startsWith("intent:") ||
-            lower.startsWith("market:") ||
-            lower.startsWith("geo:") ||
-            lower.startsWith("whatsapp:")
-    }
-
     private fun updateTabState(tabId: String, update: (TabState) -> TabState) {
         store.updateTab(tabId, update)
         onStateChanged?.invoke()

@@ -33,15 +33,7 @@ internal class MagnetUriRouter(
             }
             return true
         }
-        val lower = uri.lowercase()
-        val isExternal = lower.startsWith("mailto:") ||
-            lower.startsWith("tel:") ||
-            lower.startsWith("sms:") ||
-            lower.startsWith("intent:") ||
-            lower.startsWith("market:") ||
-            lower.startsWith("geo:") ||
-            lower.startsWith("whatsapp:")
-        if (isExternal) {
+        if (isExternalScheme(uri)) {
             onExternalUriRequested?.invoke(uri)
             return true
         }

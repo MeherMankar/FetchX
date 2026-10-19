@@ -45,7 +45,6 @@ import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.LaunchedEffect
 import java.io.File
 
@@ -135,9 +134,14 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
         LaunchedEffect(openDownloadId) {
             pendingOpenDownloadId = null     // consume before any suspension
             navController.navigate(Screen.Downloads.route) { launchSingleTop = true }
-            // Look up the item in the first available snapshot to decide engine.
-            val snapshot = repository.observeDownloads().first()
-            val item = snapshot.firstOrNull { it.id == openDownloadId }
+            // Wait for the bridge/repository to be ready before resolving the
+            // download. On a cold start the bridge is not yet initialized, so
+            // observeDownloads() would emit an empty snapshot and the torrent
+            // engine check would fail, leaving the user on Downloads. Reuse the
+            // same bounded-readiness wait as the magnet ACTION_VIEW path.
+            val readyRepo = awaitRepositoryReady(repositoryProvider = { BridgeInitializer.repositoryOrNull() })
+                ?: return@LaunchedEffect  // bridge never came up — stay on Downloads
+            val item = readyRepo.getDownload(openDownloadId)
             val engine = item?.engine ?: ""
             val isTorrent = engine.equals("native_torrent", ignoreCase = true) ||
                 engine.equals("aria2", ignoreCase = true)

@@ -80,9 +80,10 @@ where
         // Use the configured session dir, or fall back to temp_dir.
         // On Android, std::env::temp_dir() is /data/local/tmp which is NOT
         // writable by the app sandbox — callers must set session_dir explicitly.
-        let placeholder_dir = config.session_dir
+        let placeholder_dir = config
+            .session_dir
             .clone()
-            .unwrap_or_else(|| std::env::temp_dir())
+            .unwrap_or_else(std::env::temp_dir)
             .join("fetchx-librqbit-session");
         tokio::fs::create_dir_all(&placeholder_dir)
             .await
@@ -91,11 +92,11 @@ where
         let listen_addr: std::net::SocketAddr = format!("0.0.0.0:{}", config.listen_port)
             .parse()
             .map_err(|_| {
-                DownloadEngineError::NativeTorrent(format!(
-                    "invalid listen port: {}",
-                    config.listen_port
-                ))
-            })?;
+            DownloadEngineError::NativeTorrent(format!(
+                "invalid listen port: {}",
+                config.listen_port
+            ))
+        })?;
 
         let session_opts = SessionOptions {
             listen: Some(ListenerOptions {

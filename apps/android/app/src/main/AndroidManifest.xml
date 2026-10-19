@@ -42,6 +42,11 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="magnet" />
             </intent-filter>
+            <!-- Notification deep-link: tap routes to a specific download -->
+            <intent-filter>
+                <action android:name="dev.fetchx.app.OPEN_DOWNLOAD" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
         <service

@@ -8,9 +8,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
 import dev.fetchx.app.navigation.AppNavigation
 import dev.fetchx.app.ui.theme.FetchXTheme
+import dev.fetchx.app.navigation.awaitRepositoryReady
 import dev.fetchx.downloads.notification.DownloadNotificationManager
 import kotlinx.coroutines.MainScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -81,24 +81,22 @@ class MainActivity : ComponentActivity() {
 
     private fun submitMagnetWhenReady(magnetUri: String) {
         MainScope().launch {
-            // Wait up to 30s for bridge to initialize, checking every 500ms.
-            var waited = 0
-            while (waited < 30_000) {
-                val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull()
-                if (repo is dev.fetchx.core.download.TorrentDownloadRepository) {
-                    android.util.Log.i("FetchXApp", "submitMagnet: bridge ready, adding magnet")
-                    try {
-                        val id = repo.addMagnet(magnetUri, dev.fetchx.core.download.DownloadPriority.DEFAULT)
-                        android.util.Log.i("FetchXApp", "submitMagnet: added id=$id")
-                    } catch (e: Exception) {
-                        android.util.Log.e("FetchXApp", "submitMagnet: failed: $e")
-                    }
-                    return@launch
+            // Wait up to 30s for the bridge/repository to be ready, reusing the
+            // same bounded-readiness wait as the notification deep-link path.
+            val repo = awaitRepositoryReady(repositoryProvider = {
+                dev.fetchx.bridge.BridgeInitializer.repositoryOrNull()
+            })
+            if (repo is dev.fetchx.core.download.TorrentDownloadRepository) {
+                android.util.Log.i("FetchXApp", "submitMagnet: bridge ready, adding magnet")
+                try {
+                    val id = repo.addMagnet(magnetUri, dev.fetchx.core.download.DownloadPriority.DEFAULT)
+                    android.util.Log.i("FetchXApp", "submitMagnet: added id=$id")
+                } catch (e: Exception) {
+                    android.util.Log.e("FetchXApp", "submitMagnet: failed: $e")
                 }
-                delay(500)
-                waited += 500
+            } else {
+                android.util.Log.e("FetchXApp", "submitMagnet: bridge not ready after 30s")
             }
-            android.util.Log.e("FetchXApp", "submitMagnet: bridge not ready after 30s")
         }
     }
 
