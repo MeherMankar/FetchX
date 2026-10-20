@@ -117,6 +117,8 @@ pub enum DownloadEngineError {
     SftpError(String),
     #[error("SFTP host key is not recognised: {host}")]
     SftpUnknownHostKey { host: String },
+    #[error("SFTP authentication rejected by server")]
+    SftpAuthenticationFailed,
     #[error("Metalink error: {0}")]
     MetalinkError(String),
     #[error(
@@ -227,7 +229,9 @@ impl DownloadEngineError {
                 DownloadErrorCode::Engine,
                 "The FTP download could not be completed.".to_owned(),
             ),
-            Self::SftpError(_) | Self::SftpUnknownHostKey { .. } => (
+            Self::SftpError(_)
+            | Self::SftpUnknownHostKey { .. }
+            | Self::SftpAuthenticationFailed => (
                 DownloadErrorCode::Engine,
                 "The SFTP download could not be completed.".to_owned(),
             ),

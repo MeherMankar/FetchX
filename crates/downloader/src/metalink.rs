@@ -363,7 +363,9 @@ where
             let http_engine = Arc::clone(&self.direct_http);
             let download_result = tokio::task::spawn(async move {
                 let _limit_tx = limit_tx; // keep sender alive for the task's lifetime
-                http_engine.download_managed(transient_id, mirror_control).await
+                http_engine
+                    .download_managed(transient_id, mirror_control)
+                    .await
             })
             .await
             .map_err(|e| DownloadEngineError::MetalinkError(format!("task join: {e}")))?;
