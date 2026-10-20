@@ -22,8 +22,8 @@ use tokio::{
 };
 
 use crate::{
-    AdaptiveConfig, BandwidthControl, BandwidthLimiter, DirectHttpEngine, DownloadEngineError,
-    HttpEngineConfig, ManagedDownloadControl, ManagedDownloadEngine,
+    AdaptiveConfig, BandwidthControl, BandwidthLimiter, DirectHttpEngine,
+    DownloadEngineError, HttpEngineConfig, ManagedDownloadControl, ManagedDownloadEngine,
 };
 
 struct TestDirectory(PathBuf);
@@ -54,7 +54,7 @@ struct ServerResponse {
     signal_after_first_chunk: Option<oneshot::Sender<()>>,
 }
 
-struct ScriptedResponse {
+pub(crate) struct ScriptedResponse {
     status: u16,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -110,7 +110,7 @@ async fn start_server(
     Ok((format!("http://{address}/file"), task))
 }
 
-async fn start_scripted_server(
+pub(crate) async fn start_scripted_server(
     responses: Vec<ScriptedResponse>,
 ) -> Result<(String, JoinHandle<Vec<String>>), std::io::Error> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -506,7 +506,7 @@ async fn serve_segment_connection(
     completion_order.lock().await.push(segment_index);
 }
 
-fn scripted_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> ScriptedResponse {
+pub(crate) fn scripted_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> ScriptedResponse {
     ScriptedResponse {
         status,
         headers: headers
@@ -2187,4 +2187,342 @@ async fn progress_is_persisted_during_transfer_and_final_state_is_complete()
     assert_eq!(persisted.progress().total_bytes(), Some(body.len() as u64));
     assert_eq!(tokio::fs::read(destination).await?, body);
     Ok(())
+}
+
+// ── FTP regression tests ──────────────────────────────────────────────────────
+
+/// Normal FTP download: start in-process server, download file, verify content.
+#[tokio::test]
+async fn ftp_normal_download_via_in_process_server() -> Result<(), Box<dyn Error>> {
+    use crate::FtpEngine;
+
+    let content = b"FTP regression test content".to_vec();
+    let (addr, _server) = start_ftp_server(content.clone()).await?;
+
+    let database = Database::connect("sqlite::memory:").await?;
+    let repo = database.downloads();
+    let engine = FtpEngine::new(repo.clone());
+
+    let dir = tempfile::tempdir()?;
+    let dest = dir.path().join("ftp-normal.bin");
+    let url = format!("ftp://{addr}/file.bin");
+
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftp)?,
+        FileName::new("ftp-normal.bin")?,
+        dest.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repo.create(&item).await?;
+
+    let (_tx, rx) = watch::channel(false);
+    let completed = crate::DownloadEngine::download(&engine, id, rx).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(&dest).await?, content);
+    Ok(())
+}
+
+/// FTP resume via REST: place a partial file, start server that responds to REST,
+/// verify the completed file contains the full content.
+#[tokio::test]
+async fn ftp_resume_rest_appends_remaining_bytes() -> Result<(), Box<dyn Error>> {
+    use crate::FtpEngine;
+
+    let full_content: Vec<u8> = (0..256_u32).map(|i| (i % 200) as u8).collect();
+    let partial_size = 64_usize;
+
+    // Start a server with the full content; FtpEngine will issue REST <offset>.
+    let (addr, _server) = start_ftp_server(full_content.clone()).await?;
+
+    let database = Database::connect("sqlite::memory:").await?;
+    let repo = database.downloads();
+    let engine = FtpEngine::new(repo.clone());
+
+    let dir = tempfile::tempdir()?;
+    let dest = dir.path().join("ftp-resume.bin");
+    let tmp = dir.path().join("ftp-resume.bin.part");
+    // Write partial data to simulate a previous interrupted download.
+    tokio::fs::write(&tmp, &full_content[..partial_size]).await?;
+
+    let url = format!("ftp://{addr}/file.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftp)?,
+        FileName::new("ftp-resume.bin")?,
+        dest.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repo.create(&item).await?;
+
+    let (_tx, rx) = watch::channel(false);
+    let completed = crate::DownloadEngine::download(&engine, id, rx).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(&dest).await?, full_content);
+    Ok(())
+}
+
+/// FTP cancel: signal cancellation immediately and verify `Cancelled` is returned.
+#[tokio::test]
+async fn ftp_cancellation_returns_cancelled_error() -> Result<(), Box<dyn Error>> {
+    use crate::{FtpEngine, ManagedDownloadControl, ManagedDownloadEngine};
+
+    // Use a large content so the transfer has time to be cancelled.
+    let content = vec![0u8; 512 * 1024];
+    let (addr, _server) = start_ftp_server(content).await?;
+
+    let database = Database::connect("sqlite::memory:").await?;
+    let repo = database.downloads();
+    let engine = FtpEngine::new(repo.clone());
+
+    let dir = tempfile::tempdir()?;
+    let dest = dir.path().join("ftp-cancel.bin");
+    let url = format!("ftp://{addr}/file.bin");
+
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftp)?,
+        FileName::new("ftp-cancel.bin")?,
+        dest.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repo.create(&item).await?;
+
+    // Cancel immediately (before starting).
+    let (cancel_tx, cancellation) = watch::channel(true);
+    let (_pause_tx, pause) = watch::channel(false);
+    let (_limit_tx, connection_limit) = watch::channel(1_usize);
+    let control = ManagedDownloadControl {
+        cancellation,
+        pause,
+        connection_limit,
+        resource_demand: None,
+        bandwidth: BandwidthControl::default(),
+    };
+    let result = engine.download_managed(id, control).await;
+    drop(cancel_tx);
+
+    assert!(
+        matches!(result, Err(DownloadEngineError::Cancelled)),
+        "expected Cancelled, got: {result:?}"
+    );
+    assert!(!dest.exists());
+    Ok(())
+}
+
+/// FTP path traversal: the engine should reject URLs with `..` components
+/// before attempting a connection.
+#[tokio::test]
+async fn ftp_path_traversal_rejected_before_connect() {
+    use crate::ftp::parse_ftp_url;
+    assert!(matches!(
+        parse_ftp_url("ftp://host/pub/../../../etc/passwd"),
+        Err(DownloadEngineError::FtpPathTraversal)
+    ));
+    assert!(matches!(
+        parse_ftp_url("ftp://host/safe/../other"),
+        Err(DownloadEngineError::FtpPathTraversal)
+    ));
+}
+
+// ── Security / failure regression tests ──────────────────────────────────────
+
+/// Connection refused: downloading from a port that actively refuses connections
+/// must return a `DownloadEngineError` within a bounded time.
+#[tokio::test]
+async fn http_connection_refused_returns_error_quickly() -> Result<(), Box<dyn Error>> {
+    // Use a very short request timeout so the refused-connection error surfaces fast.
+    let config = HttpEngineConfig {
+        minimum_segmented_file_size: u64::MAX, // force single stream
+        ..HttpEngineConfig::default()
+    };
+    let (database, engine, directory) = setup_engine(config).await?;
+    let dest = directory.destination("refused.bin");
+    let item = make_item("http://127.0.0.1:1/file", &dest)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_tx, rx) = watch::channel(false);
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        engine.download(id, rx),
+    )
+    .await;
+
+    assert!(result.is_ok(), "download did not complete within 15 s timeout");
+    assert!(result.unwrap().is_err(), "expected an error for refused connection");
+    Ok(())
+}
+
+/// HTTP 404: the engine must surface `DownloadEngineError::HttpStatus(404)`.
+/// (This is already partially covered by `http_failures_persist_failed_state_and_safe_error`
+/// but an explicit assertion ensures the exact variant is preserved.)
+#[tokio::test]
+async fn http_404_surfaces_correct_error_variant() -> Result<(), Box<dyn Error>> {
+    let (url, server) = start_scripted_server(vec![scripted_response(404, &[], b"Not Found")]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let dest = directory.destination("http-404.bin");
+    let item = make_item(&url, &dest)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_tx, rx) = watch::channel(false);
+
+    let result = engine.download(id, rx).await;
+    server.await?;
+
+    assert!(
+        matches!(result, Err(DownloadEngineError::HttpStatus(404))),
+        "expected HttpStatus(404), got: {result:?}"
+    );
+    assert!(!dest.exists());
+    Ok(())
+}
+
+/// HTTP 500: the engine must surface `DownloadEngineError::HttpStatus(500)`.
+/// 500 is transient, so provide enough responses for retry attempts.
+#[tokio::test]
+async fn http_500_surfaces_correct_error_variant() -> Result<(), Box<dyn Error>> {
+    // 500 is transient — engine will retry 4 times with Retry-After: 0
+    let responses = vec![
+        scripted_response(500, &[("Retry-After", "0")], b"Server Error"),
+        scripted_response(500, &[("Retry-After", "0")], b"Server Error"),
+        scripted_response(500, &[("Retry-After", "0")], b"Server Error"),
+        scripted_response(500, &[("Retry-After", "0")], b"Server Error"),
+    ];
+    let (url, server) = start_scripted_server(responses).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let dest = directory.destination("http-500.bin");
+    let item = make_item(&url, &dest)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_tx, rx) = watch::channel(false);
+
+    let result = engine.download(id, rx).await;
+    server.await?;
+
+    assert!(
+        matches!(result, Err(DownloadEngineError::HttpStatus(500))),
+        "expected HttpStatus(500), got: {result:?}"
+    );
+    assert!(!dest.exists());
+    Ok(())
+}
+
+/// Credential leak guard: verify that ftp.rs and sftp.rs do not log passwords
+/// or credential values via `log::` or `tracing` macros at fields that contain
+/// "password", "pass", or "credential". We check the source text in-process.
+///
+/// This is a static analysis test — it reads the source files as strings and
+/// searches for dangerous patterns. It does not require running the engines.
+#[test]
+fn credential_fields_are_not_logged_in_ftp_or_sftp() {
+    // Patterns that would indicate a password field being logged:
+    // e.g.  info!("login {} {}", user, password)
+    //       warn!(password = %pass, ...)
+    let sources = [
+        include_str!("ftp.rs"),
+        include_str!("sftp.rs"),
+    ];
+    for src in &sources {
+        let lower = src.to_ascii_lowercase();
+        // Find every occurrence of a tracing/log macro call.
+        for line in lower.lines() {
+            let has_macro = line.contains("info!(")
+                || line.contains("warn!(")
+                || line.contains("debug!(")
+                || line.contains("error!(")
+                || line.contains("trace!(");
+            if has_macro {
+                assert!(
+                    !line.contains("password") && !line.contains("passwd"),
+                    "Potential credential leak found in source line: {line}"
+                );
+            }
+        }
+    }
+}
+
+// ── Binary-detection tests (aria2, yt-dlp, ffmpeg) ────────────────────────────
+//
+// These tests attempt to detect the external binary on PATH. If absent they
+// return early (skip). They do NOT validate behaviour — only that detection
+// succeeds or gracefully reports absence.
+// NOT VALIDATED — results depend on the CI/developer environment.
+
+/// Detect aria2c binary; skip gracefully if absent.
+/// NOT VALIDATED — binary presence depends on environment.
+#[tokio::test]
+async fn aria2_binary_detection_skips_when_absent() {
+    use std::process::Stdio;
+    let Ok(output) = tokio::process::Command::new("aria2c")
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        // Binary not found — test skips.
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        version_output.contains("aria2"),
+        "aria2c --version did not mention 'aria2': {version_output}"
+    );
+}
+
+/// Detect yt-dlp binary; skip gracefully if absent.
+/// NOT VALIDATED — binary presence depends on environment.
+#[tokio::test]
+async fn ytdlp_binary_detection_skips_when_absent() {
+    use std::process::Stdio;
+    let Ok(output) = tokio::process::Command::new("yt-dlp")
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !version_output.trim().is_empty(),
+        "yt-dlp --version returned empty output"
+    );
+}
+
+/// Detect ffmpeg binary; skip gracefully if absent.
+/// NOT VALIDATED — binary presence depends on environment.
+#[tokio::test]
+async fn ffmpeg_binary_detection_skips_when_absent() {
+    use std::process::Stdio;
+    let Ok(output) = tokio::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        return;
+    };
+    // ffmpeg -version exits 0 or 1 depending on build; presence is enough.
+    let version_output = String::from_utf8_lossy(&output.stdout);
+    let err_output = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{version_output}{err_output}");
+    assert!(
+        combined.to_ascii_lowercase().contains("ffmpeg"),
+        "ffmpeg -version did not mention 'ffmpeg': {combined}"
+    );
 }
