@@ -19,7 +19,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use digest::Digest;
@@ -32,7 +32,7 @@ use fetchx_storage::DownloadRepository;
 use md5::Md5;
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
-use tokio::{fs, io::AsyncReadExt, sync::watch};
+use tokio::{fs, sync::watch};
 use tracing::{info, warn};
 
 use crate::{
@@ -41,8 +41,6 @@ use crate::{
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 
 // ── Public data types ─────────────────────────────────────────────────────────
 
@@ -78,7 +76,7 @@ pub struct MetalinkEngine<R> {
 
 impl<R> MetalinkEngine<R>
 where
-    R: DownloadRepository + Clone,
+    R: DownloadRepository + Clone + Send + Sync + 'static,
 {
     /// Creates a new engine backed by `direct_http`.
     pub fn new(repository: R, direct_http: Arc<DirectHttpEngine<R>>) -> Self {
@@ -206,7 +204,7 @@ where
             && fs::symlink_metadata(&destination)
                 .await
                 .ok()
-                .map_or(false, |m| m.file_type().is_file())
+                .is_some_and(|m| m.file_type().is_file())
         {
             return Err(DownloadEngineError::MetalinkError(
                 "destination exists as a file but manifest has multiple files".to_owned(),
@@ -339,8 +337,7 @@ where
             let filename = FileName::new(sanitize_filename(&mf.name)).map_err(|_| {
                 DownloadEngineError::MetalinkError(format!("invalid filename: {}", mf.name))
             })?;
-            let created_at =
-                Timestamp::now().map_err(DownloadEngineError::Timestamp)?;
+            let created_at = Timestamp::now().map_err(DownloadEngineError::Timestamp)?;
             let transient_item = DownloadItem::new(
                 transient_id,
                 source,
@@ -359,12 +356,17 @@ where
                 resource_demand: None,
                 bandwidth: BandwidthControl::default(),
             };
-            drop(limit_tx); // keep alive via the receiver
+            // Note: limit_tx is moved into the spawned task to keep the channel open
+            // for the duration of the download (dropping it early causes the engine
+            // to treat the closed channel as a failure).
 
-            let download_result = self
-                .direct_http
-                .download_managed(transient_id, mirror_control)
-                .await;
+            let http_engine = Arc::clone(&self.direct_http);
+            let download_result = tokio::task::spawn(async move {
+                let _limit_tx = limit_tx; // keep sender alive for the task's lifetime
+                http_engine.download_managed(transient_id, mirror_control).await
+            })
+            .await
+            .map_err(|e| DownloadEngineError::MetalinkError(format!("task join: {e}")))?;
 
             match download_result {
                 Err(DownloadEngineError::Cancelled) => {
@@ -391,8 +393,7 @@ where
                 }
                 Ok(_completed_transient) => {
                     // Verify checksum of staged file.
-                    let checksum_result =
-                        verify_checksums(&staging_path, &mf.hashes).await;
+                    let checksum_result = verify_checksums(&staging_path, &mf.hashes).await;
                     match checksum_result {
                         Err(DownloadEngineError::MetalinkChecksumMismatch {
                             algorithm,
@@ -427,8 +428,7 @@ where
                             }
                             // Update tracked progress on parent item.
                             let progress = DownloadProgress::new(1, Some(1), None, None)?;
-                            tracked
-                                .set_progress_at(progress, next_ts(tracked.updated_at())?)?;
+                            tracked.set_progress_at(progress, next_ts(tracked.updated_at())?)?;
                             if let Err(e) = self.repository.update(tracked).await {
                                 warn!("Metalink: parent progress persist error: {e}");
                             }
@@ -441,10 +441,7 @@ where
 
         // All mirrors exhausted.
         Err(last_error.unwrap_or_else(|| {
-            DownloadEngineError::MetalinkError(format!(
-                "all mirrors failed for file '{}'",
-                mf.name
-            ))
+            DownloadEngineError::MetalinkError(format!("all mirrors failed for file '{}'", mf.name))
         }))
     }
 
@@ -466,14 +463,9 @@ where
                 .await
                 .map_err(DownloadEngineError::Request)?;
             if !response.status().is_success() {
-                return Err(DownloadEngineError::HttpStatus(
-                    response.status().as_u16(),
-                ));
+                return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
             }
-            response
-                .text()
-                .await
-                .map_err(DownloadEngineError::Request)
+            response.text().await.map_err(DownloadEngineError::Request)
         } else {
             // Local file path or file:// URI.
             let path = if let Some(stripped) = source.strip_prefix("file://") {
@@ -483,9 +475,7 @@ where
             };
             let bytes = fs::read(&path).await.map_err(DownloadEngineError::Io)?;
             String::from_utf8(bytes).map_err(|_| {
-                DownloadEngineError::MetalinkError(
-                    "manifest file is not valid UTF-8".to_owned(),
-                )
+                DownloadEngineError::MetalinkError("manifest file is not valid UTF-8".to_owned())
             })
         }
     }
@@ -566,7 +556,7 @@ where
 
 impl<R> DownloadEngine for MetalinkEngine<R>
 where
-    R: DownloadRepository + Clone,
+    R: DownloadRepository + Clone + Send + Sync + 'static,
 {
     async fn download(
         &self,
@@ -591,7 +581,7 @@ where
 
 impl<R> ManagedDownloadEngine for MetalinkEngine<R>
 where
-    R: DownloadRepository + Clone,
+    R: DownloadRepository + Clone + Send + Sync + 'static,
 {
     async fn download_managed(
         &self,
@@ -659,12 +649,12 @@ pub fn parse_metalink(xml: &str) -> Result<Vec<MetalinkFile>, DownloadEngineErro
     Ok(files)
 }
 
-fn parse_v4_file(
-    node: roxmltree::Node<'_, '_>,
-) -> Result<MetalinkFile, DownloadEngineError> {
+fn parse_v4_file(node: roxmltree::Node<'_, '_>) -> Result<MetalinkFile, DownloadEngineError> {
     let name = node
         .attribute("name")
-        .ok_or_else(|| DownloadEngineError::MetalinkError("<file> missing 'name' attribute".to_owned()))?
+        .ok_or_else(|| {
+            DownloadEngineError::MetalinkError("<file> missing 'name' attribute".to_owned())
+        })?
         .to_owned();
 
     let mut size: Option<u64> = None;
@@ -707,9 +697,7 @@ fn parse_v4_file(
     })
 }
 
-fn parse_v3_files(
-    root: roxmltree::Node<'_, '_>,
-) -> Result<Vec<MetalinkFile>, DownloadEngineError> {
+fn parse_v3_files(root: roxmltree::Node<'_, '_>) -> Result<Vec<MetalinkFile>, DownloadEngineError> {
     let mut files = Vec::new();
 
     // Find <files> element (may or may not be namespaced).
@@ -820,7 +808,7 @@ fn check_filename_safety(name: &str) -> Result<(), DownloadEngineError> {
         )));
     }
     // Reject any `..` path component (split on both forward and backslashes).
-    for component in name.split(|c| c == '/' || c == '\\') {
+    for component in name.split(['/', '\\']) {
         if component == ".." {
             return Err(DownloadEngineError::MetalinkError(format!(
                 "filename '{name}' contains a path traversal sequence (..)"
@@ -896,18 +884,21 @@ mod tests {
     use std::{error::Error, path::PathBuf};
 
     use digest::Digest;
-    use fetchx_models::{DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp};
+    use fetchx_models::{
+        DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp,
+    };
     use fetchx_storage::{Database, DownloadRepository};
     use tokio::sync::watch;
 
     use super::{MetalinkEngine, check_filename_safety, compute_hash, parse_metalink};
     use crate::{
-        DownloadEngine, DownloadEngineError, DirectHttpEngine, ManagedDownloadControl,
-        ManagedDownloadEngine, BandwidthControl,
+        BandwidthControl, DirectHttpEngine, DownloadEngine, DownloadEngineError,
+        ManagedDownloadControl, ManagedDownloadEngine,
     };
 
     /// Run an async test body in a thread with 8 MiB stack to avoid stack
     /// overflows caused by deeply nested futures in debug builds.
+    #[allow(dead_code)]
     fn run_large_stack<F, T>(f: F) -> T
     where
         F: FnOnce() -> T + Send + 'static,
@@ -1076,7 +1067,9 @@ mod tests {
     ) {
         let repo = db.downloads();
         let http = DirectHttpEngine::new(repo.clone()).expect("http engine");
-        let http_arc = std::sync::Arc::new(DirectHttpEngine::new(repo.clone()).expect("http engine for metalink"));
+        let http_arc = std::sync::Arc::new(
+            DirectHttpEngine::new(repo.clone()).expect("http engine for metalink"),
+        );
         let metalink = MetalinkEngine::new(repo, http_arc);
         (metalink, http)
     }
@@ -1178,7 +1171,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "stack overflow in debug builds due to deeply nested MetalinkEngine->DirectHttpEngine future chain"]
     async fn metalink_checksum_success() -> Result<(), Box<dyn Error>> {
         use crate::tests::start_scripted_server;
 
@@ -1212,7 +1204,7 @@ mod tests {
         let id = item.id();
         db.downloads().create(&item).await?;
 
-        let (_, rx) = watch::channel(false);
+        let (_cancel_tx, rx) = watch::channel(false);
         let result = DownloadEngine::download(&engine, id, rx).await;
         assert!(result.is_ok(), "expected success, got: {result:?}");
         let content = std::fs::read(&dest)?;
@@ -1222,7 +1214,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "stack overflow in debug builds due to deeply nested MetalinkEngine->DirectHttpEngine future chain"]
     async fn metalink_checksum_mismatch() -> Result<(), Box<dyn Error>> {
         use crate::tests::start_scripted_server;
 
@@ -1254,7 +1245,7 @@ mod tests {
         let id = item.id();
         db.downloads().create(&item).await?;
 
-        let (_, rx) = watch::channel(false);
+        let (_cancel_tx, rx) = watch::channel(false);
         let result = DownloadEngine::download(&engine, id, rx).await;
         assert!(
             matches!(
@@ -1269,9 +1260,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "stack overflow in debug builds due to deeply nested MetalinkEngine->DirectHttpEngine future chain"]
     async fn metalink_mirror_failover() -> Result<(), Box<dyn Error>> {
-        use crate::tests::{start_scripted_server, scripted_response};
+        use crate::tests::{scripted_response, start_scripted_server};
 
         let body = b"world".to_vec();
         let expected_hash = hex::encode(sha2::Sha256::digest(&body));
@@ -1307,9 +1297,12 @@ mod tests {
         let id = item.id();
         db.downloads().create(&item).await?;
 
-        let (_, rx) = watch::channel(false);
+        let (_cancel_tx, rx) = watch::channel(false);
         let result = DownloadEngine::download(&engine, id, rx).await;
-        assert!(result.is_ok(), "expected failover to succeed, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected failover to succeed, got: {result:?}"
+        );
         assert_eq!(std::fs::read(&dest)?, body);
         let _ = server_fail.await;
         let _ = server_ok.await;
@@ -1317,17 +1310,18 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "stack overflow in debug builds due to deeply nested MetalinkEngine->DirectHttpEngine future chain"]
     async fn metalink_multiple_files() -> Result<(), Box<dyn Error>> {
-        use crate::tests::{start_scripted_server, scripted_response};
+        use crate::tests::{scripted_response, start_scripted_server};
 
         let body1 = b"file one content".to_vec();
         let body2 = b"file two content".to_vec();
         let hash1 = hex::encode(sha2::Sha256::digest(&body1));
         let hash2 = hex::encode(sha2::Sha256::digest(&body2));
 
-        let (url1, server1) = start_scripted_server(vec![scripted_response(200, &[], &body1)]).await?;
-        let (url2, server2) = start_scripted_server(vec![scripted_response(200, &[], &body2)]).await?;
+        let (url1, server1) =
+            start_scripted_server(vec![scripted_response(200, &[], &body1)]).await?;
+        let (url2, server2) =
+            start_scripted_server(vec![scripted_response(200, &[], &body2)]).await?;
 
         let db = Database::connect("sqlite::memory:").await?;
         let (engine, _) = make_engine(&db).await;
@@ -1358,9 +1352,12 @@ mod tests {
         let id = item.id();
         db.downloads().create(&item).await?;
 
-        let (_, rx) = watch::channel(false);
+        let (_cancel_tx, rx) = watch::channel(false);
         let result = DownloadEngine::download(&engine, id, rx).await;
-        assert!(result.is_ok(), "expected multi-file success, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected multi-file success, got: {result:?}"
+        );
         assert_eq!(std::fs::read(dest_dir.join("file1.bin"))?, body1);
         assert_eq!(std::fs::read(dest_dir.join("file2.bin"))?, body2);
         let _ = server1.await;

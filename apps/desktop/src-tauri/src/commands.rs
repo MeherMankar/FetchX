@@ -651,9 +651,7 @@ impl IpcError {
                 "yt-dlp is currently unavailable. Please check Settings → Download Engines."
             }
             EngineKind::NativeTorrent => "The native torrent engine is currently unavailable.",
-            EngineKind::Ftp | EngineKind::Ftps => {
-                "The FTP engine is currently unavailable."
-            }
+            EngineKind::Ftp | EngineKind::Ftps => "The FTP engine is currently unavailable.",
             EngineKind::Sftp => "The SFTP engine is currently unavailable.",
             EngineKind::Metalink => "The Metalink engine is currently unavailable.",
             EngineKind::DirectHttp | EngineKind::Hls => {

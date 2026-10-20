@@ -725,18 +725,11 @@ mod tests {
         // DirectHttp to Metalink in the dispatcher. A Metalink engine can also
         // be set explicitly.
         assert!(
-            DownloadSource::new(
-                "https://example.com/release.meta4",
-                EngineKind::Metalink
-            )
-            .is_ok()
+            DownloadSource::new("https://example.com/release.meta4", EngineKind::Metalink).is_ok()
         );
         assert!(
-            DownloadSource::new(
-                "https://example.com/release.metalink",
-                EngineKind::Metalink
-            )
-            .is_ok()
+            DownloadSource::new("https://example.com/release.metalink", EngineKind::Metalink)
+                .is_ok()
         );
     }
 

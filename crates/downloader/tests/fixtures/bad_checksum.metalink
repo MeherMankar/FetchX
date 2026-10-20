@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="bad-checksum.bin">
+    <size>5</size>
+    <hash type="sha-256">0000000000000000000000000000000000000000000000000000000000000000</hash>
+    <url location="us" priority="1">http://mirror.example.test/bad-checksum.bin</url>
+  </file>
+</metalink>

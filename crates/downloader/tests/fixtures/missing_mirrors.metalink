@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="no-mirrors.bin">
+    <size>1024</size>
+    <hash type="sha-256">aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd</hash>
+  </file>
+</metalink>

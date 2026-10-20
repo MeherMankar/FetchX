@@ -119,7 +119,9 @@ pub enum DownloadEngineError {
     SftpUnknownHostKey { host: String },
     #[error("Metalink error: {0}")]
     MetalinkError(String),
-    #[error("Metalink checksum mismatch: algorithm={algorithm} expected={expected} actual={actual}")]
+    #[error(
+        "Metalink checksum mismatch: algorithm={algorithm} expected={expected} actual={actual}"
+    )]
     MetalinkChecksumMismatch {
         algorithm: String,
         expected: String,

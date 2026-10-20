@@ -26,6 +26,10 @@ pub struct EngineConfig {
     #[serde(default)]
     pub ftp: FtpConfig,
     #[serde(default)]
+    pub sftp: SftpConfig,
+    #[serde(default)]
+    pub metalink: MetalinkConfig,
+    #[serde(default)]
     pub resource_policy: ResourcePolicy,
 }
 
@@ -38,6 +42,8 @@ impl Default for EngineConfig {
             yt_dlp: YtDlpConfig::default(),
             native_torrent: NativeTorrentConfig::default(),
             ftp: FtpConfig::default(),
+            sftp: SftpConfig::default(),
+            metalink: MetalinkConfig::default(),
             resource_policy: ResourcePolicy::default(),
         }
     }
@@ -142,6 +148,38 @@ impl Default for FtpConfig {
             enabled: true,
             passive_mode: true,
         }
+    }
+}
+
+// ── SFTP config ───────────────────────────────────────────────────────────────
+
+/// Configuration for the SFTP engine.
+///
+/// SFTP is always-available (russh is pure Rust, no binary dependency).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SftpConfig {
+    pub enabled: bool,
+}
+
+impl Default for SftpConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+// ── Metalink config ───────────────────────────────────────────────────────────
+
+/// Configuration for the Metalink orchestration engine.
+///
+/// Metalink is always-available (pure Rust, no binary dependency).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MetalinkConfig {
+    pub enabled: bool,
+}
+
+impl Default for MetalinkConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 

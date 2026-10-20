@@ -237,8 +237,10 @@ pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
         "yt-dlp" | "yt_dlp" | "ytdlp" => Ok(EngineKind::YtDlp),
         "ftp" => Ok(EngineKind::Ftp),
         "ftps" => Ok(EngineKind::Ftps),
+        "sftp" => Ok(EngineKind::Sftp),
+        "metalink" => Ok(EngineKind::Metalink),
         other => Err(format!(
-            "unknown engine `{other}`. Valid: direct-http, aria2, yt-dlp, ftp, ftps"
+            "unknown engine `{other}`. Valid: direct-http, aria2, yt-dlp, ftp, ftps, sftp, metalink"
         )),
     }
 }
@@ -267,6 +269,12 @@ fn resolve_engine(
             }
             if u.starts_with("ftps://") {
                 return Ok(EngineKind::Ftps);
+            }
+            // Auto-detect .metalink and .meta4 file extensions (case-insensitive).
+            let lower = u.to_ascii_lowercase();
+            let path_part = lower.split('?').next().unwrap_or(&lower);
+            if path_part.ends_with(".metalink") || path_part.ends_with(".meta4") {
+                return Ok(EngineKind::Metalink);
             }
         }
     }
@@ -319,8 +327,14 @@ mod tests {
 
     #[test]
     fn magnet_defaults_to_aria2_and_suggests_a_confined_name() {
-        assert_eq!(resolve_engine(true, false, None, None), Ok(EngineKind::Aria2));
-        assert_eq!(resolve_engine(false, true, None, None), Ok(EngineKind::Aria2));
+        assert_eq!(
+            resolve_engine(true, false, None, None),
+            Ok(EngineKind::Aria2)
+        );
+        assert_eq!(
+            resolve_engine(false, true, None, None),
+            Ok(EngineKind::Aria2)
+        );
         let metadata = parse_magnet_uri(
             "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=..%5C..%5Cunsafe%3Aname%3F.torrent",
         )
@@ -339,8 +353,32 @@ mod tests {
         );
         // Explicit --engine flag overrides auto-detection.
         assert_eq!(
-            resolve_engine(false, false, Some("direct-http"), Some("ftp://host/file.bin")),
+            resolve_engine(
+                false,
+                false,
+                Some("direct-http"),
+                Some("ftp://host/file.bin")
+            ),
             Ok(EngineKind::DirectHttp)
+        );
+        // Metalink extension auto-detection.
+        assert_eq!(
+            resolve_engine(false, false, None, Some("https://host/file.metalink")),
+            Ok(EngineKind::Metalink)
+        );
+        assert_eq!(
+            resolve_engine(false, false, None, Some("https://host/file.meta4")),
+            Ok(EngineKind::Metalink)
+        );
+        // Explicit --engine metalink.
+        assert_eq!(
+            resolve_engine(
+                false,
+                false,
+                Some("metalink"),
+                Some("https://host/file.bin")
+            ),
+            Ok(EngineKind::Metalink)
         );
     }
 

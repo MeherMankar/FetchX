@@ -601,11 +601,16 @@ fn ftp_blocking_plain(tcp: TcpStream, p: BlockingParams) -> Result<(), DownloadE
     // we need to move `data` out of scope before using `stream` again.
     // Use a raw-pointer trick-free approach: just collect into a Vec so the
     // data reader is dropped before finalize is called.
-    let result = transfer_loop(data, |d| {
-        stream
-            .finalize_retr_stream(d)
-            .map_err(|e| DownloadEngineError::FtpError(e.to_string()))
-    }, &p, total_bytes);
+    let result = transfer_loop(
+        data,
+        |d| {
+            stream
+                .finalize_retr_stream(d)
+                .map_err(|e| DownloadEngineError::FtpError(e.to_string()))
+        },
+        &p,
+        total_bytes,
+    );
 
     let _ = stream.quit();
     result
@@ -655,11 +660,16 @@ fn ftp_blocking_tls(tcp: TcpStream, p: BlockingParams) -> Result<(), DownloadEng
         .retr_as_stream(&p.path)
         .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
 
-    let result = transfer_loop(data, |d| {
-        stream
-            .finalize_retr_stream(d)
-            .map_err(|e| DownloadEngineError::FtpError(e.to_string()))
-    }, &p, total_bytes);
+    let result = transfer_loop(
+        data,
+        |d| {
+            stream
+                .finalize_retr_stream(d)
+                .map_err(|e| DownloadEngineError::FtpError(e.to_string()))
+        },
+        &p,
+        total_bytes,
+    );
 
     let _ = stream.quit();
     result
@@ -763,7 +773,9 @@ pub(crate) fn parse_ftp_url(
 mod tests {
     use std::{error::Error, path::PathBuf};
 
-    use fetchx_models::{DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp};
+    use fetchx_models::{
+        DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp,
+    };
     use fetchx_storage::{Database, DownloadRepository};
 
     use super::{FtpEngine, parse_ftp_url};

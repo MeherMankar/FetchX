@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="broken.bin">
+    <size>1024</size>
+    <hash type="sha-256">aabbccdd</hash>
+    <!-- unclosed element below -->
+    <url location="us" priority="1">http://example.test/broken.bin

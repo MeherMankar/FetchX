@@ -22,8 +22,8 @@ use tokio::{
 };
 
 use crate::{
-    AdaptiveConfig, BandwidthControl, BandwidthLimiter, DirectHttpEngine,
-    DownloadEngineError, HttpEngineConfig, ManagedDownloadControl, ManagedDownloadEngine,
+    AdaptiveConfig, BandwidthControl, BandwidthLimiter, DirectHttpEngine, DownloadEngineError,
+    HttpEngineConfig, ManagedDownloadControl, ManagedDownloadEngine,
 };
 
 struct TestDirectory(PathBuf);
@@ -506,7 +506,11 @@ async fn serve_segment_connection(
     completion_order.lock().await.push(segment_index);
 }
 
-pub(crate) fn scripted_response(status: u16, headers: &[(&str, &str)], body: &[u8]) -> ScriptedResponse {
+pub(crate) fn scripted_response(
+    status: u16,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> ScriptedResponse {
     ScriptedResponse {
         status,
         headers: headers
@@ -617,7 +621,11 @@ pub(crate) async fn start_ftp_server(
         };
 
         // 220 Welcome
-        if ctrl.write_all(b"220 FetchX-test FTP ready\r\n").await.is_err() {
+        if ctrl
+            .write_all(b"220 FetchX-test FTP ready\r\n")
+            .await
+            .is_err()
+        {
             return;
         }
 
@@ -630,7 +638,9 @@ pub(crate) async fn start_ftp_server(
                 Ok(0) | Err(_) => return,
                 Ok(n) => n,
             };
-            let cmd = String::from_utf8_lossy(&buf[..n]).trim().to_ascii_uppercase();
+            let cmd = String::from_utf8_lossy(&buf[..n])
+                .trim()
+                .to_ascii_uppercase();
 
             if cmd.starts_with("USER") {
                 let _ = ctrl.write_all(b"331 Password required\r\n").await;
@@ -671,17 +681,19 @@ pub(crate) async fn start_ftp_server(
                 let content_clone = content.clone();
                 let rest = rest_offset;
                 tokio::spawn(async move {
-                    let Ok((mut data_stream, _)) =
-                        tokio::time::timeout(std::time::Duration::from_secs(5), data_listener.accept()).await
-                            .ok()
-                            .and_then(|r| r.ok()) // flatten Result
-                            .map(|v| Ok::<_, std::io::Error>(v))
-                            .unwrap_or_else(|| Err(std::io::Error::other("accept timeout")))
-                            .map(|v| Ok::<_, std::io::Error>(v))
-                            .unwrap_or_else(|_| Err(std::io::Error::other("error")))
-                            .map(|v| Ok(v))
-                            .unwrap_or_else(|_e: std::io::Error| Err(()))
-                    else {
+                    let Ok((mut data_stream, _)) = tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        data_listener.accept(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok()) // flatten Result
+                    .map(Ok::<_, std::io::Error>)
+                    .unwrap_or_else(|| Err(std::io::Error::other("accept timeout")))
+                    .map(Ok::<_, std::io::Error>)
+                    .unwrap_or_else(|_| Err(std::io::Error::other("error")))
+                    .map(Ok)
+                    .unwrap_or_else(|_e: std::io::Error| Err(())) else {
                         return;
                     };
                     let slice = if rest as usize <= content_clone.len() {
@@ -2029,9 +2041,7 @@ async fn unsupported_schemes_and_embedded_credentials_are_rejected() -> Result<(
     // FTP URLs can no longer be created with the DirectHttp engine (FEAT-001
     // introduced SchemeMismatch validation in DownloadSource).  Only test the
     // embedded-credentials case which still applies to HTTP URLs.
-    for (url, expected) in [
-        ("http://user:password@example.test/file", "credentials"),
-    ] {
+    for (url, expected) in [("http://user:password@example.test/file", "credentials")] {
         let item = make_item(url, &directory.destination("rejected.bin"))?;
         let id = item.id();
         database.downloads().create(&item).await?;
@@ -2348,14 +2358,16 @@ async fn http_connection_refused_returns_error_quickly() -> Result<(), Box<dyn E
     database.downloads().create(&item).await?;
     let (_tx, rx) = watch::channel(false);
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        engine.download(id, rx),
-    )
-    .await;
+    let result = tokio::time::timeout(Duration::from_secs(15), engine.download(id, rx)).await;
 
-    assert!(result.is_ok(), "download did not complete within 15 s timeout");
-    assert!(result.unwrap().is_err(), "expected an error for refused connection");
+    assert!(
+        result.is_ok(),
+        "download did not complete within 15 s timeout"
+    );
+    assert!(
+        result.unwrap().is_err(),
+        "expected an error for refused connection"
+    );
     Ok(())
 }
 
@@ -2364,7 +2376,8 @@ async fn http_connection_refused_returns_error_quickly() -> Result<(), Box<dyn E
 /// but an explicit assertion ensures the exact variant is preserved.)
 #[tokio::test]
 async fn http_404_surfaces_correct_error_variant() -> Result<(), Box<dyn Error>> {
-    let (url, server) = start_scripted_server(vec![scripted_response(404, &[], b"Not Found")]).await?;
+    let (url, server) =
+        start_scripted_server(vec![scripted_response(404, &[], b"Not Found")]).await?;
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
     let dest = directory.destination("http-404.bin");
     let item = make_item(&url, &dest)?;
@@ -2424,10 +2437,7 @@ fn credential_fields_are_not_logged_in_ftp_or_sftp() {
     // Patterns that would indicate a password field being logged:
     // e.g.  info!("login {} {}", user, password)
     //       warn!(password = %pass, ...)
-    let sources = [
-        include_str!("ftp.rs"),
-        include_str!("sftp.rs"),
-    ];
+    let sources = [include_str!("ftp.rs"), include_str!("sftp.rs")];
     for src in &sources {
         let lower = src.to_ascii_lowercase();
         // Find every occurrence of a tracing/log macro call.

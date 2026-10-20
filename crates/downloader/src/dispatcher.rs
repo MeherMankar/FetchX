@@ -8,8 +8,8 @@ use tokio::sync::watch;
 
 use crate::{
     Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
-    ManagedDownloadControl, ManagedDownloadEngine, NativeTorrentEngine, YtDlpEngine, YtDlpFormat,
-    is_hls_url,
+    ManagedDownloadControl, ManagedDownloadEngine, MetalinkEngine, NativeTorrentEngine, SftpEngine,
+    YtDlpEngine, YtDlpFormat, is_hls_url,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -21,6 +21,8 @@ pub struct EngineDispatcher<R> {
     hls: Option<Arc<HlsEngine<R>>>,
     native_torrent: Option<Arc<NativeTorrentEngine<R>>>,
     ftp: Option<Arc<FtpEngine<R>>>,
+    sftp: Option<Arc<SftpEngine<R>>>,
+    metalink: Option<Arc<MetalinkEngine<R>>>,
     probe_client: Client,
 }
 
@@ -41,6 +43,8 @@ where
             hls: None,
             native_torrent: None,
             ftp: None,
+            sftp: None,
+            metalink: None,
             probe_client: Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -65,6 +69,16 @@ where
 
     pub fn with_ftp(mut self, engine: Arc<FtpEngine<R>>) -> Self {
         self.ftp = Some(engine);
+        self
+    }
+
+    pub fn with_sftp(mut self, engine: Arc<SftpEngine<R>>) -> Self {
+        self.sftp = Some(engine);
+        self
+    }
+
+    pub fn with_metalink(mut self, engine: Arc<MetalinkEngine<R>>) -> Self {
+        self.metalink = Some(engine);
         self
     }
 
@@ -138,7 +152,7 @@ fn is_hls_content_type(content_type: &str) -> bool {
 
 impl<R> DownloadEngine for EngineDispatcher<R>
 where
-    R: DownloadRepository + Clone,
+    R: DownloadRepository + Clone + 'static,
 {
     async fn download(
         &self,
@@ -164,16 +178,21 @@ where
                 Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
-            EngineKind::Sftp | EngineKind::Metalink => {
-                Err(DownloadEngineError::EngineNotAvailable)
-            }
+            EngineKind::Sftp => match &self.sftp {
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+            EngineKind::Metalink => match &self.metalink {
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 }
 
 impl<R> ManagedDownloadEngine for EngineDispatcher<R>
 where
-    R: DownloadRepository + Clone,
+    R: DownloadRepository + Clone + 'static,
 {
     async fn download_managed(
         &self,
@@ -201,9 +220,14 @@ where
                 Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
-            EngineKind::Sftp | EngineKind::Metalink => {
-                Err(DownloadEngineError::EngineNotAvailable)
-            }
+            EngineKind::Sftp => match &self.sftp {
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
+            EngineKind::Metalink => match &self.metalink {
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 
@@ -270,9 +294,9 @@ mod tests {
     use super::EngineDispatcher;
     use crate::{
         Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
-        DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, YtDlpConfig,
-        YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
-        YtDlpRunnerFuture,
+        DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, SftpEngine,
+        YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner,
+        YtDlpRunnerEvent, YtDlpRunnerFuture,
     };
 
     struct CountingRunner(Arc<AtomicUsize>);
@@ -370,6 +394,51 @@ mod tests {
             dispatcher.download(unsupported_id, cancellation).await,
             Err(DownloadEngineError::EngineNotAvailable)
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatcher_routes_sftp_to_the_configured_engine() -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+
+        let base =
+            std::env::temp_dir().join(format!("fetchx-sftp-dispatcher-test-{}", DownloadId::new()));
+        tokio::fs::create_dir_all(&base).await?;
+
+        let sftp_item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("sftp://unknown.test/file.bin", EngineKind::Sftp)?,
+            FileName::new("file.bin")?,
+            base.join("file.bin"),
+            Timestamp::now()?,
+        );
+        let sftp_id = sftp_item.id();
+        repository.create(&sftp_item).await?;
+
+        let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
+        let aria2 = Arc::new(Aria2Engine::new(
+            repository.clone(),
+            Aria2Client::new(Aria2ClientConfig::new(
+                "http://127.0.0.1:6800/jsonrpc",
+                None,
+                Duration::from_millis(50),
+            ))?,
+        ));
+        let sftp = Arc::new(SftpEngine::new(repository.clone()));
+        let dispatcher = EngineDispatcher::new(repository.clone(), direct, aria2).with_sftp(sftp);
+
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        let result = dispatcher.download(sftp_id, cancellation).await;
+        // Routing reached the SFTP engine, which rejects unknown hosts — an
+        // unwired engine would have returned EngineNotAvailable instead.
+        assert!(
+            matches!(result, Err(DownloadEngineError::SftpUnknownHostKey { ref host }) if host == "unknown.test"),
+            "expected SftpUnknownHostKey from the routed SFTP engine, got: {:?}",
+            result
+        );
+
+        tokio::fs::remove_dir_all(base).await?;
         Ok(())
     }
 

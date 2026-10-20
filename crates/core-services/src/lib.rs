@@ -29,8 +29,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
-    DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine,
-    NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine,
+    DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
+    NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
     YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
 };
 use fetchx_models::EngineKind;
@@ -50,7 +50,7 @@ use tracing::{error, info, warn};
 
 pub use config::{
     Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, FtpConfig,
-    NativeTorrentConfig, YtDlpConfig,
+    MetalinkConfig, NativeTorrentConfig, SftpConfig, YtDlpConfig,
 };
 pub use engine_status::{EngineAvailability, EngineRuntimeStatus};
 
@@ -822,6 +822,8 @@ pub struct EngineRuntime {
     pub aria2_supervisor: Option<Arc<Aria2Supervisor>>,
     pub native_torrent_engine: Option<Arc<NativeTorrentEngine<CoreRepository>>>,
     pub ftp_engine: Arc<FtpEngine<CoreRepository>>,
+    pub sftp_engine: Arc<SftpEngine<CoreRepository>>,
+    pub metalink_engine: Arc<MetalinkEngine<CoreRepository>>,
     pub status: EngineRuntimeStatus,
 }
 
@@ -875,10 +877,43 @@ impl EngineRuntime {
             EngineAvailability::Disabled
         };
 
+        // SFTP engine — always available (russh is pure Rust, no binary dep).
+        let sftp_engine = Arc::new(SftpEngine::new(repository.clone()));
+        let sftp_avail = if config.sftp.enabled {
+            info!(engine = "sftp", version = "russh/0.63.1", "engine ready");
+            EngineAvailability::Available {
+                version: "russh/0.63.1".to_owned(),
+            }
+        } else {
+            info!(engine = "sftp", "engine disabled");
+            EngineAvailability::Disabled
+        };
+
+        // Metalink engine — always available (pure Rust, no binary dep).
+        let metalink_engine = Arc::new(MetalinkEngine::new(
+            repository.clone(),
+            Arc::clone(&direct_http),
+        ));
+        let metalink_avail = if config.metalink.enabled {
+            info!(
+                engine = "metalink",
+                version = "orchestrator",
+                "engine ready"
+            );
+            EngineAvailability::Available {
+                version: "orchestrator".to_owned(),
+            }
+        } else {
+            info!(engine = "metalink", "engine disabled");
+            EngineAvailability::Disabled
+        };
+
         let mut dispatcher =
             EngineDispatcher::new(repository, direct_http, Arc::clone(&aria2_engine))
                 .with_hls(hls_engine)
-                .with_ftp(Arc::clone(&ftp_engine));
+                .with_ftp(Arc::clone(&ftp_engine))
+                .with_sftp(Arc::clone(&sftp_engine))
+                .with_metalink(Arc::clone(&metalink_engine));
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
@@ -892,11 +927,15 @@ impl EngineRuntime {
             aria2_supervisor,
             native_torrent_engine,
             ftp_engine,
+            sftp_engine,
+            metalink_engine,
             status: EngineRuntimeStatus {
                 aria2: aria2_avail,
                 yt_dlp: ytdlp_avail,
                 native_torrent: native_torrent_avail,
                 ftp: ftp_avail,
+                sftp: sftp_avail,
+                metalink: metalink_avail,
             },
         })
     }
@@ -930,8 +969,12 @@ impl EngineRuntime {
             EngineKind::Ftp | EngineKind::Ftps => {
                 matches!(self.status.ftp, EngineAvailability::Available { .. })
             }
-            // SFTP and Metalink engines are not yet implemented; always unavailable.
-            EngineKind::Sftp | EngineKind::Metalink => false,
+            EngineKind::Sftp => {
+                matches!(self.status.sftp, EngineAvailability::Available { .. })
+            }
+            EngineKind::Metalink => {
+                matches!(self.status.metalink, EngineAvailability::Available { .. })
+            }
         }
     }
 }
