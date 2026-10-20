@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 base64.workspace = true
 fetchx-core = { path = "../core" }
+fetchx-media-extractor = { path = "../media-extractor" }
 fetchx-models = { path = "../models" }
 fetchx-storage = { path = "../storage" }
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }

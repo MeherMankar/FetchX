@@ -32,6 +32,11 @@ use fetchx_downloader::{
     DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
     NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
     YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
+    YtDlpProcessRunnerAdapter,
+};
+use fetchx_media_extractor::{
+    ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry,
+    UnsupportedExtractor, YtDlpExtractor,
 };
 use fetchx_models::EngineKind;
 use fetchx_models::{
@@ -227,6 +232,22 @@ impl CoreServices {
     #[must_use]
     pub fn downloads_dir(&self) -> &std::path::Path {
         &self.downloads_dir
+    }
+
+    /// Extract media formats for `url` using the registered media extractor pipeline.
+    ///
+    /// Returns structured [`fetchx_media_extractor::MediaInfo`] on success,
+    /// or a [`fetchx_media_extractor::ExtractionError`] on failure.
+    ///
+    /// The title in the returned `MediaInfo` is suitable for use as a download
+    /// filename after passing through
+    /// [`fetchx_media_extractor::sanitise_title_for_filename`].
+    pub async fn extract_media(
+        &self,
+        url: &str,
+        opts: MediaExtractOptions,
+    ) -> Result<fetchx_media_extractor::MediaInfo, ExtractionError> {
+        self.engine_runtime.media_registry.extract(url, opts).await
     }
 
     /// Durable torrent metadata repository for aria2 magnet/.torrent downloads.
@@ -825,6 +846,7 @@ pub struct EngineRuntime {
     pub sftp_engine: Arc<SftpEngine<CoreRepository>>,
     pub metalink_engine: Arc<MetalinkEngine<CoreRepository>>,
     pub status: EngineRuntimeStatus,
+    pub media_registry: Arc<ExtractorRegistry>,
 }
 
 impl EngineRuntime {
@@ -855,6 +877,9 @@ impl EngineRuntime {
 
         let (aria2_engine, aria2_supervisor, aria2_avail) =
             init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await;
+        // Clone the runner before moving it into init_ytdlp so we can also
+        // pass it to YtDlpProcessRunnerAdapter for the media extraction registry.
+        let ytdlp_runner_for_registry = ytdlp_runner.clone();
         let (yt_dlp_engine, ytdlp_avail) =
             init_ytdlp(repository.clone(), config, ytdlp_runner).await;
         let (native_torrent_engine, native_torrent_avail) =
@@ -914,12 +939,47 @@ impl EngineRuntime {
                 .with_ftp(Arc::clone(&ftp_engine))
                 .with_sftp(Arc::clone(&sftp_engine))
                 .with_metalink(Arc::clone(&metalink_engine));
+
+        // Capture the resolved executable BEFORE moving the engine into the dispatcher.
+        let ytdlp_executable: Option<std::path::PathBuf> =
+            yt_dlp_engine.as_ref().map(|e| e.executable().to_path_buf());
+
         if let Some(engine) = yt_dlp_engine {
             dispatcher = dispatcher.with_yt_dlp(engine);
         }
         if let Some(ref engine) = native_torrent_engine {
             dispatcher = dispatcher.with_native_torrent(Arc::clone(engine));
         }
+
+        // ── Media extraction registry ────────────────────────────────────
+        // Build the ExtractorRegistry here in the composition root.
+        // The adapter only needs the executable path — it spawns yt-dlp itself.
+        let media_registry = {
+            let mut registry = ExtractorRegistry::new();
+            if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
+                // Use the resolved executable path captured before the engine was moved.
+                let executable = ytdlp_executable.unwrap_or_else(|| {
+                    // Fallback: use config path (shouldn't reach here when Available).
+                    if let Some(p) = &config.yt_dlp.executable_path {
+                        p.clone()
+                    } else if cfg!(target_os = "windows") {
+                        "yt-dlp.exe".into()
+                    } else {
+                        "yt-dlp".into()
+                    }
+                });
+                let adapter = Arc::new(if let Some(runner) = ytdlp_runner_for_registry {
+                    YtDlpProcessRunnerAdapter::new(runner, executable.clone())
+                } else {
+                    YtDlpProcessRunnerAdapter::from_executable(executable.clone())
+                });
+                let extractor = Arc::new(YtDlpExtractor::new(adapter, executable));
+                registry.register(extractor);
+            } else {
+                registry.register(Arc::new(UnsupportedExtractor));
+            }
+            Arc::new(registry)
+        };
 
         Ok(Self {
             dispatcher: Arc::new(dispatcher),
@@ -937,6 +997,7 @@ impl EngineRuntime {
                 sftp: sftp_avail,
                 metalink: metalink_avail,
             },
+            media_registry,
         })
     }
 
