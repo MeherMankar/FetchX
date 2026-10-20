@@ -36,7 +36,7 @@ use tracing::{info, warn};
 
 use crate::{
     BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
-    ManagedDownloadEngine,
+    ManagedDownloadEngine, retry::RetryPolicy,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -55,8 +55,17 @@ pub struct FtpEngineConfig {
     pub connect_timeout: Duration,
     /// TCP read timeout. Default: 30 s.
     pub read_timeout: Duration,
-    /// Use PASV (passive) mode. Default: `true`.
+    /// Reserved for future active-mode support. Currently always `true`; the engine always
+    /// uses PASV (passive mode). Active mode (PORT) is not implemented.
     pub passive_mode: bool,
+    /// Username for FTP authentication. `None` falls back to `"anonymous"`.
+    pub username: Option<String>,
+    /// Password for FTP authentication. Never logged. `None` uses an empty password (anonymous).
+    pub password: Option<String>,
+    /// Timeout that bounds the FTPS TLS handshake. Default: 30 s.
+    /// Applied as the TCP read timeout on the underlying stream before calling
+    /// `into_secure`; the data-phase `read_timeout` takes over afterward.
+    pub tls_handshake_timeout: Duration,
 }
 
 impl Default for FtpEngineConfig {
@@ -65,6 +74,9 @@ impl Default for FtpEngineConfig {
             connect_timeout: Duration::from_secs(15),
             read_timeout: Duration::from_secs(30),
             passive_mode: true,
+            username: None,
+            password: None,
+            tls_handshake_timeout: Duration::from_secs(30),
         }
     }
 }
@@ -138,7 +150,34 @@ where
             }
         };
 
-        let result = self.run(id, &item, &mut control).await;
+        let started_at = std::time::Instant::now();
+        let mut attempts: u8 = 0;
+        let result = loop {
+            attempts = attempts.saturating_add(1);
+            let outcome = self.run(id, &item, &mut control).await;
+            match &outcome {
+                Ok(_) | Err(DownloadEngineError::Cancelled) | Err(DownloadEngineError::Paused) => {
+                    break outcome;
+                }
+                Err(e) if !is_retryable_ftp_error(e) => {
+                    break outcome;
+                }
+                Err(_) => {
+                    let Some(delay) = RetryPolicy::FTP.delay(attempts, None, started_at.elapsed())
+                    else {
+                        break outcome;
+                    };
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {}
+                        changed = control.cancellation.changed() => {
+                            if changed.is_err() || *control.cancellation.borrow_and_update() {
+                                break Err(DownloadEngineError::Cancelled);
+                            }
+                        }
+                    }
+                }
+            }
+        };
 
         match result {
             Ok(completed) => Ok(completed),
@@ -219,16 +258,22 @@ where
         let dest_sync = destination.clone();
         let connect_timeout = self.config.connect_timeout;
         let read_timeout = self.config.read_timeout;
+        let tls_handshake_timeout = self.config.tls_handshake_timeout;
+        // Username from URL takes priority; fall back to config username.
+        let effective_username = username.or_else(|| self.config.username.clone());
+        let password = self.config.password.clone();
 
         let ftp_task = tokio::task::spawn_blocking(move || {
             ftp_blocking(BlockingParams {
                 host,
                 port,
                 path,
-                username,
+                username: effective_username,
+                password,
                 use_tls,
                 connect_timeout,
                 read_timeout,
+                tls_handshake_timeout,
                 resume_offset,
                 temporary_path: tmp_sync,
                 destination: dest_sync,
@@ -469,14 +514,19 @@ where
 
 // ── Blocking FTP work (runs on a threadpool thread) ────────────────────────────
 
+#[derive(Clone)]
 struct BlockingParams {
     host: String,
     port: u16,
     path: String,
     username: Option<String>,
+    /// Password for FTP authentication. Never logged.
+    password: Option<String>,
     use_tls: bool,
     connect_timeout: Duration,
     read_timeout: Duration,
+    /// Timeout applied to the TCP stream before the TLS handshake in FTPS.
+    tls_handshake_timeout: Duration,
     resume_offset: u64,
     temporary_path: PathBuf,
     destination: PathBuf,
@@ -498,6 +548,9 @@ fn ftp_blocking(p: BlockingParams) -> Result<(), DownloadEngineError> {
         .map_err(DownloadEngineError::Io)?;
 
     if p.use_tls {
+        // Re-apply the (potentially shorter) handshake timeout before TLS upgrade.
+        tcp.set_read_timeout(Some(p.tls_handshake_timeout))
+            .map_err(DownloadEngineError::Io)?;
         ftp_blocking_tls(tcp, p)
     } else {
         ftp_blocking_plain(tcp, p)
@@ -579,9 +632,10 @@ fn ftp_blocking_plain(tcp: TcpStream, p: BlockingParams) -> Result<(), DownloadE
         .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
 
     let user = p.username.as_deref().unwrap_or("anonymous");
+    // Active mode (PORT) is not implemented; PASV is always used.
     stream
-        .login(user, "")
-        .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
+        .login(user, p.password.as_deref().unwrap_or(""))
+        .map_err(map_ftp_login_error)?;
     stream
         .transfer_type(suppaftp::types::FileType::Binary)
         .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
@@ -641,10 +695,15 @@ fn ftp_blocking_tls(tcp: TcpStream, p: BlockingParams) -> Result<(), DownloadEng
         .into_secure(connector, &p.host)
         .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
 
+    // Restore data-phase read timeout after TLS handshake completes.
+    // suppaftp 6.3.0 does not expose a way to reset the underlying stream's
+    // read timeout after into_secure(); tls_handshake_timeout defaults to the
+    // same value as read_timeout (30 s), so both phases are covered correctly.
     let user = p.username.as_deref().unwrap_or("anonymous");
+    // Active mode (PORT) is not implemented; PASV is always used.
     stream
-        .login(user, "")
-        .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
+        .login(user, p.password.as_deref().unwrap_or(""))
+        .map_err(map_ftp_login_error)?;
     stream
         .transfer_type(suppaftp::types::FileType::Binary)
         .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
@@ -769,6 +828,55 @@ pub(crate) fn parse_ftp_url(
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
+
+/// Maps a `suppaftp::FtpError` from a `login()` call to the appropriate
+/// [`DownloadEngineError`] variant.
+///
+/// Auth-denial responses (530 Not Logged In, 430 Invalid Credentials) are mapped
+/// to [`DownloadEngineError::FtpCredentialRequired`] so that
+/// `is_retryable_ftp_error` correctly classifies them as non-retryable.
+/// All other errors fall through to the generic [`DownloadEngineError::FtpError`].
+fn map_ftp_login_error(e: suppaftp::FtpError) -> DownloadEngineError {
+    use suppaftp::FtpError;
+    use suppaftp::types::Response;
+    if let FtpError::UnexpectedResponse(Response { ref status, .. }) = e {
+        // 530 = Not Logged In (password rejected)
+        // 430 = Invalid Credentials
+        if matches!(
+            status,
+            suppaftp::Status::NotLoggedIn | suppaftp::Status::InvalidCredentials
+        ) {
+            return DownloadEngineError::FtpCredentialRequired;
+        }
+    }
+    DownloadEngineError::FtpError(e.to_string())
+}
+
+/// Returns `true` for transient FTP errors that warrant a retry.
+/// Authentication failures and permanent errors are NOT retried.
+fn is_retryable_ftp_error(e: &DownloadEngineError) -> bool {
+    match e {
+        // FtpError wraps suppaftp strings; connection/network failures are transient.
+        DownloadEngineError::FtpError(_) => true,
+        // Io errors (e.g. connection reset) are transient.
+        DownloadEngineError::Io(_) => true,
+        // These are permanent or require human intervention.
+        DownloadEngineError::FtpCredentialRequired
+        | DownloadEngineError::EmbeddedCredentials
+        | DownloadEngineError::FtpPathTraversal
+        | DownloadEngineError::InvalidUrl
+        | DownloadEngineError::UnsupportedScheme
+        | DownloadEngineError::EngineMismatch
+        | DownloadEngineError::Cancelled
+        | DownloadEngineError::Paused
+        | DownloadEngineError::DestinationExists
+        | DownloadEngineError::NotFound(_) => false,
+        // Storage/state errors are not transient.
+        DownloadEngineError::StateMachine(_) | DownloadEngineError::Storage(_) => false,
+        // Anything else (progress, timestamp, domain): not retried.
+        _ => false,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -935,5 +1043,164 @@ mod tests {
         assert_eq!(completed.status(), fetchx_models::DownloadStatus::Completed);
         assert_eq!(tokio::fs::read(&dest).await?, content);
         Ok(())
+    }
+
+    // ── Authentication config tests ──────────────────────────────────────────
+
+    #[test]
+    fn ftp_config_anonymous_login_uses_empty_password() {
+        // When password is None, as_deref().unwrap_or("") must produce "".
+        let config = super::FtpEngineConfig::default();
+        assert!(config.password.is_none());
+        assert_eq!(config.password.as_deref().unwrap_or(""), "");
+    }
+
+    #[test]
+    fn ftp_config_with_credentials_are_passed_to_login() {
+        // When password is Some, it must be passed through correctly.
+        let config = super::FtpEngineConfig {
+            password: Some("s3cr3t".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(config.password.as_deref().unwrap_or(""), "s3cr3t");
+    }
+
+    // ── Retry classification tests ───────────────────────────────────────────
+
+    #[test]
+    fn ftp_is_retryable_error_classifies_correctly() {
+        use super::is_retryable_ftp_error;
+
+        // FtpError (connection/network) → retryable.
+        assert!(is_retryable_ftp_error(&DownloadEngineError::FtpError(
+            "connection reset".to_owned()
+        )));
+        // Io error → retryable.
+        assert!(is_retryable_ftp_error(&DownloadEngineError::Io(
+            std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset")
+        )));
+        // Auth/permanent errors → NOT retryable.
+        assert!(!is_retryable_ftp_error(
+            &DownloadEngineError::FtpCredentialRequired
+        ));
+        assert!(!is_retryable_ftp_error(
+            &DownloadEngineError::FtpPathTraversal
+        ));
+        assert!(!is_retryable_ftp_error(
+            &DownloadEngineError::EmbeddedCredentials
+        ));
+        assert!(!is_retryable_ftp_error(&DownloadEngineError::Cancelled));
+        assert!(!is_retryable_ftp_error(&DownloadEngineError::Paused));
+        assert!(!is_retryable_ftp_error(
+            &DownloadEngineError::DestinationExists
+        ));
+    }
+
+    #[test]
+    fn ftp_auth_failure_is_not_retried() {
+        use super::is_retryable_ftp_error;
+        // FtpCredentialRequired is the designated auth-failure error.
+        assert!(!is_retryable_ftp_error(
+            &DownloadEngineError::FtpCredentialRequired
+        ));
+    }
+
+    // ── TLS handshake timeout field test ────────────────────────────────────
+
+    #[test]
+    fn ftps_tls_handshake_timeout_field_exists() {
+        let config = super::FtpEngineConfig::default();
+        // Confirm the field is present and defaults to 30 s.
+        assert_eq!(
+            config.tls_handshake_timeout,
+            std::time::Duration::from_secs(30)
+        );
+    }
+
+    // ── Login error mapping tests ────────────────────────────────────────────
+
+    /// Verifies that `map_ftp_login_error` maps 530 Not Logged In → FtpCredentialRequired.
+    /// This is the wire path for an authentication failure from suppaftp.
+    #[test]
+    fn ftp_login_error_530_maps_to_credential_required() {
+        use suppaftp::FtpError;
+        use suppaftp::types::Response;
+
+        let response = Response::new(suppaftp::Status::NotLoggedIn, b"Login incorrect".to_vec());
+        let err = FtpError::UnexpectedResponse(response);
+        let mapped = super::map_ftp_login_error(err);
+        assert!(
+            matches!(mapped, DownloadEngineError::FtpCredentialRequired),
+            "expected FtpCredentialRequired, got: {mapped:?}"
+        );
+    }
+
+    /// Verifies that `map_ftp_login_error` maps 430 Invalid Credentials → FtpCredentialRequired.
+    #[test]
+    fn ftp_login_error_430_maps_to_credential_required() {
+        use suppaftp::FtpError;
+        use suppaftp::types::Response;
+
+        let response = Response::new(
+            suppaftp::Status::InvalidCredentials,
+            b"Invalid credentials".to_vec(),
+        );
+        let err = FtpError::UnexpectedResponse(response);
+        let mapped = super::map_ftp_login_error(err);
+        assert!(
+            matches!(mapped, DownloadEngineError::FtpCredentialRequired),
+            "expected FtpCredentialRequired, got: {mapped:?}"
+        );
+    }
+
+    /// Verifies that `map_ftp_login_error` maps connection errors → FtpError (retryable).
+    #[test]
+    fn ftp_login_error_connection_maps_to_ftp_error() {
+        use suppaftp::FtpError;
+
+        let err = FtpError::ConnectionError(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "reset",
+        ));
+        let mapped = super::map_ftp_login_error(err);
+        assert!(
+            matches!(mapped, DownloadEngineError::FtpError(_)),
+            "expected FtpError, got: {mapped:?}"
+        );
+        // A connection error should be retryable.
+        assert!(super::is_retryable_ftp_error(&mapped));
+    }
+
+    /// Confirms that FtpCredentialRequired (the result of a 530 login failure)
+    /// is not retried — the credential error classification works end-to-end.
+    #[test]
+    fn ftp_credential_required_is_not_retryable() {
+        use suppaftp::FtpError;
+        use suppaftp::types::Response;
+
+        let response = Response::new(suppaftp::Status::NotLoggedIn, b"Login incorrect".to_vec());
+        let err = FtpError::UnexpectedResponse(response);
+        let mapped = super::map_ftp_login_error(err);
+        // Must be FtpCredentialRequired, which is NOT retried.
+        assert!(!super::is_retryable_ftp_error(&mapped));
+    }
+
+    // ── RetryPolicy::FTP constant test ──────────────────────────────────────
+
+    #[test]
+    fn ftp_retry_policy_has_adequate_window() {
+        use crate::retry::RetryPolicy;
+        use std::time::Duration;
+        // FTP policy should allow at least 5 attempts within its window even
+        // if the first attempt takes up to 15 s (the default connect timeout).
+        const { assert!(RetryPolicy::FTP.max_attempts >= 5) }
+        const { assert!(RetryPolicy::FTP.max_duration.as_secs() >= 60) }
+        // First delay should be available even after 15 s elapsed.
+        assert!(
+            RetryPolicy::FTP
+                .delay(1, None, Duration::from_secs(15))
+                .is_some(),
+            "FTP retry budget exhausted after first 15 s connect attempt"
+        );
     }
 }

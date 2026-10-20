@@ -11,12 +11,20 @@
 //! - Paths containing `..` components are rejected with
 //!   [`DownloadEngineError::SftpError`].
 //!
-//! # Known limitations
-//! - Only password authentication is supported (username + empty password for
-//!   anonymous). SSH key authentication requires a credential store API and is
-//!   deferred to a future release.
-//! - Host key management is config-driven (no interactive prompt), which is
-//!   appropriate for automated/CLI use.
+//! # Authentication
+//! Both password and public-key (Ed25519/RSA) authentication are implemented.
+//! Authentication priority: private key → password → anonymous (empty password).
+//! Credentials are never logged.
+//!
+//! # Host key verification
+//! Two policies are available via [`KnownHostsPolicy`]:
+//! - [`KnownHostsPolicy::RequireConfigured`] (default): only hosts listed in
+//!   `SftpEngineConfig::known_hosts` are accepted. Unknown hosts return
+//!   [`DownloadEngineError::SftpUnknownHostKey`].
+//! - [`KnownHostsPolicy::AcceptAll`]: accepts any key (testing only; emits a warning).
+//!
+//! Host key management is config-driven (no interactive prompt), appropriate for
+//! automated/CLI use.
 //!
 //! # Host key format
 //! `SftpKnownHost::host_key_base64` is the standard base64 encoding of the raw
@@ -65,6 +73,20 @@ pub struct SftpKnownHost {
     pub host_key_base64: String,
 }
 
+/// Controls how the SFTP engine handles host key verification.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum KnownHostsPolicy {
+    /// Reject any host whose key is not in `SftpEngineConfig::known_hosts`.
+    /// This is the secure default for production use.
+    #[default]
+    RequireConfigured,
+    /// Accept any host key without verification.
+    ///
+    /// **Use for testing only.** This policy emits a `warn!` on every connection
+    /// and must never be used in production.
+    AcceptAll,
+}
+
 /// Configuration for the SFTP engine.
 #[derive(Clone, Debug)]
 pub struct SftpEngineConfig {
@@ -73,8 +95,11 @@ pub struct SftpEngineConfig {
     /// Known hosts for host key verification.
     ///
     /// An empty list causes every connection attempt to fail with
-    /// [`DownloadEngineError::SftpUnknownHostKey`].
+    /// [`DownloadEngineError::SftpUnknownHostKey`] when using
+    /// [`KnownHostsPolicy::RequireConfigured`].
     pub known_hosts: Vec<SftpKnownHost>,
+    /// Host key verification policy. Default: [`KnownHostsPolicy::RequireConfigured`].
+    pub known_hosts_policy: KnownHostsPolicy,
     /// Password for password-based SSH authentication. If `None`, anonymous/empty-password is used.
     pub password: Option<String>,
     /// PEM-encoded private key for public-key authentication (ed25519 or RSA). If `Some`, tried before password.
@@ -88,6 +113,7 @@ impl Default for SftpEngineConfig {
         Self {
             connect_timeout: Duration::from_secs(15),
             known_hosts: Vec::new(),
+            known_hosts_policy: KnownHostsPolicy::default(),
             password: None,
             private_key_pem: None,
             private_key_passphrase: None,
@@ -206,16 +232,27 @@ where
 
         let (host, port, path, username) = parse_sftp_url(&url_str)?;
 
-        // Host key pre-check: find the expected key before connecting.
-        // Unknown hosts are rejected here — we never silently accept.
-        let expected_key_b64 = self
-            .config
-            .known_hosts
-            .iter()
-            .find(|entry| entry.host == host)
-            .ok_or_else(|| DownloadEngineError::SftpUnknownHostKey { host: host.clone() })?
-            .host_key_base64
-            .clone();
+        // Host key pre-check: resolve expected key based on policy.
+        // Unknown hosts are rejected here with RequireConfigured — we never silently accept.
+        let expected_key_b64: Option<String> = match self.config.known_hosts_policy {
+            KnownHostsPolicy::AcceptAll => {
+                warn!(
+                    host = %host,
+                    "SFTP host key verification is disabled (KnownHostsPolicy::AcceptAll). \
+                     This must not be used in production."
+                );
+                None
+            }
+            KnownHostsPolicy::RequireConfigured => Some(
+                self.config
+                    .known_hosts
+                    .iter()
+                    .find(|entry| entry.host == host)
+                    .ok_or_else(|| DownloadEngineError::SftpUnknownHostKey { host: host.clone() })?
+                    .host_key_base64
+                    .clone(),
+            ),
+        };
 
         let resume_offset: u64 = std::fs::metadata(&tmp)
             .ok()
@@ -596,7 +633,9 @@ where
 /// Mismatches cause the connection to fail immediately.
 struct SftpClientHandler {
     /// Base64 (standard alphabet) of the expected host key wire bytes.
-    expected_key_base64: String,
+    /// `None` when policy is [`KnownHostsPolicy::AcceptAll`]; `Some(b64)` when
+    /// policy is [`KnownHostsPolicy::RequireConfigured`].
+    expected_key_base64: Option<String>,
 }
 
 impl client::Handler for SftpClientHandler {
@@ -608,23 +647,31 @@ impl client::Handler for SftpClientHandler {
     ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         let expected = self.expected_key_base64.clone();
         async move {
-            // Extract the public key bytes from the received key.
-            let key_bytes: Vec<u8> = match server_public_key {
-                PublicKeyOrCertificate::PublicKey { key, .. } => key
-                    .to_bytes()
-                    .map_err(|e| DownloadSftpError(format!("key encoding failed: {e}")))?,
-                PublicKeyOrCertificate::Certificate(cert) => cert
-                    .to_bytes()
-                    .map_err(|e| DownloadSftpError(format!("cert encoding failed: {e}")))?,
-            };
+            match expected {
+                None => {
+                    // AcceptAll policy — key already warned at connection setup.
+                    Ok(true)
+                }
+                Some(expected_b64) => {
+                    // Extract the public key bytes from the received key.
+                    let key_bytes: Vec<u8> = match server_public_key {
+                        PublicKeyOrCertificate::PublicKey { key, .. } => key
+                            .to_bytes()
+                            .map_err(|e| DownloadSftpError(format!("key encoding failed: {e}")))?,
+                        PublicKeyOrCertificate::Certificate(cert) => cert
+                            .to_bytes()
+                            .map_err(|e| DownloadSftpError(format!("cert encoding failed: {e}")))?,
+                    };
 
-            let received_b64 = base64::engine::general_purpose::STANDARD.encode(&key_bytes);
-            if received_b64 == expected {
-                Ok(true)
-            } else {
-                Err(DownloadSftpError(
-                    "server host key does not match known_hosts".to_owned(),
-                ))
+                    let received_b64 = base64::engine::general_purpose::STANDARD.encode(&key_bytes);
+                    if received_b64 == expected_b64 {
+                        Ok(true)
+                    } else {
+                        Err(DownloadSftpError(
+                            "server host key does not match known_hosts".to_owned(),
+                        ))
+                    }
+                }
             }
         }
     }
@@ -960,5 +1007,144 @@ mod tests {
                 // A real integration test would use a known-good generated key.
             }
         }
+    }
+
+    // ── KnownHostsPolicy tests ───────────────────────────────────────────────
+
+    #[test]
+    fn sftp_accept_all_policy_skips_host_verification() {
+        // AcceptAll config: known_hosts is empty but policy allows any key.
+        let config = SftpEngineConfig {
+            known_hosts_policy: super::KnownHostsPolicy::AcceptAll,
+            ..Default::default()
+        };
+        // No known_hosts entry — with AcceptAll this should NOT produce SftpUnknownHostKey.
+        // (Full network test deferred to integration; this verifies the config shape.)
+        assert!(config.known_hosts.is_empty());
+        assert_eq!(
+            config.known_hosts_policy,
+            super::KnownHostsPolicy::AcceptAll
+        );
+    }
+
+    #[test]
+    fn sftp_require_configured_policy_rejects_unknown() {
+        // RequireConfigured with empty known_hosts → SftpUnknownHostKey at the pre-check.
+        // Tested via the existing sftp_unknown_host_rejected test (which uses the default
+        // policy). This test validates the policy enum value explicitly.
+        let config = SftpEngineConfig::default();
+        assert_eq!(
+            config.known_hosts_policy,
+            super::KnownHostsPolicy::RequireConfigured
+        );
+        // The existing sftp_unknown_host_rejected async test covers the runtime path.
+    }
+
+    #[test]
+    fn sftp_require_configured_policy_accepts_known() {
+        // When a matching known_hosts entry is present, no error is produced at the
+        // pre-check stage (the actual handler comparison is tested separately).
+        let config = SftpEngineConfig {
+            known_hosts: vec![SftpKnownHost {
+                host: "server.test".to_owned(),
+                host_key_base64: "dGVzdA==".to_owned(), // base64("test")
+            }],
+            known_hosts_policy: super::KnownHostsPolicy::RequireConfigured,
+            ..Default::default()
+        };
+        let found = config.known_hosts.iter().any(|e| e.host == "server.test");
+        assert!(found);
+    }
+
+    // ── check_server_key handler unit tests ─────────────────────────────────
+
+    // Inline Ed25519 OpenSSH PEM — same key as used in sftp_key_parses_test_ed25519_pem.
+    const CHECK_KEY_PEM: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\n\
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZWQy\n\
+        NTUxOQAAACBY2a1x7ULrxFiLG3QPJHME2HVRqm9XWQZ7hMilJFToUgAAAJBrVDi7a1Q4\n\
+        uwAAAAtzc2gtZWQyNTUxOQAAACBY2a1x7ULrxFiLG3QPJHME2HVRqm9XWQZ7hMilJFTo\n\
+        UgAAAECFnGF2rM4JNaY1wIqh1G1Y0RwnEXR9r3EMBxVjJFBlEFjZrXHtQuvEWIsbdA8k\n\
+        cwTYdVGqb1dZBnuEyKUkVOhSAAAAEHRlc3RAZXhhbXBsZS5jb20BAgMEBQ==\n\
+        -----END OPENSSH PRIVATE KEY-----\n";
+
+    /// `AcceptAll` policy: `check_server_key` returns `Ok(true)` for any key.
+    #[tokio::test]
+    async fn sftp_check_server_key_accept_all_returns_true() {
+        use russh::client::Handler as _;
+        use russh::keys::PublicKeyOrCertificate;
+
+        let key_pair = match russh::keys::decode_secret_key(CHECK_KEY_PEM, None) {
+            Ok(k) => k,
+            Err(_) => return, // skip if PEM decode unsupported on this platform
+        };
+        let public_key = key_pair.public_key().clone();
+        let pkoc = PublicKeyOrCertificate::from(public_key);
+
+        let mut handler = super::SftpClientHandler {
+            expected_key_base64: None, // AcceptAll
+        };
+
+        let result = handler.check_server_key(&pkoc).await;
+        assert!(
+            matches!(result, Ok(true)),
+            "AcceptAll should return Ok(true), got: {result:?}"
+        );
+    }
+
+    /// `RequireConfigured` policy: matching key → `Ok(true)`.
+    #[tokio::test]
+    async fn sftp_check_server_key_matching_key_accepted() {
+        use base64::Engine as _;
+        use russh::client::Handler as _;
+        use russh::keys::PublicKeyOrCertificate;
+
+        let key_pair = match russh::keys::decode_secret_key(CHECK_KEY_PEM, None) {
+            Ok(k) => k,
+            Err(_) => return,
+        };
+        let public_key = key_pair.public_key().clone();
+
+        // Derive expected_key_base64 the same way run() derives it: to_bytes() + base64.
+        let key_bytes = match public_key.to_bytes() {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let expected_b64 = base64::engine::general_purpose::STANDARD.encode(&key_bytes);
+
+        let pkoc = PublicKeyOrCertificate::from(public_key);
+        let mut handler = super::SftpClientHandler {
+            expected_key_base64: Some(expected_b64),
+        };
+
+        let result = handler.check_server_key(&pkoc).await;
+        assert!(
+            matches!(result, Ok(true)),
+            "Matching key should be accepted, got: {result:?}"
+        );
+    }
+
+    /// `RequireConfigured` policy: mismatched key → `Err(...)`.
+    #[tokio::test]
+    async fn sftp_check_server_key_mismatched_key_rejected() {
+        use russh::client::Handler as _;
+        use russh::keys::PublicKeyOrCertificate;
+
+        let key_pair = match russh::keys::decode_secret_key(CHECK_KEY_PEM, None) {
+            Ok(k) => k,
+            Err(_) => return,
+        };
+        let public_key = key_pair.public_key().clone();
+        let pkoc = PublicKeyOrCertificate::from(public_key);
+
+        let mut handler = super::SftpClientHandler {
+            // Use a clearly wrong base64 value — this will never match a real key.
+            expected_key_base64: Some("dGhpc2lzd3Jvbmc=".to_owned()), // base64("thisiswrong")
+        };
+
+        let result = handler.check_server_key(&pkoc).await;
+        assert!(
+            result.is_err(),
+            "Mismatched key should be rejected, got: {result:?}"
+        );
     }
 }

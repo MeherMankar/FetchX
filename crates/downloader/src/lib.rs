@@ -38,7 +38,7 @@ pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 pub use http::{DirectHttpEngine, HttpEngineConfig, validate_http_source_url};
 pub use metalink::{MetalinkEngine, MetalinkFile, MetalinkMirror};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
-pub use sftp::{SftpEngine, SftpEngineConfig, SftpKnownHost};
+pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
 pub use supervisor::{
     Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,
     Aria2SupervisorState, ProcessExit, SupervisedProcess,

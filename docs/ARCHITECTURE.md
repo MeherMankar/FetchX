@@ -79,14 +79,20 @@ Phase 10 schedules are one-shot only. Recurrence, cron syntax, calendar rules, a
 bandwidth windows are not implemented.
 
 The `downloader` crate provides a `DirectHttpEngine` using Reqwest and Tokio file I/O
-for single-stream and adaptive segmented transfers. It accepts only HTTP/HTTPS URLs
-without embedded credentials, follows
-at most ten HTTP(S) redirects without HTTPS downgrade, and uses connect/read timeouts.
-For single-stream transfers, response chunks stream into a sibling `.part` file.
-Progress checkpoints are persisted by byte/time thresholds through status- and
-timestamp-conditional repository updates. If a regular `.part` file already exists and
-is non-empty, the engine sends `Range: bytes=N-`, where `N` is the file's current size,
-not the database progress value.
+for single-stream and adaptive segmented transfers. It downloads an explicitly supplied
+URL; it does not crawl pages or discover candidate URLs. It accepts only HTTP/HTTPS
+URLs without embedded credentials, follows at most ten HTTP(S) redirects without
+HTTPS downgrade, and uses connect/read timeouts. For single-stream transfers, response
+chunks stream into a sibling `.part` file. Progress checkpoints are persisted by
+byte/time thresholds through status- and timestamp-conditional repository updates.
+
+Resume metadata is stored beside the partial as `.part.meta`, including the original
+URL and a response validator (a strong ETag when available, otherwise Last-Modified).
+An existing non-empty `.part` is resumed only when that metadata matches the requested
+URL and includes a validator; the engine then sends `Range: bytes=N-` and `If-Range`,
+where `N` is the partial file's actual size, not the database progress value. Without
+matching resume metadata, the engine starts a fresh transfer rather than appending
+unverified bytes.
 
 The engine appends only after a `206 Partial Content` response has a valid
 `Content-Range` whose start matches `N`, whose end is not before the start, and whose
@@ -101,20 +107,22 @@ Cancellation and transfer failures preserve the `.part` file for a later invocat
 Queued, failed, cancelled, and paused downloads can be started again through the
 existing state machine; failed/cancelled items transition back to preparing. Progress
 is reconciled from the actual partial-file size before requesting bytes, and resumed
-progress counts the existing prefix only once. The engine does not persist ETag or
-Last-Modified validators. A stale partial may therefore belong to an older version of
-the resource (including after a redirect); resume validates byte-range arithmetic but
-cannot prove representation identity. Startup reconciliation is not implemented.
-Range responses reached through a redirect to a different effective URL are rejected
-rather than appended because no persisted redirect target is available for comparison.
-Parent directories are not created automatically.
+progress counts the existing prefix only once. A resumed response is appended only
+when its range starts at the local size, its validator still matches, and its effective
+URL has not changed through a redirect. A `200 OK` to a range request restarts from
+zero; an incomplete `416 Range Not Satisfiable` fails without modifying the partial.
+The sidecar also records finalization state and expected size so a later invocation can
+recover a complete temporary file after a crash during publication. Startup-wide
+reconciliation is not implemented. Parent directories are not created automatically.
 
 For a fresh download, if the initial response advertises `Accept-Ranges: bytes`, has a
-known size of at least 4 MiB, and is not redirected, the engine plans up to eight
-inclusive byte ranges and initially starts four workers. `HttpEngineConfig::segment_count`
-sets the number of planned ranges (bounded to 2—16); the adaptive controller independently
-limits active requests to at most eight. Each response's status, final URL, Content-Range,
-total size, body length, and local segment size are validated before bytes are accepted.
+known size at least `minimum_segmented_file_size` (4 MiB by default), and is not
+redirected, the engine plans inclusive byte ranges and initially starts four workers.
+`HttpEngineConfig::segment_count` sets the number of planned ranges (2—32; eight by
+default); the adaptive controller independently limits active requests according to
+its configured maximum (eight by default, at most 32). Each response's status, final
+URL, Content-Range, total size, body length, and local segment size are validated before
+bytes are accepted.
 If a segment endpoint ignores Range or returns unusable range metadata, the engine
 discards segment artifacts and falls back to a fresh single-stream request. Unknown-size,
 small, redirected, or non-range responses use single-stream downloading immediately.
@@ -123,17 +131,17 @@ The scheduler keeps pending ranges separate from active workers. It launches wor
 up to the controller's current target, so a decrease stops assigning new ranges without
 terminating healthy requests already in flight. Cancellation prevents further scheduling,
 signals existing workers through the Phase 7 mechanism, joins them, and preserves useful
-segment files. Workers receive at most three attempts total; repeated failures feed the
+segment files. Workers receive at most four attempts total; repeated failures feed the
 controller, while exhausted failures remain visible as download errors.
 
 Segments write to separate sibling temporary files identified by segment count, total
-size, and index. Existing four-range Phase 7 segment files are detected and resumed using
-their original byte ranges. Global progress is the sum of actual local segment-file
-lengths and is periodically persisted; per-segment state and adaptive telemetry are not
-stored in SQLite. After all ranges complete, every segment's exact length and the
-contiguous assembly size are checked. Segments are copied in index order into `.part`,
-flushed and synced, then published with the same no-overwrite hard-link operation.
-Completed segment temporary files are removed before publication.
+size, and index. Existing segment files are resumed using their original byte ranges
+only when the saved URL and response validator match. Global progress is the sum of
+actual local segment-file lengths and is periodically persisted; per-segment state and
+adaptive telemetry are not stored in SQLite. After all ranges complete, every segment's
+exact length and the contiguous assembly size are checked. Segments are copied in index
+order into `.part`, flushed and synced, then published with the same no-overwrite
+hard-link operation. Completed segment temporary files are removed before publication.
 
 `AdaptiveConfig` defaults to minimum/initial/maximum concurrency of 1/4/8 and validates
 that all bounds, thresholds, and sampling intervals are usable. The hard maximum is
@@ -151,13 +159,13 @@ HTTP range semantics. After an unproductive probe or throughput regression, anot
 upward probe is held until measured throughput improves by the configured threshold.
 The measurement window must be at least 10 ms; zero-byte windows are ignored.
 
-The engine does not persist ETag or Last-Modified validators. Segment temp files are
-keyed by destination, count, size, and index—not by remote representation—so a stale
-segment can theoretically be reused if a resource changes without changing its length.
-Startup reconciliation is not implemented. Adaptive concurrency cannot overcome
-server-side or network bandwidth limits; the engine does not attempt to bypass server
-throttling or access controls. It does not parse or wait for `Retry-After`; 429 responses
-and 503 responses carrying that header are not retried automatically. Downloads remain
+Resume and segment reuse rely on the server's strong ETag or Last-Modified validator;
+they cannot prove representation identity if a server reuses a validator for changed
+content. Startup-wide reconciliation is not implemented. Transient connection errors
+and HTTP 408, 425, 429, and 5xx responses are retried within a four-attempt, 30-second
+budget; a valid `Retry-After` value is honored when it fits that budget. Adaptive
+concurrency cannot overcome server-side or network bandwidth limits, and the engine
+does not attempt to bypass server throttling or access controls. Downloads remain
 single-source, with no dynamic segment sizing. Filesystem publication and database
 completion are separate operations, so a crash between them can leave a published file
 whose persisted state is not yet `Completed`.

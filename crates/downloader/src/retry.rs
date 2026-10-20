@@ -16,6 +16,20 @@ impl RetryPolicy {
         max_backoff: Duration::from_secs(8),
     };
 
+    /// Retry policy tuned for stateful FTP/FTPS connections.
+    ///
+    /// FTP uses a persistent TCP control connection; a single connect timeout of
+    /// 15 s can consume half of an HTTP-tuned 30 s window, leaving at most one
+    /// useful retry attempt.  This policy uses a 120 s window and 5 attempts to
+    /// give slow or intermittently reachable FTP servers a realistic chance to
+    /// recover before the budget is exhausted.
+    pub(crate) const FTP: Self = Self {
+        max_attempts: 5,
+        max_duration: Duration::from_secs(120),
+        initial_backoff: Duration::from_millis(500),
+        max_backoff: Duration::from_secs(16),
+    };
+
     pub(crate) fn delay(
         self,
         failed_attempt: u8,

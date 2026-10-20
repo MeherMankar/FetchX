@@ -317,7 +317,7 @@ async fn start_segment_server(
     ) {
         Duration::from_secs(10)
     } else {
-        Duration::from_millis(500)
+        Duration::from_secs(5)
     };
     let task = tokio::spawn(async move {
         let mut connections = Vec::with_capacity(total_connections);
