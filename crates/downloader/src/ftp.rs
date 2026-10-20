@@ -273,13 +273,14 @@ where
                 msg = progress_rx.recv() => {
                     match msg {
                         Some((new_dl, new_total)) => {
+                            let chunk_bytes = new_dl.saturating_sub(downloaded);
                             downloaded = new_dl;
                             if new_total.is_some() {
                                 total_bytes = new_total;
                             }
 
                             let _ = bandwidth.acquire(
-                                CHUNK_SIZE as u64,
+                                chunk_bytes,
                                 control.cancellation.clone(),
                                 control.pause.clone(),
                             ).await;
