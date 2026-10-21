@@ -19,6 +19,7 @@ uniffi-cli = ["uniffi/cli"]
 fetchx-core-services = { path = "../core-services" }
 fetchx-core          = { path = "../core" }
 fetchx-downloader    = { path = "../downloader" }
+fetchx-media-extractor = { path = "../media-extractor" }
 fetchx-models        = { path = "../models" }
 fetchx-queue         = { path = "../queue" }
 fetchx-scheduler     = { path = "../scheduler" }

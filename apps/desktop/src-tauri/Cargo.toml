@@ -13,6 +13,7 @@ fetchx-browser-protocol = { path = "../../../crates/browser-protocol" }
 fetchx-core-services = { path = "../../../crates/core-services" }
 fetchx-core = { path = "../../../crates/core" }
 fetchx-downloader = { path = "../../../crates/downloader" }
+fetchx-media-extractor = { path = "../../../crates/media-extractor" }
 fetchx-models = { path = "../../../crates/models" }
 fetchx-queue = { path = "../../../crates/queue" }
 fetchx-scheduler = { path = "../../../crates/scheduler" }

@@ -860,3 +860,271 @@ async fn test_full_pipeline_extracted_ssrf_url_dropped() {
         "expected NoFormats, got {err:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FormatSelector regression: every FormatPreference variant is deterministic
+// ---------------------------------------------------------------------------
+
+/// Local helper mirroring `make_format` in `format_selector::tests`, since that
+/// helper is private to its own test module.
+fn regression_format(
+    id: &str,
+    bitrate: Option<u64>,
+    height: Option<u32>,
+    video_codec: Option<&str>,
+    audio_codec: Option<&str>,
+) -> MediaFormat {
+    MediaFormat {
+        id: id.to_owned(),
+        ext: "mp4".to_owned(),
+        protocol: MediaProtocol::Http,
+        url: format!("https://cdn.example.com/{id}.mp4"),
+        label: id.to_owned(),
+        video_codec: video_codec.map(str::to_owned),
+        audio_codec: audio_codec.map(str::to_owned),
+        width: height.map(|h| h * 16 / 9),
+        height,
+        fps: None,
+        bitrate,
+        filesize: None,
+        required_headers: vec![],
+    }
+}
+
+#[test]
+fn test_format_selector_all_criteria_regression() {
+    use crate::format_selector::{FormatPreference, select_format};
+
+    // A mixed format list exercising every selection path:
+    //   - two combined AV formats (different bitrates)
+    //   - one video-only format (highest bitrate)
+    //   - two audio-only formats (different bitrates)
+    //   - a malformed format with no bitrate
+    let formats = vec![
+        regression_format(
+            "av-low",
+            Some(1_000_000),
+            Some(480),
+            Some("avc1"),
+            Some("mp4a"),
+        ),
+        regression_format(
+            "av-high",
+            Some(3_000_000),
+            Some(720),
+            Some("avc1"),
+            Some("mp4a"),
+        ),
+        regression_format("vo-best", Some(5_000_000), Some(1080), Some("avc1"), None),
+        regression_format("ao-128", Some(128_000), None, None, Some("mp4a")),
+        regression_format("ao-256", Some(256_000), None, None, Some("opus")),
+        // Malformed: no bitrate, no codecs — must not crash selection.
+        regression_format("malformed", None, None, None, None),
+    ];
+
+    // BestCombined → highest-bitrate combined AV format (av-high).
+    let selected =
+        select_format(&formats, &FormatPreference::BestCombined).expect("BestCombined finds");
+    assert_eq!(selected.id, "av-high");
+
+    // BestVideo → video-only format with the highest bitrate (vo-best).
+    let selected = select_format(&formats, &FormatPreference::BestVideo).expect("BestVideo finds");
+    assert_eq!(selected.id, "vo-best");
+
+    // BestAudio → audio-only format with the highest bitrate (ao-256).
+    let selected = select_format(&formats, &FormatPreference::BestAudio).expect("BestAudio finds");
+    assert_eq!(selected.id, "ao-256");
+
+    // FormatId → exact match (av-high).
+    let selected = select_format(&formats, &FormatPreference::FormatId("av-high".to_owned()))
+        .expect("FormatId finds");
+    assert_eq!(selected.id, "av-high");
+
+    // FormatId → missing id returns None.
+    assert!(select_format(&formats, &FormatPreference::FormatId("nope".to_owned())).is_none());
+
+    // MaxHeight(480) → highest format at or below 480p (av-low).
+    let selected =
+        select_format(&formats, &FormatPreference::MaxHeight(480)).expect("MaxHeight finds");
+    assert_eq!(selected.id, "av-low");
+
+    // MaxHeight(720) → av-high is the highest at or below 720p.
+    let selected =
+        select_format(&formats, &FormatPreference::MaxHeight(720)).expect("MaxHeight finds");
+    assert_eq!(selected.id, "av-high");
+}
+
+#[test]
+fn test_format_selector_malformed_no_bitrate_returns_last() {
+    // When every format lacks a bitrate, the selector falls back to the
+    // yt-dlp convention of "best last".
+    use crate::format_selector::{FormatPreference, select_format};
+
+    let formats = vec![
+        regression_format("first", None, Some(480), Some("avc1"), Some("mp4a")),
+        regression_format("second", None, Some(720), Some("avc1"), Some("mp4a")),
+        regression_format("last", None, Some(1080), Some("avc1"), Some("mp4a")),
+    ];
+
+    let selected =
+        select_format(&formats, &FormatPreference::BestCombined).expect("should find a format");
+    assert_eq!(selected.id, "last");
+}
+
+// ---------------------------------------------------------------------------
+// Registry boundary: per-format sanitisation runs regardless of extractor
+// ---------------------------------------------------------------------------
+
+/// A mock extractor that returns a [`MediaInfo`] containing both a safe and an
+/// unsafe (private-IP) format URL, plus a blocked header on the safe format.
+/// It performs **no** inline sanitisation, so any protection must come from the
+/// registry boundary. Proves the registry enforces per-format safety even when
+/// the extractor does not.
+struct UnsafeFormatExtractor;
+
+#[async_trait]
+impl MediaExtractor for UnsafeFormatExtractor {
+    fn can_handle(&self, url: &str) -> bool {
+        url.starts_with("https://")
+    }
+
+    async fn extract(
+        &self,
+        url: &str,
+        _opts: &ExtractOptions,
+    ) -> Result<MediaInfo, ExtractionError> {
+        Ok(MediaInfo {
+            title: "unsafe-mock".to_owned(),
+            duration: None,
+            thumbnail_url: None,
+            webpage_url: url.to_owned(),
+            extractor_name: "unsafe-mock".to_owned(),
+            formats: vec![
+                MediaFormat {
+                    id: "safe".to_owned(),
+                    ext: "mp4".to_owned(),
+                    protocol: MediaProtocol::Http,
+                    url: "https://cdn.example.com/safe.mp4".to_owned(),
+                    label: "safe".to_owned(),
+                    video_codec: None,
+                    audio_codec: None,
+                    width: None,
+                    height: None,
+                    fps: None,
+                    bitrate: None,
+                    filesize: None,
+                    required_headers: vec![
+                        ("Authorization".to_owned(), "Bearer leak".to_owned()),
+                        ("User-Agent".to_owned(), "FetchX".to_owned()),
+                    ],
+                },
+                MediaFormat {
+                    id: "private".to_owned(),
+                    ext: "mp4".to_owned(),
+                    protocol: MediaProtocol::Http,
+                    url: "https://192.168.1.1/private.mp4".to_owned(),
+                    label: "private".to_owned(),
+                    video_codec: None,
+                    audio_codec: None,
+                    width: None,
+                    height: None,
+                    fps: None,
+                    bitrate: None,
+                    filesize: None,
+                    required_headers: vec![],
+                },
+            ],
+        })
+    }
+}
+
+/// A mock extractor that returns only unsafe (private-IP) format URLs with no
+/// inline sanitisation. Proves the registry reports [`ExtractionError::NoFormats`]
+/// when its boundary sanitisation empties the format list.
+struct OnlyUnsafeFormatExtractor;
+
+#[async_trait]
+impl MediaExtractor for OnlyUnsafeFormatExtractor {
+    fn can_handle(&self, url: &str) -> bool {
+        url.starts_with("https://")
+    }
+
+    async fn extract(
+        &self,
+        url: &str,
+        _opts: &ExtractOptions,
+    ) -> Result<MediaInfo, ExtractionError> {
+        Ok(MediaInfo {
+            title: "only-unsafe-mock".to_owned(),
+            duration: None,
+            thumbnail_url: None,
+            webpage_url: url.to_owned(),
+            extractor_name: "only-unsafe-mock".to_owned(),
+            formats: vec![MediaFormat {
+                id: "private".to_owned(),
+                ext: "mp4".to_owned(),
+                protocol: MediaProtocol::Http,
+                url: "https://10.0.0.1/private.mp4".to_owned(),
+                label: "private".to_owned(),
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: None,
+                fps: None,
+                bitrate: None,
+                filesize: None,
+                required_headers: vec![],
+            }],
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_registry_drops_unsafe_per_format_urls_from_non_ytdlp_extractor() {
+    let mut registry = ExtractorRegistry::new();
+    registry.register(Arc::new(UnsafeFormatExtractor));
+
+    let info = registry
+        .extract("https://example.com/watch", ExtractOptions::default())
+        .await
+        .expect("extraction should succeed with safe formats retained");
+
+    // The private-IP format must be dropped; only the safe format remains.
+    assert_eq!(
+        info.formats.len(),
+        1,
+        "unsafe per-format URL must be dropped"
+    );
+    assert_eq!(info.formats[0].id, "safe");
+    // The blocked Authorization header must be stripped at the registry boundary.
+    assert!(
+        info.formats[0]
+            .required_headers
+            .iter()
+            .all(|(k, _)| !k.eq_ignore_ascii_case("authorization")),
+        "Authorization must be stripped by registry sanitisation"
+    );
+    assert!(
+        info.formats[0]
+            .required_headers
+            .iter()
+            .any(|(k, _)| k == "User-Agent"),
+        "User-Agent must survive registry sanitisation"
+    );
+}
+
+#[tokio::test]
+async fn test_registry_returns_no_formats_when_only_unsafe_urls_remain() {
+    let mut registry = ExtractorRegistry::new();
+    registry.register(Arc::new(OnlyUnsafeFormatExtractor));
+
+    let err = registry
+        .extract("https://example.com/watch", ExtractOptions::default())
+        .await
+        .expect_err("should fail with NoFormats");
+
+    assert!(
+        matches!(err, ExtractionError::NoFormats),
+        "expected NoFormats after registry sanitisation, got {err:?}"
+    );
+}

@@ -5,7 +5,8 @@ use std::{
 
 use fetchx_core::StateMachineError;
 use fetchx_core_services::{ConfigService, CoreRepository, CoreServices, EngineRuntime};
-use fetchx_downloader::{YtDlpFormat, validate_http_source_url};
+use fetchx_downloader::validate_http_source_url;
+use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
     EngineKind, FileName, Timestamp, parse_magnet_uri,
@@ -198,16 +199,15 @@ impl AppState {
         self.get(id).await
     }
 
-    async fn discover_ytdlp_formats(&self, source_url: &str) -> Result<Vec<YtDlpFormat>, IpcError> {
-        let canonical_url =
-            validate_http_source_url(source_url).map_err(|_| IpcError::invalid_request())?;
-        if !self.engine_runtime.is_available(EngineKind::YtDlp) {
-            return Err(IpcError::engine_unavailable(EngineKind::YtDlp));
-        }
-        self.engine_runtime
-            .dispatcher
-            .discover_ytdlp_formats(&canonical_url)
+    async fn extract_media_formats(&self, source_url: &str) -> Result<MediaInfoDto, IpcError> {
+        let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+        core_services
+            .extract_media(
+                source_url,
+                fetchx_media_extractor::ExtractOptions::default(),
+            )
             .await
+            .map(media_info_to_dto)
             .map_err(|_| IpcError::internal())
     }
 
@@ -511,6 +511,34 @@ pub struct DownloadErrorDto {
     pub message: String,
 }
 
+/// A single downloadable format, derived from [`fetchx_media_extractor::MediaFormat`].
+#[derive(Clone, Debug, Serialize)]
+pub struct MediaFormatDto {
+    pub format_id: String,
+    pub label: String,
+    pub ext: String,
+    pub protocol: String,
+    pub url: String,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fps: Option<f64>,
+    pub bitrate: Option<u64>,
+    pub filesize: Option<u64>,
+}
+
+/// Structured media information returned by the unified extraction pipeline.
+#[derive(Clone, Debug, Serialize)]
+pub struct MediaInfoDto {
+    pub title: String,
+    pub duration: Option<f64>,
+    pub thumbnail_url: Option<String>,
+    pub webpage_url: String,
+    pub extractor_name: String,
+    pub formats: Vec<MediaFormatDto>,
+}
+
 /// Transfer object for a persisted one-shot schedule.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ScheduleDto {
@@ -770,12 +798,48 @@ fn extension_is_safe(extension: Option<&str>) -> bool {
     })
 }
 
+/// Maps a [`fetchx_media_extractor::MediaInfo`] to the Tauri IPC [`MediaInfoDto`].
+fn media_info_to_dto(info: fetchx_media_extractor::MediaInfo) -> MediaInfoDto {
+    MediaInfoDto {
+        title: info.title,
+        duration: info.duration,
+        thumbnail_url: info.thumbnail_url,
+        webpage_url: info.webpage_url,
+        extractor_name: info.extractor_name,
+        formats: info
+            .formats
+            .into_iter()
+            .map(|f| MediaFormatDto {
+                format_id: f.id,
+                label: f.label,
+                ext: f.ext,
+                protocol: match f.protocol {
+                    MediaProtocol::Http => "http".to_owned(),
+                    MediaProtocol::Hls => "hls".to_owned(),
+                    MediaProtocol::Dash => "dash".to_owned(),
+                    MediaProtocol::YtDlp => "ytdlp".to_owned(),
+                    MediaProtocol::Other(s) => s,
+                    _ => "other".to_owned(),
+                },
+                url: f.url,
+                video_codec: f.video_codec,
+                audio_codec: f.audio_codec,
+                width: f.width,
+                height: f.height,
+                fps: f.fps,
+                bitrate: f.bitrate,
+                filesize: f.filesize,
+            })
+            .collect(),
+    }
+}
+
 #[tauri::command(rename_all = "snake_case")]
-pub async fn discover_ytdlp_formats(
+pub async fn extract_media_formats(
     state: State<'_, AppState>,
     url: String,
-) -> Result<Vec<YtDlpFormat>, IpcError> {
-    state.discover_ytdlp_formats(&url).await
+) -> Result<MediaInfoDto, IpcError> {
+    state.extract_media_formats(&url).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

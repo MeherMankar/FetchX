@@ -42,7 +42,14 @@ impl ExtractorRegistry {
 
     /// Extract formats for `url`, routing to the first matching extractor.
     ///
-    /// Validates the URL with [`is_safe_media_url`] before delegating.
+    /// Validates the input URL with [`is_safe_media_url`] before delegating,
+    /// then enforces per-format URL/header safety on the returned
+    /// [`MediaInfo`] via [`MediaInfo::sanitise_format_urls`] regardless of
+    /// which extractor produced it. This keeps the registry/core boundary
+    /// protected even when an extractor does not perform inline sanitisation.
+    ///
+    /// If sanitisation removes every format, [`ExtractionError::NoFormats`] is
+    /// returned.
     pub async fn extract(
         &self,
         url: &str,
@@ -50,7 +57,14 @@ impl ExtractorRegistry {
     ) -> Result<MediaInfo, ExtractionError> {
         is_safe_media_url(url)?;
         let extractor = self.find(url).ok_or(ExtractionError::UnsupportedUrl)?;
-        extractor.extract(url, &opts).await
+        let mut info = extractor.extract(url, &opts).await?;
+        // Enforce per-format SSRF/header safety at the registry boundary so the
+        // invariant holds regardless of which extractor produced `info`.
+        info.sanitise_format_urls();
+        if info.formats.is_empty() {
+            return Err(ExtractionError::NoFormats);
+        }
+        Ok(info)
     }
 }
 

@@ -158,8 +158,7 @@ impl ProcessRunner for YtDlpProcessRunnerAdapter {
             let executable = self.executable.clone();
             let url = url.to_owned();
             return Box::pin(async move {
-                Self::discover_via_runner(runner.as_ref(), &executable, &url, command_timeout)
-                    .await
+                Self::discover_via_runner(runner.as_ref(), &executable, &url, command_timeout).await
             });
         }
 

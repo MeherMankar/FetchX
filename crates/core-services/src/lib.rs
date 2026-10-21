@@ -953,7 +953,9 @@ impl EngineRuntime {
 
         // ── Media extraction registry ────────────────────────────────────
         // Build the ExtractorRegistry here in the composition root.
-        // The adapter only needs the executable path — it spawns yt-dlp itself.
+        // The adapter is built from the resolved executable path: when a runner
+        // is injected (e.g. Android's in-process Chaquopy runner) it delegates
+        // to that runner; otherwise it spawns yt-dlp itself (desktop/CLI).
         let media_registry = {
             let mut registry = ExtractorRegistry::new();
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {

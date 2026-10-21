@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use crate::{
     Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
     ManagedDownloadControl, ManagedDownloadEngine, MetalinkEngine, NativeTorrentEngine, SftpEngine,
-    YtDlpEngine, YtDlpFormat, is_hls_url,
+    YtDlpEngine, is_hls_url,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -80,18 +80,6 @@ where
     pub fn with_metalink(mut self, engine: Arc<MetalinkEngine<R>>) -> Self {
         self.metalink = Some(engine);
         self
-    }
-
-    pub async fn discover_ytdlp_formats(
-        &self,
-        url: &str,
-    ) -> Result<Vec<YtDlpFormat>, DownloadEngineError> {
-        self.yt_dlp
-            .as_ref()
-            .ok_or(DownloadEngineError::EngineNotAvailable)?
-            .discover_formats(url)
-            .await
-            .map_err(Into::into)
     }
 
     async fn engine_for(&self, id: DownloadId) -> Result<EngineKind, DownloadEngineError> {

@@ -402,20 +402,25 @@ impl DownloadService {
             ));
         }
         self.with_inner(|inner| {
-            if !inner.core.engine_runtime.is_available(EngineKind::YtDlp) {
-                return Err(MobileApiError::UnavailableEngine("YtDlp".to_string()));
-            }
-            let formats = inner
+            let info = inner
                 .runtime
                 .block_on(
                     inner
                         .core
-                        .engine_runtime
-                        .dispatcher
-                        .discover_ytdlp_formats(&url),
+                        .extract_media(&url, fetchx_media_extractor::ExtractOptions::default()),
                 )
                 .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
-            Ok(formats.into_iter().map(format_to_dto).collect())
+            Ok(info
+                .formats
+                .into_iter()
+                .map(|f| YtDlpFormatDto {
+                    format_id: f.id,
+                    label: f.label,
+                    extension: if f.ext.is_empty() { None } else { Some(f.ext) },
+                    title: None,
+                    platform: None,
+                })
+                .collect())
         })
     }
 
@@ -889,16 +894,6 @@ impl YtDlpProcessRunner for AndroidYtDlpProcessRunner {
             }
             parse_format_output(output.as_bytes())
         })
-    }
-}
-
-fn format_to_dto(format: YtDlpFormat) -> YtDlpFormatDto {
-    YtDlpFormatDto {
-        format_id: format.format_id,
-        label: format.label,
-        extension: format.extension,
-        title: format.title,
-        platform: format.platform,
     }
 }
 

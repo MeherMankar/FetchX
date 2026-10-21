@@ -35,7 +35,6 @@ const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
 const MAX_FORMAT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DISCOVERED_FORMATS: usize = 100;
-const FORMAT_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
@@ -277,17 +276,6 @@ where
 
     pub fn version(&self) -> &str {
         &self.version
-    }
-
-    pub async fn discover_formats(&self, url: &str) -> Result<Vec<YtDlpFormat>, YtDlpError> {
-        let url = validate_source_url(url)?;
-        timeout(
-            FORMAT_DISCOVERY_TIMEOUT,
-            self.runner
-                .discover_formats(&self.executable, url.as_str(), FORMAT_DISCOVERY_TIMEOUT),
-        )
-        .await
-        .map_err(|_| YtDlpError::FormatDiscoveryTimeout)?
     }
 
     async fn download_controlled(
