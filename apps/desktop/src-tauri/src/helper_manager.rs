@@ -482,11 +482,9 @@ impl HelperManager {
     ) -> Result<Vec<u8>, String> {
         let mut response = self.open_allowlisted(url, cancellation).await?;
         let status = response.status();
-        if !status.is_success() {
-            if status.as_u16() >= 500 || status.as_u16() == 429 {
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                response = self.open_allowlisted(url, cancellation).await?;
-            }
+        if !status.is_success() && (status.as_u16() >= 500 || status.as_u16() == 429) {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            response = self.open_allowlisted(url, cancellation).await?;
         }
         if !response.status().is_success() {
             let status = response.status();

@@ -118,6 +118,11 @@ pub struct Database {
 }
 
 impl Database {
+    #[cfg(test)]
+    pub(crate) fn migration_count() -> usize {
+        MIGRATOR.migrations.len()
+    }
+
     /// Connects to the caller-selected SQLite URL and applies embedded migrations.
     ///
     /// In-memory databases use one pooled connection so every operation sees the same
