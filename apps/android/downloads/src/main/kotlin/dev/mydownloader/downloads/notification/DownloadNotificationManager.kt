@@ -142,6 +142,10 @@ class DownloadNotificationManager(
         cancel(item.id)
         val size = (item.state as? DownloadState.Completed)?.let { " · ${formatBytes(it.totalBytes)}" } ?: ""
         val genericTitle = "Download completed"
+        // Scan the completed file into MediaStore so it appears in public Downloads/FetchX
+        (item.state as? DownloadState.Completed)?.let { state ->
+            scanCompletedFileToMediaStore(state.destinationPath)
+        }
         val b = NotificationCompat.Builder(context, CHANNEL_COMPLETE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(notificationTitle(item, genericTitle))
@@ -169,6 +173,20 @@ class DownloadNotificationManager(
 
     fun cancel(downloadId: String) = nm.cancel(stableId(downloadId))
     fun cancelAll() = nm.cancelAll()
+
+    /**
+     * Scans a completed download file into MediaStore so it appears in the system
+     * Files app under Downloads even when stored in app-scoped external storage.
+     */
+    private fun scanCompletedFileToMediaStore(destinationPath: String) {
+        try {
+            android.media.MediaScannerConnection.scanFile(
+                context, arrayOf(destinationPath), null, null
+            )
+        } catch (_: Exception) {
+            // Best-effort: if scanning fails the file is still accessible via app storage
+        }
+    }
 
     fun buildForegroundSummary(activeCount: Int): Notification =
         NotificationCompat.Builder(context, CHANNEL_ACTIVE)

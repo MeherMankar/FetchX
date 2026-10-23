@@ -12,7 +12,7 @@ use std::{
 use fetchx_core_services::{CoreServices, CoreServicesConfig};
 use fetchx_downloader::{
     YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
-    YtDlpRunnerFuture, parse_format_output,
+    YtDlpRunnerFuture, is_hls_url, parse_format_output,
 };
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
@@ -24,6 +24,7 @@ use tokio::{
     time::sleep,
 };
 use tracing::warn;
+use url::Url;
 
 use crate::dto::{
     CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentDownloadMetadataDto, TorrentFileDto,
@@ -49,6 +50,48 @@ struct ServiceInner {
 pub struct DownloadService {
     /// `None` after `shutdown()` has been called.
     inner: Mutex<Option<ServiceInner>>,
+}
+
+/// Returns `true` for URLs that point directly to a media file and can be
+/// downloaded without yt-dlp format extraction.
+fn is_direct_media_url(url: &str) -> bool {
+    let Ok(url) = Url::parse(url) else {
+        return false;
+    };
+    let extension = url
+        .path_segments()
+        .and_then(Iterator::last)
+        .and_then(|filename| filename.rsplit_once('.').map(|(_, ext)| ext))
+        .unwrap_or_default();
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "mp4"
+            | "m4v"
+            | "webm"
+            | "mkv"
+            | "avi"
+            | "mov"
+            | "ts"
+            | "m3u8"
+            | "m4a"
+            | "mp3"
+            | "ogg"
+            | "flac"
+            | "aac"
+            | "wav"
+    )
+}
+
+fn engine_for_url(url: &str) -> EngineKind {
+    match Url::parse(url)
+        .ok()
+        .map(|url| url.scheme().to_ascii_lowercase())
+    {
+        Some(scheme) if scheme == "ftp" => EngineKind::Ftp,
+        Some(scheme) if scheme == "ftps" => EngineKind::Ftps,
+        Some(scheme) if scheme == "sftp" => EngineKind::Sftp,
+        _ => EngineKind::DirectHttp,
+    }
 }
 
 impl DownloadService {
@@ -170,14 +213,7 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
-        // Auto-detect engine from URL scheme.
-        let engine = if url.starts_with("ftps://") {
-            EngineKind::Ftps
-        } else if url.starts_with("ftp://") {
-            EngineKind::Ftp
-        } else {
-            EngineKind::DirectHttp
-        };
+        let engine = engine_for_url(&url);
         self.add_download_for_engine(url, filename, destination, priority, engine, None)
     }
 
@@ -382,14 +418,18 @@ impl DownloadService {
         priority: DownloadPriorityDto,
         format_id: Option<String>,
     ) -> Result<String, MobileApiError> {
-        self.add_download_for_engine(
-            url,
-            filename,
-            destination,
-            priority,
-            EngineKind::YtDlp,
-            format_id,
-        )
+        // For direct media URLs (mp4, m3u8, webm, etc.) use the appropriate native engine
+        // instead of routing through yt-dlp which is unavailable via subprocess on Android.
+        let engine = if format_id.is_none() && is_direct_media_url(&url) {
+            if is_hls_url(&url) {
+                EngineKind::Hls
+            } else {
+                EngineKind::DirectHttp
+            }
+        } else {
+            EngineKind::YtDlp
+        };
+        self.add_download_for_engine(url, filename, destination, priority, engine, format_id)
     }
 
     pub fn discover_media_formats(
@@ -443,8 +483,10 @@ impl DownloadService {
             FileName::new(&filename).map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let source = DownloadSource::new(&url, engine)
             .and_then(|source| match format_id {
-                Some(format_id) => source.with_yt_dlp_format(format_id),
-                None => Ok(source),
+                Some(format_id) if engine == EngineKind::YtDlp => {
+                    source.with_yt_dlp_format(format_id)
+                }
+                _ => Ok(source),
             })
             .map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let dest = PathBuf::from(&destination);
@@ -959,9 +1001,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::DownloadService;
+    use super::{DownloadService, engine_for_url, is_direct_media_url};
     use crate::dto::{CoreConfig, DownloadEventDto, DownloadPriorityDto};
     use crate::error::MobileApiError;
+    use fetchx_models::EngineKind;
 
     fn make_config() -> (CoreConfig, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir");
@@ -973,6 +1016,29 @@ mod tests {
             aria2_executable_path: None,
         };
         (config, dir)
+    }
+
+    #[test]
+    fn add_download_selects_engine_from_url_scheme() {
+        assert_eq!(engine_for_url("ftp://example.test/file"), EngineKind::Ftp);
+        assert_eq!(engine_for_url("FTPS://example.test/file"), EngineKind::Ftps);
+        assert_eq!(engine_for_url("sftp://example.test/file"), EngineKind::Sftp);
+        assert_eq!(
+            engine_for_url("https://example.test/file"),
+            EngineKind::DirectHttp
+        );
+    }
+
+    #[test]
+    fn direct_media_detection_uses_url_path_not_host_query_or_fragment() {
+        assert!(is_direct_media_url(
+            "https://cdn.example.test/video.mp4?token=abc#t=10"
+        ));
+        assert!(!is_direct_media_url("https://video.mp4/"));
+        assert!(!is_direct_media_url(
+            "https://example.test/watch?format=video.mp4"
+        ));
+        assert!(!is_direct_media_url("https://example.test/watch#video.mp4"));
     }
 
     #[test]

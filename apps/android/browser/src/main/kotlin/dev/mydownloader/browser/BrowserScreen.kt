@@ -939,7 +939,11 @@ fun BrowserScreen(
                                         .fillMaxWidth()
                                         .clickable {
                                             showPicker = false
-                                            viewModel.requestMediaFormats(video)
+                                            if (isDirectMediaUrl(video.url)) {
+                                                viewModel.downloadDetectedVideo(video)
+                                            } else {
+                                                viewModel.requestMediaFormats(video)
+                                            }
                                         }
                                         .padding(horizontal = 16.dp, vertical = 12.dp),
                                 ) {
@@ -990,7 +994,11 @@ fun BrowserScreen(
                                     IconButton(
                                         onClick = {
                                             showPicker = false
-                                            viewModel.requestMediaFormats(video)
+                                            if (isDirectMediaUrl(video.url)) {
+                                                viewModel.downloadDetectedVideo(video)
+                                            } else {
+                                                viewModel.requestMediaFormats(video)
+                                            }
                                         },
                                         modifier = Modifier.size(36.dp),
                                     ) {
@@ -3542,6 +3550,11 @@ private fun BookmarksDialog(
         },
     )
 }
+
+/** Returns true for URLs that point directly to a media file and can be
+ * downloaded without yt-dlp format extraction.
+ */
+private fun isDirectMediaUrl(url: String): Boolean = BrowserViewModel.isDirectMediaUrl(url)
 
 @Composable
 private fun VideoDownloadBanner(

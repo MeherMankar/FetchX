@@ -54,31 +54,12 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         Log.e("FetchXYtDlp", "Rust yt-dlp failure code=$diagnosticCode")
     }
 
-    @Synchronized
     private fun ensureFfmpegExecutable(): File {
         val abi = Build.SUPPORTED_ABIS.firstOrNull { it in SUPPORTED_FFMPEG_ABIS }
             ?: error("No bundled FFmpeg executable for this device ABI")
-        val bundled = File(context.applicationInfo.nativeLibraryDir, FFMPEG_LIBRARY_NAME)
-        check(bundled.isFile) { "Bundled FFmpeg executable is missing for $abi" }
-
-        val directory = File(context.filesDir, "runtime/ffmpeg")
-        check(directory.isDirectory || directory.mkdirs()) {
-            "Could not create the FFmpeg runtime directory"
-        }
-        val executable = File(directory, "ffmpeg")
-        if (!executable.isFile || executable.length() != bundled.length()) {
-            val temporary = File(directory, "ffmpeg.tmp")
-            bundled.copyTo(temporary, overwrite = true)
-            temporary.copyTo(executable, overwrite = true)
-            check(executable.setExecutable(true, true)) {
-                "Could not make the FFmpeg executable runnable"
-            }
-            check(temporary.delete()) { "Could not clean up the FFmpeg staging file" }
-        } else if (!executable.canExecute()) {
-            check(executable.setExecutable(true, true)) {
-                "Could not make the FFmpeg executable runnable"
-            }
-        }
+        val executable = File(context.applicationInfo.nativeLibraryDir, FFMPEG_LIBRARY_NAME)
+        check(executable.isFile) { "Bundled FFmpeg executable is missing for $abi" }
+        check(executable.canExecute()) { "Bundled FFmpeg executable is not runnable for $abi" }
         return executable
     }
 
@@ -96,9 +77,9 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
             }
         }
 
-        private fun requiresFfmpeg(arguments: List<String>): Boolean =
+        internal fun requiresFfmpeg(arguments: List<String>): Boolean =
             arguments.windowed(2).any { (option, value) ->
-                option == "--format" && "+bestaudio" in value
+                option == "--format" && '+' in value
             }
         }
 }

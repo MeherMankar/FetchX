@@ -43,12 +43,30 @@ class StorageManager(private val context: Context) {
         return defaultDownloadDirectory().absolutePath
     }
 
-    /** Returns the app-specific external Downloads directory, creating it if needed. */
+    /** Returns /storage/emulated/0/Android/data/dev.fetchx.app.debug/files/Download, creating it if needed.
+     *
+     * Uses app-scoped external storage (getExternalFilesDir) which is always writable
+     * without special permissions. Downloads are scanned into MediaStore on completion
+     * so they appear in the public Downloads/FetchX folder in Files apps.
+     */
     fun defaultDownloadDirectory(): File {
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: context.filesDir.resolve("downloads")
         dir.mkdirs()
         return dir
+    }
+
+    /**
+     * Returns a destination file confined to the FetchX download directory.
+     * Throws if the resolved path escapes the base directory (path traversal protection).
+     */
+    fun confinedDestination(filename: String): File {
+        val base = defaultDownloadDirectory().canonicalFile
+        val target = File(base, filename).canonicalFile
+        require(target.path.startsWith(base.path + File.separator) || target == base) {
+            "Filename escapes the FetchX download directory: $filename"
+        }
+        return target
     }
 
     /** Stores a user-selected SAF URI and takes a persisted permission. */

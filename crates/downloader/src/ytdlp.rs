@@ -623,8 +623,10 @@ where
                     .filter(|total| *total >= downloaded_bytes)
             } else {
                 match (item.progress().total_bytes(), update.total_bytes) {
-                    (Some(previous_total), _) => Some(previous_total),
-                    (None, Some(candidate_total)) if candidate_total >= downloaded_bytes => {
+                    (Some(previous_total), _) if previous_total >= downloaded_bytes => {
+                        Some(previous_total)
+                    }
+                    (_, Some(candidate_total)) if candidate_total >= downloaded_bytes => {
                         Some(candidate_total)
                     }
                     _ => None,
@@ -713,6 +715,13 @@ where
             return Ok(());
         };
         if downloaded_bytes < *progress {
+            if item
+                .source()
+                .yt_dlp_format()
+                .is_some_and(|selector| selector.contains('+'))
+            {
+                return Ok(());
+            }
             return Err(YtDlpError::ProgressRegression.into());
         }
 
@@ -826,6 +835,12 @@ fn download_failure_diagnostic_code(error: &DownloadEngineError) -> &'static str
         DownloadEngineError::FailurePersistence { .. } => "failure_persistence",
         DownloadEngineError::Io(_) => "file_io",
         DownloadEngineError::ResourceManagerUnavailable => "resource_manager",
+        DownloadEngineError::ClientConfiguration(_) => "client_configuration",
+        DownloadEngineError::InvalidConfiguration => "invalid_configuration",
+        DownloadEngineError::Progress(_) => "progress",
+        DownloadEngineError::DomainError(_) => "domain_error",
+        DownloadEngineError::Domain(_) => "domain",
+        DownloadEngineError::Timestamp(_) => "timestamp",
         _ => "download_engine",
     }
 }
@@ -1010,8 +1025,7 @@ fn build_arguments(
         "--no-cache-dir".into(),
         "--no-write-thumbnail".into(),
         "--no-write-info-json".into(),
-        "--no-write-annotations".into(),
-        "--no-write-comments".into(),
+         "--no-write-comments".into(),
         "--format".into(),
         selected_format.into(),
         "--concurrent-fragments".into(),
@@ -1351,9 +1365,16 @@ async fn prepare_workspace(path: &Path) -> Result<(), YtDlpError> {
 async fn restrict_workspace_permissions(path: &Path) -> Result<(), YtDlpError> {
     use std::os::unix::fs::PermissionsExt;
 
-    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        .await
-        .map_err(|_| YtDlpError::WorkspaceUnavailable)
+    match tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Permission changes are unsupported on some filesystems (e.g. Android
+            // external storage / FAT32). Treat as non-fatal — the directory is still
+            // usable; security is enforced by the Android sandbox instead.
+            tracing::warn!(path = %path.display(), "could not restrict workspace permissions (filesystem may not support chmod); continuing");
+            Ok(())
+        }
+    }
 }
 
 #[cfg(not(unix))]
@@ -1432,8 +1453,24 @@ async fn promote_output_to_destination(
     output: &Path,
     destination: &Path,
 ) -> Result<(), DownloadEngineError> {
+    // Try hard link first (zero-copy, atomic on same filesystem).
     match tokio::fs::hard_link(output, destination).await {
-        Ok(()) => Ok(()),
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(YtDlpError::DestinationExists.into());
+        }
+        Err(_) => {
+            // Hard link failed (cross-device, unsupported FS such as Android external
+            // storage). Fall back to copy-then-delete so the download still completes.
+        }
+    }
+    // Copy to destination then remove the source.
+    match tokio::fs::copy(output, destination).await {
+        Ok(_) => {
+            // Best-effort removal of the source; ignore errors.
+            let _ = tokio::fs::remove_file(output).await;
+            Ok(())
+        }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             Err(YtDlpError::DestinationExists.into())
         }
@@ -1836,14 +1873,34 @@ mod tests {
         ),
         Box<dyn Error>,
     > {
+        fixture_with_format(url, runner, None).await
+    }
+
+    async fn fixture_with_format(
+        url: &str,
+        runner: FakeRunner,
+        format: Option<&str>,
+    ) -> Result<
+        (
+            YtDlpEngine<fetchx_storage::SqliteDownloadRepository>,
+            PathBuf,
+            DownloadId,
+        ),
+        Box<dyn Error>,
+    > {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let id = DownloadId::new();
         let base = std::env::temp_dir().join(format!("fetchx-ytdlp-test-{id}"));
         tokio::fs::create_dir_all(&base).await?;
+        let source = DownloadSource::new(url, EngineKind::YtDlp)?;
+        let source = match format {
+            Some(format) => source.with_yt_dlp_format(format)?,
+            None => source,
+        };
         let item = DownloadItem::new(
             id,
-            DownloadSource::new(url, EngineKind::YtDlp)?,
+            source,
             FileName::new("video.webm")?,
             base.join("video.webm"),
             Timestamp::now()?,
@@ -1943,6 +2000,57 @@ mod tests {
         let stored = engine.repository.get(id).await?.expect("item still exists");
         assert_eq!(stored.progress().downloaded_bytes(), 20_480);
         assert_eq!(stored.progress().total_bytes(), Some(1_048_576));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replaces_an_estimated_total_when_downloaded_bytes_exceed_it()
+    -> Result<(), Box<dyn Error>> {
+        let runner = FakeRunner::default();
+        let (engine, _, id) = fixture("https://example.test/video", runner).await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Downloading)
+            .await?;
+        let mut item = engine.repository.get(id).await?.ok_or("item missing")?;
+        let mut expected_updated_at = item.updated_at();
+
+        engine
+            .persist_progress(
+                &mut item,
+                &mut expected_updated_at,
+                &YtDlpProgress {
+                    percentage_basis_points: Some(9_900),
+                    downloaded_bytes: Some(99),
+                    total_bytes: Some(100),
+                    speed_bytes_per_second: None,
+                    estimated_remaining_seconds: None,
+                },
+                false,
+            )
+            .await?;
+        engine
+            .persist_progress(
+                &mut item,
+                &mut expected_updated_at,
+                &YtDlpProgress {
+                    percentage_basis_points: None,
+                    downloaded_bytes: Some(101),
+                    total_bytes: Some(102),
+                    speed_bytes_per_second: None,
+                    estimated_remaining_seconds: None,
+                },
+                false,
+            )
+            .await?;
+
+        let stored = engine.repository.get(id).await?.ok_or("item missing")?;
+        assert_eq!(stored.progress().downloaded_bytes(), 101);
+        assert_eq!(stored.progress().total_bytes(), Some(102));
         Ok(())
     }
 
@@ -2061,6 +2169,17 @@ mod tests {
             "request failed for https://private.example/video?token=secret".to_owned(),
         );
         assert_eq!(error.diagnostic_code(), "runtime_failure");
+    }
+
+    #[test]
+    fn progress_failure_diagnostic_is_specific() {
+        let error = DownloadEngineError::Progress(
+            fetchx_models::DownloadProgressError::DownloadedExceedsTotal {
+                downloaded_bytes: 2,
+                total_bytes: 1,
+            },
+        );
+        assert_eq!(download_failure_diagnostic_code(&error), "progress");
     }
 
     #[test]
@@ -2215,7 +2334,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_regressing_progress_without_publishing_output() -> Result<(), Box<dyn Error>> {
+    async fn ignores_regressing_progress_for_merged_formats() -> Result<(), Box<dyn Error>> {
+        let runner = FakeRunner::default();
+        {
+            let mut state = runner.state.lock().expect("test runner mutex");
+            state.output = b"video!".to_vec();
+            state.progress_lines = vec![
+                "FETCHX_PROGRESS|50%|5|10|NA|1|1".to_owned(),
+                "FETCHX_PROGRESS|40%|4|10|NA|1|1".to_owned(),
+                "FETCHX_PROGRESS|60%|6|10|NA|1|1".to_owned(),
+            ];
+        }
+        let state = Arc::clone(&runner.state);
+        let (engine, base, id) = fixture_with_format(
+            "https://example.test/video",
+            runner,
+            Some("602+bestaudio/602"),
+        )
+        .await?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        let completed = engine.download(id, cancellation).await?;
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(completed.progress().downloaded_bytes(), 6);
+        assert_eq!(tokio::fs::read(base.join("video.webm")).await?, b"video!");
+        assert!(
+            state
+                .lock()
+                .expect("test runner mutex")
+                .diagnostic_codes
+                .is_empty()
+        );
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_regressing_progress_for_single_format() -> Result<(), Box<dyn Error>> {
         let runner = FakeRunner::default();
         {
             let mut state = runner.state.lock().expect("test runner mutex");

@@ -1787,6 +1787,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uniffi",
+ "url",
  "uuid",
 ]
 

@@ -2035,8 +2035,22 @@ async fn publish_without_replacement(
     temporary: &Path,
     destination: &Path,
 ) -> Result<(), DownloadEngineError> {
+    // Try hard link first (zero-copy, atomic on same filesystem).
     match fs::hard_link(temporary, destination).await {
-        Ok(()) => Ok(()),
+        Ok(()) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(DownloadEngineError::DestinationExists);
+        }
+        Err(_) => {
+            // Hard link failed (cross-device or unsupported FS — e.g. Android external
+            // storage does not support hard links). Fall back to copy-then-delete.
+        }
+    }
+    match fs::copy(temporary, destination).await {
+        Ok(_) => {
+            let _ = fs::remove_file(temporary).await;
+            Ok(())
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(DownloadEngineError::DestinationExists)
         }

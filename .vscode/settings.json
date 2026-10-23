@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cargo test --workspace --quiet$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

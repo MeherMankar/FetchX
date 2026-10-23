@@ -191,6 +191,33 @@ async fn repository_persists_selected_ytdlp_format() -> Result<(), Box<dyn Error
 }
 
 #[tokio::test]
+async fn repository_persists_merged_ytdlp_format_selector() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let id = DownloadId::new();
+    let download = DownloadItem::new(
+        id,
+        DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?
+            .with_yt_dlp_format("160+bestaudio/160")?,
+        FileName::new("video.mp4")?,
+        PathBuf::from("downloads/video.mp4"),
+        Timestamp::now()?,
+    );
+
+    repository.create(&download).await?;
+    assert_eq!(
+        repository
+            .get(id)
+            .await?
+            .ok_or("merged-format download was not found")?
+            .source()
+            .yt_dlp_format(),
+        Some("160+bestaudio/160")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn queue_order_and_priority_updates_preserve_download_progress() -> Result<(), Box<dyn Error>>
 {
     let database = Database::connect("sqlite::memory:").await?;

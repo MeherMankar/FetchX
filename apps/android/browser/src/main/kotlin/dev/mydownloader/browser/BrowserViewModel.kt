@@ -553,7 +553,14 @@ class BrowserViewModel internal constructor(
             ?.takeIf { it.startsWith("http") }
         // If a specific format was chosen from page format discovery, pass pageUrl.
         // Otherwise, if this is a direct intercepted stream or default, download direct video stream url.
-        val downloadUrl = if (formatId != null && pageUrl != null) pageUrl else (video.url.takeIf { it.isNotBlank() } ?: pageUrl ?: "")
+        // For direct media URLs (mp4, m3u8, etc.) download directly via the appropriate
+        // native engine without going through yt-dlp format discovery or extraction.
+        val isDirectMedia = formatId == null && isDirectMediaUrl(video.url)
+        val downloadUrl = when {
+            isDirectMedia -> video.url
+            formatId != null && pageUrl != null -> pageUrl
+            else -> video.url.takeIf { it.isNotBlank() } ?: pageUrl ?: ""
+        }
         val discoveredMetadata = _uiState.value.mediaFormats
             .firstOrNull { it.formatId == formatId }
             ?: _uiState.value.mediaFormats.firstOrNull()
@@ -583,7 +590,7 @@ class BrowserViewModel internal constructor(
         _uiState.update { it.copy(isQueueingMedia = true, mediaQueueError = null) }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // addMediaDownload routes through yt-dlp which handles HLS/DASH properly
+                // Direct media URLs use native engines; page URLs use yt-dlp extraction.
                 repo.addMediaDownload(
                     url = downloadUrl,
                     fileName = fileName,
@@ -591,16 +598,17 @@ class BrowserViewModel internal constructor(
                     priority = dev.fetchx.core.download.DownloadPriority.NORMAL,
                     formatId = formatId,
                 )
-                Log.i(TAG, "Queued media download via yt-dlp: $fileName")
+                val engineLabel = if (isDirectMedia) "native engine" else "yt-dlp"
+                Log.i(TAG, "Queuing media download via $engineLabel: url=$downloadUrl fileName=$fileName")
                 withContext(Dispatchers.Main) { closeMediaFormatPicker() }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to queue video download", e)
+                Log.e(TAG, "Failed to queue video download: ${e.javaClass.simpleName}: ${e.message}", e)
                 _uiState.update {
                     it.copy(
                         isQueueingMedia = false,
-                        mediaQueueError = e.message ?: "Could not queue video download.",
+                        mediaQueueError = "Error: ${e.message ?: "Could not queue video download."}",
                     )
                 }
             }
@@ -1281,6 +1289,30 @@ class BrowserViewModel internal constructor(
     }
 
     companion object {
+        /** Returns true for URLs that are direct media files, downloadable without yt-dlp. */
+        fun isDirectMediaUrl(url: String): Boolean {
+            val path = try {
+                java.net.URI(url).rawPath.orEmpty()
+            } catch (_: Exception) {
+                return false
+            }
+            val extension = path.substringAfterLast('/').substringAfterLast('.', "")
+            return extension.equals("mp4", ignoreCase = true) ||
+                extension.equals("m4v", ignoreCase = true) ||
+                extension.equals("webm", ignoreCase = true) ||
+                extension.equals("mkv", ignoreCase = true) ||
+                extension.equals("avi", ignoreCase = true) ||
+                extension.equals("mov", ignoreCase = true) ||
+                extension.equals("ts", ignoreCase = true) ||
+                extension.equals("m3u8", ignoreCase = true) ||
+                extension.equals("m4a", ignoreCase = true) ||
+                extension.equals("mp3", ignoreCase = true) ||
+                extension.equals("ogg", ignoreCase = true) ||
+                extension.equals("flac", ignoreCase = true) ||
+                extension.equals("aac", ignoreCase = true) ||
+                extension.equals("wav", ignoreCase = true)
+        }
+
         private const val SEARCH_PREFERENCES_FILE = "fetchx_browser_search"
         private const val SEARCH_ENGINE_KEY = "search_engine"
         private const val LOCAL_SUGGESTIONS_KEY = "browser_suggestions_enabled"

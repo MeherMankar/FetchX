@@ -2,6 +2,8 @@ package dev.fetchx.browser
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class MediaFilenameTest {
     @Test
@@ -36,5 +38,14 @@ class MediaFilenameTest {
             "video - Best - Web.mp4",
             buildMediaFileName("", null, null, null),
         )
+    }
+
+    @Test
+    fun `direct media detection uses URL path and ignores query and fragment`() {
+        assertTrue(BrowserViewModel.isDirectMediaUrl("https://cdn.example.test/video.mp4?token=abc#t=10"))
+        assertTrue(BrowserViewModel.isDirectMediaUrl("https://cdn.example.test/stream.m3u8#fragment"))
+        assertFalse(BrowserViewModel.isDirectMediaUrl("https://video.mp4/"))
+        assertFalse(BrowserViewModel.isDirectMediaUrl("https://example.test/watch?format=video.mp4"))
+        assertFalse(BrowserViewModel.isDirectMediaUrl("https://example.test/watch#video.mp4"))
     }
 }

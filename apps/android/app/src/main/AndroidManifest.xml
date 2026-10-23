@@ -3,6 +3,8 @@
 
     <!-- Network permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Write to public Downloads/FetchX on API 26–28; not needed on API 29+ -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <!-- Foreground service for background downloads (Phase 20E) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

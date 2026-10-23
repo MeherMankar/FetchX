@@ -4,12 +4,7 @@
 //!
 //! Deterministic: the injected runner is a stub that never spawns yt-dlp.
 
-use std::{
-    ffi::OsString,
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{ffi::OsString, path::Path, sync::Arc, time::Duration};
 
 use fetchx_core_services::{CoreServices, CoreServicesConfig, EngineConfig, YtDlpConfig};
 use fetchx_downloader::{
