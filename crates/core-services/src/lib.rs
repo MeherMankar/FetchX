@@ -79,6 +79,9 @@ pub struct CoreServicesConfig {
     pub database_path: PathBuf,
     pub downloads_dir: PathBuf,
     pub runtime_dir: PathBuf,
+    /// Optional directory containing installer-bundled desktop engine binaries.
+    /// Used only to seed engine defaults when no engine config has been stored.
+    pub bundled_engines_dir: Option<PathBuf>,
 }
 
 // ============================================================
@@ -167,10 +170,17 @@ impl CoreServices {
         let config_service = ConfigService::new(database.config());
         let engine_config = match engine_config_override {
             Some(config) => config,
-            None => config_service
-                .load()
-                .await
-                .map_err(CoreServicesError::Config)?,
+            None => {
+                let defaults = bundled_engine_defaults(cfg.bundled_engines_dir.as_deref());
+                config_service
+                    .initialize_if_missing(&defaults)
+                    .await
+                    .map_err(CoreServicesError::Config)?;
+                config_service
+                    .load()
+                    .await
+                    .map_err(CoreServicesError::Config)?
+            }
         };
         engine_config
             .validate()
@@ -1040,6 +1050,35 @@ impl EngineRuntime {
             }
         }
     }
+}
+
+fn bundled_engine_defaults(directory: Option<&std::path::Path>) -> EngineConfig {
+    let mut config = EngineConfig::default();
+    let Some(directory) = directory else {
+        return config;
+    };
+
+    let aria2 = directory.join(if cfg!(target_os = "windows") {
+        "aria2c.exe"
+    } else {
+        "aria2c"
+    });
+    if aria2.is_file() {
+        config.aria2.enabled = true;
+        config.aria2.executable_path = Some(aria2);
+    }
+
+    let ytdlp = directory.join(if cfg!(target_os = "windows") {
+        "yt-dlp.exe"
+    } else {
+        "yt-dlp"
+    });
+    if ytdlp.is_file() {
+        config.yt_dlp.enabled = true;
+        config.yt_dlp.executable_path = Some(ytdlp);
+    }
+
+    config
 }
 
 fn log_avail(name: &str, avail: &EngineAvailability) {

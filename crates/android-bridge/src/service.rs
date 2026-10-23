@@ -112,6 +112,7 @@ impl DownloadService {
             database_path: PathBuf::from(&config.database_path),
             downloads_dir: PathBuf::from(&config.downloads_dir),
             runtime_dir: PathBuf::from(&config.runtime_dir),
+            bundled_engines_dir: None,
         };
         let ytdlp_runner = yt_dlp_runtime.map(|runtime| {
             Arc::new(AndroidYtDlpProcessRunner {

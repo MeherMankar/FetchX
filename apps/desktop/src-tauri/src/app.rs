@@ -20,6 +20,7 @@ impl AppState {
     async fn initialize(
         database_path: std::path::PathBuf,
         downloads_dir: std::path::PathBuf,
+        bundled_engines_dir: std::path::PathBuf,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let runtime_dir = database_path
             .parent()
@@ -29,6 +30,7 @@ impl AppState {
             database_path,
             downloads_dir,
             runtime_dir,
+            bundled_engines_dir: Some(bundled_engines_dir),
         })
         .await?;
         Ok(AppState::from_core_services(services))
@@ -120,9 +122,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let downloads_dir = app.path().download_dir()?;
+            let bundled_engines_dir = app.path().resource_dir()?.join("engines");
             let database_path = app_data_dir.join("fetchx.db");
-            let state =
-                tauri::async_runtime::block_on(AppState::initialize(database_path, downloads_dir))?;
+            let state = tauri::async_runtime::block_on(AppState::initialize(
+                database_path,
+                downloads_dir,
+                bundled_engines_dir,
+            ))?;
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());

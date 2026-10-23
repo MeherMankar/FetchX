@@ -130,7 +130,9 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel as composeViewModel
@@ -698,6 +700,14 @@ fun BrowserScreen(
         },
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+            // Observe the active tab's CloudflareBypassController StateFlow and push to ViewModel
+            LaunchedEffect(uiState.activeTabId) {
+                val controller = viewModel.activeCfController() ?: return@LaunchedEffect
+                controller.state.collect { state ->
+                    viewModel.onCfBypassStateChanged(state)
+                }
+            }
+
             // Error banner
             uiState.activeTab?.errorText?.let { error ->
                 Surface(
@@ -710,6 +720,66 @@ fun BrowserScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
+                }
+            }
+
+            // Cloudflare bypass banner — shown above all content while a challenge is active
+            val cfState = uiState.cloudflareBypassState
+            AnimatedVisibility(
+                visible = cfState is CloudflareBypassState.Bypassing || cfState is CloudflareBypassState.Failed,
+                enter = slideInVertically { -it },
+                exit = slideOutVertically { -it },
+                modifier = Modifier.align(Alignment.TopCenter).zIndex(10f),
+            ) {
+                Surface(
+                    color = if (cfState is CloudflareBypassState.Failed)
+                        MaterialTheme.colorScheme.errorContainer
+                    else
+                        MaterialTheme.colorScheme.tertiaryContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (cfState is CloudflareBypassState.Bypassing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Shield,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        Text(
+                            text = when (cfState) {
+                                is CloudflareBypassState.Bypassing ->
+                                    "Bypassing ${cfState.provider.displayName} security check\u2026"
+                                is CloudflareBypassState.Failed ->
+                                    "${cfState.provider.displayName} bypass failed: ${cfState.reason}"
+                                else -> ""
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (cfState is CloudflareBypassState.Failed)
+                                MaterialTheme.colorScheme.onErrorContainer
+                            else
+                                MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (cfState is CloudflareBypassState.Failed) {
+                            TextButton(onClick = { viewModel.resetCloudflareBypass() }) {
+                                Text("Dismiss")
+                            }
+                        }
+                    }
                 }
             }
 

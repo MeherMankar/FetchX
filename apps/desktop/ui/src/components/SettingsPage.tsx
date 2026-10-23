@@ -459,6 +459,40 @@ function isResourceProfile(value: string): value is ResourceProfile {
   return ["unlimited", "normal", "limited", "night", "custom"].includes(value);
 }
 
+const HELPER_INSTALL_LINKS: Record<string, string> = {
+  aria2: "https://github.com/aria2/aria2/releases",
+  yt_dlp: "https://github.com/yt-dlp/yt-dlp/releases",
+  ffmpeg: "https://www.ffmpeg.org/download.html",
+  ffprobe: "https://www.ffmpeg.org/download.html",
+};
+
+function HelperInstallPanel() {
+  const openLink = (key: string) => {
+    const url = HELPER_INSTALL_LINKS[key];
+    if (url) {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  return (
+    <div className="settings-notice" role="note">
+      <strong>Optional helper install:</strong> aria2, yt-dlp, FFmpeg, and FFprobe are external tools.
+      If they are missing, use the links below to install them before enabling the corresponding engine.
+      <div className="settings-actions" style={{ marginTop: "0.75rem", justifyContent: "flex-start" }}>
+        <button className="button button-secondary" onClick={() => openLink("aria2")}>
+          Install aria2
+        </button>
+        <button className="button button-secondary" onClick={() => openLink("yt_dlp")}>
+          Install yt-dlp
+        </button>
+        <button className="button button-secondary" onClick={() => openLink("ffmpeg")}>
+          Install FFmpeg / FFprobe
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function policyForProfile(
   profile: ResourceProfile,
   current: ResourcePolicyDto,
@@ -742,6 +776,8 @@ export function SettingsPage() {
         after restarting FetchX. Active downloads keep their existing runtime
         settings. Disabling an engine does not cancel downloads already in progress.
       </div>
+
+      <HelperInstallPanel />
 
       {cfg && (
         <>

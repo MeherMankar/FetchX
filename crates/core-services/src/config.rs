@@ -255,6 +255,21 @@ impl ConfigService {
         }
     }
 
+    /// Persist startup defaults only when no engine configuration exists yet.
+    /// Existing user choices are never overwritten by newly installed bundles.
+    pub async fn initialize_if_missing(&self, defaults: &EngineConfig) -> Result<(), ConfigError> {
+        if self
+            .repo
+            .get(CONFIG_KEY)
+            .await
+            .map_err(|error| ConfigError::Storage(error.to_string()))?
+            .is_none()
+        {
+            self.save(defaults).await?;
+        }
+        Ok(())
+    }
+
     pub async fn save(&self, config: &EngineConfig) -> Result<(), ConfigError> {
         config.validate()?;
         let json =

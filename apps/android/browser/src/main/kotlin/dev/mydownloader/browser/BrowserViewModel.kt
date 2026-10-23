@@ -117,6 +117,7 @@ data class BrowserUiState(
     val pendingDownload: PendingDownload? = null,
     val magnetQueued: String? = null,
     val magnetError: String? = null,
+    val cloudflareBypassState: CloudflareBypassState = CloudflareBypassState.Idle,
 ) {
     val activeTab: TabState? get() = tabs.find { it.id == activeTabId }
     val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
@@ -244,6 +245,9 @@ class BrowserViewModel internal constructor(
         saveCurrentTabs(tabs, activeId)
         saveBookmarks(bState.bookmarks)
         saveHistory(tm.allHistory())
+        // Keep cloudflareBypassState in sync with the active tab's controller.
+        val cfState = tm.activeCfController()?.state?.value ?: CloudflareBypassState.Idle
+        _uiState.update { it.copy(cloudflareBypassState = cfState) }
     }
 
     private fun updateNavigationState(tabId: String, tab: TabState) {
@@ -308,6 +312,44 @@ class BrowserViewModel internal constructor(
 
     fun clearMagnetState() {
         _uiState.update { it.copy(magnetQueued = null, magnetError = null) }
+    }
+
+    // ── Cloudflare bypass ─────────────────────────────────────────────────
+
+    private var cfBypassTimeoutJob: Job? = null
+
+    /** Returns the [CloudflareBypassController] for the active tab (for BrowserScreen use). */
+    fun activeCfController(): CloudflareBypassController? = tabManager?.activeCfController()
+
+    /**
+     * Called by a [LaunchedEffect] in BrowserScreen that collects the active tab's bypass
+     * controller StateFlow and pushes state updates here.
+     */
+    fun onCfBypassStateChanged(state: CloudflareBypassState) {
+        _uiState.update { it.copy(cloudflareBypassState = state) }
+        when (state) {
+            is CloudflareBypassState.Bypassing -> {
+                // Start a 30-second timeout — most challenges resolve in < 5 s.
+                cfBypassTimeoutJob?.cancel()
+                cfBypassTimeoutJob = viewModelScope.launch {
+                    delay(30_000L)
+                    tabManager?.activeCfController()
+                        ?.onChallengeFailed("Timed out waiting for ${state.provider.displayName}")
+                }
+            }
+            else -> {
+                cfBypassTimeoutJob?.cancel()
+                cfBypassTimeoutJob = null
+            }
+        }
+    }
+
+    /** Resets bypass state for the active tab and returns to Idle. */
+    fun resetCloudflareBypass() {
+        tabManager?.activeCfController()?.reset()
+        cfBypassTimeoutJob?.cancel()
+        cfBypassTimeoutJob = null
+        _uiState.update { it.copy(cloudflareBypassState = CloudflareBypassState.Idle) }
     }
 
     // ──Navigation ─────────────────────────────────────────────────────────

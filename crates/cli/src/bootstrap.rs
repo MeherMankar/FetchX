@@ -62,6 +62,7 @@ pub async fn start() -> Result<CoreServices, CoreServicesError> {
         database_path: data_dir.join("fetchx.db"),
         downloads_dir: downloads_dir(),
         runtime_dir: data_dir.join("runtime"),
+        bundled_engines_dir: None,
     })
     .await
 }
@@ -94,6 +95,7 @@ mod tests {
             database_path: root.path().join("fetchx.db"),
             downloads_dir: root.path().join("downloads"),
             runtime_dir: root.path().join("runtime"),
+            bundled_engines_dir: None,
         })
         .await?;
 

@@ -35,8 +35,6 @@ const MAX_PROBE_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_MEDIA_STREAMS: usize = 128;
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_CHANNEL_CAPACITY: usize = 16;
-const MAX_EXECUTABLE_DISCOVERY_PATHS: usize = 256;
-
 pub type FfmpegFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Clone, Debug)]
@@ -755,24 +753,45 @@ fn is_native_executable_signature(_signature: [u8; 4]) -> bool {
 }
 
 async fn discover_executable(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for (index, directory) in std::env::split_paths(&path).enumerate() {
-        if index >= MAX_EXECUTABLE_DISCOVERY_PATHS {
-            break;
+    let mut seen = std::collections::HashSet::new();
+    let mut directories = Vec::new();
+
+    if let Some(path) = std::env::var_os("PATH") {
+        directories.extend(std::env::split_paths(&path));
+    }
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(dir) = executable.parent() {
+            directories.push(dir.to_path_buf());
+            directories.push(dir.join("engines"));
+            if let Some(parent) = dir.parent() {
+                let resources = parent.join("resources").join("engines");
+                directories.push(resources);
+            }
         }
-        if !directory.is_absolute() {
+        if let Some(dir) = std::env::var_os("APPDIR").map(PathBuf::from) {
+            directories.push(dir.join("Contents").join("Resources").join("engines"));
+            directories.push(dir.join("engines"));
+        }
+    }
+
+    for directory in directories {
+        if !directory.is_absolute() || !seen.insert(directory.clone()) {
             continue;
         }
-        for candidate_name in executable_names(name) {
-            let candidate = directory.join(candidate_name);
-            if tokio::fs::metadata(&candidate)
-                .await
-                .is_ok_and(|metadata| metadata.is_file())
-            {
-                return Some(candidate);
+        if directory.exists() {
+            for candidate_name in executable_names(name) {
+                let candidate = directory.join(candidate_name);
+                if tokio::fs::metadata(&candidate)
+                    .await
+                    .is_ok_and(|metadata| metadata.is_file())
+                {
+                    return Some(candidate);
+                }
             }
         }
     }
+
     None
 }
 

@@ -31,6 +31,7 @@ class TabManager(
     private val sessions = mutableMapOf<String, GeckoSession>()
     private val loadedTabIds = mutableSetOf<String>()
     private val historyStore = HistoryStore()
+    private val bypassControllers = mutableMapOf<String, CloudflareBypassController>()
 
     /** Callback to notify observers of state changes. */
     var onStateChanged: (() -> Unit)? = null
@@ -97,6 +98,7 @@ class TabManager(
         trackerBlockingController.removeTab(tabId)
         sessions.remove(tabId)?.close()
         loadedTabIds.remove(tabId)
+        bypassControllers.remove(tabId)?.reset()
         store.removeTab(tabId)
         Log.i(TAG, "Closed tab $tabId, remaining: ${store.tabCount()}")
         // Ensure at least one tab always exists.
@@ -216,9 +218,17 @@ class TabManager(
         sessions.clear()
         loadedTabIds.clear()
         openSessions.forEach { it.close() }
+        bypassControllers.values.forEach { it.reset() }
+        bypassControllers.clear()
         store.clear()
         Log.i(TAG, "TabManager disposed")
     }
+
+    /** Returns the [CloudflareBypassController] for the given tab, if one exists. */
+    fun cfControllerForTab(tabId: String): CloudflareBypassController? = bypassControllers[tabId]
+
+    /** Returns the [CloudflareBypassController] for the currently active tab. */
+    fun activeCfController(): CloudflareBypassController? = bypassControllers[store.activeTabId()]
 
     private fun loadRestoredTab(tabId: String) {
         if (!loadedTabIds.add(tabId)) return
@@ -258,6 +268,8 @@ class TabManager(
 
     private fun buildSession(tabId: String): GeckoSession {
         val s = GeckoSession()
+        val cfController = CloudflareBypassController()
+        bypassControllers[tabId] = cfController
         s.settings.useTrackingProtection = true
         // Match the Firefox version to the embedded GeckoView release so sites do
         // not see an obsolete browser version or the GeckoView embedder token.
@@ -284,6 +296,7 @@ class TabManager(
                 val currentUrl = store.findTab(tabId)?.url ?: ""
                 historyStore.updateTitle(tabId, currentUrl, title)
                 updateTabState(tabId) { it.copy(title = title) }
+                cfController.onTitleChange(title)
             }
 
             override fun onExternalResponse(session: GeckoSession, response: org.mozilla.geckoview.WebResponse) {
@@ -347,6 +360,7 @@ class TabManager(
                 hasUserGesture: Boolean,
             ) {
                 updateTabState(tabId) { it.copy(url = url ?: "", errorText = null) }
+                cfController.onLocationChange(url ?: "")
             }
 
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {

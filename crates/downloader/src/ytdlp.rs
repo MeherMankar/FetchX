@@ -1025,7 +1025,7 @@ fn build_arguments(
         "--no-cache-dir".into(),
         "--no-write-thumbnail".into(),
         "--no-write-info-json".into(),
-         "--no-write-comments".into(),
+        "--no-write-comments".into(),
         "--format".into(),
         selected_format.into(),
         "--concurrent-fragments".into(),
