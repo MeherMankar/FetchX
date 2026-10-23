@@ -236,3 +236,24 @@ export interface EngineStatus {
   aria2: EngineInstanceStatus;
   yt_dlp: EngineInstanceStatus;
 }
+
+export type ManagedHelperId = "aria2c" | "yt_dlp" | "ffmpeg" | "ffprobe";
+
+export interface HelperStatus {
+  helper: ManagedHelperId;
+  installed: boolean;
+  executable_path: string | null;
+  version: string | null;
+  architecture: string | null;
+  available: boolean;
+  validation: string;
+  install_supported: boolean;
+}
+
+export interface HelperInstallProgress {
+  helper: ManagedHelperId;
+  phase: "downloading" | "verifying" | "installing" | "completed" | "failed" | "cancelled";
+  received_bytes: number;
+  total_bytes: number | null;
+  message: string | null;
+}

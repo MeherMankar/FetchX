@@ -16,10 +16,21 @@ pause/resume/cancel/removal controls, startup recovery, and a global connection 
 Tauri 2 desktop foundation is in place with a minimal React + TypeScript shell. It
 currently exposes direct HTTP/HTTPS downloads, queue controls, and explicit refresh;
 live progress notifications and engine selection are not yet wired to the desktop.
+The desktop app includes an optional per-user helper manager for aria2c, yt-dlp,
+FFmpeg, and FFprobe. Installs are initiated explicitly in Settings, use allowlisted
+HTTPS distributions, verify published SHA-256 checksums, validate Windows x64 PE
+architecture and executable version output, and install into the FetchX application
+data `bin` directory without changing the system PATH. The supported sources are the
+aria2 GitHub release pinned to the SHA-256 in the Microsoft WinGet manifest, the
+yt-dlp GitHub release digest, and Gyan.dev's Windows FFmpeg essentials build and
+checksum. The helper manager is Windows desktop only; helper installation is optional
+and does not affect Android or CLI startup. Installed engine paths are persisted and
+take effect after restarting FetchX.
+
 The downloader crate includes an optional FFmpeg/ffprobe media post-processing
 service for metadata inspection, remuxing, and a small set of transcoding presets. It
-requires externally installed executables configured by path or discovered on `PATH`;
-it never installs binaries. The processor bounds concurrent child processes, supports
+also supports external executables configured by path or discovered on `PATH`; it
+never installs binaries itself. The processor bounds concurrent child processes, supports
 cancellation but not active pause/resume, streams selected input files over stdin with
 only the `pipe` input protocol enabled, caps output at 100 GiB by default (configurable
 up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal

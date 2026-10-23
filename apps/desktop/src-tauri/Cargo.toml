@@ -18,7 +18,8 @@ fetchx-models = { path = "../../../crates/models" }
 fetchx-queue = { path = "../../../crates/queue" }
 fetchx-scheduler = { path = "../../../crates/scheduler" }
 fetchx-storage = { path = "../../../crates/storage" }
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+sha2 = "0.10"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
@@ -27,6 +28,7 @@ tracing.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

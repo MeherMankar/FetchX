@@ -6,6 +6,7 @@ mod browser_ipc;
 mod commands;
 mod engine_commands;
 mod events;
+mod helper_manager;
 
 fn main() {
     if let Err(error) = app::run() {

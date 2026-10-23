@@ -27,7 +27,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png", "icons/icon.ico"],
-    "resources": ["engines/*"]
+    "icon": ["icons/icon.png", "icons/icon.ico"]
   }
 }

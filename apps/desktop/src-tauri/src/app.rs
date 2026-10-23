@@ -11,6 +11,7 @@ use crate::engine_commands;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
+use crate::helper_manager::{self, HelperManager};
 
 const SHUTDOWN_RUNNING: u8 = 0;
 const SHUTDOWN_IN_PROGRESS: u8 = 1;
@@ -118,17 +119,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             engine_commands::test_aria2_config,
             engine_commands::test_ytdlp_config,
             engine_commands::get_engine_status,
+            helper_manager::get_helper_status,
+            helper_manager::install_helper,
+            helper_manager::cancel_helper_install,
         ])
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let downloads_dir = app.path().download_dir()?;
             let bundled_engines_dir = app.path().resource_dir()?.join("engines");
             let database_path = app_data_dir.join("fetchx.db");
+            let helper_manager =
+                HelperManager::new(app_data_dir.join("bin"), bundled_engines_dir.clone());
             let state = tauri::async_runtime::block_on(AppState::initialize(
                 database_path,
                 downloads_dir,
                 bundled_engines_dir,
             ))?;
+            if !app.manage(helper_manager) {
+                return Err("desktop helper manager was already initialized".into());
+            }
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
@@ -221,9 +230,12 @@ mod tests {
     async fn desktop_state_initializes_through_core_services()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let state =
-            AppState::initialize(root.path().join("fetchx.db"), root.path().join("downloads"))
-                .await?;
+        let state = AppState::initialize(
+            root.path().join("fetchx.db"),
+            root.path().join("downloads"),
+            root.path().join("engines"),
+        )
+        .await?;
 
         let core_services = state
             .core_services

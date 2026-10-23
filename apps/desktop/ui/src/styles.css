@@ -1443,6 +1443,51 @@ a {
   border-top: 1px solid var(--color-border-light);
 }
 
+.helper-manager-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.helper-manager-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-sm);
+}
+
+.helper-manager-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.helper-manager-available {
+  color: var(--color-success);
+}
+
+.helper-manager-missing,
+.helper-manager-error {
+  color: var(--color-danger);
+}
+
+.helper-manager-path {
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.helper-manager-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
 /* ============================================================
    Secret field
    ============================================================ */

@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 import {
+  cancelHelperInstall,
+  getHelperStatus,
   getEngineConfig,
   getEngineStatus,
+  installHelper,
   resetEngineConfig,
   saveEngineConfig,
   testAria2Config,
@@ -13,6 +17,9 @@ import type {
   EngineConfigDto,
   EngineInstanceStatus,
   EngineStatus,
+  HelperInstallProgress,
+  HelperStatus,
+  ManagedHelperId,
   SaveAria2ConfigRequest,
   ResourcePolicyDto,
   ResourceProfile,
@@ -459,37 +466,150 @@ function isResourceProfile(value: string): value is ResourceProfile {
   return ["unlimited", "normal", "limited", "night", "custom"].includes(value);
 }
 
-const HELPER_INSTALL_LINKS: Record<string, string> = {
-  aria2: "https://github.com/aria2/aria2/releases",
-  yt_dlp: "https://github.com/yt-dlp/yt-dlp/releases",
-  ffmpeg: "https://www.ffmpeg.org/download.html",
-  ffprobe: "https://www.ffmpeg.org/download.html",
-};
+function HelperInstallPanel({
+  onConfigChanged,
+}: {
+  onConfigChanged: (config: EngineConfigDto) => void;
+}) {
+  const [helpers, setHelpers] = useState<HelperStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState<Partial<Record<ManagedHelperId, HelperInstallProgress>>>({});
+  const [errors, setErrors] = useState<Partial<Record<ManagedHelperId, string>>>({});
 
-function HelperInstallPanel() {
-  const openLink = (key: string) => {
-    const url = HELPER_INSTALL_LINKS[key];
-    if (url) {
-      window.open(url, "_blank", "noopener,noreferrer");
+  const refresh = useCallback(async () => {
+    try {
+      setHelpers(await getHelperStatus());
+    } catch (cause) {
+      setErrors((current) => ({ ...current, aria2c: errorMessage(cause) }));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    let unlisten: (() => void) | undefined;
+    void listen<HelperInstallProgress>("helper-install-progress", (event) => {
+      const update = event.payload;
+      setProgress((current) => ({ ...current, [update.helper]: update }));
+      if (update.phase === "completed" || update.phase === "failed" || update.phase === "cancelled") {
+        if (update.message) {
+          setErrors((current) => ({ ...current, [update.helper]: update.message ?? undefined }));
+        }
+        if (update.phase === "completed") {
+          setErrors((current) => ({ ...current, [update.helper]: undefined }));
+          void refresh();
+        }
+      }
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
+  }, [refresh]);
+
+  const install = async (helper: ManagedHelperId) => {
+    setErrors((current) => ({ ...current, [helper]: undefined }));
+    try {
+      await installHelper(helper);
+      onConfigChanged(await getEngineConfig());
+      await refresh();
+    } catch (cause) {
+      setErrors((current) => ({ ...current, [helper]: errorMessage(cause) }));
+      await refresh();
     }
   };
 
+  const cancel = async (helper: ManagedHelperId) => {
+    try {
+      await cancelHelperInstall(helper);
+    } catch (cause) {
+      setErrors((current) => ({ ...current, [helper]: errorMessage(cause) }));
+    }
+  };
+
+  const items: Array<{ id: ManagedHelperId; name: string }> = [
+    { id: "aria2c", name: "aria2c" },
+    { id: "yt_dlp", name: "yt-dlp" },
+    { id: "ffmpeg", name: "FFmpeg" },
+    { id: "ffprobe", name: "FFprobe" },
+  ];
+
   return (
-    <div className="settings-notice" role="note">
-      <strong>Optional helper install:</strong> aria2, yt-dlp, FFmpeg, and FFprobe are external tools.
-      If they are missing, use the links below to install them before enabling the corresponding engine.
-      <div className="settings-actions" style={{ marginTop: "0.75rem", justifyContent: "flex-start" }}>
-        <button className="button button-secondary" onClick={() => openLink("aria2")}>
-          Install aria2
-        </button>
-        <button className="button button-secondary" onClick={() => openLink("yt_dlp")}>
-          Install yt-dlp
-        </button>
-        <button className="button button-secondary" onClick={() => openLink("ffmpeg")}>
-          Install FFmpeg / FFprobe
-        </button>
+    <section className="settings-section" aria-labelledby="helper-manager-heading">
+      <div className="settings-section-header">
+        <h3 id="helper-manager-heading" className="settings-section-title">Optional helper manager</h3>
       </div>
-    </div>
+      <p className="settings-hint">
+        Optional tools are installed only when you choose Install. FetchX downloads from fixed HTTPS sources,
+        verifies the published SHA-256 checksum, and stores executables in its per-user application data folder.
+        Engine changes take effect after restarting FetchX.
+      </p>
+      {loading ? (
+        <div className="settings-loading" role="status">Checking installed helpers…</div>
+      ) : (
+        <div className="helper-manager-list">
+          {items.map(({ id, name }) => {
+            const status = helpers.find((helper) => helper.helper === id);
+            const current = progress[id];
+            const busy = current !== undefined
+              && ["downloading", "verifying", "installing"].includes(current.phase);
+            const packageBusy = id === "ffmpeg" || id === "ffprobe"
+              ? progress.ffmpeg !== undefined && ["downloading", "verifying", "installing"].includes(progress.ffmpeg.phase)
+                || progress.ffprobe !== undefined && ["downloading", "verifying", "installing"].includes(progress.ffprobe.phase)
+              : busy;
+            return (
+              <div className="helper-manager-item" key={id}>
+                <div className="helper-manager-details">
+                  <strong>{name}</strong>
+                  <span className={status?.available ? "helper-manager-available" : "helper-manager-missing"}>
+                    {status?.available ? `Installed · ${status.version}` : status?.installed ? "Installed · validation failed" : "Not installed"}
+                  </span>
+                  {status?.executable_path && (
+                    <span className="helper-manager-path" title={status.executable_path}>
+                      {status.executable_path}
+                    </span>
+                  )}
+                  {status?.architecture && <span className="settings-hint">Architecture: {status.architecture}</span>}
+                  {!status?.available && status?.validation && (
+                    <span className="settings-hint">{status.validation}</span>
+                  )}
+                  {current && busy && (
+                    <span className="settings-hint" role="status" aria-live="polite">
+                      {current.phase === "downloading" && current.total_bytes
+                        ? `Downloading… ${Math.round(current.received_bytes * 100 / current.total_bytes)}%`
+                        : `${current.phase[0].toUpperCase()}${current.phase.slice(1)}…`}
+                    </span>
+                  )}
+                  {errors[id] && <span className="helper-manager-error" role="alert">{errors[id]}</span>}
+                </div>
+                <div className="helper-manager-actions">
+                  <button
+                    className="button button-secondary"
+                    disabled={!status?.install_supported || packageBusy}
+                    onClick={() => void install(id)}
+                  >
+                    {packageBusy ? "Working…" : status?.installed ? "Reinstall / Update" : "Install"}
+                  </button>
+                  {packageBusy && current?.phase !== "installing" && (
+                    <button
+                      className="button button-secondary"
+                      onClick={() => void cancel(id)}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <p className="settings-hint">
+        aria2 and yt-dlp use their upstream release artifacts; aria2 is checksum-pinned to the Microsoft WinGet manifest.
+        FFmpeg and FFprobe use Gyan.dev’s Windows essentials build and published checksum. Windows x64 is supported;
+        other architectures are rejected.
+      </p>
+    </section>
   );
 }
 
@@ -777,7 +897,7 @@ export function SettingsPage() {
         settings. Disabling an engine does not cancel downloads already in progress.
       </div>
 
-      <HelperInstallPanel />
+      <HelperInstallPanel onConfigChanged={setCfg} />
 
       {cfg && (
         <>
