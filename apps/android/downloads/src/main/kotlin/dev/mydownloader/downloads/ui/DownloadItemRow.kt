@@ -254,14 +254,33 @@ fun DownloadItemRow(
                     }
                 }
 
+                is DownloadState.PublicationPending -> {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Downloaded locally; public copy pending",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                    Text(
+                        text = state.destinationPath,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        TextButton(onClick = onRemove) { Text("Remove") }
+                    }
+                }
+
                 is DownloadState.Completed -> {
                     Spacer(modifier = Modifier.height(4.dp))
 
                     // Show destination file name as a hint.
-                    val destFileName = state.destinationPath
-                        .substringAfterLast('/')
-                        .substringAfterLast('\\')
-                        .ifBlank { null }
+                    val destFileName = item.fileName.ifBlank { null }
                     if (destFileName != null) {
                         Text(
                             text = destFileName,

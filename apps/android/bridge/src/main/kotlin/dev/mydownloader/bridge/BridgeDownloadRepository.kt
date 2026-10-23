@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class BridgeDownloadRepository(
     private val service: DownloadService,
+    private val publicDownloadStorage: PublicDownloadStorage,
     private val externalScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : TorrentDownloadRepository {
@@ -70,13 +71,31 @@ class BridgeDownloadRepository(
         // Rust Tokio thread, so all operations inside it must be thread-safe.
         service.addEventListener(object : DownloadEventListener {
             override fun onEvent(event: DownloadEventDto) {
-                mapEvent(event)?.let { _events.tryEmit(it) }
-                // Refresh the snapshot on every event so observeDownloads() stays current.
                 val generation = refreshGeneration.incrementAndGet()
                 externalScope.launch {
                     try {
+                        val completedStage = (event as? DownloadEventDto.Updated)
+                            ?.item
+                            ?.takeIf {
+                                it.status == DownloadStatusDto.COMPLETED &&
+                                    publicDownloadStorage.isStagingPath(it.destination)
+                            }
+                        if (completedStage != null) {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    publicDownloadStorage.publishCompleted(completedStage.destination)
+                                }
+                                mapEvent(event)?.let { _events.emit(it) }
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                Log.e(TAG, "Could not publish completed download to public storage", error)
+                            }
+                        } else {
+                            mapEvent(event)?.let { _events.emit(it) }
+                        }
                         val items = withContext(Dispatchers.IO) {
-                            service.listDownloads().map(::mapItem)
+                            loadDownloadsAndReconcile()
                         }
                         if (generation == refreshGeneration.get()) _downloads.value = items
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -93,7 +112,7 @@ class BridgeDownloadRepository(
             try {
                 val generation = refreshGeneration.incrementAndGet()
                 val items = withContext(Dispatchers.IO) {
-                    service.listDownloads().map(::mapItem)
+                    loadDownloadsAndReconcile()
                 }
                 if (generation == refreshGeneration.get()) _downloads.value = items
                 initialSnapshotReady.complete(Unit)
@@ -130,9 +149,11 @@ class BridgeDownloadRepository(
             service.addTorrentFileDownload(url.trim(), mapPriorityToDto(priority))
         } else if (isMediaUrl(url)) {
             val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) destinationPath else "$destinationPath.mp4"
-            service.addMediaDownload(url, fileName, safeDestination, mapPriorityToDto(priority), null)
+            val stagingPath = publicDownloadStorage.stageDestinationIfPublic(safeDestination)
+            service.addMediaDownload(url, fileName, stagingPath, mapPriorityToDto(priority), null)
         } else {
-            service.addDownload(url, fileName, destinationPath, mapPriorityToDto(priority))
+            val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
+            service.addDownload(url, fileName, stagingPath, mapPriorityToDto(priority))
         }
     }
 
@@ -143,10 +164,11 @@ class BridgeDownloadRepository(
         priority: DownloadPriority,
         formatId: String?,
     ): String = withContext(Dispatchers.IO) {
+        val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
         service.addMediaDownload(
             url,
             fileName,
-            destinationPath,
+            stagingPath,
             mapPriorityToDto(priority),
             formatId,
         )
@@ -241,11 +263,12 @@ class BridgeDownloadRepository(
         destinationDirectory: String,
         priority: DownloadPriority,
     ): String = withContext(Dispatchers.IO) {
+        val destination = publicDownloadStorage.torrentDirectoryIfPublic(destinationDirectory)
         service.addTorrentFileDownloadSelected(
             torrentPath,
             mapPriorityToDto(priority),
             selectedFileIndexes.map(Int::toUInt),
-            destinationDirectory,
+            destination,
         )
     }
 
@@ -262,7 +285,17 @@ class BridgeDownloadRepository(
         withContext(Dispatchers.IO) { service.cancelDownload(downloadId) }
 
     override suspend fun removeDownload(downloadId: String, deleteFile: Boolean) =
-        withContext(Dispatchers.IO) { service.removeDownload(downloadId) }
+        withContext(Dispatchers.IO) {
+            val destination = service.getDownload(downloadId)?.destination
+            service.removeDownload(downloadId)
+            if (destination != null && publicDownloadStorage.isStagingPath(destination)) {
+                if (deleteFile) {
+                    publicDownloadStorage.deletePublished(destination)
+                } else {
+                    publicDownloadStorage.forgetPublication(destination)
+                }
+            }
+        }
 
     override suspend fun retryDownload(downloadId: String): String =
         withContext(Dispatchers.IO) { service.retryDownload(downloadId) }
@@ -279,12 +312,40 @@ class BridgeDownloadRepository(
 
     override suspend fun getDownload(downloadId: String): DownloadItem? =
         withContext(Dispatchers.IO) {
-            service.getDownload(downloadId)?.let(::mapItem)
+            service.getDownload(downloadId)?.let { dto ->
+                if (dto.status == DownloadStatusDto.COMPLETED) {
+                    reconcileCompleted(dto.destination)
+                }
+                mapItem(dto)
+            }
         }
 
     suspend fun hasRelevantDownloads(): Boolean = withContext(Dispatchers.IO) {
-        service.listDownloads().map(::mapItem).any { item ->
+        loadDownloadsAndReconcile().any { item ->
             item.state is DownloadState.Active || item.state is DownloadState.Queued
+        }
+    }
+
+    private fun loadDownloadsAndReconcile(): List<DownloadItem> {
+        val items = service.listDownloads()
+        items.asSequence()
+            .filter { it.status == DownloadStatusDto.COMPLETED }
+            .forEach { reconcileCompleted(it.destination) }
+        return items.map(::mapItem)
+    }
+
+    private fun reconcileCompleted(destination: String) {
+        if (!publicDownloadStorage.isStagingPath(destination)) {
+            return
+        }
+        if (publicDownloadStorage.publishedUri(destination) != null) {
+            publicDownloadStorage.cleanupPublishedStagingArtifacts(destination)
+            return
+        }
+        try {
+            publicDownloadStorage.reconcileCompleted(destination)
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not reconcile public download publication", error)
         }
     }
 
@@ -294,20 +355,23 @@ class BridgeDownloadRepository(
      * Converts a [DownloadInfoDto] from Rust into the Android [DownloadItem].
      * Sentinel values (-1) for numeric optional fields are mapped to null.
      */
-    internal fun mapItem(dto: DownloadInfoDto): DownloadItem = DownloadItem(
-        id = dto.id,
-        fileName = dto.filename,
-        url = dto.url,
-        destinationPath = dto.destination,
-        state = mapState(dto),
-        priority = mapPriorityFromDto(dto.priority),
-        engine = dto.engine,
-        mimeType = null,
-        totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
-        createdAt = dto.createdAtMillis,
-    )
+    internal fun mapItem(dto: DownloadInfoDto): DownloadItem {
+        val destination = publicDownloadStorage.displayDestination(dto.destination)
+        return DownloadItem(
+            id = dto.id,
+            fileName = dto.filename,
+            url = dto.url,
+            destinationPath = destination,
+            state = mapState(dto, destination),
+            priority = mapPriorityFromDto(dto.priority),
+            engine = dto.engine,
+            mimeType = null,
+            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
+            createdAt = dto.createdAtMillis,
+        )
+    }
 
-    private fun mapState(dto: DownloadInfoDto): DownloadState = when (dto.status) {
+    private fun mapState(dto: DownloadInfoDto, displayDestination: String): DownloadState = when (dto.status) {
         DownloadStatusDto.QUEUED -> DownloadState.Queued
         DownloadStatusDto.METADATA_ACQUIRING -> DownloadState.MetadataAcquiring(
             downloadedBytes = dto.progress.downloadedBytes.toLong(),
@@ -325,10 +389,15 @@ class BridgeDownloadRepository(
             downloadedBytes = dto.progress.downloadedBytes.toLong(),
             totalBytes = dto.progress.totalBytes.takeIf { it >= 0L },
         )
-        DownloadStatusDto.COMPLETED -> DownloadState.Completed(
-            totalBytes = dto.progress.totalBytes.takeIf { it >= 0L } ?: 0L,
-            destinationPath = dto.destination,
-        )
+        DownloadStatusDto.COMPLETED -> {
+            val totalBytes = dto.progress.totalBytes.takeIf { it >= 0L } ?: 0L
+            completedDownloadState(
+                totalBytes = totalBytes,
+                destinationPath = displayDestination,
+                isPublicStagingPath = publicDownloadStorage.isStagingPath(dto.destination),
+                isPublished = publicDownloadStorage.publishedUri(dto.destination) != null,
+            )
+        }
         DownloadStatusDto.FAILED -> DownloadState.Failed(
             reason = dto.errorMessage ?: "unknown error",
             retryable = true,
@@ -404,6 +473,18 @@ class BridgeDownloadRepository(
         is DownloadEventDto.Removed -> null
     }
 }
+
+internal fun completedDownloadState(
+    totalBytes: Long,
+    destinationPath: String,
+    isPublicStagingPath: Boolean,
+    isPublished: Boolean,
+): DownloadState =
+    if (isPublicStagingPath && !isPublished) {
+        DownloadState.PublicationPending(totalBytes, destinationPath)
+    } else {
+        DownloadState.Completed(totalBytes, destinationPath)
+    }
 
 internal fun isMediaUrl(url: String): Boolean {
     val host = try {

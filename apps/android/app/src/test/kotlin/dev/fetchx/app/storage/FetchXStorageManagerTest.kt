@@ -17,6 +17,7 @@ class FetchXStorageManagerTest {
         val root = temporaryFolder.root.toPath()
         val files = Files.createDirectories(root.resolve("files"))
         val downloads = Files.createDirectories(root.resolve("external"))
+        val staging = Files.createDirectories(files.resolve("downloads/public-staging"))
         val cache = Files.createDirectories(root.resolve("cache"))
         val profile = Files.createDirectories(files.resolve("mozilla/profile"))
         val workspace = Files.createDirectories(downloads.resolve(".fetchx-ytdlp-active"))
@@ -25,6 +26,7 @@ class FetchXStorageManagerTest {
 
         writeBytes(downloads.resolve("complete.bin"), 13)
         writeBytes(downloads.resolve("active.part"), 5)
+        writeBytes(staging.resolve("staged-download.part"), 4)
         writeBytes(workspace.resolve("fragment.part"), 7)
         writeBytes(downloads.resolve(".fetchx-ffmpeg-active/output.tmp"), 11)
         writeBytes(runtime.resolve("progress"), 29)
@@ -40,19 +42,20 @@ class FetchXStorageManagerTest {
             StorageLocations(
                 filesDir = files,
                 downloadsDir = downloads,
+                stagingDir = staging,
                 cacheDirs = listOf(cache),
                 databaseFile = database,
                 customSafLocationConfigured = true,
             ),
         )
 
-        assertEquals(18, usage.downloadsBytes)
+        assertEquals(22, usage.downloadsBytes)
         assertEquals(11, usage.browserDataBytes)
         assertEquals(42, usage.browserCacheBytes)
         assertEquals(47, usage.temporaryBytes)
         assertEquals(9, usage.databaseBytes)
         assertEquals(17, usage.otherAppDataBytes)
-        assertEquals(144, usage.totalBytes)
+        assertEquals(148, usage.totalBytes)
         assertTrue(usage.customSafLocationConfigured)
     }
 

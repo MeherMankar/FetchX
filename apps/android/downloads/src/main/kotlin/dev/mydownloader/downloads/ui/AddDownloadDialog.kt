@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import dev.fetchx.bridge.BridgeInitializer
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -140,8 +141,11 @@ fun AddDownloadDialog(
     val rawFileName = fileName.ifBlank {
         url.trimEnd('/').substringAfterLast('/').ifBlank { "download" }
     }
-    val resolvedFileName = dev.fetchx.downloads.storage.StorageManager(context)
-        .uniqueFileName(java.io.File(downloadsDir), rawFileName)
+    val resolvedFileName = remember(downloadsDir, rawFileName) {
+        BridgeInitializer.publicDownloadStorageOrNull()?.uniquePublicFileName(rawFileName)
+            ?: dev.fetchx.downloads.storage.StorageManager(context)
+                .uniqueFileName(java.io.File(downloadsDir), rawFileName)
+    }
     val destinationPath = "$downloadsDir/$resolvedFileName"
 
     AlertDialog(

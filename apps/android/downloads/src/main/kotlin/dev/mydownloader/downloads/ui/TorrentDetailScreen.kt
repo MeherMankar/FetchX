@@ -466,6 +466,7 @@ private fun stateLabel(state: DownloadState): String = when (state) {
     is DownloadState.Active -> "Downloading"
     is DownloadState.Cancelled -> "Cancelled"
     is DownloadState.Completed -> "Completed"
+    is DownloadState.PublicationPending -> "Public copy pending"
     is DownloadState.Failed -> "Failed"
     is DownloadState.MetadataAcquiring -> "Acquiring metadata"
     is DownloadState.Paused -> "Paused"

@@ -124,8 +124,13 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     val browserVersionName = remember(context) {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"
     }
-    val downloadsDir: String = context.getExternalFilesDir(null)?.absolutePath
-        ?: "${context.filesDir.absolutePath}/downloads"
+    val downloadsDir = BridgeInitializer.publicDownloadStorageOrNull()?.defaultDirectoryPath()
+        ?: java.io.File(
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            ),
+            "FetchX",
+        ).absolutePath
 
     // Handle notification deep-link: navigate to Downloads, then to TorrentDetailScreen
     // for torrent downloads (engine == "native_torrent" or "aria2").
@@ -190,15 +195,19 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                         navController.navigate(Screen.TorrentDetail.route(id))
                     },
                     onPlayFile = { path ->
-                        val file = java.io.File(path)
-                        val uri = try {
-                            androidx.core.content.FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.fileprovider",
-                                file,
-                            )
-                        } catch (_: Exception) {
-                            null
+                        val uri = if (path.startsWith("content://")) {
+                            Uri.parse(path)
+                        } else {
+                            val file = java.io.File(path)
+                            try {
+                                androidx.core.content.FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file,
+                                )
+                            } catch (_: Exception) {
+                                null
+                            }
                         }
                         if (uri == null) {
                             android.widget.Toast.makeText(
@@ -338,7 +347,9 @@ internal fun mediaDownloadDestination(
 ): String {
     val directory = File(downloadsDir)
     val baseName = sanitizeMediaFileName(title)
-    val safeName = StorageManager(context).uniqueFileName(directory, baseName)
+    val safeName = BridgeInitializer.publicDownloadStorageOrNull()
+        ?.uniquePublicFileName(baseName)
+        ?: StorageManager(context).uniqueFileName(directory, baseName)
     return File(directory, safeName).absolutePath
 }
 

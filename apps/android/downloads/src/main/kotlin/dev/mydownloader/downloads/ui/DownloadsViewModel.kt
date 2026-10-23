@@ -118,7 +118,13 @@ class DownloadsViewModel(
 
     /** Downloads that finished successfully. */
     val completedDownloads: StateFlow<List<DownloadItem>> = downloads
-        .map { list -> list.filter { it.state is DownloadState.Completed || it.state is DownloadState.Stopped } }
+        .map {
+            list -> list.filter {
+                it.state is DownloadState.Completed ||
+                    it.state is DownloadState.PublicationPending ||
+                    it.state is DownloadState.Stopped
+            }
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),

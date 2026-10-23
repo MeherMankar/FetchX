@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -142,9 +143,13 @@ class DownloadNotificationManager(
         cancel(item.id)
         val size = (item.state as? DownloadState.Completed)?.let { " · ${formatBytes(it.totalBytes)}" } ?: ""
         val genericTitle = "Download completed"
-        // Scan the completed file into MediaStore so it appears in public Downloads/FetchX
         (item.state as? DownloadState.Completed)?.let { state ->
-            scanCompletedFileToMediaStore(state.destinationPath)
+            if (!state.destinationPath.startsWith("content://")) {
+                scanCompletedFileToMediaStore(
+                    Uri.parse(state.destinationPath).takeIf { it.scheme == "file" }?.path
+                        ?: state.destinationPath,
+                )
+            }
         }
         val b = NotificationCompat.Builder(context, CHANNEL_COMPLETE)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)

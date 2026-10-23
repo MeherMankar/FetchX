@@ -82,6 +82,7 @@ class DownloadForegroundService : Service() {
                             notificationManager.notifyTorrentStatus(item, "Seeding")
                         is DownloadState.Paused -> notificationManager.notifyPaused(item)
                         is DownloadState.Completed -> notificationManager.notifyCompleted(item)
+                        is DownloadState.PublicationPending -> Unit
                         is DownloadState.Stopped ->
                             notificationManager.notifyTorrentStatus(item, "Seeding stopped", ongoing = false)
                         is DownloadState.Failed -> notificationManager.notifyFailed(item)

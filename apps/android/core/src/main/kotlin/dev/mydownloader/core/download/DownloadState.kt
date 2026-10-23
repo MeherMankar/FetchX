@@ -44,6 +44,12 @@ sealed class DownloadState {
         val destinationPath: String
     ) : DownloadState()
 
+    /** Rust completed a private staging file, but Android public publication has not succeeded yet. */
+    data class PublicationPending(
+        val totalBytes: Long,
+        val destinationPath: String,
+    ) : DownloadState()
+
     /** Download failed. */
     data class Failed(
         val reason: String,

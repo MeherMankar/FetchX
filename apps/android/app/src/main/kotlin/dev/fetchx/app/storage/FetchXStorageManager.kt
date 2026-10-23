@@ -1,6 +1,7 @@
 package dev.fetchx.app.storage
 
 import android.content.Context
+import dev.fetchx.bridge.PublicDownloadStorage
 import java.io.IOException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
@@ -26,6 +27,8 @@ data class FetchXStorageUsage(
 internal data class StorageLocations(
     val filesDir: Path,
     val downloadsDir: Path,
+    val stagingDir: Path? = null,
+    val publishedDownloadsBytes: Long = 0L,
     val cacheDirs: List<Path>,
     val databaseFile: Path,
     val customSafLocationConfigured: Boolean,
@@ -47,6 +50,8 @@ class FetchXStorageManager(context: Context) {
             StorageLocations(
                 filesDir = filesDir,
                 downloadsDir = downloadsDir,
+                stagingDir = filesDir.resolve("downloads/public-staging"),
+                publishedDownloadsBytes = PublicDownloadStorage(context).publicDownloadsBytes(),
                 cacheDirs = listOfNotNull(
                     context.cacheDir.toPath(),
                     context.externalCacheDir?.toPath(),
@@ -62,6 +67,7 @@ class FetchXStorageManager(context: Context) {
 internal fun calculateStorageUsage(locations: StorageLocations): FetchXStorageUsage {
     val filesDir = locations.filesDir.toAbsolutePath().normalize()
     val downloadsDir = locations.downloadsDir.toAbsolutePath().normalize()
+    val stagingDir = locations.stagingDir?.toAbsolutePath()?.normalize()
     val browserProfileDir = filesDir.resolve("mozilla")
     val runtimeDir = filesDir.resolve("runtime")
     val databaseFiles = listOf(
@@ -75,9 +81,12 @@ internal fun calculateStorageUsage(locations: StorageLocations): FetchXStorageUs
     val internalExclusions = mutableSetOf(browserProfileDir, runtimeDir)
     internalExclusions.addAll(databaseFiles)
     if (downloadsDir.startsWith(filesDir)) internalExclusions.add(downloadsDir)
+    stagingDir?.takeIf { it.startsWith(filesDir) }?.let(internalExclusions::add)
 
     return FetchXStorageUsage(
-        downloadsBytes = directorySize(downloadsDir, workspaces.toSet()),
+        downloadsBytes = directorySize(downloadsDir, workspaces.toSet()) +
+            (stagingDir?.let(::directorySize) ?: 0L) +
+            locations.publishedDownloadsBytes,
         browserDataBytes = browserDataBytes,
         browserCacheBytes = profileCacheBytes +
             locations.cacheDirs.sumOf { directorySize(it) },

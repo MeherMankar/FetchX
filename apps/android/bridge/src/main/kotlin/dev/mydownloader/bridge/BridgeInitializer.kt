@@ -34,6 +34,9 @@ object BridgeInitializer {
     @Volatile
     private var repository: BridgeDownloadRepository? = null
 
+    @Volatile
+    private var publicDownloadStorage: PublicDownloadStorage? = null
+
     /** Non-null if the last [initialize] call failed; null on success. */
     @Volatile
     var initError: Throwable? = null
@@ -99,8 +102,10 @@ object BridgeInitializer {
                 val svc = DownloadService(config, ytDlpRuntime)
                 service = svc
 
-                val repo = BridgeDownloadRepository(svc)
+                val storage = PublicDownloadStorage(context)
+                val repo = BridgeDownloadRepository(svc, storage)
                 repository = repo
+                publicDownloadStorage = storage
                 initError = null
                 Log.i(TAG, "Bridge initialized successfully")
                 return repo
@@ -118,6 +123,8 @@ object BridgeInitializer {
      */
     fun repositoryOrNull(): BridgeDownloadRepository? = repository
 
+    fun publicDownloadStorageOrNull(): PublicDownloadStorage? = publicDownloadStorage
+
     /**
      * Returns the initialized repository, or throws if [initialize] was not called first.
      */
@@ -133,6 +140,7 @@ object BridgeInitializer {
             service?.shutdown()
             service = null
             repository = null
+            publicDownloadStorage = null
         }
     }
 }
