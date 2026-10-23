@@ -49,6 +49,7 @@ fn make_config(root: &std::path::Path) -> CoreServicesConfig {
         database_path: root.join("fetchx.db"),
         downloads_dir: root.join("downloads"),
         runtime_dir: root.join("runtime"),
+        bundled_engines_dir: None,
     }
 }
 

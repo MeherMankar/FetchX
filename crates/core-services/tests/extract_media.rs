@@ -62,6 +62,7 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         database_path: root.path().join("fetchx.db"),
         downloads_dir: root.path().join("downloads"),
         runtime_dir: root.path().join("runtime"),
+        bundled_engines_dir: None,
     };
 
     // Enable yt-dlp so the YtDlpExtractor is registered in the registry.

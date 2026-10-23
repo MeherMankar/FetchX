@@ -15,6 +15,7 @@
 //!     database_path: PathBuf::from("/data/fetchx.db"),
 //!     downloads_dir: PathBuf::from("/downloads"),
 //!     runtime_dir:   PathBuf::from("/tmp/fetchx-runtime"),
+//!     bundled_engines_dir: None,
 //! };
 //! let services = CoreServices::start(config).await?;
 //! // use services.queue(), services.scheduler(), etc.
@@ -1479,6 +1480,7 @@ mod tests {
             database_path: root.join("fetchx.db"),
             downloads_dir: root.join("downloads"),
             runtime_dir: root.join("runtime"),
+            bundled_engines_dir: None,
         }
     }
 
@@ -1563,6 +1565,7 @@ mod tests {
             database_path: dir.path().join("fetchx.db"),
             downloads_dir: dir.path().join("downloads"),
             runtime_dir: dir.path().join("runtime"),
+            bundled_engines_dir: None,
         })
         .await?;
 
