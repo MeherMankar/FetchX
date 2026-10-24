@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.io.File
 
 private val TABS = listOf("All", "Active", "Queued", "Completed", "Failed", "Cancelled")
 
@@ -70,6 +71,11 @@ fun DownloadsScreen(
     val torrentTelemetry by viewModel.torrentTelemetry.collectAsStateWithLifecycle()
     val torrentMetadata by viewModel.torrentMetadata.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val reservedFileNames = remember(allDownloads) {
+        allDownloads.flatMap { item ->
+            listOf(item.fileName, File(item.destinationPath).name)
+        }.filter(String::isNotBlank).toSet()
+    }
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
@@ -231,6 +237,7 @@ fun DownloadsScreen(
     if (showAddDialog) {
         AddDownloadDialog(
             downloadsDir = downloadsDir,
+            reservedFileNames = reservedFileNames,
             onInspectTorrent = viewModel::inspectTorrentFile,
             onAdd = { url, fileName, destinationPath, priority, selectedTorrentFileIndexes ->
                 viewModel.addDownload(

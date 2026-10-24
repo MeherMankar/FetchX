@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
+import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 
@@ -137,6 +138,11 @@ class BridgeDownloadRepository(
     // ── DownloadRepository interface ──────────────────────────────────────
 
     override fun observeDownloads(): Flow<List<DownloadItem>> = _downloads.asStateFlow()
+
+    fun reservedPublicFileNames(): Set<String> =
+        _downloads.value.flatMap { item ->
+            listOf(item.fileName, File(item.destinationPath).name)
+        }.filter { it.isNotBlank() }.toSet()
 
     suspend fun awaitInitialSnapshot() {
         initialSnapshotReady.await()

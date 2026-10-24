@@ -270,6 +270,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                                                 downloadsDir,
                                                 title,
                                                 context,
+                                                repo.reservedPublicFileNames(),
                                             ),
                                             priority = DownloadPriority.DEFAULT,
                                         )
@@ -344,12 +345,13 @@ internal fun mediaDownloadDestination(
     downloadsDir: String,
     title: String,
     context: android.content.Context,
+    reservedFileNames: Set<String> = emptySet(),
 ): String {
     val directory = File(downloadsDir)
     val baseName = sanitizeMediaFileName(title)
     val safeName = BridgeInitializer.publicDownloadStorageOrNull()
-        ?.uniquePublicFileName(baseName)
-        ?: StorageManager(context).uniqueFileName(directory, baseName)
+        ?.uniquePublicFileName(baseName, reservedFileNames = reservedFileNames)
+        ?: StorageManager(context).uniqueFileName(directory, baseName, reservedFileNames)
     return File(directory, safeName).absolutePath
 }
 

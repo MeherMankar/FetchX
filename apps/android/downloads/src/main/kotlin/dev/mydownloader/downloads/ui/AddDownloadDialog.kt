@@ -56,6 +56,7 @@ private const val MAX_TORRENT_FILE_BYTES = 8 * 1024 * 1024
 @Composable
 fun AddDownloadDialog(
     downloadsDir: String,
+    reservedFileNames: Set<String> = emptySet(),
     onInspectTorrent: suspend (String) -> TorrentMetadata,
     onAdd: (
         url: String,
@@ -141,10 +142,13 @@ fun AddDownloadDialog(
     val rawFileName = fileName.ifBlank {
         url.trimEnd('/').substringAfterLast('/').ifBlank { "download" }
     }
-    val resolvedFileName = remember(downloadsDir, rawFileName) {
-        BridgeInitializer.publicDownloadStorageOrNull()?.uniquePublicFileName(rawFileName)
+    val resolvedFileName = remember(downloadsDir, rawFileName, reservedFileNames) {
+        BridgeInitializer.publicDownloadStorageOrNull()?.uniquePublicFileName(
+            rawFileName,
+            reservedFileNames = reservedFileNames,
+        )
             ?: dev.fetchx.downloads.storage.StorageManager(context)
-                .uniqueFileName(java.io.File(downloadsDir), rawFileName)
+                .uniqueFileName(java.io.File(downloadsDir), rawFileName, reservedFileNames)
     }
     val destinationPath = "$downloadsDir/$resolvedFileName"
 

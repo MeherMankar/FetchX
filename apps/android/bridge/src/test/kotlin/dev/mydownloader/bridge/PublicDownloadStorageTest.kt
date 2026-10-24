@@ -25,15 +25,25 @@ class PublicDownloadStorageTest {
     @Test
     fun `duplicate filename uses stable numbered suffix`() {
         val existing = setOf("archive.zip", "archive (1).zip")
-        val result = uniquePublicFileName("archive.zip") { it in existing }
+        val result = uniqueAvailablePublicFileName("archive.zip") { it in existing }
         assertEquals("archive (2).zip", result)
     }
 
     @Test
     fun `filename without extension receives suffix`() {
-        val result = uniquePublicFileName("download") { it == "download" }
+        val result = uniqueAvailablePublicFileName("download") { it == "download" }
         assertEquals("download (1)", result)
         assertTrue(result.startsWith("download"))
+    }
+
+    @Test
+    fun `filename reserved by an active download receives a suffix`() {
+        val result = uniqueAvailablePublicFileName(
+            desiredName = "archive.zip",
+            reservedFileNames = setOf("archive.zip", "archive (1).zip"),
+        ) { false }
+
+        assertEquals("archive (2).zip", result)
     }
 
     @Test

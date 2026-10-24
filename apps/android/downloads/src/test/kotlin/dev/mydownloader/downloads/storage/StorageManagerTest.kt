@@ -1,5 +1,6 @@
 package dev.fetchx.downloads.storage
 
+import java.nio.file.Files
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -41,6 +42,18 @@ class StorageManagerSanitizeTest {
     @Test fun `sanitize leading dots stripped`() {
         val result = sanitizeFileName("...hidden")
         assertFalse(result.startsWith('.'))
+    }
+
+    @Test fun `unique filename avoids a name reserved by another active download`() {
+        val directory = Files.createTempDirectory("fetchx-storage-test").toFile()
+        try {
+            assertEquals(
+                "archive (1).zip",
+                uniqueAvailableFileName(directory, "archive.zip", setOf("archive.zip")),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 }
 

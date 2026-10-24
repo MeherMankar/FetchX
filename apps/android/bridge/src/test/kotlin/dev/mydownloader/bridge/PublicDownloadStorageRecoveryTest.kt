@@ -173,6 +173,18 @@ class PublicDownloadStorageRecoveryTest {
     }
 
     @Test
+    fun `staging path avoids existing HTTP partial artifacts`() {
+        val fixture = Fixture()
+        File(fixture.stagingDirectory, "file.txt.part").writeBytes(byteArrayOf(1, 2, 3))
+
+        val staging = fixture.storage.stageDestination(
+            File(fixture.publicDirectory, "file.txt").absolutePath,
+        )
+
+        assertEquals(File(fixture.stagingDirectory, "file (1).txt").absolutePath, staging)
+    }
+
+    @Test
     fun `orphaned owned pending entries are removed without touching completed rows`() {
         val fixture = Fixture()
         val staleUri = fixture.mediaStore.insertPending("stale.txt", "text/plain", "Download/FetchX/")

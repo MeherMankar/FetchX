@@ -114,14 +114,25 @@ class StorageManager(private val context: Context) {
      * Returns a non-colliding filename within [dir].
      * "file.zip" -> "file (1).zip" -> "file (2).zip" etc.
      */
-    fun uniqueFileName(dir: File, desiredName: String): String {
-        val safe = sanitizeFileName(desiredName)
-        if (!File(dir, safe).exists()) return safe
-        val dot = safe.lastIndexOf('.')
-        val base = if (dot > 0) safe.substring(0, dot) else safe
-        val ext  = if (dot > 0) safe.substring(dot) else ""
-        var n = 1
-        while (File(dir, "$base ($n)$ext").exists()) n++
-        return "$base ($n)$ext"
+    fun uniqueFileName(
+        dir: File,
+        desiredName: String,
+        reservedFileNames: Set<String> = emptySet(),
+    ): String = uniqueAvailableFileName(dir, sanitizeFileName(desiredName), reservedFileNames)
+}
+
+internal fun uniqueAvailableFileName(
+    dir: File,
+    safeName: String,
+    reservedFileNames: Set<String> = emptySet(),
+): String {
+    if (safeName !in reservedFileNames && !File(dir, safeName).exists()) return safeName
+    val dot = safeName.lastIndexOf('.')
+    val base = if (dot > 0) safeName.substring(0, dot) else safeName
+    val extension = if (dot > 0) safeName.substring(dot) else ""
+    var index = 1
+    while ("$base ($index)$extension" in reservedFileNames || File(dir, "$base ($index)$extension").exists()) {
+        index++
     }
+    return "$base ($index)$extension"
 }

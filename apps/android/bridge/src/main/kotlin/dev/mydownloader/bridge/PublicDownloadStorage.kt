@@ -306,20 +306,23 @@ class PublicDownloadStorage private constructor(
     fun uniquePublicFileName(
         desiredName: String,
         ignoreStagingFileName: String? = null,
+        reservedFileNames: Set<String> = emptySet(),
     ): String {
         val safeName = sanitizeFileName(desiredName)
         if (sdkInt < Build.VERSION_CODES.Q) {
             val directory = File(defaultDirectoryPath())
-            return uniqueFileName(safeName) { File(directory, it).exists() }
+            return uniqueAvailablePublicFileName(safeName, reservedFileNames) {
+                File(directory, it).exists()
+            }
         }
         val existingNames = queryRows().mapTo(mutableSetOf()) { it.displayName }
-        val reservedNames = state.entries()
+        val persistedReservedNames = state.entries()
             .filterKeys { it.startsWith(RESERVATION_PREFIX) }
             .values
             .mapTo(mutableSetOf()) { raw -> decodePublicDownloadReservation(raw).name }
-        return uniqueFileName(safeName) {
-            it in existingNames || it in reservedNames ||
-                (it != ignoreStagingFileName && File(stagingDirectory, it).exists())
+        return uniqueAvailablePublicFileName(safeName, reservedFileNames) {
+            it in existingNames || it in persistedReservedNames ||
+                (it != ignoreStagingFileName && hasStagingArtifacts(it))
         }
     }
 
@@ -338,14 +341,14 @@ class PublicDownloadStorage private constructor(
             "The download staging path escapes its private directory."
         }
         while (
-            stagingFile.exists() ||
+            hasStagingArtifacts(stagingFile.name) ||
             state.contains(publicationKey(stagingFile.absolutePath)) ||
             state.contains(pendingKey(stagingFile.absolutePath)) ||
             state.contains(reservationKey(stagingFile.absolutePath))
         ) {
             val nextName = uniqueFileName(publicFileName) { name ->
                 val path = File(canonicalRoot, name).absolutePath
-                File(canonicalRoot, name).exists() ||
+                hasStagingArtifacts(name) ||
                     state.contains(publicationKey(path)) ||
                     state.contains(pendingKey(path)) ||
                     state.contains(reservationKey(path))
@@ -356,6 +359,13 @@ class PublicDownloadStorage private constructor(
             }
         }
         return stagingFile.absolutePath
+    }
+
+    private fun hasStagingArtifacts(fileName: String): Boolean {
+        if (File(stagingDirectory, fileName).exists()) return true
+        return stagingDirectory.listFiles()?.any {
+            it.name == "$fileName.part" || it.name.startsWith("$fileName.part.")
+        } == true
     }
 
     fun stageDestinationIfPublic(destination: String): String =
@@ -708,7 +718,7 @@ class PublicDownloadStorage private constructor(
     private fun reservationKey(path: String) = "reservation_${sha256(path.toByteArray())}"
 
     private fun uniqueFileName(desiredName: String, exists: (String) -> Boolean): String {
-        return uniquePublicFileName(desiredName, exists)
+        return uniqueAvailablePublicFileName(desiredName, exists = exists)
     }
 
     private fun sanitizeFileName(raw: String): String {
@@ -761,12 +771,16 @@ internal fun sanitizePublicFileName(raw: String): String {
     return result.ifBlank { "download" }
 }
 
-internal fun uniquePublicFileName(desiredName: String, exists: (String) -> Boolean): String {
-    if (!exists(desiredName)) return desiredName
+internal fun uniqueAvailablePublicFileName(
+    desiredName: String,
+    reservedFileNames: Set<String> = emptySet(),
+    exists: (String) -> Boolean,
+): String {
+    if (desiredName !in reservedFileNames && !exists(desiredName)) return desiredName
     val dot = desiredName.lastIndexOf('.')
     val base = if (dot > 0) desiredName.substring(0, dot) else desiredName
     val extension = if (dot > 0) desiredName.substring(dot) else ""
     var index = 1
-    while (exists("$base ($index)$extension")) index++
+    while ("$base ($index)$extension" in reservedFileNames || exists("$base ($index)$extension")) index++
     return "$base ($index)$extension"
 }
