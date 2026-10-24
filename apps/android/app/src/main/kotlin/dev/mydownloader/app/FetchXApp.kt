@@ -13,6 +13,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import dev.fetchx.core.download.DownloadState
 import kotlinx.coroutines.flow.collect
+import java.io.File
+import java.io.IOException
 
 private const val TAG = "FetchXApp"
 
@@ -28,9 +30,16 @@ private const val TAG = "FetchXApp"
 class FetchXApp : Application() {
 
     private val appScope = CoroutineScope(Dispatchers.IO)
+    private var ownsDownloadRuntime = false
 
     override fun onCreate() {
         super.onCreate()
+        val processName = currentProcessName()
+        if (!isMainApplicationProcess(processName, packageName)) {
+            Log.i(TAG, "Skipping download runtime initialization in process ${processName ?: "unknown"}")
+            return
+        }
+        ownsDownloadRuntime = true
         Log.i(TAG, "Application.onCreate started")
         // Initialize the Rust bridge. This starts the Tokio runtime and CoreServices.
         // The returned repository is the single source of truth for download data.
@@ -88,8 +97,28 @@ class FetchXApp : Application() {
         // Note: onTerminate() is only called in emulator/test environments.
         // In production, use ProcessLifecycleOwner for clean shutdown.
         // The bridge's own shutdown is idempotent and safe to call here.
-        GeckoRuntimeHolder.shutdownExtensions()
-        BridgeInitializer.shutdown()
+        if (ownsDownloadRuntime) {
+            GeckoRuntimeHolder.shutdownExtensions()
+            BridgeInitializer.shutdown()
+        }
         super.onTerminate()
     }
 }
+
+internal fun isMainApplicationProcess(processName: String?, packageName: String): Boolean =
+    processName == packageName
+
+private fun currentProcessName(): String? =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        Application.getProcessName()
+    } else {
+        try {
+            File("/proc/self/cmdline")
+                .readText(Charsets.UTF_8)
+                .substringBefore('\u0000')
+                .takeIf(String::isNotBlank)
+        } catch (error: IOException) {
+            Log.e(TAG, "Could not determine current process name", error)
+            null
+        }
+    }

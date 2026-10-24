@@ -52,7 +52,7 @@ Key attack surfaces observed:
 
 ### ID-20O-001 — LOW
 - Severity: LOW
-- Affected component: `apps/android/app/src/main/kotlin/dev/mydownloader/app/MyDownloaderApp.kt`, `apps/android/app/src/main/kotlin/dev/mydownloader/app/service/DownloadForegroundService.kt`
+- Affected component: `apps/android/app/src/main/kotlin/dev/mydownloader/app/FetchXApp.kt`, `apps/android/app/src/main/kotlin/dev/mydownloader/app/service/DownloadForegroundService.kt`
 - Description: The app starts the foreground service during normal app startup regardless of whether any downloads are active. The service then immediately promotes itself to the foreground and continues observing the bridge repository even when there are no active or queued downloads.
 - Attack scenario: An attacker or malicious flow that causes the app to start repeatedly can keep the process alive longer than necessary and increase the app’s background footprint. This is not a privilege escalation, but it expands the runtime and service surface.
 - Impact: Increased background persistence, unnecessary foreground notifications, higher resource usage, and a broader lifecycle attack surface than required.
