@@ -16,6 +16,9 @@ import java.net.URLConnection
 import java.security.MessageDigest
 import java.util.Base64
 
+internal fun publicFetchXDirectory(downloadsRoot: File): File =
+    File(downloadsRoot, "FetchX")
+
 internal data class PublicMediaRow(
     val uri: String,
     val displayName: String,
@@ -252,9 +255,8 @@ class PublicDownloadStorage private constructor(
     constructor(context: Context) : this(
         context.applicationContext,
         File(context.applicationContext.filesDir, "downloads/public-staging"),
-        File(
+        publicFetchXDirectory(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            DIRECTORY_NAME,
         ),
         AndroidPublicDownloadMediaStore(context.applicationContext),
         SharedPreferencesPublicationState(

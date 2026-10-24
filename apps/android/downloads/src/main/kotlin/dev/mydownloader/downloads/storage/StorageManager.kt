@@ -9,12 +9,20 @@ import java.io.File
 /**
  * Manages the download storage location for FetchX.
  *
- * Default: app-specific external Downloads directory — no dangerous permissions required.
+ * Default: the public FetchX directory under the system Downloads folder.
  * Custom: user-selected SAF directory with persisted URI permission.
  *
  * Security: all filenames are sanitized before use. Remote-supplied filenames are never
  * trusted directly. Path traversal sequences are stripped.
  */
+internal fun defaultPublicFetchXDirectory(baseDirectory: File = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)): File {
+    val dir = File(baseDirectory, "FetchX")
+    if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) {
+        throw IllegalStateException("Could not create the public FetchX download directory.")
+    }
+    return dir
+}
+
 class StorageManager(private val context: Context) {
 
     private val prefs by lazy {
@@ -43,18 +51,13 @@ class StorageManager(private val context: Context) {
         return defaultDownloadDirectory().absolutePath
     }
 
-    /** Returns /storage/emulated/0/Android/data/dev.fetchx.app.debug/files/Download, creating it if needed.
+    /** Returns the public default FetchX directory under the device's Downloads root.
      *
-     * Uses app-scoped external storage (getExternalFilesDir) which is always writable
-     * without special permissions. Downloads are scanned into MediaStore on completion
-     * so they appear in the public Downloads/FetchX folder in Files apps.
+     * The normal FetchX destination is /storage/emulated/0/Download/FetchX. This keeps the
+     * app on the public Downloads tree while still using the existing MediaStore publication
+     * workflow for final delivery and scoped storage compliance.
      */
-    fun defaultDownloadDirectory(): File {
-        val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-            ?: context.filesDir.resolve("downloads")
-        dir.mkdirs()
-        return dir
-    }
+    fun defaultDownloadDirectory(): File = defaultPublicFetchXDirectory()
 
     /**
      * Returns a destination file confined to the FetchX download directory.

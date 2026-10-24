@@ -1,5 +1,6 @@
 package dev.fetchx.downloads.storage
 
+import java.io.File
 import java.nio.file.Files
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -37,6 +38,20 @@ class StorageManagerSanitizeTest {
     @Test fun `sanitize too long truncated`() {
         val long = "a".repeat(300)
         assertTrue(sanitizeFileName(long).length <= 200)
+    }
+
+    @Test fun `default fetchx directory resolves under public Downloads`() {
+        val root = Files.createTempDirectory("fetchx-public-downloads").toFile()
+        val downloadsRoot = File(root, "Download")
+        try {
+            val dir = defaultPublicFetchXDirectory(downloadsRoot)
+            assertEquals(File(downloadsRoot, "FetchX").absolutePath, dir.absolutePath)
+            assertFalse(dir.absolutePath.contains("/Android/data/"))
+            assertFalse(dir.absolutePath.contains("/data/data/"))
+            assertTrue(dir.absolutePath.endsWith("Download/FetchX") || dir.absolutePath.endsWith("Download\\FetchX"))
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test fun `sanitize leading dots stripped`() {

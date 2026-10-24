@@ -74,6 +74,8 @@ object BridgeInitializer {
             }
 
             val dataDir = context.filesDir
+            // Rust's default root remains private for implicit torrent destinations.
+            // Public HTTP destinations are staged by BridgeDownloadRepository.
             val dlDir = context.getExternalFilesDir(null)
                 ?: File(dataDir, "downloads")
             dlDir.mkdirs()

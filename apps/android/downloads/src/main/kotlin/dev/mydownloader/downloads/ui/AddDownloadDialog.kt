@@ -298,7 +298,7 @@ fun AddDownloadDialog(
 
                 // Destination hint (read-only)
                 Text(
-                    text = "Saves to: $destinationPath",
+                    text = "Saves to: $downloadsDir",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),

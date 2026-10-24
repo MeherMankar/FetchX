@@ -5,12 +5,23 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import dev.fetchx.core.download.DownloadState
+import java.io.File
 
 class PublicDownloadStorageTest {
 
     @Test
     fun `public folder uses Downloads relative path`() {
         assertEquals("Download/FetchX/", publicRelativeDirectoryPath("Download"))
+    }
+
+    @Test
+    fun `default public directory resolves under public Downloads`() {
+        val downloadsRoot = File(File.separator + "storage", "emulated/0/Download")
+        val actual = publicFetchXDirectory(downloadsRoot).absolutePath
+        assertEquals(File(downloadsRoot, "FetchX").absolutePath, actual)
+        assertTrue(actual.endsWith("Download${File.separator}FetchX"))
+        assertFalse(actual.contains("${File.separator}Android${File.separator}data${File.separator}"))
+        assertFalse(actual.contains("${File.separator}data${File.separator}data${File.separator}"))
     }
 
     @Test
