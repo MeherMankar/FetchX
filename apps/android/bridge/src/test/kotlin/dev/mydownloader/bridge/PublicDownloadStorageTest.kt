@@ -37,6 +37,23 @@ class PublicDownloadStorageTest {
     }
 
     @Test
+    fun `reservation decoder remains compatible with Phase 20Z2 journal values`() {
+        val digest = "0123456789abcdef".repeat(4)
+        val legacy = """{"name":"archive.zip","size":24,"sha256":"$digest"}"""
+
+        assertEquals(
+            PublicDownloadReservation("archive.zip", 24, digest),
+            decodePublicDownloadReservation(legacy),
+        )
+        assertEquals(
+            PublicDownloadReservation("archive.zip", 24, digest),
+            decodePublicDownloadReservation(
+                encodePublicDownloadReservation(PublicDownloadReservation("archive.zip", 24, digest)),
+            ),
+        )
+    }
+
+    @Test
     fun `staged completion remains pending until public publication succeeds`() {
         val pending = completedDownloadState(24, "/storage/emulated/0/Download/FetchX/file.txt", true, false)
         assertTrue(pending is DownloadState.PublicationPending)

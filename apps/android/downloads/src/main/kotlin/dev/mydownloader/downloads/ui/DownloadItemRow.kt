@@ -272,6 +272,7 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
+                        TextButton(onClick = onRetry) { Text("Retry") }
                         TextButton(onClick = onRemove) { Text("Remove") }
                     }
                 }

@@ -8,54 +8,299 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
-import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.nio.charset.StandardCharsets
 import java.net.URLConnection
 import java.security.MessageDigest
+import java.util.Base64
+
+internal data class PublicMediaRow(
+    val uri: String,
+    val displayName: String,
+    val relativePath: String,
+    val size: Long,
+    val isPending: Boolean,
+    val ownerPackageName: String?,
+)
+
+internal interface PublicDownloadMediaStore {
+    fun queryRows(): List<PublicMediaRow>
+    fun find(uri: String): PublicMediaRow?
+    fun insertPending(displayName: String, mimeType: String, relativePath: String): String
+    fun write(uri: String, source: File): Long
+    fun sha256(uri: String): String
+    fun publish(uri: String): Boolean
+    fun delete(uri: String): Boolean
+}
+
+internal interface PublicationStateStore {
+    fun get(key: String): String?
+    fun contains(key: String): Boolean
+    fun entries(): Map<String, String>
+    fun update(changes: Map<String, String?>): Boolean
+}
+
+internal data class PublicDownloadReservation(
+    val name: String,
+    val size: Long,
+    val sha256: String,
+)
+
+internal fun encodePublicDownloadReservation(reservation: PublicDownloadReservation): String =
+    "${reservation.size}:${reservation.sha256}:" +
+        Base64.getEncoder().encodeToString(reservation.name.toByteArray(StandardCharsets.UTF_8))
+
+internal fun decodePublicDownloadReservation(raw: String): PublicDownloadReservation {
+    if (raw.startsWith("{")) {
+        val name = Regex("\"name\"\\s*:\\s*\"([^\"]*)\"").find(raw)?.groupValues?.get(1)
+            ?: throw IllegalArgumentException("Invalid saved public download reservation.")
+        val size = Regex("\"size\"\\s*:\\s*(\\d+)").find(raw)?.groupValues?.get(1)?.toLong()
+            ?: throw IllegalArgumentException("Invalid saved public download reservation.")
+        val digest = Regex("\"sha256\"\\s*:\\s*\"([0-9a-fA-F]{64})\"").find(raw)?.groupValues?.get(1)
+            ?: throw IllegalArgumentException("Invalid saved public download reservation.")
+        return PublicDownloadReservation(sanitizePublicFileName(name), size, digest.lowercase())
+    }
+    val parts = raw.split(':', limit = 3)
+    require(parts.size == 3) { "Invalid saved public download reservation." }
+    val size = parts[0].toLongOrNull()
+        ?: throw IllegalArgumentException("Invalid saved public download reservation.")
+    val digest = parts[1].takeIf { it.matches(Regex("[0-9a-fA-F]{64}")) }?.lowercase()
+        ?: throw IllegalArgumentException("Invalid saved public download reservation.")
+    val name = String(Base64.getDecoder().decode(parts[2]), StandardCharsets.UTF_8)
+    require(name == sanitizePublicFileName(name)) { "Invalid saved public download reservation." }
+    return PublicDownloadReservation(name, size, digest)
+}
+
+private class SharedPreferencesPublicationState(
+    private val preferences: android.content.SharedPreferences,
+) : PublicationStateStore {
+    override fun get(key: String): String? = preferences.getString(key, null)
+
+    override fun contains(key: String): Boolean = preferences.contains(key)
+
+    override fun entries(): Map<String, String> =
+        preferences.all.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap()
+
+    override fun update(changes: Map<String, String?>): Boolean =
+        preferences.edit().apply {
+            changes.forEach { (key, value) ->
+                if (value == null) remove(key) else putString(key, value)
+            }
+        }.commit()
+}
+
+private class AndroidPublicDownloadMediaStore(context: Context) : PublicDownloadMediaStore {
+    private val resolver = context.contentResolver
+    private val packageName = context.packageName
+
+    override fun queryRows(): List<PublicMediaRow> {
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.RELATIVE_PATH,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.IS_PENDING,
+            MediaStore.MediaColumns.OWNER_PACKAGE_NAME,
+        )
+        val cursor = resolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            projection,
+            "${MediaStore.MediaColumns.RELATIVE_PATH} = ?",
+            arrayOf("${Environment.DIRECTORY_DOWNLOADS}/FetchX/"),
+            "${MediaStore.MediaColumns.DISPLAY_NAME} ASC",
+        ) ?: throw IllegalStateException("Could not query public FetchX downloads.")
+        return cursor.use {
+            val idIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            val nameIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+            val pathIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+            val sizeIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            val pendingIndex = it.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
+            val ownerIndex = it.getColumnIndex(MediaStore.MediaColumns.OWNER_PACKAGE_NAME)
+            buildList {
+                while (it.moveToNext()) {
+                    val id = it.getLong(idIndex)
+                    add(
+                        PublicMediaRow(
+                            uri = ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id).toString(),
+                            displayName = it.getString(nameIndex),
+                            relativePath = it.getString(pathIndex),
+                            size = it.getLong(sizeIndex),
+                            isPending = it.getInt(pendingIndex) != 0,
+                            ownerPackageName = if (ownerIndex >= 0) it.getString(ownerIndex) else packageName,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    override fun find(uri: String): PublicMediaRow? {
+        val safeUri = validatedUri(uri)
+        val cursor = resolver.query(
+            safeUri,
+            arrayOf(
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.IS_PENDING,
+                MediaStore.MediaColumns.OWNER_PACKAGE_NAME,
+            ),
+            null,
+            null,
+            null,
+        ) ?: throw IllegalStateException("Could not inspect a public FetchX download.")
+        return cursor.use {
+            if (!it.moveToFirst()) return@use null
+            val ownerIndex = it.getColumnIndex(MediaStore.MediaColumns.OWNER_PACKAGE_NAME)
+            PublicMediaRow(
+                uri = safeUri.toString(),
+                displayName = it.getString(it.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)),
+                relativePath = it.getString(it.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)),
+                size = it.getLong(it.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)),
+                isPending = it.getInt(it.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)) != 0,
+                ownerPackageName = if (ownerIndex >= 0) it.getString(ownerIndex) else packageName,
+            )
+        }
+    }
+
+    override fun insertPending(displayName: String, mimeType: String, relativePath: String): String {
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        return resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.toString()
+            ?: throw IllegalStateException("Android did not create a public download item.")
+    }
+
+    override fun write(uri: String, source: File): Long {
+        val safeUri = validatedUri(uri)
+        return FileInputStream(source).use { input ->
+            resolver.openOutputStream(safeUri, "w")?.use { output ->
+                input.copyTo(output, DEFAULT_BUFFER_SIZE)
+            } ?: throw IllegalStateException("Android could not open the public download for writing.")
+        }
+    }
+
+    override fun sha256(uri: String): String {
+        val safeUri = validatedUri(uri)
+        val input = resolver.openInputStream(safeUri)
+            ?: throw IllegalStateException("Android could not verify the public download.")
+        return input.use(::sha256Stream)
+    }
+
+    override fun publish(uri: String): Boolean {
+        val safeUri = validatedUri(uri)
+        val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+        return resolver.update(safeUri, values, null, null) == 1
+    }
+
+    override fun delete(uri: String): Boolean {
+        val safeUri = validatedUri(uri)
+        return resolver.delete(safeUri, null, null) == 1
+    }
+
+    private fun validatedUri(raw: String): Uri {
+        val uri = Uri.parse(raw)
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val segments = uri.pathSegments
+        require(
+            uri.scheme == collection.scheme &&
+                uri.authority == collection.authority &&
+                segments.size == collection.pathSegments.size + 1 &&
+                segments.take(collection.pathSegments.size) == collection.pathSegments &&
+                segments.last().toLongOrNull()?.let { it > 0L } == true,
+        ) {
+            "Refusing to use a URI outside the MediaStore Downloads collection."
+        }
+        return uri
+    }
+
+    companion object {
+        private fun sha256Stream(input: InputStream): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            input.use { stream ->
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    }
+}
 
 /**
  * Keeps Rust downloads on a private filesystem path and publishes finalized files to Downloads.
  */
-class PublicDownloadStorage(context: Context) {
+class PublicDownloadStorage private constructor(
+    private val context: Context?,
+    private val stagingDirectory: File,
+    private val publicDirectory: File,
+    private val mediaStore: PublicDownloadMediaStore,
+    private val state: PublicationStateStore,
+    private val sdkInt: Int,
+    private val appPackageName: String,
+) {
+    private val failedPublicationAttempts = mutableSetOf<String>()
 
-    private val context = context.applicationContext
-    private val resolver = this.context.contentResolver
-    private val preferences = this.context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
-    private val stagingDirectory = File(this.context.filesDir, "downloads/public-staging")
-
-    fun defaultDirectoryPath(): String {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return context.getExternalFilesDir(null)?.absolutePath
-                ?: File(context.filesDir, "downloads").absolutePath
-        }
-        return File(
+    constructor(context: Context) : this(
+        context.applicationContext,
+        File(context.applicationContext.filesDir, "downloads/public-staging"),
+        File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
             DIRECTORY_NAME,
-        ).absolutePath
+        ),
+        AndroidPublicDownloadMediaStore(context.applicationContext),
+        SharedPreferencesPublicationState(
+            context.applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE),
+        ),
+        Build.VERSION.SDK_INT,
+        context.applicationContext.packageName,
+    )
+
+    internal constructor(
+        stagingDirectory: File,
+        publicDirectory: File,
+        mediaStore: PublicDownloadMediaStore,
+        state: PublicationStateStore,
+        appPackageName: String = "dev.fetchx.test",
+    ) : this(null, stagingDirectory, publicDirectory, mediaStore, state, Build.VERSION_CODES.Q, appPackageName)
+
+    fun defaultDirectoryPath(): String {
+        if (sdkInt < Build.VERSION_CODES.Q) {
+            return context?.getExternalFilesDir(null)?.absolutePath
+                ?: File(context?.filesDir ?: stagingDirectory.parentFile, "downloads").absolutePath
+        }
+        return publicDirectory.absolutePath
     }
 
-    fun publicDirectoryPath(): String = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-        DIRECTORY_NAME,
-    ).absolutePath
+    fun publicDirectoryPath(): String = publicDirectory.absolutePath
 
     fun privateTorrentDirectoryPath(): String =
-        context.getExternalFilesDir(null)?.absolutePath
-            ?: File(context.filesDir, "downloads").absolutePath
+        context?.getExternalFilesDir(null)?.absolutePath
+            ?: File(context?.filesDir ?: stagingDirectory.parentFile, "downloads").absolutePath
 
     fun relativePublicDirectoryPath(): String = publicRelativeDirectoryPath(Environment.DIRECTORY_DOWNLOADS)
 
     fun publicDownloadsBytes(): Long =
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) 0L
+        if (sdkInt < Build.VERSION_CODES.Q) 0L
         else queryRows().asSequence().filterNot { it.isPending }.sumOf { it.size }
 
     fun isPublicTarget(path: String): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-        val target = File(path).absoluteFile
-        return target.parentFile?.canonicalPath == File(publicDirectoryPath()).canonicalPath &&
-            target.name.isNotBlank() && target.name != "." && target.name != ".."
+        if (sdkInt < Build.VERSION_CODES.Q) return false
+        return try {
+            val target = File(path).absoluteFile
+            target.parentFile?.canonicalPath == File(publicDirectoryPath()).canonicalPath &&
+                target.name.isNotBlank() && target.name != "." && target.name != ".."
+        } catch (_: java.io.IOException) {
+            false
+        }
     }
 
     fun uniquePublicFileName(
@@ -63,13 +308,17 @@ class PublicDownloadStorage(context: Context) {
         ignoreStagingFileName: String? = null,
     ): String {
         val safeName = sanitizeFileName(desiredName)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        if (sdkInt < Build.VERSION_CODES.Q) {
             val directory = File(defaultDirectoryPath())
             return uniqueFileName(safeName) { File(directory, it).exists() }
         }
         val existingNames = queryRows().mapTo(mutableSetOf()) { it.displayName }
+        val reservedNames = state.entries()
+            .filterKeys { it.startsWith(RESERVATION_PREFIX) }
+            .values
+            .mapTo(mutableSetOf()) { raw -> decodePublicDownloadReservation(raw).name }
         return uniqueFileName(safeName) {
-            it in existingNames ||
+            it in existingNames || it in reservedNames ||
                 (it != ignoreStagingFileName && File(stagingDirectory, it).exists())
         }
     }
@@ -88,8 +337,23 @@ class PublicDownloadStorage(context: Context) {
         require(stagingFile.parentFile == canonicalRoot) {
             "The download staging path escapes its private directory."
         }
-        if (stagingFile.exists()) {
-            stagingFile = File(canonicalRoot, uniqueFileName(publicFileName) { File(canonicalRoot, it).exists() })
+        while (
+            stagingFile.exists() ||
+            state.contains(publicationKey(stagingFile.absolutePath)) ||
+            state.contains(pendingKey(stagingFile.absolutePath)) ||
+            state.contains(reservationKey(stagingFile.absolutePath))
+        ) {
+            val nextName = uniqueFileName(publicFileName) { name ->
+                val path = File(canonicalRoot, name).absolutePath
+                File(canonicalRoot, name).exists() ||
+                    state.contains(publicationKey(path)) ||
+                    state.contains(pendingKey(path)) ||
+                    state.contains(reservationKey(path))
+            }
+            stagingFile = File(canonicalRoot, nextName).canonicalFile
+            require(stagingFile.parentFile == canonicalRoot) {
+                "The download staging path escapes its private directory."
+            }
         }
         return stagingFile.absolutePath
     }
@@ -98,7 +362,7 @@ class PublicDownloadStorage(context: Context) {
         if (isPublicTarget(destination)) stageDestination(destination) else destination
 
     fun torrentDirectoryIfPublic(destinationDirectory: String): String =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+        if (sdkInt >= Build.VERSION_CODES.Q &&
             File(destinationDirectory).absolutePath == File(publicDirectoryPath()).absolutePath
         ) {
             privateTorrentDirectoryPath()
@@ -123,263 +387,288 @@ class PublicDownloadStorage(context: Context) {
 
     @Synchronized
     fun publishedUri(stagingPath: String): Uri? {
-        if (!isStagingPath(stagingPath)) return null
-        val raw = preferences.getString(publicationKey(stagingPath), null) ?: return null
-        val uri = Uri.parse(raw)
-        if (isPublished(uri)) return uri
-        preferences.edit().remove(publicationKey(stagingPath)).commit()
-        return null
+        return publishedReference(stagingPath)?.let(Uri::parse)
     }
 
     @Synchronized
-    fun publishCompleted(stagingPath: String): Uri {
+    fun publishCompleted(stagingPath: String): Uri? =
+        publishCompletedReference(stagingPath, forceRetry = false)?.let(Uri::parse)
+
+    @Synchronized
+    fun retryPublication(stagingPath: String): Uri? =
+        publishCompletedReference(stagingPath, forceRetry = true)?.let(Uri::parse)
+
+    @Synchronized
+    internal fun publishCompletedReference(stagingPath: String, forceRetry: Boolean = false): String? {
         require(isStagingPath(stagingPath)) {
             "Completed download is not in FetchX's private staging directory."
         }
-        publishedUri(stagingPath)?.let {
-            deleteStagingFile(stagingPath)
-            return it
-        }
-        check(File(stagingPath).isFile) {
-            "The completed staging file is missing."
-        }
-        val stagingFile = File(stagingPath).canonicalFile
-        val fileSize = stagingFile.length()
-        val digest = sha256(stagingFile)
-        val relativePath = "$RELATIVE_DIRECTORY/"
-
-        check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            "MediaStore public downloads require Android 10 or newer."
-        }
-        recoverInterruptedPublication(stagingPath, fileSize, digest)?.let {
-            deleteStagingFile(stagingPath)
-            return it
-        }
-
-        val sameContent = queryRows().firstOrNull { row ->
-            row.relativePath == relativePath &&
-                row.size == fileSize &&
-                row.displayName == stagingFile.name &&
-                !row.isPending &&
-                row.uri != null &&
-                sha256(resolver.openInputStream(row.uri) ?: return@firstOrNull false) == digest
-        }
-        if (sameContent?.uri != null && !sameContent.isPending) {
-            savePublished(stagingPath, sameContent.uri)
-            deleteStagingFile(stagingPath)
-            return sameContent.uri
-        }
-
-        val displayName = uniquePublicFileName(
-            stagingFile.name,
-            ignoreStagingFileName = stagingFile.name,
-        )
-        check(
-            preferences.edit().putString(
-                reservationKey(stagingPath),
-                JSONObject()
-                    .put("name", displayName)
-                    .put("size", fileSize)
-                    .put("sha256", digest)
-                    .toString(),
-            ).commit(),
-        ) {
-            "Could not persist the public download reservation."
-        }
-        val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
-            put(MediaStore.MediaColumns.MIME_TYPE, URLConnection.guessContentTypeFromName(displayName) ?: "application/octet-stream")
-            put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-            put(MediaStore.MediaColumns.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: run {
-                preferences.edit().remove(reservationKey(stagingPath)).commit()
-                throw IllegalStateException("Android did not create a public download item.")
-            }
-        savePending(stagingPath, uri)
+        if (!forceRetry && stagingPath in failedPublicationAttempts) return null
+        if (forceRetry) failedPublicationAttempts.remove(stagingPath)
 
         try {
-            val copied = FileInputStream(stagingFile).use { input ->
-                resolver.openOutputStream(uri, "w")?.use { output ->
-                    input.copyTo(output, DEFAULT_BUFFER_SIZE)
-                } ?: throw IllegalStateException("Android could not open the public download for writing.")
+            publishedReference(stagingPath)?.let {
+                deleteStagingFile(stagingPath)
+                failedPublicationAttempts.remove(stagingPath)
+                return it
             }
-            check(copied == fileSize) {
-                "Public download verification failed: expected $fileSize bytes, wrote $copied."
+            check(File(stagingPath).isFile) {
+                "The completed staging file is missing."
             }
-            val writtenStream = resolver.openInputStream(uri)
-                ?: throw IllegalStateException("Android could not verify the public download.")
-            check(sha256(writtenStream) == digest) {
-                "Public download verification failed: file contents do not match the staged download."
+            val stagingFile = File(stagingPath).canonicalFile
+            val fileSize = stagingFile.length()
+            val digest = sha256(stagingFile)
+            val relativePath = "$RELATIVE_DIRECTORY/"
+
+            check(sdkInt >= Build.VERSION_CODES.Q) {
+                "MediaStore public downloads require Android 10 or newer."
             }
-            val published = ContentValues().apply {
-                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            recoverInterruptedPublication(stagingPath, fileSize, digest)?.let {
+                deleteStagingFile(stagingPath)
+                failedPublicationAttempts.remove(stagingPath)
+                return it
             }
-            check(resolver.update(uri, published, null, null) == 1) {
-                "Android did not publish the completed download."
+
+            val reservation = reserveName(stagingPath, stagingFile.name, fileSize, digest)
+            val uri = mediaStore.insertPending(
+                displayName = reservation.name,
+                mimeType = URLConnection.guessContentTypeFromName(reservation.name) ?: "application/octet-stream",
+                relativePath = relativePath,
+            )
+            try {
+                savePending(stagingPath, uri)
+                val copied = mediaStore.write(uri, stagingFile)
+                check(copied == fileSize) {
+                    "Public download verification failed: expected $fileSize bytes, wrote $copied."
+                }
+                check(mediaStore.sha256(uri) == digest) {
+                    "Public download verification failed: file contents do not match the staged download."
+                }
+                check(mediaStore.publish(uri)) {
+                    "Android did not publish the completed download."
+                }
+                savePublished(stagingPath, uri)
+                deleteStagingFile(stagingPath)
+                failedPublicationAttempts.remove(stagingPath)
+                return uri
+            } catch (error: Exception) {
+                try {
+                    val row = mediaStore.find(uri)
+                    if (row?.isPending == true) {
+                        check(row.relativePath == relativePath && row.ownerPackageName == appPackageName) {
+                            "Refusing to clean up a public download not owned by FetchX."
+                        }
+                        if (!mediaStore.delete(uri) && mediaStore.find(uri) != null) {
+                            throw IllegalStateException("Could not remove the incomplete public download.")
+                        }
+                        check(state.update(mapOf(pendingKey(stagingPath) to null))) {
+                            "Could not clear the incomplete publication marker."
+                        }
+                    }
+                } catch (cleanupError: Exception) {
+                    error.addSuppressed(cleanupError)
+                }
+                throw error
             }
-            savePublished(stagingPath, uri)
-            deleteStagingFile(stagingPath)
-            return uri
         } catch (error: Exception) {
-            val deleted = resolver.delete(uri, null, null)
-            if (deleted == 1) {
-                preferences.edit()
-                    .remove(pendingKey(stagingPath))
-                    .remove(reservationKey(stagingPath))
-                    .commit()
-            }
+            failedPublicationAttempts.add(stagingPath)
             throw error
         }
     }
 
     @Synchronized
-    fun reconcileCompleted(stagingPath: String): Uri = publishCompleted(stagingPath)
+    fun reconcileCompleted(stagingPath: String): Uri? = publishCompleted(stagingPath)
 
     @Synchronized
     fun cleanupPublishedStagingArtifacts(stagingPath: String) {
-        if (isStagingPath(stagingPath) && preferences.contains(publicationKey(stagingPath))) {
+        if (isStagingPath(stagingPath) && state.contains(publicationKey(stagingPath))) {
             deleteStagingFile(stagingPath)
         }
     }
 
     @Synchronized
     fun deletePublished(stagingPath: String) {
-        val uri = publishedUri(stagingPath) ?: return
-        check(resolver.delete(uri, null, null) == 1) {
+        val uri = publishedReference(stagingPath) ?: return
+        check(mediaStore.delete(uri)) {
             "Could not remove the published FetchX download."
         }
-        preferences.edit().remove(publicationKey(stagingPath)).commit()
+        check(state.update(mapOf(publicationKey(stagingPath) to null))) {
+            "Could not clear the published download state."
+        }
     }
 
     @Synchronized
     fun forgetPublication(stagingPath: String) {
-        preferences.edit()
-            .remove(publicationKey(stagingPath))
-            .remove(pendingKey(stagingPath))
-            .remove(reservationKey(stagingPath))
-            .commit()
+        check(
+            state.update(
+                mapOf(
+                    publicationKey(stagingPath) to null,
+                    pendingKey(stagingPath) to null,
+                    reservationKey(stagingPath) to null,
+                ),
+            ),
+        ) {
+            "Could not clear the published download state."
+        }
     }
 
-    private fun queryRows(): List<MediaStoreRow> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return emptyList()
-        val projection = arrayOf(
-            MediaStore.MediaColumns._ID,
-            MediaStore.MediaColumns.DISPLAY_NAME,
-            MediaStore.MediaColumns.RELATIVE_PATH,
-            MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.IS_PENDING,
-        )
-        return resolver.query(
-            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-            projection,
-            "${MediaStore.MediaColumns.RELATIVE_PATH} = ?",
-            arrayOf("$RELATIVE_DIRECTORY/"),
-            "${MediaStore.MediaColumns.DISPLAY_NAME} ASC",
-        )?.use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-            val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-            val pathIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
-            val sizeIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-            val pendingIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
-            buildList {
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idIndex)
-                    add(
-                        MediaStoreRow(
-                            uri = ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id),
-                            displayName = cursor.getString(nameIndex),
-                            relativePath = cursor.getString(pathIndex),
-                            size = cursor.getLong(sizeIndex),
-                            isPending = cursor.getInt(pendingIndex) != 0,
-                        ),
-                    )
-                }
+    private fun queryRows(): List<PublicMediaRow> {
+        if (sdkInt < Build.VERSION_CODES.Q) return emptyList()
+        return mediaStore.queryRows()
+            .filter { it.relativePath == "$RELATIVE_DIRECTORY/" }
+    }
+
+    private fun publishedReference(stagingPath: String): String? {
+        if (!isStagingPath(stagingPath)) return null
+        val key = publicationKey(stagingPath)
+        val raw = state.get(key) ?: return null
+        val row = mediaStore.find(raw)
+        if (row == null) {
+            check(state.update(mapOf(key to null))) {
+                "Could not clear a missing public download reference."
             }
-        } ?: emptyList()
+            return null
+        }
+        check(row.relativePath == "$RELATIVE_DIRECTORY/") {
+            "The saved public download is outside FetchX's Downloads folder."
+        }
+        return raw.takeUnless { row.isPending }
     }
-
-    private fun isPublished(uri: Uri): Boolean {
-        if (uri.scheme == "file") return File(uri.path.orEmpty()).isFile
-        return resolver.query(
-            uri,
-            arrayOf(MediaStore.MediaColumns.IS_PENDING),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            cursor.moveToFirst() && cursor.getInt(0) == 0
-        } ?: false
-    }
-
-    private fun uriExists(uri: Uri): Boolean =
-        resolver.query(uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)?.use {
-            it.moveToFirst()
-        } ?: false
 
     private fun recoverInterruptedPublication(
         stagingPath: String,
         fileSize: Long,
         digest: String,
-    ): Uri? {
-        val pendingRaw = preferences.getString(pendingKey(stagingPath), null)
+    ): String? {
+        val pendingRaw = state.get(pendingKey(stagingPath))
         if (pendingRaw != null) {
-            val uri = Uri.parse(pendingRaw)
-            if (isPublished(uri)) {
-                val row = queryRows().firstOrNull { it.uri == uri }
-                val stream = resolver.openInputStream(uri)
-                    ?: throw IllegalStateException("Could not verify a recovered public download.")
-                if (row != null && row.size == fileSize && sha256(stream) == digest) {
-                    savePublished(stagingPath, uri)
-                    return uri
+            val row = mediaStore.find(pendingRaw)
+            if (row != null) {
+                check(row.relativePath == "$RELATIVE_DIRECTORY/") {
+                    "The saved pending download is outside FetchX's Downloads folder."
+                }
+                if (!row.isPending && row.size == fileSize && mediaStore.sha256(pendingRaw) == digest) {
+                    savePublished(stagingPath, pendingRaw)
+                    return pendingRaw
+                }
+                if (row.isPending) {
+                    deleteOwnedPending(pendingRaw, row)
                 }
             }
-            if (resolver.delete(uri, null, null) != 1 && uriExists(uri)) {
-                throw IllegalStateException("Could not clean up an interrupted public download.")
-            }
-            check(preferences.edit().remove(pendingKey(stagingPath)).commit()) {
+            check(state.update(mapOf(pendingKey(stagingPath) to null))) {
                 "Could not clear the interrupted publication marker."
             }
         }
 
-        val rawReservation = preferences.getString(reservationKey(stagingPath), null) ?: return null
-        val reservation = JSONObject(rawReservation)
-        val name = reservation.getString("name")
-        val reservedSize = reservation.getLong("size")
-        val reservedDigest = reservation.getString("sha256")
-        val matchingRows = queryRows().filter {
-            it.displayName == name && it.relativePath == "$RELATIVE_DIRECTORY/"
-        }
+        val reservation = readReservation(stagingPath) ?: return null
+        val matchingRows = queryRows().filter { it.displayName == reservation.name }
+        var nameOccupiedByDifferentContent = false
         for (row in matchingRows) {
             if (row.isPending) {
-                val uri = requireNotNull(row.uri)
-                if (resolver.delete(uri, null, null) != 1 && uriExists(uri)) {
-                    throw IllegalStateException("Could not clean up an interrupted public download.")
+                if (row.ownerPackageName == appPackageName) {
+                    deleteOwnedPending(row.uri, row)
+                } else {
+                    nameOccupiedByDifferentContent = true
                 }
                 continue
             }
-            val stream = row.uri?.let(resolver::openInputStream) ?: continue
-            val sameContent = row.size == reservedSize && sha256(stream) == reservedDigest
+            val sameContent = row.size == reservation.size && mediaStore.sha256(row.uri) == reservation.sha256
             if (sameContent) {
-                val uri = requireNotNull(row.uri)
-                savePublished(stagingPath, uri)
-                return uri
+                savePublished(stagingPath, row.uri)
+                return row.uri
             }
+            nameOccupiedByDifferentContent = true
         }
-        check(
-            preferences.edit()
-                .remove(reservationKey(stagingPath))
-                .remove(pendingKey(stagingPath))
-                .commit(),
-        ) {
-            "Could not clear the interrupted publication reservation."
+        if (nameOccupiedByDifferentContent) {
+            check(state.update(mapOf(reservationKey(stagingPath) to null))) {
+                "Could not release an occupied public download name."
+            }
         }
         return null
     }
 
-    private fun savePending(stagingPath: String, uri: Uri) {
-        check(preferences.edit().putString(pendingKey(stagingPath), uri.toString()).commit()) {
+    private fun reserveName(
+        stagingPath: String,
+        sourceName: String,
+        size: Long,
+        digest: String,
+    ): PublicDownloadReservation {
+        readReservation(stagingPath)?.let { reservation ->
+            if (reservation.size == size && reservation.sha256 == digest) {
+                val nameInUse = queryRows().any { it.displayName == reservation.name }
+                if (!nameInUse) return reservation
+            }
+            check(state.update(mapOf(reservationKey(stagingPath) to null))) {
+                "Could not release an unused public download name."
+            }
+        }
+        val name = uniquePublicFileName(sourceName, ignoreStagingFileName = sourceName)
+        val reservation = PublicDownloadReservation(name, size, digest)
+        check(
+            state.update(
+                mapOf(
+                    reservationKey(stagingPath) to encodePublicDownloadReservation(reservation),
+                ),
+            ),
+        ) {
+            "Could not persist the public download reservation."
+        }
+        return reservation
+    }
+
+    private fun readReservation(stagingPath: String): PublicDownloadReservation? {
+        val raw = state.get(reservationKey(stagingPath)) ?: return null
+        return decodePublicDownloadReservation(raw)
+    }
+
+    private fun deleteOwnedPending(uri: String, row: PublicMediaRow) {
+        check(row.ownerPackageName == appPackageName && row.relativePath == "$RELATIVE_DIRECTORY/") {
+            "Refusing to remove a pending download not owned by FetchX."
+        }
+        if (!mediaStore.delete(uri) && mediaStore.find(uri) != null) {
+            throw IllegalStateException("Could not clean up an interrupted public download.")
+        }
+    }
+
+    @Synchronized
+    internal fun reconcileOrphanedPublications(activeCompletedStagingPaths: Set<String>) {
+        val activeHashes = activeCompletedStagingPaths
+            .filter(::isStagingPath)
+            .mapTo(mutableSetOf()) { sha256(it.toByteArray()) }
+        val activePendingUris = state.entries()
+            .filterKeys { key -> key.startsWith(PENDING_PREFIX) && key.removePrefix(PENDING_PREFIX) in activeHashes }
+            .values
+            .toSet()
+        val activeReservedNames = state.entries()
+            .filterKeys { key -> key.startsWith(RESERVATION_PREFIX) && key.removePrefix(RESERVATION_PREFIX) in activeHashes }
+            .values
+            .mapTo(mutableSetOf()) { decodePublicDownloadReservation(it).name }
+
+        queryRows().asSequence()
+            .filter {
+                it.isPending &&
+                    it.ownerPackageName == appPackageName &&
+                    it.uri !in activePendingUris &&
+                    it.displayName !in activeReservedNames
+            }
+            .forEach { row -> deleteOwnedPending(row.uri, row) }
+
+        val staleKeys = state.entries().keys
+            .filter { key ->
+                (key.startsWith(PENDING_PREFIX) || key.startsWith(RESERVATION_PREFIX)) &&
+                    key.substringAfter('_') !in activeHashes
+            }
+        if (staleKeys.isNotEmpty()) {
+            check(state.update(staleKeys.associateWith { null })) {
+                "Could not clear stale public download publication state."
+            }
+        }
+    }
+
+    internal fun <T> withPublicationLock(action: () -> T): T = synchronized(this) { action() }
+
+    private fun savePending(stagingPath: String, uri: String) {
+        check(state.update(mapOf(pendingKey(stagingPath) to uri))) {
             "Could not persist the pending public download."
         }
     }
@@ -400,13 +689,15 @@ class PublicDownloadStorage(context: Context) {
         }
     }
 
-    private fun savePublished(stagingPath: String, uri: Uri) {
+    private fun savePublished(stagingPath: String, uri: String) {
         check(
-            preferences.edit()
-                .putString(publicationKey(stagingPath), uri.toString())
-                .remove(pendingKey(stagingPath))
-                .remove(reservationKey(stagingPath))
-                .commit(),
+            state.update(
+                mapOf(
+                    publicationKey(stagingPath) to uri,
+                    pendingKey(stagingPath) to null,
+                    reservationKey(stagingPath) to null,
+                ),
+            ),
         ) {
             "Could not persist the published download location."
         }
@@ -444,20 +735,14 @@ class PublicDownloadStorage(context: Context) {
     private fun sha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
-    private data class MediaStoreRow(
-        val uri: Uri?,
-        val displayName: String,
-        val relativePath: String,
-        val size: Long,
-        val isPending: Boolean,
-    )
-
     private companion object {
         const val TAG = "FetchXPublicStorage"
         const val PREFERENCES_NAME = "fetchx_public_downloads"
         const val DIRECTORY_NAME = "FetchX"
-        val RELATIVE_DIRECTORY = publicRelativeDirectoryPath(Environment.DIRECTORY_DOWNLOADS).removeSuffix("/")
-        const val MAX_FILENAME_LENGTH = 200
+        const val PENDING_PREFIX = "pending_"
+        const val RESERVATION_PREFIX = "reservation_"
+        val RELATIVE_DIRECTORY = publicRelativeDirectoryPath(DOWNLOADS_DIRECTORY_NAME).removeSuffix("/")
+        const val DOWNLOADS_DIRECTORY_NAME = "Download"
     }
 }
 

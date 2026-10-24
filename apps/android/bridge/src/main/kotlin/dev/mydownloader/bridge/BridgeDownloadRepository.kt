@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Implements [DownloadRepository] by delegating to the Rust [DownloadService]
@@ -65,6 +66,7 @@ class BridgeDownloadRepository(
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
     private val initialSnapshotReady = CompletableDeferred<Unit>()
     private val refreshGeneration = AtomicLong()
+    private val publicationAttempts = ConcurrentHashMap.newKeySet<String>()
 
     init {
         // Register the Rust → Kotlin event listener. The callback is invoked on a
@@ -81,16 +83,24 @@ class BridgeDownloadRepository(
                                     publicDownloadStorage.isStagingPath(it.destination)
                             }
                         if (completedStage != null) {
-                            try {
-                                withContext(Dispatchers.IO) {
-                                    publicDownloadStorage.publishCompleted(completedStage.destination)
+                            val stillCompleted = withContext(Dispatchers.IO) {
+                                publicDownloadStorage.withPublicationLock {
+                                    val current = service.getDownload(completedStage.id)
+                                    if (
+                                        isCurrentCompletedStagingDestination(
+                                            current?.status,
+                                            current?.destination,
+                                            completedStage.destination,
+                                        )
+                                    ) {
+                                        reconcileCompleted(completedStage.destination)
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 }
-                                mapEvent(event)?.let { _events.emit(it) }
-                            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                                throw cancelled
-                            } catch (error: Exception) {
-                                Log.e(TAG, "Could not publish completed download to public storage", error)
                             }
+                            if (stillCompleted) mapEvent(event)?.let { _events.emit(it) }
                         } else {
                             mapEvent(event)?.let { _events.emit(it) }
                         }
@@ -282,23 +292,50 @@ class BridgeDownloadRepository(
         withContext(Dispatchers.IO) { service.resumeDownload(downloadId) }
 
     override suspend fun cancelDownload(downloadId: String, deleteFile: Boolean) =
-        withContext(Dispatchers.IO) { service.cancelDownload(downloadId) }
+        withContext(Dispatchers.IO) {
+            publicDownloadStorage.withPublicationLock {
+                if (shouldCancelDownload(service.getDownload(downloadId)?.status)) {
+                    service.cancelDownload(downloadId)
+                }
+            }
+        }
 
     override suspend fun removeDownload(downloadId: String, deleteFile: Boolean) =
         withContext(Dispatchers.IO) {
-            val destination = service.getDownload(downloadId)?.destination
-            service.removeDownload(downloadId)
-            if (destination != null && publicDownloadStorage.isStagingPath(destination)) {
-                if (deleteFile) {
-                    publicDownloadStorage.deletePublished(destination)
-                } else {
-                    publicDownloadStorage.forgetPublication(destination)
+            publicDownloadStorage.withPublicationLock {
+                val destination = service.getDownload(downloadId)?.destination
+                service.removeDownload(downloadId)
+                if (destination != null && publicDownloadStorage.isStagingPath(destination)) {
+                    if (deleteFile) {
+                        publicDownloadStorage.deletePublished(destination)
+                    } else {
+                        publicDownloadStorage.forgetPublication(destination)
+                    }
                 }
             }
         }
 
     override suspend fun retryDownload(downloadId: String): String =
-        withContext(Dispatchers.IO) { service.retryDownload(downloadId) }
+        withContext(Dispatchers.IO) {
+            val item = service.getDownload(downloadId)
+            if (
+                item?.status == DownloadStatusDto.COMPLETED &&
+                publicDownloadStorage.isStagingPath(item.destination)
+            ) {
+                publicationAttempts.remove(item.destination)
+                try {
+                    publicDownloadStorage.retryPublication(item.destination)
+                    publicationAttempts.add(item.destination)
+                } catch (error: Exception) {
+                    publicationAttempts.add(item.destination)
+                    throw error
+                }
+                refreshDownloadSnapshot()
+                downloadId
+            } else {
+                service.retryDownload(downloadId)
+            }
+        }
 
     override suspend fun setPriority(downloadId: String, priority: DownloadPriority) =
         withContext(Dispatchers.IO) {
@@ -328,21 +365,39 @@ class BridgeDownloadRepository(
 
     private fun loadDownloadsAndReconcile(): List<DownloadItem> {
         val items = service.listDownloads()
+        try {
+            publicDownloadStorage.reconcileOrphanedPublications(
+                items.asSequence()
+                    .filter { it.status == DownloadStatusDto.COMPLETED }
+                    .map { it.destination }
+                    .filter(publicDownloadStorage::isStagingPath)
+                    .toSet(),
+            )
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not clean up stale public download entries", error)
+        }
         items.asSequence()
             .filter { it.status == DownloadStatusDto.COMPLETED }
             .forEach { reconcileCompleted(it.destination) }
         return items.map(::mapItem)
     }
 
+    private fun refreshDownloadSnapshot() {
+        val generation = refreshGeneration.incrementAndGet()
+        val items = loadDownloadsAndReconcile()
+        if (generation == refreshGeneration.get()) _downloads.value = items
+    }
+
     private fun reconcileCompleted(destination: String) {
         if (!publicDownloadStorage.isStagingPath(destination)) {
             return
         }
-        if (publicDownloadStorage.publishedUri(destination) != null) {
-            publicDownloadStorage.cleanupPublishedStagingArtifacts(destination)
-            return
-        }
         try {
+            if (publicDownloadStorage.publishedUri(destination) != null) {
+                publicDownloadStorage.cleanupPublishedStagingArtifacts(destination)
+                return
+            }
+            if (!publicationAttempts.add(destination)) return
             publicDownloadStorage.reconcileCompleted(destination)
         } catch (error: Exception) {
             Log.e(TAG, "Could not reconcile public download publication", error)
@@ -485,6 +540,16 @@ internal fun completedDownloadState(
     } else {
         DownloadState.Completed(totalBytes, destinationPath)
     }
+
+internal fun isCurrentCompletedStagingDestination(
+    currentStatus: DownloadStatusDto?,
+    currentDestination: String?,
+    eventDestination: String,
+): Boolean =
+    currentStatus == DownloadStatusDto.COMPLETED && currentDestination == eventDestination
+
+internal fun shouldCancelDownload(currentStatus: DownloadStatusDto?): Boolean =
+    currentStatus != DownloadStatusDto.COMPLETED
 
 internal fun isMediaUrl(url: String): Boolean {
     val host = try {
