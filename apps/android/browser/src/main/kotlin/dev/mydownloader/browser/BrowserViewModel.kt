@@ -43,6 +43,11 @@ data class SearchSuggestion(
     val tabId: String? = null,
 )
 
+internal data class MediaDownloadRoute(
+    val url: String,
+    val isDirectMedia: Boolean,
+)
+
 enum class SearchEngine(
     val displayName: String,
     val searchUrl: String,     // use %s for query placeholder
@@ -593,16 +598,14 @@ class BrowserViewModel internal constructor(
         )
         val pageUrl = _uiState.value.activeTab?.url
             ?.takeIf { it.startsWith("http") }
-        // If a specific format was chosen from page format discovery, pass pageUrl.
-        // Otherwise, if this is a direct intercepted stream or default, download direct video stream url.
-        // For direct media URLs (mp4, m3u8, etc.) download directly via the appropriate
-        // native engine without going through yt-dlp format discovery or extraction.
-        val isDirectMedia = formatId == null && isDirectMediaUrl(video.url)
-        val downloadUrl = when {
-            isDirectMedia -> video.url
-            formatId != null && pageUrl != null -> pageUrl
-            else -> video.url.takeIf { it.isNotBlank() } ?: pageUrl ?: ""
-        }
+        val route = resolveMediaDownloadRoute(
+            videoUrl = video.url,
+            pageUrl = pageUrl,
+            formatId = formatId,
+            hasDiscoveredFormats = _uiState.value.mediaFormats.isNotEmpty(),
+        )
+        val isDirectMedia = route.isDirectMedia
+        val downloadUrl = route.url
         val discoveredMetadata = _uiState.value.mediaFormats
             .firstOrNull { it.formatId == formatId }
             ?: _uiState.value.mediaFormats.firstOrNull()
@@ -1353,6 +1356,21 @@ class BrowserViewModel internal constructor(
                 extension.equals("flac", ignoreCase = true) ||
                 extension.equals("aac", ignoreCase = true) ||
                 extension.equals("wav", ignoreCase = true)
+        }
+
+        internal fun resolveMediaDownloadRoute(
+            videoUrl: String,
+            pageUrl: String?,
+            formatId: String?,
+            hasDiscoveredFormats: Boolean,
+        ): MediaDownloadRoute {
+            val isDirectMedia = formatId == null && isDirectMediaUrl(videoUrl)
+            val url = when {
+                isDirectMedia -> videoUrl
+                pageUrl != null && (formatId != null || hasDiscoveredFormats) -> pageUrl
+                else -> videoUrl.takeIf { it.isNotBlank() } ?: pageUrl.orEmpty()
+            }
+            return MediaDownloadRoute(url, isDirectMedia)
         }
 
         private const val SEARCH_PREFERENCES_FILE = "fetchx_browser_search"

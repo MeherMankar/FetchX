@@ -218,6 +218,76 @@ async fn repository_persists_merged_ytdlp_format_selector() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn repository_persists_auto_and_non_ytdlp_downloads_without_a_format()
+-> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let auto_id = DownloadId::new();
+    let direct_id = DownloadId::new();
+    let auto_download = DownloadItem::new(
+        auto_id,
+        DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
+        FileName::new("auto.mp4")?,
+        PathBuf::from("downloads/auto.mp4"),
+        Timestamp::now()?,
+    );
+    let direct_download = DownloadItem::new(
+        direct_id,
+        DownloadSource::new("https://example.test/video.mp4", EngineKind::DirectHttp)?,
+        FileName::new("direct.mp4")?,
+        PathBuf::from("downloads/direct.mp4"),
+        Timestamp::now()?,
+    );
+
+    repository.create(&auto_download).await?;
+    repository.create(&direct_download).await?;
+
+    let persisted_auto = repository
+        .get(auto_id)
+        .await?
+        .ok_or("automatic-format download was not found")?;
+    let persisted_direct = repository
+        .get(direct_id)
+        .await?
+        .ok_or("direct download was not found")?;
+    assert_eq!(persisted_auto.source().engine(), EngineKind::YtDlp);
+    assert_eq!(persisted_auto.source().yt_dlp_format(), None);
+    assert_eq!(persisted_direct.source().engine(), EngineKind::DirectHttp);
+    assert_eq!(persisted_direct.source().yt_dlp_format(), None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn schema_rejects_mismatched_ytdlp_format_alternatives() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let id = DownloadId::new();
+    let download = DownloadItem::new(
+        id,
+        DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?
+            .with_yt_dlp_format("137")?,
+        FileName::new("video.mp4")?,
+        PathBuf::from("downloads/video.mp4"),
+        Timestamp::now()?,
+    );
+    repository.create(&download).await?;
+
+    let error = sqlx::query("UPDATE downloads SET yt_dlp_format = ? WHERE id = ?")
+        .bind("137+bestaudio/138")
+        .bind(id.to_string())
+        .execute(database.pool())
+        .await
+        .expect_err("SQLite must reject a selector with mismatched alternatives");
+
+    assert!(
+        error.to_string().contains("CHECK constraint failed"),
+        "expected a CHECK constraint error, got: {error}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn queue_order_and_priority_updates_preserve_download_progress() -> Result<(), Box<dyn Error>>
 {
     let database = Database::connect("sqlite::memory:").await?;

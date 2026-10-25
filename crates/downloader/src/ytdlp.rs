@@ -38,6 +38,7 @@ const MAX_DISCOVERED_FORMATS: usize = 100;
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
+const AUTO_FORMAT_SELECTOR: &str = "bestvideo*+bestaudio/best";
 const MAX_PROGRESS_EVENTS: usize = 32;
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -103,6 +104,11 @@ pub struct YtDlpFormat {
 struct YtDlpFinalizationRecord {
     output_name: String,
     output_size: u64,
+}
+
+struct YtDlpProgressState {
+    downloaded_bytes: u64,
+    allows_component_reset: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,6 +201,8 @@ impl YtDlpError {
 
 pub trait YtDlpProcessRunner: Send + Sync {
     fn report_diagnostic(&self, _code: &'static str) {}
+
+    fn report_diagnostic_details(&self, _details: String) {}
 
     fn validate_version<'a>(
         &'a self,
@@ -369,6 +377,9 @@ where
             item.source().yt_dlp_format(),
             control.bandwidth.external_download_rate_bytes_per_second,
         );
+        let allows_component_reset = format_selector(item.source().yt_dlp_format())
+            .split('/')
+            .any(|alternative| alternative.contains('+'));
         report_resource_demand(control, id, 1, 0).await?;
 
         if item.status() == DownloadStatus::Preparing {
@@ -387,7 +398,10 @@ where
         }
         let mut expected_updated_at = item.updated_at();
         let mut last_persisted_at = Instant::now();
-        let mut progress = item.progress().downloaded_bytes();
+        let mut progress = YtDlpProgressState {
+            downloaded_bytes: item.progress().downloaded_bytes(),
+            allows_component_reset,
+        };
         let (event_sender, mut events) = mpsc::channel(MAX_PROGRESS_EVENTS);
         let mut events_open = true;
         let (stop_sender, stop) = watch::channel(false);
@@ -433,8 +447,23 @@ where
                             ).await {
                                 drop(events);
                                 let _ = stop_sender.send(true);
-                                if let Err(cleanup_error) = run.await {
-                                    return Err(cleanup_error.into());
+                                match run.await {
+                                    Ok(exit) => {
+                                        self.runner.report_diagnostic_details(format!(
+                                            "progress event error; process_success={}; process_exit_code={:?}; error={error}",
+                                            exit.success, exit.code
+                                        ));
+                                        warn!(
+                                            download_id = %id,
+                                            process_success = exit.success,
+                                            process_exit_code = ?exit.code,
+                                            error = %error,
+                                            "yt-dlp process stopped after a progress event error"
+                                        );
+                                    }
+                                    Err(cleanup_error) => {
+                                        return Err(cleanup_error.into());
+                                    }
                                 }
                                 return Err(error);
                             }
@@ -486,6 +515,22 @@ where
             estimated_remaining_seconds: Some(0),
         };
         if output_size < item.progress().downloaded_bytes() {
+            self.runner.report_diagnostic_details(format!(
+                "final output smaller than reported progress; process_exit_code={:?}; output_size_bytes={output_size}; reported_downloaded_bytes={}; reported_total_bytes={:?}; automatic_selection={}",
+                exit.code,
+                item.progress().downloaded_bytes(),
+                item.progress().total_bytes(),
+                item.source().yt_dlp_format().is_none()
+            ));
+            warn!(
+                download_id = %id,
+                process_exit_code = ?exit.code,
+                output_size_bytes = output_size,
+                reported_downloaded_bytes = item.progress().downloaded_bytes(),
+                reported_total_bytes = ?item.progress().total_bytes(),
+                automatic_selection = item.source().yt_dlp_format().is_none(),
+                "yt-dlp final output is smaller than reported transfer progress"
+            );
             return Err(YtDlpError::ProgressRegression.into());
         }
         self.persist_progress(item, &mut expected_updated_at, &final_progress, true)
@@ -687,7 +732,7 @@ where
         item: &mut DownloadItem,
         expected_updated_at: &mut Timestamp,
         last_persisted_at: &mut Instant,
-        progress: &mut u64,
+        progress: &mut YtDlpProgressState,
         control: &mut ManagedDownloadControl,
     ) -> Result<(), DownloadEngineError> {
         let update = match event {
@@ -714,20 +759,35 @@ where
         let Some(downloaded_bytes) = update.downloaded_bytes else {
             return Ok(());
         };
-        if downloaded_bytes < *progress {
-            if item
-                .source()
-                .yt_dlp_format()
-                .is_some_and(|selector| selector.contains('+'))
-            {
+        if downloaded_bytes < progress.downloaded_bytes {
+            let details = format!(
+                "progress reset; previous_downloaded_bytes={}; incoming_downloaded_bytes={downloaded_bytes}; previous_total_bytes={:?}; incoming_total_bytes={:?}; incoming_percentage_basis_points={:?}; component_selector={}",
+                progress.downloaded_bytes,
+                item.progress().total_bytes(),
+                update.total_bytes,
+                update.percentage_basis_points,
+                progress.allows_component_reset
+            );
+            self.runner.report_diagnostic_details(details);
+            warn!(
+                download_id = %item.id(),
+                previous_downloaded_bytes = progress.downloaded_bytes,
+                incoming_downloaded_bytes = downloaded_bytes,
+                previous_total_bytes = ?item.progress().total_bytes(),
+                incoming_total_bytes = ?update.total_bytes,
+                incoming_percentage_basis_points = ?update.percentage_basis_points,
+                automatic_selection = item.source().yt_dlp_format().is_none(),
+                "yt-dlp progress event regressed"
+            );
+            if progress.allows_component_reset {
                 return Ok(());
             }
             return Err(YtDlpError::ProgressRegression.into());
         }
 
         let now = Instant::now();
-        let changed_progress = downloaded_bytes != *progress;
-        *progress = downloaded_bytes;
+        let changed_progress = downloaded_bytes != progress.downloaded_bytes;
+        progress.downloaded_bytes = downloaded_bytes;
         if changed_progress && now.duration_since(*last_persisted_at) >= PROGRESS_PERSIST_INTERVAL {
             self.persist_progress(item, expected_updated_at, &update, false)
                 .await?;
@@ -1014,7 +1074,7 @@ fn build_arguments(
     selected_format: Option<&str>,
     max_download_rate_bytes_per_second: Option<u64>,
 ) -> Vec<OsString> {
-    let selected_format = selected_format.unwrap_or("bestvideo*+bestaudio/best");
+    let selected_format = format_selector(selected_format);
     let mut arguments = vec![
         "--ignore-config".into(),
         "--no-plugin-dirs".into(),
@@ -1050,6 +1110,10 @@ fn build_arguments(
         url.into(),
     ]);
     arguments
+}
+
+fn format_selector(selected_format: Option<&str>) -> &str {
+    selected_format.unwrap_or(AUTO_FORMAT_SELECTOR)
 }
 
 pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError> {
@@ -1775,6 +1839,7 @@ mod tests {
         run_count: usize,
         arguments: Vec<String>,
         diagnostic_codes: Vec<&'static str>,
+        diagnostic_details: Vec<String>,
         output: Vec<u8>,
         progress_lines: Vec<String>,
         wait_for_stop: bool,
@@ -1788,6 +1853,14 @@ mod tests {
                 .expect("test runner mutex")
                 .diagnostic_codes
                 .push(code);
+        }
+
+        fn report_diagnostic_details(&self, details: String) {
+            self.state
+                .lock()
+                .expect("test runner mutex")
+                .diagnostic_details
+                .push(details);
         }
 
         fn validate_version<'a>(
@@ -2213,19 +2286,37 @@ mod tests {
         let args = build_arguments(
             Path::new("workspace"),
             "https://example.test/video",
-            Some("137"),
+            Some("137+bestaudio/137"),
             Some(4096),
         );
         let format_index = args
             .iter()
             .position(|argument| argument == OsStr::new("--format"))
             .expect("format option is present");
-        assert_eq!(args[format_index + 1], OsStr::new("137"));
+        assert_eq!(args[format_index + 1], OsStr::new("137+bestaudio/137"));
         let limit_index = args
             .iter()
             .position(|argument| argument == OsStr::new("--limit-rate"))
             .expect("rate limit option is present");
         assert_eq!(args[limit_index + 1], OsStr::new("4096"));
+    }
+
+    #[test]
+    fn automatic_selection_uses_best_quality_ytdlp_selector() {
+        let args = build_arguments(
+            Path::new("workspace"),
+            "https://example.test/video",
+            None,
+            None,
+        );
+        let format_index = args
+            .iter()
+            .position(|argument| argument == OsStr::new("--format"))
+            .expect("format option is present");
+        assert_eq!(
+            args[format_index + 1],
+            OsStr::new("bestvideo*+bestaudio/best")
+        );
     }
 
     #[tokio::test]
@@ -2370,6 +2461,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_merged_progress_reset_completes_and_retains_output()
+    -> Result<(), Box<dyn Error>> {
+        let runner = FakeRunner::default();
+        {
+            let mut state = runner.state.lock().expect("test runner mutex");
+            state.output = b"merged-video".to_vec();
+            state.progress_lines = vec![
+                "FETCHX_PROGRESS|100%|10|10|NA|1|0".to_owned(),
+                "FETCHX_PROGRESS|0%|0|2|NA|1|1".to_owned(),
+                "FETCHX_PROGRESS|50%|1|2|NA|1|1".to_owned(),
+                "FETCHX_PROGRESS|100%|2|2|NA|1|0".to_owned(),
+            ];
+        }
+        let state = Arc::clone(&runner.state);
+        let (engine, base, id) = fixture("https://example.test/video", runner).await?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        let completed = engine.download(id, cancellation).await?;
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(
+            tokio::fs::read(base.join("video.webm")).await?,
+            b"merged-video"
+        );
+        {
+            let state = state.lock().expect("test runner mutex");
+            assert!(state.diagnostic_codes.is_empty());
+            assert!(state.diagnostic_details.iter().any(|detail| {
+                detail.contains("previous_downloaded_bytes=10")
+                    && detail.contains("incoming_downloaded_bytes=0")
+                    && detail.contains("component_selector=true")
+            }));
+        }
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rejects_regressing_progress_for_single_format() -> Result<(), Box<dyn Error>> {
         let runner = FakeRunner::default();
         {
@@ -2381,7 +2509,8 @@ mod tests {
             ];
         }
         let state = Arc::clone(&runner.state);
-        let (engine, base, id) = fixture("https://example.test/video", runner).await?;
+        let (engine, base, id) =
+            fixture_with_format("https://example.test/video", runner, Some("137")).await?;
         let (_cancel_sender, cancellation) = watch::channel(false);
 
         let result = engine.download(id, cancellation).await;

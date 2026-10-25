@@ -12,6 +12,7 @@ import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentTelemetry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -227,6 +228,28 @@ class DownloadsViewModelTest {
         job.cancel()
     }
 
+    @Test
+    fun activeDownloadsWaitForInitialSnapshotBeforeShowingEmptyState() = runTest {
+        val repo = FakeDownloadRepository()
+        val snapshotReady = CompletableDeferred<Unit>()
+        repo.initialSnapshot = snapshotReady
+        val vm = DownloadsViewModel(repo)
+        val activeCollector = backgroundScope.launch(testDispatcher) {
+            vm.activeDownloads.collect { }
+        }
+
+        assertEquals(DownloadSnapshotState.Loading, vm.downloadSnapshotState.value)
+        assertTrue(vm.activeDownloads.value.isEmpty())
+
+        val activeItem = makeItem("active-on-startup", DownloadState.Active(1, 2, 1, 1, 1))
+        repo.emit(listOf(activeItem))
+        snapshotReady.complete(Unit)
+
+        assertEquals(DownloadSnapshotState.Ready, vm.downloadSnapshotState.value)
+        assertEquals(listOf(activeItem), vm.activeDownloads.value)
+        activeCollector.cancel()
+    }
+
     // ── 12. Filtering cancelled ────────────────────────────────────────────
 
     @Test
@@ -355,12 +378,17 @@ private class FakeDownloadRepository : DownloadRepository {
     var lastRemovedId: String? = null
     var lastSetPriorityId: String? = null
     var actionFailure: Exception? = null
+    var initialSnapshot: CompletableDeferred<Unit>? = null
 
     fun emit(items: List<DownloadItem>) {
         _downloads.value = items
     }
 
     override fun observeDownloads(): Flow<List<DownloadItem>> = _downloads.asStateFlow()
+
+    override suspend fun awaitInitialSnapshot() {
+        initialSnapshot?.await()
+    }
 
     override fun observeEvents(): Flow<DownloadEvent> = _events.asSharedFlow()
 

@@ -21,8 +21,10 @@ import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentTelemetry
 import dev.fetchx.core.download.YtDlpFormat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,7 +34,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
 import java.io.File
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -66,15 +67,28 @@ class BridgeDownloadRepository(
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
     private val initialSnapshotReady = CompletableDeferred<Unit>()
-    private val refreshGeneration = AtomicLong()
     private val publicationAttempts = ConcurrentHashMap.newKeySet<String>()
+    private val snapshotRefreshWorker = SnapshotRefreshWorker(
+        scope = externalScope,
+        refresh = {
+            val items = withContext(Dispatchers.IO) { loadDownloadsAndReconcile() }
+            _downloads.value = items
+            initialSnapshotReady.complete(Unit)
+        },
+        onError = { error ->
+            if (initialSnapshotReady.completeExceptionally(error)) {
+                Log.e(TAG, "Could not load initial download snapshot", error)
+            } else {
+                Log.e(TAG, "Could not refresh download snapshot after event", error)
+            }
+        },
+    )
 
     init {
         // Register the Rust → Kotlin event listener. The callback is invoked on a
         // Rust Tokio thread, so all operations inside it must be thread-safe.
         service.addEventListener(object : DownloadEventListener {
             override fun onEvent(event: DownloadEventDto) {
-                val generation = refreshGeneration.incrementAndGet()
                 externalScope.launch {
                     try {
                         val completedStage = (event as? DownloadEventDto.Updated)
@@ -105,34 +119,18 @@ class BridgeDownloadRepository(
                         } else {
                             mapEvent(event)?.let { _events.emit(it) }
                         }
-                        val items = withContext(Dispatchers.IO) {
-                            loadDownloadsAndReconcile()
-                        }
-                        if (generation == refreshGeneration.get()) _downloads.value = items
-                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
-                        Log.e(TAG, "Could not refresh download snapshot after event", error)
+                        Log.e(TAG, "Could not process download event", error)
+                    } finally {
+                        snapshotRefreshWorker.request()
                     }
                 }
             }
         })
 
-        // Load initial state.
-        externalScope.launch {
-            try {
-                val generation = refreshGeneration.incrementAndGet()
-                val items = withContext(Dispatchers.IO) {
-                    loadDownloadsAndReconcile()
-                }
-                if (generation == refreshGeneration.get()) _downloads.value = items
-                initialSnapshotReady.complete(Unit)
-            } catch (error: Exception) {
-                initialSnapshotReady.completeExceptionally(error)
-                Log.e(TAG, "Could not load initial download snapshot", error)
-                throw error
-            }
-        }
+        snapshotRefreshWorker.request()
     }
 
     // ── DownloadRepository interface ──────────────────────────────────────
@@ -144,7 +142,7 @@ class BridgeDownloadRepository(
             listOf(item.fileName, File(item.destinationPath).name)
         }.filter { it.isNotBlank() }.toSet()
 
-    suspend fun awaitInitialSnapshot() {
+    override suspend fun awaitInitialSnapshot() {
         initialSnapshotReady.await()
     }
 
@@ -336,7 +334,7 @@ class BridgeDownloadRepository(
                     publicationAttempts.add(item.destination)
                     throw error
                 }
-                refreshDownloadSnapshot()
+                _downloads.value = loadDownloadsAndReconcile()
                 downloadId
             } else {
                 service.retryDownload(downloadId)
@@ -386,12 +384,6 @@ class BridgeDownloadRepository(
             .filter { it.status == DownloadStatusDto.COMPLETED }
             .forEach { reconcileCompleted(it.destination) }
         return items.map(::mapItem)
-    }
-
-    private fun refreshDownloadSnapshot() {
-        val generation = refreshGeneration.incrementAndGet()
-        val items = loadDownloadsAndReconcile()
-        if (generation == refreshGeneration.get()) _downloads.value = items
     }
 
     private fun reconcileCompleted(destination: String) {
@@ -556,6 +548,34 @@ internal fun isCurrentCompletedStagingDestination(
 
 internal fun shouldCancelDownload(currentStatus: DownloadStatusDto?): Boolean =
     currentStatus != DownloadStatusDto.COMPLETED
+
+internal class SnapshotRefreshWorker(
+    scope: CoroutineScope,
+    private val refresh: suspend () -> Unit,
+    private val onError: (Exception) -> Unit,
+) {
+    private val requests = Channel<Unit>(Channel.CONFLATED)
+
+    init {
+        scope.launch {
+            for (ignored in requests) {
+                try {
+                    refresh()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    onError(error)
+                }
+            }
+        }
+    }
+
+    fun request() {
+        check(requests.trySend(Unit).isSuccess) {
+            "Could not queue download snapshot refresh"
+        }
+    }
+}
 
 internal fun isMediaUrl(url: String): Boolean {
     val host = try {

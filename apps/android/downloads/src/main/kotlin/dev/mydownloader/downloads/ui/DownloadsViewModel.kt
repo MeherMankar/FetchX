@@ -36,6 +36,12 @@ data class DownloadsUiState(
     val bridgeAvailable: Boolean = true,
 )
 
+enum class DownloadSnapshotState {
+    Loading,
+    Ready,
+    Failed,
+}
+
 /**
  * ViewModel for the Downloads screen.
  *
@@ -57,6 +63,9 @@ class DownloadsViewModel(
 
     /** Observed by the screen for loading/error/degraded-mode signals. */
     val uiState: StateFlow<DownloadsUiState> = _uiState.asStateFlow()
+
+    private val _downloadSnapshotState = MutableStateFlow(DownloadSnapshotState.Loading)
+    val downloadSnapshotState: StateFlow<DownloadSnapshotState> = _downloadSnapshotState.asStateFlow()
 
     // ── Reactive download lists ────────────────────────────────────────────
 
@@ -150,6 +159,17 @@ class DownloadsViewModel(
         )
 
     init {
+        viewModelScope.launch {
+            try {
+                repository.awaitInitialSnapshot()
+                _downloadSnapshotState.value = DownloadSnapshotState.Ready
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _downloadSnapshotState.value = DownloadSnapshotState.Failed
+            }
+        }
+
         val torrentRepository = repository as? TorrentDownloadRepository
         if (torrentRepository != null) {
             viewModelScope.launch {

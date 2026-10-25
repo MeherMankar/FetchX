@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -71,6 +72,7 @@ fun DownloadsScreen(
     val torrentTelemetry by viewModel.torrentTelemetry.collectAsStateWithLifecycle()
     val torrentMetadata by viewModel.torrentMetadata.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val downloadSnapshotState by viewModel.downloadSnapshotState.collectAsStateWithLifecycle()
     val reservedFileNames = remember(allDownloads) {
         allDownloads.flatMap { item ->
             listOf(item.fileName, File(item.destinationPath).name)
@@ -141,7 +143,26 @@ fun DownloadsScreen(
             }
 
             if (filtered.isEmpty()) {
-                if (selectedTab == 0) {
+                if (downloadSnapshotState == DownloadSnapshotState.Loading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (downloadSnapshotState == DownloadSnapshotState.Failed) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "Downloads could not be loaded. Restart FetchX to try again.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                } else if (selectedTab == 0) {
                     // All tab: rich empty state with an Add Download call-to-action.
                     Box(
                         modifier = Modifier.fillMaxSize(),

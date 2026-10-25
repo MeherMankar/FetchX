@@ -48,4 +48,56 @@ class MediaFilenameTest {
         assertFalse(BrowserViewModel.isDirectMediaUrl("https://example.test/watch?format=video.mp4"))
         assertFalse(BrowserViewModel.isDirectMediaUrl("https://example.test/watch#video.mp4"))
     }
+
+    @Test
+    fun `automatic selection after format discovery uses page url without a manual selector`() {
+        val route = BrowserViewModel.resolveMediaDownloadRoute(
+            videoUrl = "https://rr.example.test/videoplayback?token=abc",
+            pageUrl = "https://www.youtube.com/watch?v=example",
+            formatId = null,
+            hasDiscoveredFormats = true,
+        )
+
+        assertEquals("https://www.youtube.com/watch?v=example", route.url)
+        assertFalse(route.isDirectMedia)
+    }
+
+    @Test
+    fun `automatic selection without discovered formats keeps the stream url`() {
+        val route = BrowserViewModel.resolveMediaDownloadRoute(
+            videoUrl = "https://cdn.example.test/videoplayback?token=abc",
+            pageUrl = "https://example.test/watch?v=example",
+            formatId = null,
+            hasDiscoveredFormats = false,
+        )
+
+        assertEquals("https://cdn.example.test/videoplayback?token=abc", route.url)
+        assertFalse(route.isDirectMedia)
+    }
+
+    @Test
+    fun `manual format selection uses page url`() {
+        val route = BrowserViewModel.resolveMediaDownloadRoute(
+            videoUrl = "https://rr.example.test/videoplayback?token=abc",
+            pageUrl = "https://www.youtube.com/watch?v=example",
+            formatId = "137+bestaudio/137",
+            hasDiscoveredFormats = true,
+        )
+
+        assertEquals("https://www.youtube.com/watch?v=example", route.url)
+        assertFalse(route.isDirectMedia)
+    }
+
+    @Test
+    fun `direct media selection keeps using the direct url`() {
+        val route = BrowserViewModel.resolveMediaDownloadRoute(
+            videoUrl = "https://cdn.example.test/video.mp4?token=abc",
+            pageUrl = "https://example.test/watch?v=example",
+            formatId = null,
+            hasDiscoveredFormats = false,
+        )
+
+        assertEquals("https://cdn.example.test/video.mp4?token=abc", route.url)
+        assertTrue(route.isDirectMedia)
+    }
 }

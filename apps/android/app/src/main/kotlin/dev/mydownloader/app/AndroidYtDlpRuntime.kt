@@ -51,7 +51,7 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
     }
 
     override fun reportFailure(diagnosticCode: String) {
-        Log.e("FetchXYtDlp", "Rust yt-dlp failure code=$diagnosticCode")
+        Log.e("FetchXYtDlp", "Rust yt-dlp diagnostic=$diagnosticCode")
     }
 
     private fun ensureFfmpegExecutable(): File {

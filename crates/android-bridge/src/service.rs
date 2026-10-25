@@ -795,6 +795,10 @@ impl YtDlpProcessRunner for AndroidYtDlpProcessRunner {
         self.runtime.report_failure(code.to_owned());
     }
 
+    fn report_diagnostic_details(&self, details: String) {
+        self.runtime.report_failure(details);
+    }
+
     fn validate_version<'a>(
         &'a self,
         _executable: &'a Path,

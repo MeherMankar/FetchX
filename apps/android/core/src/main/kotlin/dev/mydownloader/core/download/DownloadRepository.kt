@@ -79,6 +79,12 @@ interface DownloadRepository {
     /** Observe all downloads as a reactive stream. Emits the full list on every change. */
     fun observeDownloads(): Flow<List<DownloadItem>>
 
+    /**
+     * Wait until the repository has loaded its persisted initial download snapshot.
+     * Repositories without asynchronous startup loading can keep the default no-op.
+     */
+    suspend fun awaitInitialSnapshot() = Unit
+
     /** Observe events from the download engine. */
     fun observeEvents(): Flow<DownloadEvent>
 
