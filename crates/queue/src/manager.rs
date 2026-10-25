@@ -1400,7 +1400,12 @@ where
                 .await?;
         }
     }
-    if result.is_ok() && current.status() != DownloadStatus::Completed {
+    if result.is_ok()
+        && !matches!(
+            current.status(),
+            DownloadStatus::Completed | DownloadStatus::Seeding
+        )
+    {
         return Err(QueueError::InvalidStatus {
             id,
             action: "complete",
@@ -1630,6 +1635,66 @@ mod tests {
         release: watch::Receiver<bool>,
         supports_yt_dlp_pause: bool,
         desired_connections: usize,
+    }
+
+    struct TorrentCompletionEngine {
+        repository: SqliteDownloadRepository,
+        release: watch::Receiver<bool>,
+    }
+
+    impl DownloadEngine for TorrentCompletionEngine {
+        async fn download(
+            &self,
+            _id: DownloadId,
+            _cancellation: watch::Receiver<bool>,
+        ) -> Result<DownloadItem, DownloadEngineError> {
+            Err(DownloadEngineError::InvalidConfiguration)
+        }
+    }
+
+    impl ManagedDownloadEngine for TorrentCompletionEngine {
+        async fn download_managed(
+            &self,
+            id: DownloadId,
+            _control: ManagedDownloadControl,
+        ) -> Result<DownloadItem, DownloadEngineError> {
+            let state_machine = DownloadStateMachine::new(self.repository.clone());
+            let item = self
+                .repository
+                .get(id)
+                .await?
+                .ok_or(DownloadEngineError::NotFound(id))?;
+            if item.status() == DownloadStatus::Queued {
+                state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+            }
+            state_machine
+                .transition(id, DownloadStatus::Downloading)
+                .await?;
+
+            let mut release = self.release.clone();
+            while !*release.borrow() {
+                release
+                    .changed()
+                    .await
+                    .map_err(|_| DownloadEngineError::Cancelled)?;
+            }
+
+            let final_status = if item.source().engine() == EngineKind::NativeTorrent {
+                DownloadStatus::Seeding
+            } else {
+                DownloadStatus::Completed
+            };
+            state_machine
+                .transition(id, final_status)
+                .await
+                .map_err(Into::into)
+        }
+
+        fn supports_active_pause(&self, _engine: EngineKind) -> bool {
+            true
+        }
     }
 
     impl DownloadEngine for WaitingEngine {
@@ -2031,6 +2096,71 @@ mod tests {
             manager.snapshot().await?
         );
         completion??;
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seeding_completion_releases_queue_capacity_and_keeps_actor_running()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let (release_sender, release) = watch::channel(false);
+        let engine = Arc::new(TorrentCompletionEngine {
+            repository: repository.clone(),
+            release,
+        });
+        let manager = QueueManager::new(
+            repository.clone(),
+            engine,
+            QueueConfig {
+                max_active_downloads: 1,
+                global_connection_limit: 1,
+            },
+        )
+        .await?;
+
+        let torrent = mixed_workload_item(
+            EngineKind::NativeTorrent,
+            "magnet:?xt=urn:btih:45087a74049ba24e2ca2b65a6da76f5840cac866",
+            "torrent.bin",
+        )?;
+        let torrent_id = torrent.id();
+        let next = item()?;
+        let next_id = next.id();
+        manager.enqueue(torrent).await?;
+        manager.enqueue(next).await?;
+        assert_eq!(
+            wait_for_active(&manager, 1).await?.active[0].item.id(),
+            torrent_id
+        );
+
+        release_sender.send(true)?;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                let torrent_status = repository
+                    .get(torrent_id)
+                    .await?
+                    .ok_or(QueueError::DownloadNotFound(torrent_id))?
+                    .status();
+                let next_status = repository
+                    .get(next_id)
+                    .await?
+                    .ok_or(QueueError::DownloadNotFound(next_id))?
+                    .status();
+                if torrent_status == DownloadStatus::Seeding
+                    && next_status == DownloadStatus::Completed
+                    && snapshot.active.is_empty()
+                    && snapshot.queued.is_empty()
+                {
+                    return Ok::<(), QueueError>(());
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+
         manager.shutdown().await?;
         Ok(())
     }

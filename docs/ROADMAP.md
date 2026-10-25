@@ -1283,6 +1283,32 @@ real daemon-restart recovery or race-proof filesystem confinement.
 
 ---
 
+### Phase 20W.4 -- Android Download Lifecycle Validation
+
+**Status: PARTIAL; Direct HTTP lifecycle live-validated on the Android emulator.**
+
+On-device validation used a local range-capable, throttled HTTP fixture:
+- A segmented 64 MiB Direct HTTP download was paused at 39,059,456 /
+  67,108,864 bytes. Its `paused` state and segment files survived an app
+  force-stop/relaunch. Resuming completed at 67,108,864 / 67,108,864 bytes;
+  the destination file was 67,108,864 bytes and the `completed` state survived
+  another relaunch.
+- A separate Direct HTTP transfer was cancelled at 65,863,680 /
+  67,108,864 bytes. Its `cancelled` state remained persisted and segmented
+  partial data was retained; no completed destination was published.
+- A separate 32 MiB Direct HTTP fixture completed successfully.
+
+Previously recorded live YouTube Auto and manual-format downloads also remain
+valid evidence; manual selection is not repeated here. Automated Rust workspace
+format/check/test/Clippy validation and the Android browser, bridge, downloads,
+and app unit-test tasks plus debug APK assembly passed.
+
+This phase does not claim live aria2/BitTorrent daemon lifecycle coverage.
+yt-dlp active pause remains explicitly unsupported; its supported completion
+path is covered by the existing live YouTube evidence and automated tests.
+
+---
+
 ### Phase 21A -- FetchX Remote Protocol (CRITICAL)
 
 **Platform Coverage:** SHARED CORE (protocol definition); all clients consume same protocol

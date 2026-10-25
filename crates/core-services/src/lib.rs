@@ -563,9 +563,6 @@ impl CoreServices {
     }
 
     /// Stops torrent seeding for the given download, transitioning it to Stopped.
-    ///
-    /// The download must be in `Seeding` state. After stopping seeding the
-    /// underlying aria2 task is removed.
     pub async fn stop_torrent_seeding(&self, id: DownloadId) -> Result<(), CoreServicesError> {
         let item = self
             .repository
@@ -579,10 +576,32 @@ impl CoreServices {
                 item.status()
             )));
         }
-        self.queue
-            .cancel(id)
-            .await
-            .map_err(|e| CoreServicesError::Queue(e.to_string()))?;
+        match item.source().engine() {
+            EngineKind::NativeTorrent => {
+                let engine = self
+                    .engine_runtime
+                    .native_torrent_engine
+                    .as_ref()
+                    .ok_or_else(|| {
+                        CoreServicesError::Engine("native torrent engine is unavailable".to_owned())
+                    })?;
+                engine
+                    .stop_seeding(id)
+                    .await
+                    .map_err(|error| CoreServicesError::Engine(error.to_string()))?;
+            }
+            EngineKind::Aria2 => {
+                self.queue
+                    .cancel(id)
+                    .await
+                    .map_err(|e| CoreServicesError::Queue(e.to_string()))?;
+            }
+            engine => {
+                return Err(CoreServicesError::Queue(format!(
+                    "download {id} uses unsupported torrent engine {engine:?}"
+                )));
+            }
+        }
         fetchx_core::DownloadStateMachine::new(self.repository.clone())
             .transition(id, fetchx_models::DownloadStatus::Stopped)
             .await
@@ -1497,6 +1516,98 @@ mod tests {
         let (first, second) = tokio::join!(services.shutdown(), services.shutdown());
         first?;
         second?;
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stopping_native_seeding_without_a_queue_worker_preserves_completed_file_state()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{ConfigService, EngineConfig, NativeTorrentConfig};
+        use fetchx_storage::Database;
+
+        let root = tempdir()?;
+        let paths = config(root.path());
+        let database = Database::connect_path(&paths.database_path).await?;
+        ConfigService::new(database.config())
+            .save(&EngineConfig {
+                native_torrent: NativeTorrentConfig {
+                    enabled: true,
+                    listen_port: 0,
+                    session_dir: Some(root.path().join("librqbit")),
+                },
+                ..EngineConfig::default()
+            })
+            .await?;
+        drop(database);
+
+        let services = CoreServices::start(paths).await?;
+        let id = DownloadId::new();
+        let now = Timestamp::from_unix_millis(1_700_000_000_000);
+        let info_hash = "0123456789abcdef0123456789abcdef01234567";
+        let magnet = format!("magnet:?xt=urn:btih:{info_hash}");
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(&magnet, EngineKind::NativeTorrent)?,
+            FileName::new("completed.bin")?,
+            root.path().join("downloads").join("completed.bin"),
+            now,
+        );
+        services.repository.create(&item).await?;
+
+        let state_machine = DownloadStateMachine::new(services.repository.clone());
+        state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        state_machine
+            .transition(id, DownloadStatus::Downloading)
+            .await?;
+        state_machine
+            .transition(id, DownloadStatus::Seeding)
+            .await?;
+
+        services
+            .database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet),
+                local_torrent_path: None,
+                info_hash: info_hash.to_owned(),
+                torrent_name: "completed.bin".to_owned(),
+                torrent_metadata: None,
+                destination: item.destination().to_path_buf(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: vec![0],
+                selected_total_bytes: 1,
+                selection_confirmed: true,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Seeding,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        services.stop_torrent_seeding(id).await?;
+
+        assert_eq!(
+            services.repository.get(id).await?.map(|item| item.status()),
+            Some(DownloadStatus::Stopped)
+        );
+        assert_eq!(
+            services
+                .database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .map(|metadata| metadata.seed_state),
+            Some(TorrentSeedState::Stopped)
+        );
         services.shutdown().await?;
         Ok(())
     }

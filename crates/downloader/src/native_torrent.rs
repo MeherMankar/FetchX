@@ -57,9 +57,9 @@ impl Default for NativeTorrentConfig {
 pub struct NativeTorrentEngine<R> {
     session: Arc<Session>,
     repository: R,
-    /// Maps `DownloadId` to the active librqbit handle so pause/cancel can
-    /// reach the torrent without querying librqbit's DB by info-hash.
-    active: Mutex<std::collections::HashMap<DownloadId, Arc<ManagedTorrent>>>,
+    /// Retains handles for active transfers and completed torrents that are
+    /// still seeding, so controls can reach the librqbit session.
+    handles: Mutex<std::collections::HashMap<DownloadId, Arc<ManagedTorrent>>>,
 }
 
 impl<R> NativeTorrentEngine<R>
@@ -124,8 +124,24 @@ where
         Ok(Self {
             session,
             repository,
-            active: Mutex::new(std::collections::HashMap::new()),
+            handles: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// Stops an in-session torrent without deleting its downloaded files.
+    ///
+    /// A missing handle means the torrent is not being seeded by this session,
+    /// which is expected after an app restart because session persistence is disabled.
+    pub async fn stop_seeding(&self, id: DownloadId) -> Result<(), DownloadEngineError> {
+        let handle = self.handles.lock().await.get(&id).cloned();
+        if let Some(handle) = handle {
+            self.session
+                .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
+                .await
+                .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?;
+            self.handles.lock().await.remove(&id);
+        }
+        Ok(())
     }
 
     /// Returns the underlying librqbit session for shutdown / telemetry.
@@ -140,8 +156,8 @@ where
         &self,
         id: DownloadId,
     ) -> Option<fetchx_models::TorrentTelemetry> {
-        let active = self.active.lock().await;
-        let handle: &Arc<ManagedTorrent> = active.get(&id)?;
+        let handles = self.handles.lock().await;
+        let handle: &Arc<ManagedTorrent> = handles.get(&id)?;
         let stats = handle.stats();
         let live = stats.live.as_ref();
         // Convert librqbit's Speed (megabits/s) to bytes/s using as_bytes().
@@ -265,7 +281,14 @@ where
         cancellation: tokio::sync::watch::Receiver<bool>,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let pause = tokio::sync::watch::channel(false).1;
-        let connection_limit = tokio::sync::watch::channel(self.active.lock().await.len()).1;
+        let active_count = self
+            .handles
+            .lock()
+            .await
+            .values()
+            .filter(|handle| !handle.stats().finished)
+            .count();
+        let connection_limit = tokio::sync::watch::channel(active_count).1;
         let control = ManagedDownloadControl {
             cancellation,
             pause,
@@ -356,7 +379,7 @@ where
         };
 
         // Register for pause/cancel routing.
-        self.active.lock().await.insert(id, Arc::clone(&handle));
+        self.handles.lock().await.insert(id, Arc::clone(&handle));
 
         // For magnets: wait for metadata before transitioning to Downloading.
         if is_magnet {
@@ -378,9 +401,6 @@ where
 
         let result = self.drive_to_completion(id, &handle, control).await;
 
-        // Always deregister from active map.
-        self.active.lock().await.remove(&id);
-
         match result {
             Ok(()) => {
                 fetchx_core::DownloadStateMachine::new(self.repository.clone())
@@ -394,12 +414,14 @@ where
                 Ok(completed)
             }
             Err(DownloadEngineError::Cancelled) => {
+                self.handles.lock().await.remove(&id);
                 let _ = fetchx_core::DownloadStateMachine::new(self.repository.clone())
                     .transition(id, DownloadStatus::Cancelled)
                     .await;
                 Err(DownloadEngineError::Cancelled)
             }
             Err(other) => {
+                self.handles.lock().await.remove(&id);
                 // Persist the failure record.
                 let _ = fetchx_core::DownloadStateMachine::new(self.repository.clone())
                     .transition(id, DownloadStatus::Failed)
@@ -428,8 +450,8 @@ where
         id: DownloadId,
     ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
         async move {
-            let active = self.active.lock().await;
-            if let Some(handle) = active.get(&id) {
+            let handles = self.handles.lock().await;
+            if let Some(handle) = handles.get(&id) {
                 let _ =
                     self.session.pause(handle).await.map_err(|e| {
                         warn!("NativeTorrentEngine: cancel_inactive pause failed: {e}")

@@ -211,9 +211,13 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(onClick = onPause) { Text("Pause") }
+                        if (!item.engine.equals("native_torrent", ignoreCase = true)) {
+                            TextButton(onClick = onPause) { Text("Pause") }
+                        }
                         TextButton(onClick = onStopSeeding) { Text("Stop seeding") }
-                        TextButton(onClick = onCancel) { Text("Cancel") }
+                        if (!item.engine.equals("native_torrent", ignoreCase = true)) {
+                            TextButton(onClick = onCancel) { Text("Cancel") }
+                        }
                     }
                 }
 

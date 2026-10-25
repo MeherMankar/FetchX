@@ -447,7 +447,8 @@ private fun ActionButtons(
             item.state is DownloadState.Queued ||
             item.state is DownloadState.MetadataAcquiring ||
             item.state is DownloadState.Recovering ||
-            item.state is DownloadState.Seeding ||
+            (item.state is DownloadState.Seeding &&
+                !item.engine.equals("native_torrent", ignoreCase = true)) ||
             item.state is DownloadState.Paused
         if (canCancel) {
             OutlinedButton(
