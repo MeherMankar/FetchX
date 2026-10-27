@@ -117,6 +117,7 @@ is implemented.
 
 - `crates/models` — shared domain and data structures
 - `crates/remote-protocol` — transport-independent, validated JSON-RPC contract for remote clients
+- `crates/remote-server` — localhost-first HTTP/JSON-RPC and WebSocket host over CoreServices
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume/adaptive segmentation,
@@ -129,6 +130,14 @@ is implemented.
 - `migrations` — embedded, ordered SQLite schema migrations
 - `tests` — workspace-level integration tests
 - `docs` — architecture, roadmap, and AI contribution rules
+
+## Headless server
+
+Run the standalone server with `fetchx server`. It binds to `127.0.0.1:39800` by
+default; see [docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md) for endpoints, supported
+operations, configuration, and security limitations. The current server has no
+authentication, authorization, or TLS and must not be exposed to a LAN or the public
+internet.
 
 ## Build
 

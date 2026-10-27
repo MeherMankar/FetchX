@@ -1,6 +1,7 @@
 //! CLI argument definitions using clap.
 
 use clap::{Args, Parser, Subcommand};
+use std::{net::IpAddr, path::PathBuf};
 
 /// FetchX — a fast, extensible download manager.
 #[derive(Parser, Debug)]
@@ -68,6 +69,28 @@ pub enum Command {
 
     /// Torrent-specific commands.
     Torrent(TorrentOpts),
+
+    /// Run the unauthenticated local remote-control server.
+    Server(ServerOpts),
+}
+
+#[derive(Args, Debug)]
+pub struct ServerOpts {
+    /// Bind address. Defaults to localhost; use a LAN address only on a trusted network.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub bind: IpAddr,
+
+    /// TCP port.
+    #[arg(long, default_value_t = fetchx_remote_server::DEFAULT_PORT)]
+    pub port: u16,
+
+    /// SQLite database path (defaults to the standard FetchX data directory).
+    #[arg(long)]
+    pub database: Option<PathBuf>,
+
+    /// Download directory (defaults to ~/Downloads).
+    #[arg(long)]
+    pub downloads: Option<PathBuf>,
 }
 
 // ── Plugins ────────────────────────────────────────────────────────────────
@@ -218,6 +241,7 @@ pub enum TorrentCommand {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use std::net::Ipv4Addr;
 
     use super::{Cli, Command, TorrentCommand};
 
@@ -287,5 +311,17 @@ mod tests {
             options.command,
             TorrentCommand::Select { files, .. } if files == "1,3"
         ));
+    }
+
+    #[test]
+    fn server_defaults_to_loopback_and_standard_port() {
+        let cli = Cli::try_parse_from(["fetchx", "server"])
+            .expect("server should use safe localhost defaults");
+        let Command::Server(options) = cli.command else {
+            panic!("expected server command");
+        };
+        assert_eq!(options.bind, Ipv4Addr::LOCALHOST);
+        assert_eq!(options.port, fetchx_remote_server::DEFAULT_PORT);
+        assert!(options.database.is_none());
     }
 }

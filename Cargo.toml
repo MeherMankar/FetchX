@@ -9,6 +9,7 @@ members = [
     "crates/scheduler",
     "crates/browser-protocol",
     "crates/remote-protocol",
+    "crates/remote-server",
     "crates/plugin-api",
     "crates/plugin-manager",
     "crates/core-services",
@@ -36,6 +37,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
 netstat2 = "0.11.2"
 url = "2"
 clap = { version = "4", features = ["derive", "env"] }

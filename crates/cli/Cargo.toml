@@ -14,6 +14,7 @@ fetchx-downloader    = { path = "../downloader" }
 fetchx-models        = { path = "../models" }
 fetchx-plugin-manager = { path = "../plugin-manager" }
 fetchx-queue         = { path = "../queue" }
+fetchx-remote-server = { path = "../remote-server" }
 fetchx-scheduler     = { path = "../scheduler" }
 fetchx-storage       = { path = "../storage" }
 dirs = "5.0"

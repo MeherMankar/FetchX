@@ -49,10 +49,18 @@ database. The caller's journal mode is left unchanged rather than forcing WAL.
 The `remote-protocol` crate defines the transport-independent FetchX JSON-RPC 2.0
 envelopes, stable `fetchx.rpc.v1` discovery metadata, request identifiers, supported
 download commands, and event notification names. It bounds and validates incoming
-JSON and method parameters before any server dispatch. It does not open a listener,
-authenticate clients, authorize operations, or invoke CoreServices; those concerns
-belong to subsequent server and security phases. Semantic URL, engine, and filesystem
-validation remains authoritative in the shared core.
+JSON and method parameters before server dispatch.
+
+The `remote-server` crate provides the standalone Axum HTTP/JSON-RPC and WebSocket
+transport. It initializes the same `CoreServices` graph as the CLI and desktop,
+dispatches supported download operations through the repository and queue, and streams
+the existing bounded `DownloadEventBus` with a bounded per-client queue. The default
+listener is loopback-only. Download responses intentionally omit source URLs,
+destination paths, and raw engine diagnostics. Operations without a shared CoreServices
+implementation are omitted from discovery or return an explicit unsupported-operation
+error. This phase does not authenticate clients, authorize operations, configure TLS,
+or validate remote origins; do not bind beyond loopback until the later remote-security
+phases are complete.
 
 The `queue` crate coordinates persisted download records with the downloader
 abstraction. It recovers interrupted `Preparing`/`Downloading` records to `Queued`,

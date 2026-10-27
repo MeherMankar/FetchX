@@ -108,6 +108,8 @@ pub enum RpcErrorCode {
     NotFound = -32004,
     Conflict = -32009,
     ServiceUnavailable = -32010,
+    Timeout = -32011,
+    UnsupportedOperation = -32012,
 }
 
 /// One recognized, validated client operation.

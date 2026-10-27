@@ -1351,13 +1351,23 @@ in Phases 21B, 21C, and 21D.
 
 ### Phase 21B -- Headless Server (CRITICAL)
 
+**Status: IMPLEMENTED; LOOPBACK INTEGRATION VALIDATION PASS.**
+
 **Platform Coverage:** SERVER/REMOTE (platform-independent) -> SHARED CORE
 
 Standalone server using CoreServices -> FetchX Core. No Tauri dependency.
-HTTP/RPC + WebSocket transport.
+HTTP/JSON-RPC + WebSocket event transport. `fetchx server` defaults to
+`127.0.0.1:39800`; request bodies, active RPC/WebSocket sessions, dispatch time,
+WebSocket frames, and per-client event queues are bounded. Graceful shutdown closes
+event sessions and drains active handlers before shutting down CoreServices.
 
-Supports: persistent downloads, queue, scheduler, engines, plugins, storage,
-configuration, remote events.
+Implemented RPC operations: discovery, HTTP(S)/magnet create, get/list, pause, resume,
+cancel, remove, and priority. Remote DTOs omit source URLs and filesystem paths.
+Event streaming uses the existing CoreServices download event bus. Retry, engine
+selection for existing jobs, per-download speed limits, scheduler, plugin, and config
+operations are not advertised unless a future shared service API can support them.
+Unauthenticated access, authorization, TLS, origin validation, SSRF protections, and
+LAN/public deployment remain out of scope; bind only to loopback.
 
 **Windows:** Server can run as Windows service or standalone process.
 **Android:** Android FetchX acts as a local server for Phase 21I browser integration.

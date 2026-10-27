@@ -133,5 +133,51 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
             svc.shutdown().await?;
             Ok(code)
         }
+        Server(opts) => {
+            let defaults = fetchx_remote_server::ServerConfig::default();
+            let config = fetchx_remote_server::ServerConfig {
+                bind_ip: opts.bind,
+                port: opts.port,
+                database_path: opts.database.unwrap_or(defaults.database_path.clone()),
+                downloads_dir: opts.downloads.unwrap_or(defaults.downloads_dir.clone()),
+                runtime_dir: defaults.runtime_dir,
+                max_request_bytes: defaults.max_request_bytes,
+                max_connections: defaults.max_connections,
+                request_timeout: defaults.request_timeout,
+                event_backlog: defaults.event_backlog,
+            };
+            let server = fetchx_remote_server::RemoteServer::start(config).await?;
+            tracing::info!(address = %server.local_addr(), "FetchX remote server listening");
+            server.run_until(shutdown_signal()).await?;
+            Ok(exit::SUCCESS)
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    result = tokio::signal::ctrl_c() => {
+                        if let Err(error) = result {
+                            tracing::error!(%error, "failed to listen for Ctrl+C");
+                        }
+                    }
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "failed to install SIGTERM handler");
+                if let Err(error) = tokio::signal::ctrl_c().await {
+                    tracing::error!(%error, "failed to listen for Ctrl+C");
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    if let Err(error) = tokio::signal::ctrl_c().await {
+        tracing::error!(%error, "failed to listen for Ctrl+C");
     }
 }
