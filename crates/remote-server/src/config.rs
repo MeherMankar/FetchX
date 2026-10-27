@@ -11,6 +11,12 @@ const MAX_CONNECTIONS: usize = 128;
 const MAX_TIMEOUT_SECS: u64 = 300;
 const MAX_EVENT_BACKLOG: usize = 2048;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TlsConfig {
+    pub certificate_path: PathBuf,
+    pub private_key_path: PathBuf,
+}
+
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub bind_ip: IpAddr,
@@ -23,6 +29,8 @@ pub struct ServerConfig {
     pub request_timeout: Duration,
     /// Maximum queued notifications per WebSocket client before it is disconnected.
     pub event_backlog: usize,
+    pub tls: Option<TlsConfig>,
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -38,6 +46,8 @@ impl Default for ServerConfig {
             max_connections: 32,
             request_timeout: Duration::from_secs(30),
             event_backlog: 256,
+            tls: None,
+            allowed_origins: vec!["http://127.0.0.1".to_owned(), "http://localhost".to_owned()],
         }
     }
 }
@@ -59,6 +69,13 @@ impl ServerConfig {
         }
         if self.event_backlog == 0 || self.event_backlog > MAX_EVENT_BACKLOG {
             return Err(ServerConfigError::EventBacklog);
+        }
+        if let Some(tls) = &self.tls {
+            if tls.certificate_path.as_os_str().is_empty()
+                || tls.private_key_path.as_os_str().is_empty()
+            {
+                return Err(ServerConfigError::TlsConfiguration);
+            }
         }
         Ok(())
     }
@@ -122,6 +139,8 @@ pub enum ServerConfigError {
     RequestTimeout,
     #[error("event backlog must be between 1 and 2048")]
     EventBacklog,
+    #[error("TLS requires a certificate and private key path")]
+    TlsConfiguration,
 }
 
 #[cfg(test)]
@@ -157,5 +176,29 @@ mod tests {
             request_timeout.validate(),
             Err(ServerConfigError::RequestTimeout)
         );
+    }
+
+    #[test]
+    fn tls_requires_certificate_and_key_paths() {
+        let config = ServerConfig {
+            tls: Some(super::TlsConfig {
+                certificate_path: Default::default(),
+                private_key_path: Default::default(),
+            }),
+            ..ServerConfig::default()
+        };
+        assert_eq!(config.validate(), Err(ServerConfigError::TlsConfiguration));
+    }
+
+    #[test]
+    fn valid_tls_paths_are_accepted() {
+        let config = ServerConfig {
+            tls: Some(super::TlsConfig {
+                certificate_path: "certificate.pem".into(),
+                private_key_path: "private-key.pem".into(),
+            }),
+            ..ServerConfig::default()
+        };
+        assert!(config.validate().is_ok());
     }
 }

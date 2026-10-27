@@ -8,6 +8,7 @@ fetchx server rotate-auth
 fetchx server
 fetchx server --bind 127.0.0.1 --port 39800
 fetchx server --bind 127.0.0.1 --port 39800 --database C:\FetchX\fetchx.db --downloads C:\FetchX\Downloads
+fetchx server --bind 127.0.0.1 --port 39800 --tls-certificate C:\FetchX\server-cert.pem --tls-private-key C:\FetchX\server-key.pem
 ```
 
 Initialize authentication once before starting the server. `init-auth` creates a
@@ -17,6 +18,13 @@ again at startup. Save the token in a password manager or another secure local s
 store. The default database is in the FetchX application-data directory; its access
 inherits the current user's operating-system file permissions. No additional plaintext
 credential file is created.
+
+TLS is enabled only when both `--tls-certificate` and `--tls-private-key` are
+provided. Both files must be PEM encoded. Invalid, missing, or mismatched files
+cause startup to fail; a requested TLS server never falls back to plaintext. The
+default listener remains loopback-only. Without these flags, the server continues
+to serve HTTP as before. Protect the private key with operating-system file
+permissions and do not place it in source control.
 
 Use the token in an HTTP Authorization header:
 
@@ -65,7 +73,7 @@ include source URLs, destination paths, or raw engine error text. WebSocket subs
 use a bounded event buffer; a slow subscriber is disconnected rather than blocking
 downloads or silently continuing after an event gap.
 
-## Resource bounds
+## Resource bounds and security defaults
 
 The server accepts JSON-RPC request bodies up to the protocol's 1 MiB maximum. Default
 limits are 32 concurrent RPC/WebSocket sessions, a 30-second request/body deadline,
@@ -74,21 +82,34 @@ these at 128 sessions, 300 seconds, and 2,048 queued notifications. WebSocket fr
 use the configured request-size limit. The queue's existing broadcast event capacity
 remains bounded independently.
 
+The default bind remains loopback (`127.0.0.1`). The remote server intentionally does
+not expose a public listener by default. Direct HTTP and redirect targets are rejected
+when they resolve to localhost, loopback, private, link-local, multicast, unspecified,
+or IPv4-mapped IPv6 local ranges. The downloader validates and pins each resolved
+destination address for the matching connection, including each redirect hop, to
+prevent a second DNS lookup from selecting a different address. Environment proxy settings are
+bypassed for these protected direct requests. WebSocket connections require a
+configured origin allow-list; a missing or forbidden origin is rejected before
+subscription establishment.
+A bounded in-memory rate limiter rejects repeated abusive requests with HTTP 429 while
+preserving the existing 21A/21D authentication and authorization checks.
+
 ## Threat model and remaining limitations
 
 | Threat | Current mitigation / status |
 |---|---|
 | Token guessing | 256 bits from the operating-system cryptographic random source; SHA-256 verifier comparison is constant-time. |
 | Token leakage | Only the verifier is stored; token is shown only by explicit `init-auth` or `rotate-auth`. Request headers are not logged. |
-| Replay | Bearer tokens are reusable; HTTPS/TLS is not configured. Do not send tokens over untrusted networks. |
-| Brute force | Existing connection, body-size, and time limits apply. Dedicated rate limiting is deferred to 21E. |
+| Replay | Bearer tokens are reusable. TLS is optional; configure a certificate and private key before sending tokens over an untrusted network. |
+| Brute force | Bounded in-memory HTTP/WebSocket rate limiting plus connection, body-size, and request-deadline limits. |
 | Credential theft | SQLite access is protected by the host user's existing filesystem permissions; the verifier alone cannot authenticate. |
 | Unauthorized RPC | A centralized bearer-token check guards all RPC before parsing/dispatch. |
 | Unauthorized WebSocket | The handshake is authenticated before event subscription; sessions are rechecked when sending events so token rotation closes old sessions. |
 | Restart bypass | The verifier remains in SQLite and is loaded at startup; startup fails closed if auth is uninitialized or corrupt. |
 | Credential reset abuse | Only an explicit local CLI `rotate-auth` operation changes the token; no hidden recovery token exists. |
 
-Phase 21C provides token authentication only. It does **not** implement authorization
-(21D), TLS, WebSocket Origin validation, SSRF protections, or broader remote hardening
-(21E). The default bind remains loopback. Changing it does not make LAN/public exposure
-safe; do not expose the server to a LAN, reverse proxy, or public internet.
+Phase 21C provides token authentication only. Authorization, optional TLS,
+WebSocket Origin validation, SSRF protections, and broader remote hardening are
+implemented in later phases. The default bind remains loopback. Changing it does
+not make LAN/public exposure safe; do not expose the server to a LAN, reverse
+proxy, or public internet without reviewing the deployment threat model.

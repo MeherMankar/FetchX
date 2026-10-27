@@ -191,6 +191,21 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
                 max_connections: defaults.max_connections,
                 request_timeout: defaults.request_timeout,
                 event_backlog: defaults.event_backlog,
+                tls: match (opts.tls_certificate, opts.tls_private_key) {
+                    (Some(certificate_path), Some(private_key_path)) => {
+                        Some(fetchx_remote_server::TlsConfig {
+                            certificate_path,
+                            private_key_path,
+                        })
+                    }
+                    (None, None) => defaults.tls,
+                    _ => {
+                        return Err(
+                            "TLS certificate and private key must be configured together".into(),
+                        );
+                    }
+                },
+                allowed_origins: defaults.allowed_origins,
             };
             let server = fetchx_remote_server::RemoteServer::start(config).await?;
             tracing::info!(address = %server.local_addr(), "FetchX remote server listening");

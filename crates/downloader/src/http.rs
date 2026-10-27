@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     ffi::OsString,
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -18,8 +19,8 @@ use fetchx_storage::DownloadRepository;
 use reqwest::{
     Client, Response, StatusCode, Url,
     header::{
-        ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
-        RETRY_AFTER,
+        ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, LOCATION,
+        RANGE, RETRY_AFTER,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -149,7 +150,6 @@ impl Default for HttpEngineConfig {
 pub struct DirectHttpEngine<R> {
     repository: R,
     state_machine: DownloadStateMachine<R>,
-    client: Client,
     config: HttpEngineConfig,
 }
 
@@ -177,33 +177,11 @@ where
             return Err(DownloadEngineError::InvalidConfiguration);
         }
 
-        let client = Client::builder()
-            .user_agent(&config.user_agent)
-            .connect_timeout(config.connect_timeout)
-            .read_timeout(config.read_timeout)
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let next = attempt.url();
-                let previous = attempt.previous();
-                let is_http = matches!(next.scheme(), "http" | "https");
-                let has_credentials = !next.username().is_empty() || next.password().is_some();
-                let downgrades_tls = previous
-                    .last()
-                    .is_some_and(|url| url.scheme() == "https" && next.scheme() == "http");
-
-                if previous.len() >= 10 || !is_http || has_credentials || downgrades_tls {
-                    attempt.stop()
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .build()
-            .map_err(DownloadEngineError::ClientConfiguration)?;
         let state_machine = DownloadStateMachine::new(repository.clone());
 
         Ok(Self {
             repository,
             state_machine,
-            client,
             config,
         })
     }
@@ -317,7 +295,10 @@ where
         if item.source().engine() != EngineKind::DirectHttp {
             return Err(DownloadEngineError::EngineMismatch);
         }
-        let url = parse_http_url(item.source().url())?;
+        let url = parse_http_url_with_private_policy(
+            item.source().url(),
+            self.allow_private_test_target(),
+        )?;
         let destination = item.destination().to_path_buf();
         let temporary_path = temporary_path(&destination);
         if let Some(completed) = self
@@ -627,18 +608,8 @@ where
                     }
                 }
                 response = async {
-                    let request = self.client.get(url.clone());
-                    let request = if let Some(start) = range_start {
-                        let request = request.header(RANGE, format!("bytes={start}-"));
-                        if let Some(validator) = &if_range {
-                            request.header(IF_RANGE, validator)
-                        } else {
-                            request
-                        }
-                    } else {
-                        request
-                    };
-                    request.send().await
+                    self.send_redirect_chain(&url, range_start, if_range.as_deref())
+                        .await
                 } => {
                     match response {
                         Ok(response)
@@ -657,8 +628,9 @@ where
                                 return Ok(response);
                             }
                         }
+
                         Ok(response) => return Ok(response),
-                        Err(error) => {
+                        Err(DownloadEngineError::Request(error)) => {
                             if !RetryPolicy::is_transient_request(&error) {
                                 return Err(DownloadEngineError::Request(error));
                             }
@@ -673,10 +645,101 @@ where
                                 return Err(DownloadEngineError::Request(error));
                             }
                         }
+                        Err(error) => return Err(error),
                     }
                 }
             }
         }
+    }
+
+    async fn send_redirect_chain(
+        &self,
+        initial_url: &Url,
+        range_start: Option<u64>,
+        if_range: Option<&str>,
+    ) -> Result<Response, DownloadEngineError> {
+        let mut url = initial_url.clone();
+        for redirect_count in 0..=10 {
+            let allow_private = redirect_count == 0 && self.allow_private_test_target();
+            let client = self.client_for_url(&url, allow_private).await?;
+            let mut request = client.get(url.clone());
+            if let Some(start) = range_start {
+                request = request.header(RANGE, format!("bytes={start}-"));
+                if let Some(validator) = if_range {
+                    request = request.header(IF_RANGE, validator);
+                }
+            }
+            let response = request.send().await.map_err(DownloadEngineError::Request)?;
+            if !response.status().is_redirection() {
+                return Ok(response);
+            }
+            let Some(location) = response
+                .headers()
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+            else {
+                return Ok(response);
+            };
+            if redirect_count == 10 {
+                return Err(DownloadEngineError::InvalidUrl);
+            }
+            let next_url = response
+                .url()
+                .join(location)
+                .map_err(|_| DownloadEngineError::InvalidUrl)?;
+            if !redirect_target_is_safe(&url, &next_url) {
+                return Err(DownloadEngineError::InvalidUrl);
+            }
+            url = next_url;
+        }
+        Err(DownloadEngineError::InvalidUrl)
+    }
+
+    async fn client_for_url(
+        &self,
+        url: &Url,
+        allow_private: bool,
+    ) -> Result<Client, DownloadEngineError> {
+        let host = url.host_str().ok_or(DownloadEngineError::InvalidUrl)?;
+        let port = url
+            .port_or_known_default()
+            .ok_or(DownloadEngineError::InvalidUrl)?;
+        let addresses = if let Ok(ip) = host.parse::<IpAddr>() {
+            vec![SocketAddr::new(ip, port)]
+        } else {
+            tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|_| DownloadEngineError::InvalidUrl)?
+                .collect::<Vec<_>>()
+        };
+        if addresses.is_empty()
+            || (!allow_private
+                && addresses
+                    .iter()
+                    .any(|address| is_local_or_private_ip(address.ip())))
+        {
+            return Err(DownloadEngineError::InvalidUrl);
+        }
+
+        Client::builder()
+            .user_agent(&self.config.user_agent)
+            .connect_timeout(self.config.connect_timeout)
+            .read_timeout(self.config.read_timeout)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve_to_addrs(host, &addresses)
+            .build()
+            .map_err(DownloadEngineError::ClientConfiguration)
+    }
+
+    #[cfg(test)]
+    fn allow_private_test_target(&self) -> bool {
+        true
+    }
+
+    #[cfg(not(test))]
+    fn allow_private_test_target(&self) -> bool {
+        false
     }
 
     async fn download_segmented(
@@ -695,6 +758,9 @@ where
             validator,
         } = context;
         let temporary_path = temporary_path(item.destination());
+        let segment_client = self
+            .client_for_url(&url, self.allow_private_test_target())
+            .await?;
         let mut segments = segments::plan_segments(total_size, segment_count, |index| {
             segment_file_path(&temporary_path, segment_count, total_size, index)
         })
@@ -752,7 +818,7 @@ where
             total_size,
             &url,
             &validator,
-            &self.client,
+            &segment_client,
             &control.cancellation,
             &stop_receiver,
             &control.bandwidth,
@@ -825,7 +891,7 @@ where
                             total_size,
                             &url,
                             &validator,
-                            &self.client,
+                            &segment_client,
                             &control.cancellation,
                             &stop_receiver,
                             &control.bandwidth,
@@ -900,7 +966,7 @@ where
                         total_size,
                         &url,
                         &validator,
-                        &self.client,
+                        &segment_client,
                         &control.cancellation,
                         &stop_receiver,
                         &control.bandwidth,
@@ -989,7 +1055,7 @@ where
                             total_size,
                             &url,
                             &validator,
-                            &self.client,
+                            &segment_client,
                             &control.cancellation,
                             &stop_receiver,
                             &control.bandwidth,
@@ -1510,6 +1576,13 @@ where
 }
 
 fn parse_http_url(source: &str) -> Result<Url, DownloadEngineError> {
+    parse_http_url_with_private_policy(source, false)
+}
+
+fn parse_http_url_with_private_policy(
+    source: &str,
+    allow_private: bool,
+) -> Result<Url, DownloadEngineError> {
     if source.trim().is_empty() {
         return Err(DownloadEngineError::InvalidUrl);
     }
@@ -1521,8 +1594,111 @@ fn parse_http_url(source: &str) -> Result<Url, DownloadEngineError> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err(DownloadEngineError::EmbeddedCredentials);
     }
+    if !allow_private && is_internal_target(&url) {
+        return Err(DownloadEngineError::InvalidUrl);
+    }
 
     Ok(url)
+}
+
+fn redirect_has_safe_structure(previous: &Url, next: &Url) -> bool {
+    let Some(host) = next.host_str() else {
+        return false;
+    };
+    if !matches!(next.scheme(), "http" | "https")
+        || previous.scheme() == "https" && next.scheme() == "http"
+        || !next.username().is_empty()
+        || next.password().is_some()
+    {
+        return false;
+    }
+    !host.is_empty()
+}
+
+fn redirect_target_is_safe(previous: &Url, next: &Url) -> bool {
+    if !redirect_has_safe_structure(previous, next) {
+        return false;
+    }
+    let Some(host) = next.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(addr) = host.parse::<IpAddr>() {
+        return !is_local_or_private_ip(addr);
+    }
+    true
+}
+
+fn is_internal_target(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return true;
+    }
+    if let Ok(addr) = host.parse::<IpAddr>() {
+        return is_local_or_private_ip(addr);
+    }
+    url.socket_addrs(|| None)
+        .is_ok_and(|addrs| addrs.iter().any(|addr| is_local_or_private_ip(addr.ip())))
+}
+
+fn is_local_or_private_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ipv4) => {
+            let octets = ipv4.octets();
+            ipv4.is_loopback()
+                || ipv4.is_private()
+                || ipv4.is_link_local()
+                || ipv4.is_multicast()
+                || ipv4.is_unspecified()
+                || octets[0] == 0
+                || octets[0] == 100 && (64..=127).contains(&octets[1])
+                || octets[0] == 169 && octets[1] == 254
+                || octets[0] == 192 && (octets[1] == 0 || octets[1] == 88 && octets[2] == 99)
+                || octets[0] == 198
+                    && (octets[1] == 18 || octets[1] == 19 || octets[1] == 51 && octets[2] == 100)
+                || octets[0] == 203 && octets[1] == 0 && octets[2] == 113
+                || octets[0] >= 240
+        }
+        std::net::IpAddr::V6(ipv6) => {
+            ipv6.is_loopback()
+                || ipv6.is_unspecified()
+                || ipv6.is_multicast()
+                || ipv6.is_unicast_link_local()
+                || ipv6.is_unique_local()
+                || ipv6.segments()[0] & 0xffc0 == 0xfec0
+                || ipv6.segments()[0] == 0x2001 && ipv6.segments()[1] == 0x0db8
+                || ipv6
+                    .to_ipv4()
+                    .is_some_and(|ip| is_local_or_private_ip(IpAddr::V4(ip)))
+                || ipv6_embedded_ipv4_is_unsafe(ipv6)
+        }
+    }
+}
+
+fn ipv6_embedded_ipv4_is_unsafe(ipv6: std::net::Ipv6Addr) -> bool {
+    let segments = ipv6.segments();
+    let embedded = if segments[..4] == [0x0064, 0xff9b, 0, 0] {
+        Some(std::net::Ipv4Addr::new(
+            (segments[4] >> 8) as u8,
+            segments[4] as u8,
+            (segments[5] >> 8) as u8,
+            segments[5] as u8,
+        ))
+    } else if segments[0] == 0x2002 {
+        Some(std::net::Ipv4Addr::new(
+            (segments[1] >> 8) as u8,
+            segments[1] as u8,
+            (segments[2] >> 8) as u8,
+            segments[2] as u8,
+        ))
+    } else {
+        None
+    };
+    embedded.is_some_and(|ip| is_local_or_private_ip(IpAddr::V4(ip)))
 }
 
 /// Validates and canonicalizes a direct HTTP/HTTPS source URL for application adapters.
@@ -2041,11 +2217,13 @@ async fn publish_without_replacement(
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(DownloadEngineError::DestinationExists);
         }
+
         Err(_) => {
             // Hard link failed (cross-device or unsupported FS — e.g. Android external
             // storage does not support hard links). Fall back to copy-then-delete.
         }
     }
+
     match fs::copy(temporary, destination).await {
         Ok(_) => {
             let _ = fs::remove_file(temporary).await;
@@ -2055,5 +2233,46 @@ async fn publish_without_replacement(
             Err(DownloadEngineError::DestinationExists)
         }
         Err(error) => Err(DownloadEngineError::Io(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{redirect_target_is_safe, validate_http_source_url};
+    use reqwest::Url;
+
+    #[test]
+    fn rejects_local_private_network_targets() {
+        for source in [
+            "http://localhost/",
+            "http://127.0.0.1/",
+            "http://127.0.0.2/",
+            "http://10.0.0.1/",
+            "http://100.64.0.1/",
+            "http://192.0.2.1/",
+            "http://192.168.1.2/",
+            "http://198.18.0.1/",
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[2001:db8::1]/",
+            "http://[64:ff9b::7f00:1]/",
+            "http://[2002:7f00:1::]/",
+        ] {
+            assert!(validate_http_source_url(source).is_err(), "{source}");
+        }
+        assert!(validate_http_source_url("https://example.com/file.bin").is_ok());
+        assert!(validate_http_source_url("http://[::ffff:8.8.8.8]/").is_ok());
+    }
+
+    #[test]
+    fn allows_public_redirects_but_rejects_private_and_downgrade_targets() {
+        let source = Url::parse("https://source.example/file").expect("valid source URL");
+        let public = Url::parse("https://cdn.example/file").expect("valid redirect URL");
+        let private = Url::parse("https://127.0.0.1/file").expect("valid redirect URL");
+        let downgrade = Url::parse("http://cdn.example/file").expect("valid redirect URL");
+
+        assert!(redirect_target_is_safe(&source, &public));
+        assert!(!redirect_target_is_safe(&source, &private));
+        assert!(!redirect_target_is_safe(&source, &downgrade));
     }
 }

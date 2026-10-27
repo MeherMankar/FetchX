@@ -1,4 +1,10 @@
-use std::{future::Future, io, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    future::Future,
+    io,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use axum::{
     Router,
@@ -7,7 +13,10 @@ use axum::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, Request, StatusCode, header::AUTHORIZATION},
+    http::{
+        HeaderMap, Request, StatusCode,
+        header::{AUTHORIZATION, ORIGIN},
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -15,13 +24,19 @@ use fetchx_core_services::{CoreServices, CoreServicesConfig};
 use fetchx_queue::DownloadEvent;
 use fetchx_remote_protocol::{EventNotification, RpcErrorCode, RpcFailure, parse_request};
 use futures_util::{SinkExt, StreamExt};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder as ConnectionBuilder,
+    service::TowerToHyperService,
+};
 use serde_json::json;
 use thiserror::Error;
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::{Semaphore, broadcast, mpsc, oneshot, watch},
-    time::{Instant, interval, timeout},
+    time::{interval, timeout},
 };
+use tokio_rustls::{TlsAcceptor, rustls};
 use tracing::{debug, warn};
 
 use crate::{
@@ -39,6 +54,7 @@ struct AppState {
     connections: Arc<Semaphore>,
     authentication: Arc<AuthenticationService>,
     shutdown: watch::Receiver<bool>,
+    rate_limits: Arc<RateLimiter>,
 }
 
 pub struct RemoteServer {
@@ -47,11 +63,19 @@ pub struct RemoteServer {
     app: Router,
     services: Arc<CoreServices>,
     shutdown_sender: watch::Sender<bool>,
+    tls: Option<Arc<rustls::ServerConfig>>,
+    max_connections: usize,
 }
 
 impl RemoteServer {
     pub async fn start(config: ServerConfig) -> Result<Self, ServerError> {
         config.validate()?;
+        let tls = config
+            .tls
+            .as_ref()
+            .map(load_tls_config)
+            .transpose()?
+            .map(Arc::new);
         let listener = TcpListener::bind(config.socket_addr()).await?;
         let address = listener.local_addr()?;
         let services = Arc::new(
@@ -79,8 +103,9 @@ impl RemoteServer {
             services: Arc::clone(&services),
             connections: Arc::new(Semaphore::new(config.max_connections)),
             authentication,
-            config,
+            config: config.clone(),
             shutdown: shutdown_receiver,
+            rate_limits: Arc::new(RateLimiter::new()),
         };
         let app = Router::new()
             .route("/health", get(health))
@@ -93,6 +118,8 @@ impl RemoteServer {
             app,
             services,
             shutdown_sender,
+            tls,
+            max_connections: config.max_connections,
         })
     }
 
@@ -110,21 +137,135 @@ impl RemoteServer {
             app,
             services,
             shutdown_sender,
+            tls,
+            max_connections,
             ..
         } = self;
         let shutdown_signal = async move {
             shutdown.await;
             let _ = shutdown_sender.send(true);
         };
-        let server_result = axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal)
-            .await;
+        let server_result = if let Some(tls) = tls {
+            serve_tls(listener, app, tls, max_connections, shutdown_signal).await
+        } else {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal)
+                .await
+                .map_err(ServerError::Io)
+        };
         let shutdown_result = services
             .shutdown()
             .await
             .map_err(|error| ServerError::Shutdown(error.to_string()));
         server_result?;
         shutdown_result
+    }
+}
+
+fn load_tls_config(config: &crate::TlsConfig) -> Result<rustls::ServerConfig, ServerError> {
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+
+    let certificates = CertificateDer::pem_file_iter(&config.certificate_path)
+        .map_err(|error| {
+            ServerError::Tls(format!(
+                "could not read TLS certificate file {}: {error}",
+                config.certificate_path.display()
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            ServerError::Tls(format!(
+                "could not parse TLS certificate file {}: {error}",
+                config.certificate_path.display()
+            ))
+        })?;
+    if certificates.is_empty() {
+        return Err(ServerError::Tls(format!(
+            "TLS certificate file {} contains no certificates",
+            config.certificate_path.display()
+        )));
+    }
+
+    let private_key = rustls::pki_types::PrivateKeyDer::from_pem_file(&config.private_key_path)
+        .map_err(|error| {
+            ServerError::Tls(format!(
+                "could not read TLS private key file {}: {error}",
+                config.private_key_path.display()
+            ))
+        })?;
+    rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| ServerError::Tls(format!("invalid TLS protocol configuration: {error}")))?
+    .with_no_client_auth()
+    .with_single_cert(certificates, private_key)
+    .map_err(|error| ServerError::Tls(format!("invalid TLS certificate/key pair: {error}")))
+}
+
+async fn serve_tls<F>(
+    listener: TcpListener,
+    app: Router,
+    tls: Arc<rustls::ServerConfig>,
+    max_connections: usize,
+    shutdown: F,
+) -> Result<(), ServerError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let acceptor = TlsAcceptor::from(tls);
+    let handshake_slots = Arc::new(Semaphore::new(max_connections));
+    let mut connections = tokio::task::JoinSet::new();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => break,
+            accepted = listener.accept() => {
+                let (stream, _) = accepted?;
+                let Ok(slot) = Arc::clone(&handshake_slots).try_acquire_owned() else {
+                    debug!("dropping TLS connection after reaching the connection limit");
+                    drop(stream);
+                    continue;
+                };
+                let acceptor = acceptor.clone();
+                let app = app.clone();
+                connections.spawn(async move {
+                    let _slot = slot;
+                    serve_tls_connection(stream, acceptor, app).await;
+                });
+            }
+            Some(result) = connections.join_next(), if !connections.is_empty() => {
+                if let Err(error) = result {
+                    debug!(%error, "TLS connection task failed");
+                }
+            }
+        }
+    }
+    if tokio::time::timeout(Duration::from_secs(5), async {
+        while connections.join_next().await.is_some() {}
+    })
+    .await
+    .is_err()
+    {
+        connections.abort_all();
+    }
+    Ok(())
+}
+
+async fn serve_tls_connection(stream: TcpStream, acceptor: TlsAcceptor, app: Router) {
+    let stream = match acceptor.accept(stream).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            debug!(%error, "TLS handshake failed");
+            return;
+        }
+    };
+    let builder = ConnectionBuilder::new(TokioExecutor::new());
+    if let Err(error) = builder
+        .serve_connection_with_upgrades(TokioIo::new(stream), TowerToHyperService::new(app))
+        .await
+    {
+        debug!(%error, "TLS HTTP connection failed");
     }
 }
 
@@ -138,6 +279,8 @@ pub enum ServerError {
     Core(String),
     #[error("{0}")]
     Authentication(String),
+    #[error("{0}")]
+    Tls(String),
     #[error("could not gracefully stop FetchX services: {0}")]
     Shutdown(String),
 }
@@ -155,6 +298,9 @@ async fn health(State(state): State<AppState>) -> Response {
 }
 
 async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response {
+    if state.rate_limits.is_rate_limited("rpc") {
+        return rate_limit_response();
+    }
     let deadline = Instant::now() + state.config.request_timeout;
     let permit = match Arc::clone(&state.connections).try_acquire_owned() {
         Ok(permit) => permit,
@@ -249,10 +395,20 @@ async fn websocket(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
+    if state.rate_limits.is_rate_limited("ws") {
+        return rate_limit_response();
+    }
     let permit = match Arc::clone(&state.connections).try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    let origin = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
+    if let Some(origin) = origin {
+        if !origin_allowed(&state.config, origin) {
+            drop(permit);
+            return forbidden_origin_response();
+        }
+    }
     let Some(authorization) = headers.get(AUTHORIZATION).cloned() else {
         drop(permit);
         return authentication_failure();
@@ -343,10 +499,68 @@ fn authorization_failure() -> Response {
     )
 }
 
+fn forbidden_origin_response() -> Response {
+    rpc_response_with_status(
+        RpcError::new(RpcErrorCode::Forbidden, "origin not allowed").failure(None),
+        StatusCode::FORBIDDEN,
+    )
+}
+
+fn rate_limit_response() -> Response {
+    rpc_response_with_status(
+        RpcError::new(RpcErrorCode::ServiceUnavailable, "rate limit exceeded").failure(None),
+        StatusCode::TOO_MANY_REQUESTS,
+    )
+}
+
 fn rpc_response_with_status(response: RpcFailure, status: StatusCode) -> Response {
     let mut response = rpc_response(response);
     *response.status_mut() = status;
     response
+}
+
+fn origin_allowed(config: &ServerConfig, origin: &str) -> bool {
+    if config.allowed_origins.is_empty() {
+        return false;
+    }
+    if let Ok(parsed) = url::Url::parse(origin) {
+        let origin = parsed.origin().unicode_serialization();
+        return config.allowed_origins.iter().any(|candidate| {
+            let Ok(candidate_url) = url::Url::parse(candidate) else {
+                return false;
+            };
+            candidate_url.origin().unicode_serialization() == origin
+        });
+    }
+    false
+}
+
+#[derive(Clone, Default)]
+struct RateLimiter {
+    buckets: Arc<Mutex<HashMap<String, VecDeque<Instant>>>>,
+}
+
+impl RateLimiter {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn is_rate_limited(&self, bucket: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut buckets = self.buckets.lock().unwrap();
+        let queue = buckets.entry(bucket.to_owned()).or_default();
+        while queue
+            .front()
+            .is_some_and(|ts| now.duration_since(*ts) > Duration::from_secs(60))
+        {
+            queue.pop_front();
+        }
+        queue.push_back(now);
+        if queue.len() > 120 {
+            return true;
+        }
+        false
+    }
 }
 
 async fn serve_websocket(
@@ -481,7 +695,7 @@ async fn pump_events(
 mod tests {
     use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 
-    use super::{RemoteServer, ServerConfig, ServerError};
+    use super::{RemoteServer, ServerConfig, ServerError, origin_allowed};
     use crate::initialize_auth;
 
     #[tokio::test]
@@ -525,6 +739,53 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn tls_startup_rejects_missing_certificate_and_key_without_plaintext_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let missing_certificate = ServerConfig {
+            tls: Some(crate::TlsConfig {
+                certificate_path: temp.path().join("missing-cert.pem"),
+                private_key_path: temp.path().join("missing-key.pem"),
+            }),
+            ..test_config(temp.path().to_path_buf())
+        };
+        let error = match RemoteServer::start(missing_certificate).await {
+            Ok(_) => return Err(std::io::Error::other("server started without TLS files").into()),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ServerError::Tls(_)));
+
+        let certificate_path = temp.path().join("invalid-cert.pem");
+        let private_key_path = temp.path().join("invalid-key.pem");
+        tokio::fs::write(&certificate_path, b"not a PEM certificate").await?;
+        tokio::fs::write(&private_key_path, b"not a PEM private key").await?;
+        let invalid_pair = ServerConfig {
+            tls: Some(crate::TlsConfig {
+                certificate_path,
+                private_key_path,
+            }),
+            ..test_config(temp.path().to_path_buf())
+        };
+        let error = match RemoteServer::start(invalid_pair).await {
+            Ok(_) => return Err(std::io::Error::other("server accepted invalid TLS files").into()),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ServerError::Tls(_)));
+        Ok(())
+    }
+
+    #[test]
+    fn origin_validation_accepts_loopback_clients_only() {
+        let config = ServerConfig {
+            allowed_origins: vec!["http://127.0.0.1".to_owned(), "http://localhost".to_owned()],
+            ..ServerConfig::default()
+        };
+        assert!(origin_allowed(&config, "http://127.0.0.1"));
+        assert!(origin_allowed(&config, "http://localhost"));
+        assert!(!origin_allowed(&config, "https://example.com"));
+    }
+
     pub(super) fn test_config(root: PathBuf) -> ServerConfig {
         ServerConfig {
             bind_ip: Ipv4Addr::LOCALHOST.into(),
@@ -536,6 +797,8 @@ mod tests {
             max_connections: 16,
             request_timeout: Duration::from_secs(5),
             event_backlog: 64,
+            tls: None,
+            allowed_origins: vec!["http://127.0.0.1".to_owned(), "http://localhost".to_owned()],
         }
     }
 

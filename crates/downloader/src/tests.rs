@@ -158,6 +158,34 @@ pub(crate) async fn start_scripted_server(
     Ok((format!("http://{address}/file"), task))
 }
 
+async fn start_redirect_server(
+    redirect_target: Option<String>,
+) -> Result<(String, JoinHandle<Vec<String>>), std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        let Ok((mut first_stream, _)) = listener.accept().await else {
+            return requests;
+        };
+        if let Some(request) = read_request(&mut first_stream).await {
+            requests.push(request);
+        }
+        let location = redirect_target.unwrap_or_else(|| format!("http://{address}/private"));
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        if first_stream.write_all(redirect.as_bytes()).await.is_err() {
+            return requests;
+        }
+        let _ = first_stream.flush().await;
+        drop(first_stream);
+        requests
+    });
+
+    Ok((format!("http://{address}/redirect"), task))
+}
+
 async fn start_disconnect_then_success_server(
     body: Vec<u8>,
 ) -> Result<(String, JoinHandle<Vec<String>>), std::io::Error> {
@@ -1515,19 +1543,9 @@ async fn invalid_partial_responses_never_append_or_publish() -> Result<(), Box<d
 }
 
 #[tokio::test]
-async fn resumed_partial_response_after_redirect_is_not_appended() -> Result<(), Box<dyn Error>> {
-    let (target_url, target_server) = start_scripted_server(vec![scripted_response(
-        206,
-        &[("Content-Range", "bytes 5-9/10")],
-        b"world",
-    )])
-    .await?;
-    let (url, redirect_server) = start_scripted_server(vec![scripted_response(
-        302,
-        &[("Location", &target_url)],
-        b"",
-    )])
-    .await?;
+async fn resumed_partial_is_preserved_when_redirect_targets_private_address()
+-> Result<(), Box<dyn Error>> {
+    let (url, redirect_server) = start_redirect_server(None).await?;
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
     let destination = directory.destination("redirected-resume.bin");
     let partial_path = PathBuf::from(format!("{}.part", destination.display()));
@@ -1540,10 +1558,11 @@ async fn resumed_partial_response_after_redirect_is_not_appended() -> Result<(),
 
     assert!(matches!(
         engine.download(id, receiver).await,
-        Err(DownloadEngineError::RangeMismatch)
+        Err(DownloadEngineError::InvalidUrl)
     ));
-    assert!(range_header(&redirect_server.await?[0]).is_some());
-    assert!(range_header(&target_server.await?[0]).is_some());
+    let requests = redirect_server.await?;
+    assert_eq!(requests.len(), 1);
+    assert!(range_header(&requests[0]).is_some());
     assert_eq!(tokio::fs::read(partial_path).await?, b"hello");
     assert!(!destination.exists());
     Ok(())
@@ -1902,17 +1921,44 @@ async fn single_stream_download_persists_measured_speed_and_eta() -> Result<(), 
 }
 
 #[tokio::test]
-async fn follows_a_normal_redirect() -> Result<(), Box<dyn Error>> {
+#[ignore = "requires direct public network access to verify a pinned safe redirect"]
+async fn follows_public_redirect_and_downloads_known_content() -> Result<(), Box<dyn Error>> {
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
-    let (file_url, server) = start_server(ServerResponse::ok(b"redirected".to_vec())).await?;
-    let url = file_url.replace("/file", "/redirect");
+    let expected_body = b"User-agent: *\nDisallow:\n";
+    let (url, server) =
+        start_redirect_server(Some("https://www.iana.org/robots.txt".to_owned())).await?;
     let destination = directory.destination("redirect.bin");
     let item = make_item(&url, &destination)?;
     let completed = run_download(&engine, &database, item).await?;
-    server.await?;
+    let requests = server.await?;
 
-    assert_eq!(tokio::fs::read(destination).await?, b"redirected");
+    let body = tokio::fs::read(destination).await?;
+    assert_eq!(body, expected_body);
     assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /redirect "));
+    Ok(())
+}
+
+#[tokio::test]
+async fn follows_first_request_then_rejects_redirect_to_private_address()
+-> Result<(), Box<dyn Error>> {
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let (url, server) = start_redirect_server(None).await?;
+    let destination = directory.destination("private-redirect.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::InvalidUrl)
+    ));
+    let requests = server.await?;
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /redirect "));
+    assert!(!destination.exists());
     Ok(())
 }
 

@@ -14,5 +14,5 @@ pub use auth::{
     set_auth_role,
 };
 pub use authorization::Role;
-pub use config::{DEFAULT_PORT, ServerConfig, ServerConfigError};
+pub use config::{DEFAULT_PORT, ServerConfig, ServerConfigError, TlsConfig};
 pub use transport::{RemoteServer, ServerError};

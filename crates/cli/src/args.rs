@@ -94,6 +94,14 @@ pub struct ServerOpts {
     /// Download directory (defaults to ~/Downloads).
     #[arg(long)]
     pub downloads: Option<PathBuf>,
+
+    /// TLS certificate PEM file. Must be used with --tls-private-key.
+    #[arg(long, requires = "tls_private_key")]
+    pub tls_certificate: Option<PathBuf>,
+
+    /// TLS private key PEM file. Must be used with --tls-certificate.
+    #[arg(long, requires = "tls_certificate")]
+    pub tls_private_key: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -343,6 +351,29 @@ mod tests {
         assert_eq!(options.port, fetchx_remote_server::DEFAULT_PORT);
         assert!(options.database.is_none());
         assert!(options.action.is_none());
+    }
+
+    #[test]
+    fn server_tls_requires_certificate_and_private_key_together() {
+        assert!(
+            Cli::try_parse_from(["fetchx", "server", "--tls-certificate", "certificate.pem"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["fetchx", "server", "--tls-private-key", "private-key.pem"])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "fetchx",
+                "server",
+                "--tls-certificate",
+                "certificate.pem",
+                "--tls-private-key",
+                "private-key.pem"
+            ])
+            .is_ok()
+        );
     }
 
     #[test]
