@@ -26,6 +26,7 @@ use tracing::{debug, warn};
 
 use crate::{
     auth::{AuthError, AuthenticationService},
+    authorization::{AuthenticatedPrincipal, Permission},
     config::ServerConfig,
     dispatch::{RpcError, dispatch, success},
     events,
@@ -166,10 +167,13 @@ async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response 
     };
     let authorization = request.headers().get(AUTHORIZATION).cloned();
     let remaining = deadline.saturating_duration_since(Instant::now());
-    if let Err(error) = verify_authentication(&state, authorization.as_ref(), remaining).await {
-        drop(permit);
-        return authentication_error_response(error);
-    }
+    let principal = match verify_authentication(&state, authorization.as_ref(), remaining).await {
+        Ok(principal) => principal,
+        Err(error) => {
+            drop(permit);
+            return authentication_error_response(error);
+        }
+    };
     let remaining = deadline.saturating_duration_since(Instant::now());
     let body = match timeout(
         remaining,
@@ -207,14 +211,14 @@ async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response 
     let Some(id) = request.id.clone() else {
         let _permit = permit;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let result = timeout(remaining, dispatch(&state.services, request)).await;
+        let result = timeout(remaining, dispatch(&state.services, principal, request)).await;
         if result.is_err() {
             warn!("remote JSON-RPC notification timed out");
         }
         return StatusCode::NO_CONTENT.into_response();
     };
     let remaining = deadline.saturating_duration_since(Instant::now());
-    let result = timeout(remaining, dispatch(&state.services, request)).await;
+    let result = timeout(remaining, dispatch(&state.services, principal, request)).await;
     drop(permit);
     match result {
         Ok(Ok(result)) => {
@@ -225,6 +229,9 @@ async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response 
                     RpcError::new(RpcErrorCode::InternalError, "internal error").failure(Some(id)),
                 ),
             }
+        }
+        Ok(Err(error)) if error.code() == RpcErrorCode::Forbidden => {
+            rpc_response_with_status(error.failure(Some(id)), StatusCode::FORBIDDEN)
         }
         Ok(Err(error)) => rpc_response(error.failure(Some(id))),
         Err(_) => rpc_response(
@@ -250,11 +257,19 @@ async fn websocket(
         drop(permit);
         return authentication_failure();
     };
-    if let Err(error) =
-        verify_authentication(&state, Some(&authorization), state.config.request_timeout).await
-    {
+    let principal =
+        match verify_authentication(&state, Some(&authorization), state.config.request_timeout)
+            .await
+        {
+            Ok(principal) => principal,
+            Err(error) => {
+                drop(permit);
+                return authentication_error_response(error);
+            }
+        };
+    if !principal.allows(Permission::EventsRead) {
         drop(permit);
-        return authentication_error_response(error);
+        return authorization_failure();
     }
     let state_for_socket = state.clone();
     upgrade
@@ -271,14 +286,14 @@ async fn verify_authentication(
     state: &AppState,
     authorization: Option<&axum::http::HeaderValue>,
     timeout_budget: Duration,
-) -> Result<(), AuthenticationFailure> {
+) -> Result<AuthenticatedPrincipal, AuthenticationFailure> {
     match timeout(
         timeout_budget,
-        state.authentication.verify_bearer(authorization),
+        state.authentication.authenticate_bearer(authorization),
     )
     .await
     {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(principal)) => Ok(principal),
         Ok(Err(AuthError::Unauthorized | AuthError::NotInitialized)) => {
             Err(AuthenticationFailure::Unauthorized)
         }
@@ -318,6 +333,13 @@ fn authentication_failure() -> Response {
     rpc_response_with_status(
         RpcError::new(RpcErrorCode::Unauthorized, "authentication required").failure(None),
         StatusCode::UNAUTHORIZED,
+    )
+}
+
+fn authorization_failure() -> Response {
+    rpc_response_with_status(
+        RpcError::new(RpcErrorCode::Forbidden, "permission denied").failure(None),
+        StatusCode::FORBIDDEN,
     )
 }
 
@@ -377,15 +399,20 @@ async fn serve_websocket(
             }
             event = event_receiver.recv() => {
                 let Some(event) = event else { break };
-                if !matches!(
-                    timeout(
-                        state.config.request_timeout,
-                        state.authentication.verify_bearer(Some(&authorization)),
-                    )
-                    .await,
-                    Ok(Ok(()))
-                ) {
-                    debug!("closing remote WebSocket after authentication was revoked");
+                let principal = match timeout(
+                    state.config.request_timeout,
+                    state.authentication.authenticate_bearer(Some(&authorization)),
+                )
+                .await
+                {
+                    Ok(Ok(principal)) => principal,
+                    _ => {
+                        debug!("closing remote WebSocket after authentication was revoked");
+                        break;
+                    }
+                };
+                if !principal.allows(Permission::EventsRead) {
+                    debug!("closing remote WebSocket after event permission was revoked");
                     break;
                 }
                 let value = match events::serialized(&event) {

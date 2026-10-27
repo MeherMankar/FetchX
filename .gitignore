@@ -30,6 +30,11 @@
 /.agents/
 .agents
 
+# Node.js tooling artefacts created during local validation
+node_modules/
+package-lock.json
+package.json
+
 # Python compiled files
 __pycache__/
 *.py[cod]

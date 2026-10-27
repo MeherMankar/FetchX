@@ -139,27 +139,45 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
                 .database
                 .unwrap_or_else(|| defaults.database_path.clone());
             if let Some(action) = opts.action {
-                let token = match action {
+                match action {
                     args::ServerAction::InitAuth => {
-                        fetchx_remote_server::initialize_auth(&database_path).await?
+                        let token = fetchx_remote_server::initialize_auth(&database_path).await?;
+                        print_auth_token(token, cli.json);
                     }
                     args::ServerAction::RotateAuth => {
-                        fetchx_remote_server::rotate_auth(&database_path).await?
+                        let token = fetchx_remote_server::rotate_auth(&database_path).await?;
+                        print_auth_token(token, cli.json);
                     }
-                };
-                if cli.json {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "status": "authentication_updated",
-                            "token": token,
-                            "warning": "store this token securely; it will not be displayed again"
-                        })
-                    );
-                } else {
-                    println!(
-                        "Authentication credential updated.\n\nToken (shown only once):\n{token}\n\nStore it securely. It will not be displayed again."
-                    );
+                    args::ServerAction::ShowRole => {
+                        let role = fetchx_remote_server::current_auth_role(&database_path).await?;
+                        if cli.json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "status": "ok",
+                                    "role": role.as_str()
+                                })
+                            );
+                        } else {
+                            println!("Primary credential role: {}", role.as_str());
+                        }
+                    }
+                    args::ServerAction::SetRole { role } => {
+                        let role = fetchx_remote_server::Role::parse(&role)
+                            .ok_or("unsupported authorization role")?;
+                        fetchx_remote_server::set_auth_role(&database_path, role).await?;
+                        if cli.json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "status": "authorization_role_updated",
+                                    "role": role.as_str()
+                                })
+                            );
+                        } else {
+                            println!("Primary credential role updated to {}.", role.as_str());
+                        }
+                    }
                 }
                 return Ok(exit::SUCCESS);
             }
@@ -179,6 +197,23 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
             server.run_until(shutdown_signal()).await?;
             Ok(exit::SUCCESS)
         }
+    }
+}
+
+fn print_auth_token(token: String, json: bool) {
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "authentication_updated",
+                "token": token,
+                "warning": "store this token securely; it will not be displayed again"
+            })
+        );
+    } else {
+        println!(
+            "Authentication credential updated.\n\nToken (shown only once):\n{token}\n\nStore it securely. It will not be displayed again."
+        );
     }
 }
 

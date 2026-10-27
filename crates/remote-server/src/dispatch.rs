@@ -16,6 +16,8 @@ use fetchx_storage::{DownloadRepository, StorageError};
 use serde_json::{Value, json};
 use tracing::warn;
 
+use crate::authorization::{AuthenticatedPrincipal, required_permission};
+
 #[derive(Clone, Copy)]
 pub(crate) struct RpcError {
     code: RpcErrorCode,
@@ -25,6 +27,10 @@ pub(crate) struct RpcError {
 impl RpcError {
     pub(crate) const fn new(code: RpcErrorCode, message: &'static str) -> Self {
         Self { code, message }
+    }
+
+    pub(crate) const fn code(self) -> RpcErrorCode {
+        self.code
     }
 
     pub(crate) fn from_protocol(error: ProtocolError) -> Self {
@@ -56,8 +62,18 @@ impl RpcError {
 
 pub(crate) async fn dispatch(
     services: &CoreServices,
+    principal: AuthenticatedPrincipal,
     request: ValidatedRequest,
 ) -> Result<Value, RpcError> {
+    let permission = required_permission(&request.command);
+    if !principal.allows(permission) {
+        tracing::debug!(
+            principal = principal.identity(),
+            role = ?principal.role(),
+            "remote RPC authorization denied"
+        );
+        return Err(RpcError::new(RpcErrorCode::Forbidden, "permission denied"));
+    }
     let result = match request.command {
         RemoteCommand::Discover => serde_json::to_value(discovery_info())
             .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?,

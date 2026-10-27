@@ -14,7 +14,10 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
 };
 
-use fetchx_remote_server::{RemoteServer, ServerConfig, initialize_auth, rotate_auth};
+use fetchx_remote_server::{
+    RemoteServer, Role, ServerConfig, current_auth_role, initialize_auth, rotate_auth,
+    set_auth_role,
+};
 
 #[tokio::test]
 async fn remote_http_and_event_stream_use_core_download_lifecycle()
@@ -333,6 +336,233 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
         old_after_restart.status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
+    let _ = shutdown_sender.send(());
+    server_task.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn authorization_roles_gate_rpc_events_and_survive_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let config = test_config(temp.path().to_path_buf());
+    let restart_config = config.clone();
+    let token = initialize_auth(&config.database_path).await?;
+
+    // Databases created by Phase 21C have no role record and retain admin access.
+    assert_eq!(current_auth_role(&config.database_path).await?, Role::Admin);
+    let server = RemoteServer::start(config).await?;
+    let address = server.local_addr();
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+    let server_task = tokio::spawn(server.run_until(async {
+        let _ = shutdown_receiver.await;
+    }));
+    let client = authenticated_client(&token)?;
+
+    let admin_remove = post_rpc(
+        &client,
+        address,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "admin-remove-check",
+            "method": "download.remove",
+            "params": { "id": "00000000-0000-0000-0000-000000000001" }
+        }),
+    )
+    .await?;
+    assert_eq!(admin_remove["error"]["code"], -32004);
+
+    set_auth_role(&restart_config.database_path, Role::ReadOnly).await?;
+    for (id, method, params) in [
+        (
+            "create",
+            "download.create",
+            json!({ "url": "http://127.0.0.1:9/forbidden.bin" }),
+        ),
+        (
+            "pause",
+            "download.pause",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+        ),
+        (
+            "resume",
+            "download.resume",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+        ),
+        (
+            "cancel",
+            "download.cancel",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+        ),
+        (
+            "retry",
+            "download.retry",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+        ),
+        (
+            "remove",
+            "download.remove",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+        ),
+        (
+            "priority",
+            "download.setPriority",
+            json!({
+                "id": "00000000-0000-0000-0000-000000000001",
+                "priority": "low"
+            }),
+        ),
+        (
+            "engine",
+            "download.setEngine",
+            json!({
+                "id": "00000000-0000-0000-0000-000000000001",
+                "engine": "direct_http"
+            }),
+        ),
+        (
+            "speed-limit",
+            "download.setSpeedLimit",
+            json!({
+                "id": "00000000-0000-0000-0000-000000000001",
+                "bytes_per_second": 1024
+            }),
+        ),
+    ] {
+        let response = send_rpc(
+            &client,
+            address,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": method,
+                "params": params
+            }),
+        )
+        .await?;
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::FORBIDDEN,
+            "{method}"
+        );
+        let body: Value = serde_json::from_slice(&response.bytes().await?)?;
+        assert_eq!(body["error"]["code"], -32003, "{method}");
+        assert_eq!(body["error"]["message"], "permission denied", "{method}");
+    }
+
+    for request in [
+        json!({ "jsonrpc": "2.0", "id": "read-list", "method": "download.list" }),
+        json!({ "jsonrpc": "2.0", "id": "read-discover", "method": "system.discover" }),
+    ] {
+        let response = send_rpc(&client, address, &request).await?;
+        assert!(response.status().is_success());
+        let body: Value = serde_json::from_slice(&response.bytes().await?)?;
+        assert!(body.get("result").is_some());
+    }
+    let read_get = post_rpc(
+        &client,
+        address,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "read-get",
+            "method": "download.get",
+            "params": { "id": "00000000-0000-0000-0000-000000000001" }
+        }),
+    )
+    .await?;
+    assert_eq!(read_get["error"]["code"], -32004);
+
+    let unauthorized_socket = connect_authenticated_websocket(address, &token).await;
+    let Err(err) = unauthorized_socket else {
+        return Err(std::io::Error::other("read-only WebSocket was not rejected").into());
+    };
+    let Some(tokio_tungstenite::tungstenite::Error::Http(handshake_error)) =
+        err.downcast_ref::<tokio_tungstenite::tungstenite::Error>()
+    else {
+        return Err(
+            std::io::Error::other("read-only WebSocket returned an unexpected error").into(),
+        );
+    };
+    assert_eq!(handshake_error.status(), reqwest::StatusCode::FORBIDDEN);
+
+    set_auth_role(&restart_config.database_path, Role::Operator).await?;
+    let (mut operator_socket, _) = connect_authenticated_websocket(address, &token).await?;
+    let expected_payload = [0x21_u8, 0x46, 0x58, 0x44].repeat(16_384);
+    let fixture_hash = Sha256::digest(&expected_payload);
+    let fixture_address = start_http_fixture(expected_payload.clone()).await?;
+    let create = post_rpc(
+        &client,
+        address,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "operator-create",
+            "method": "download.create",
+            "params": { "url": format!("http://{fixture_address}/operator.bin") }
+        }),
+    )
+    .await?;
+    let download_id = create["result"]["id"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("operator download was rejected"))?;
+    let completed = timeout(
+        Duration::from_secs(15),
+        receive_completed(&mut operator_socket),
+    )
+    .await??;
+    assert_eq!(completed["params"]["data"]["download"]["id"], download_id);
+    let completed_path = restart_config
+        .downloads_dir
+        .join(format!("{download_id}-operator.bin"));
+    let completed_payload = tokio::fs::read(completed_path).await?;
+    assert_eq!(Sha256::digest(&completed_payload), fixture_hash);
+
+    set_auth_role(&restart_config.database_path, Role::ReadOnly).await?;
+    operator_socket.close(None).await?;
+    let operator_remove = send_rpc(
+        &client,
+        address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "operator-remove",
+            "method": "download.remove",
+            "params": { "id": download_id }
+        }),
+    )
+    .await?;
+    assert_eq!(operator_remove.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let _ = shutdown_sender.send(());
+    server_task.await??;
+
+    let restarted = RemoteServer::start(restart_config.clone()).await?;
+    let restarted_address = restarted.local_addr();
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+    let server_task = tokio::spawn(restarted.run_until(async {
+        let _ = shutdown_receiver.await;
+    }));
+    assert_eq!(
+        current_auth_role(&restart_config.database_path).await?,
+        Role::ReadOnly
+    );
+    let persisted_read = send_rpc(
+        &client,
+        restarted_address,
+        &json!({ "jsonrpc": "2.0", "id": "persisted-read", "method": "download.list" }),
+    )
+    .await?;
+    assert!(persisted_read.status().is_success());
+    let persisted_write = send_rpc(
+        &client,
+        restarted_address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "persisted-write",
+            "method": "download.create",
+            "params": { "url": "http://127.0.0.1:9/forbidden-after-restart.bin" }
+        }),
+    )
+    .await?;
+    assert_eq!(persisted_write.status(), reqwest::StatusCode::FORBIDDEN);
     let _ = shutdown_sender.send(());
     server_task.await??;
     Ok(())

@@ -102,6 +102,14 @@ pub enum ServerAction {
     InitAuth,
     /// Replace the server token and immediately invalidate the old token.
     RotateAuth,
+    /// Show the authorization role assigned to the primary credential.
+    ShowRole,
+    /// Set the primary credential's authorization role using local access.
+    SetRole {
+        /// Role to assign: admin, operator, or read-only.
+        #[arg(value_parser = ["admin", "operator", "read-only"])]
+        role: String,
+    },
 }
 
 // ── Plugins ────────────────────────────────────────────────────────────────
@@ -354,5 +362,22 @@ mod tests {
         };
         assert!(matches!(options.action, Some(ServerAction::RotateAuth)));
         assert_eq!(options.database, Some(PathBuf::from("fetchx.db")));
+
+        let set_role = Cli::try_parse_from(["fetchx", "server", "set-role", "read-only"])
+            .expect("server set-role should parse");
+        let Command::Server(options) = set_role.command else {
+            panic!("expected server command");
+        };
+        assert!(matches!(
+            options.action,
+            Some(ServerAction::SetRole { role }) if role == "read-only"
+        ));
+
+        let show_role = Cli::try_parse_from(["fetchx", "server", "show-role"])
+            .expect("server show-role should parse");
+        let Command::Server(options) = show_role.command else {
+            panic!("expected server command");
+        };
+        assert!(matches!(options.action, Some(ServerAction::ShowRole)));
     }
 }
