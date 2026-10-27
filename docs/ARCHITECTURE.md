@@ -46,6 +46,14 @@ timeout are configured for connections. File-backed databases use a five-connect
 pool; in-memory databases use one connection so pooled operations share the same
 database. The caller's journal mode is left unchanged rather than forcing WAL.
 
+The `remote-protocol` crate defines the transport-independent FetchX JSON-RPC 2.0
+envelopes, stable `fetchx.rpc.v1` discovery metadata, request identifiers, supported
+download commands, and event notification names. It bounds and validates incoming
+JSON and method parameters before any server dispatch. It does not open a listener,
+authenticate clients, authorize operations, or invoke CoreServices; those concerns
+belong to subsequent server and security phases. Semantic URL, engine, and filesystem
+validation remains authoritative in the shared core.
+
 The `queue` crate coordinates persisted download records with the downloader
 abstraction. It recovers interrupted `Preparing`/`Downloading` records to `Queued`,
 starts work according to priority and FIFO order, and applies a bounded active-download

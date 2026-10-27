@@ -116,6 +116,7 @@ is implemented.
 ## Workspace
 
 - `crates/models` — shared domain and data structures
+- `crates/remote-protocol` — transport-independent, validated JSON-RPC contract for remote clients
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume/adaptive segmentation,

@@ -1307,14 +1307,26 @@ This phase does not claim live aria2/BitTorrent daemon lifecycle coverage.
 yt-dlp active pause remains explicitly unsupported; its supported completion
 path is covered by the existing live YouTube evidence and automated tests.
 
+The Phase 20W.4.2 physical-device native-torrent lifecycle remains
+**BLOCKED / NOT VALIDATED**. The connected V2135 device could not receive a ping
+reply from the host Wi-Fi address (`10.74.55.222`), so no physical-device torrent
+completion, seeding, Stop Seeding, queue-release, persistence, or file-integrity
+claim is made. No FetchX networking changes were made to bypass this environment
+limitation.
+
 ---
 
 ### Phase 21A -- FetchX Remote Protocol (CRITICAL)
 
+**Status: PROTOCOL CONTRACT IMPLEMENTED; AUTOMATED VALIDATION PASS.**
+
 **Platform Coverage:** SHARED CORE (protocol definition); all clients consume same protocol
 
-JSON-RPC 2.0 logical model. Namespaces: `download.*`, `queue.*`, `scheduler.*`,
-`engine.*`, `plugin.*`, `config.*`, `system.*`.
+The new `fetchx-remote-protocol` crate defines bounded JSON-RPC 2.0 request and
+response envelopes, validates request IDs, protocol version, supported methods,
+and typed command parameters, and advertises the `fetchx.rpc.v1` protocol version
+and implemented capabilities through `system.discover`. It defines event
+notification names for download, queue, engine, and plugin lifecycle events.
 
 Key commands: `download.create`, `download.get`, `download.list`, `download.pause`,
 `download.resume`, `download.cancel`, `download.retry`, `download.remove`,
@@ -1326,6 +1338,10 @@ Events: `download.created`, `download.updated`, `download.progress`, `download.p
 
 Protocol versioning: `fetchx.rpc.v1`. Every connection discovers protocol version,
 server version, supported capabilities.
+
+This phase provides the shared wire contract and validation only. It does not add
+network transport, command dispatch, authentication, or authorization; these remain
+in Phases 21B, 21C, and 21D.
 
 **Windows:** Windows .exe acts as a local server and remote client.
 **Android:** Android .apk acts as a remote client (Phase 21I wires browser to it).

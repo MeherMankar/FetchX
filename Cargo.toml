@@ -8,6 +8,7 @@ members = [
     "crates/queue",
     "crates/scheduler",
     "crates/browser-protocol",
+    "crates/remote-protocol",
     "crates/plugin-api",
     "crates/plugin-manager",
     "crates/core-services",

@@ -1984,6 +1984,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fetchx-remote-protocol"
+version = "0.1.0"
+dependencies = [
+ "fetchx-models",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "fetchx-scheduler"
 version = "0.1.0"
 dependencies = [

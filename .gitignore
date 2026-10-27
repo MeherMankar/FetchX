@@ -1,5 +1,7 @@
 # Rust build artefacts
 /target/
+# Standalone builds of the shared remote protocol crate.
+/crates/remote-protocol/target/
 
 # Tauri generated schemas and platform build outputs
 /apps/desktop/src-tauri/gen/

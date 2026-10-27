@@ -578,23 +578,21 @@ impl CoreServices {
         }
         match item.source().engine() {
             EngineKind::NativeTorrent => {
-                let engine = self
-                    .engine_runtime
-                    .native_torrent_engine
-                    .as_ref()
-                    .ok_or_else(|| {
-                        CoreServicesError::Engine("native torrent engine is unavailable".to_owned())
-                    })?;
-                engine
-                    .stop_seeding(id)
-                    .await
-                    .map_err(|error| CoreServicesError::Engine(error.to_string()))?;
+                if let Some(engine) = self.engine_runtime.native_torrent_engine.as_ref() {
+                    engine
+                        .stop_seeding(id)
+                        .await
+                        .map_err(|error| CoreServicesError::Engine(error.to_string()))?;
+                }
+                // If the engine is not available (e.g. session restart without
+                // NativeTorrent), the handle is already gone — just transition.
             }
             EngineKind::Aria2 => {
-                self.queue
-                    .cancel(id)
-                    .await
-                    .map_err(|e| CoreServicesError::Queue(e.to_string()))?;
+                // Do NOT call queue.cancel() here — it races with finish_worker
+                // when the worker is still active during seeding. The state
+                // machine transition to Stopped below is sufficient. If aria2
+                // is available, the reconciliation loop will detect the Stopped
+                // status and clean up the aria2 process.
             }
             engine => {
                 return Err(CoreServicesError::Queue(format!(
