@@ -134,10 +134,11 @@ is implemented.
 ## Headless server
 
 Run the standalone server with `fetchx server`. It binds to `127.0.0.1:39800` by
-default; see [docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md) for endpoints, supported
-operations, configuration, and security limitations. The current server has no
-authentication, authorization, or TLS and must not be exposed to a LAN or the public
-internet.
+default after authentication is initialized with `fetchx server init-auth`. The token
+is shown once; use `fetchx server rotate-auth` to replace it. See
+[docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md) for authenticated endpoints, token
+handling, supported operations, and security limitations. Authentication is not
+authorization or TLS; do not expose the server beyond loopback.
 
 ## Build
 

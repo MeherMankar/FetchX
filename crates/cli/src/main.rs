@@ -135,10 +135,38 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
         }
         Server(opts) => {
             let defaults = fetchx_remote_server::ServerConfig::default();
+            let database_path = opts
+                .database
+                .unwrap_or_else(|| defaults.database_path.clone());
+            if let Some(action) = opts.action {
+                let token = match action {
+                    args::ServerAction::InitAuth => {
+                        fetchx_remote_server::initialize_auth(&database_path).await?
+                    }
+                    args::ServerAction::RotateAuth => {
+                        fetchx_remote_server::rotate_auth(&database_path).await?
+                    }
+                };
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "authentication_updated",
+                            "token": token,
+                            "warning": "store this token securely; it will not be displayed again"
+                        })
+                    );
+                } else {
+                    println!(
+                        "Authentication credential updated.\n\nToken (shown only once):\n{token}\n\nStore it securely. It will not be displayed again."
+                    );
+                }
+                return Ok(exit::SUCCESS);
+            }
             let config = fetchx_remote_server::ServerConfig {
                 bind_ip: opts.bind,
                 port: opts.port,
-                database_path: opts.database.unwrap_or(defaults.database_path.clone()),
+                database_path,
                 downloads_dir: opts.downloads.unwrap_or(defaults.downloads_dir.clone()),
                 runtime_dir: defaults.runtime_dir,
                 max_request_bytes: defaults.max_request_bytes,

@@ -70,12 +70,15 @@ pub enum Command {
     /// Torrent-specific commands.
     Torrent(TorrentOpts),
 
-    /// Run the unauthenticated local remote-control server.
+    /// Run the authenticated local remote-control server.
     Server(ServerOpts),
 }
 
 #[derive(Args, Debug)]
 pub struct ServerOpts {
+    #[command(subcommand)]
+    pub action: Option<ServerAction>,
+
     /// Bind address. Defaults to localhost; use a LAN address only on a trusted network.
     #[arg(long, default_value = "127.0.0.1")]
     pub bind: IpAddr,
@@ -91,6 +94,14 @@ pub struct ServerOpts {
     /// Download directory (defaults to ~/Downloads).
     #[arg(long)]
     pub downloads: Option<PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServerAction {
+    /// Initialize server authentication and display the token once.
+    InitAuth,
+    /// Replace the server token and immediately invalidate the old token.
+    RotateAuth,
 }
 
 // ── Plugins ────────────────────────────────────────────────────────────────
@@ -241,9 +252,9 @@ pub enum TorrentCommand {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
-    use std::net::Ipv4Addr;
+    use std::{net::Ipv4Addr, path::PathBuf};
 
-    use super::{Cli, Command, TorrentCommand};
+    use super::{Cli, Command, ServerAction, TorrentCommand};
 
     #[test]
     fn add_accepts_explicit_magnet_option() {
@@ -323,5 +334,25 @@ mod tests {
         assert_eq!(options.bind, Ipv4Addr::LOCALHOST);
         assert_eq!(options.port, fetchx_remote_server::DEFAULT_PORT);
         assert!(options.database.is_none());
+        assert!(options.action.is_none());
+    }
+
+    #[test]
+    fn server_auth_admin_commands_parse() {
+        let init = Cli::try_parse_from(["fetchx", "server", "init-auth"])
+            .expect("server init-auth should parse");
+        let Command::Server(options) = init.command else {
+            panic!("expected server command");
+        };
+        assert!(matches!(options.action, Some(ServerAction::InitAuth)));
+
+        let rotate =
+            Cli::try_parse_from(["fetchx", "server", "--database", "fetchx.db", "rotate-auth"])
+                .expect("server rotate-auth should parse");
+        let Command::Server(options) = rotate.command else {
+            panic!("expected server command");
+        };
+        assert!(matches!(options.action, Some(ServerAction::RotateAuth)));
+        assert_eq!(options.database, Some(PathBuf::from("fetchx.db")));
     }
 }

@@ -58,9 +58,16 @@ the existing bounded `DownloadEventBus` with a bounded per-client queue. The def
 listener is loopback-only. Download responses intentionally omit source URLs,
 destination paths, and raw engine diagnostics. Operations without a shared CoreServices
 implementation are omitted from discovery or return an explicit unsupported-operation
-error. This phase does not authenticate clients, authorize operations, configure TLS,
-or validate remote origins; do not bind beyond loopback until the later remote-security
-phases are complete.
+error.
+
+The server's authentication boundary verifies an HTTP bearer token before JSON-RPC
+parsing and dispatch, and verifies WebSocket credentials before event subscription.
+Tokens are generated from the OS cryptographic RNG; only a SHA-256 verifier is stored
+in the existing SQLite configuration table. The CLI explicitly initializes or rotates
+credentials and displays the plaintext token only for that operation. `/health` is
+public; all RPC methods, including discovery, and the WebSocket event endpoint require
+authentication. Authentication does not provide authorization, TLS, origin validation,
+or SSRF protection; do not bind beyond loopback before later remote-security work.
 
 The `queue` crate coordinates persisted download records with the downloader
 abstraction. It recovers interrupted `Preparing`/`Downloading` records to `Queued`,

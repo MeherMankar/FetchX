@@ -9,9 +9,12 @@ use tokio::{
     sync::oneshot,
     time::{sleep, timeout},
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
+};
 
-use fetchx_remote_server::{RemoteServer, ServerConfig};
+use fetchx_remote_server::{RemoteServer, ServerConfig, initialize_auth, rotate_auth};
 
 #[tokio::test]
 async fn remote_http_and_event_stream_use_core_download_lifecycle()
@@ -19,6 +22,7 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
     let temp = tempfile::tempdir()?;
     let config = test_config(temp.path().to_path_buf());
     let restart_config = config.clone();
+    let token = initialize_auth(&config.database_path).await?;
     let downloads_dir = config.downloads_dir.clone();
     let server = RemoteServer::start(config).await?;
     let address = server.local_addr();
@@ -27,13 +31,51 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
         let _ = shutdown_receiver.await;
     }));
 
-    let client = reqwest::Client::new();
-    let response = client
+    let public_client = reqwest::Client::new();
+    let response = public_client
         .get(format!("http://{address}/health"))
         .send()
         .await?;
     let health: Value = serde_json::from_slice(&response.bytes().await?)?;
     assert_eq!(health["status"], "ok");
+    let client = authenticated_client(&token)?;
+
+    let unauthenticated_request = json!({
+        "jsonrpc": "2.0",
+        "id": "missing-token",
+        "method": "download.list"
+    });
+    let missing_response = send_rpc(&public_client, address, &unauthenticated_request).await?;
+    assert_eq!(missing_response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let missing_body: Value = serde_json::from_slice(&missing_response.bytes().await?)?;
+    assert_eq!(missing_body["error"]["code"], -32001);
+    assert!(!missing_body.to_string().contains(&token));
+
+    let invalid_client = reqwest::Client::builder()
+        .default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("Bearer fx_invalid"),
+            );
+            headers
+        })
+        .build()?;
+    let invalid_response = send_rpc(&invalid_client, address, &unauthenticated_request).await?;
+    assert_eq!(invalid_response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let invalid_body: Value = serde_json::from_slice(&invalid_response.bytes().await?)?;
+    assert_eq!(invalid_body["error"]["code"], missing_body["error"]["code"]);
+    assert_eq!(
+        invalid_body["error"]["message"],
+        missing_body["error"]["message"]
+    );
+
+    let unauthenticated_socket = connect_async(format!("ws://{address}/events")).await;
+    let Err(tokio_tungstenite::tungstenite::Error::Http(handshake_error)) = unauthenticated_socket
+    else {
+        return Err(std::io::Error::other("unauthenticated WebSocket was not rejected").into());
+    };
+    assert_eq!(handshake_error.status(), reqwest::StatusCode::UNAUTHORIZED);
 
     let oversized = vec![b' '; fetchx_remote_protocol::MAX_MESSAGE_BYTES + 1];
     let oversized_response = client
@@ -45,15 +87,33 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
     let oversized_error: Value = serde_json::from_slice(&oversized_response.bytes().await?)?;
     assert_eq!(oversized_error["error"]["code"], -32600);
 
-    let (websocket, _) = connect_async(format!("ws://{address}/events")).await?;
+    let (websocket, _) = connect_authenticated_websocket(address, &token).await?;
     let (_websocket_sink, mut websocket_stream) = websocket.split();
-    let (second_websocket, _) = connect_async(format!("ws://{address}/events")).await?;
+    let (second_websocket, _) = connect_authenticated_websocket(address, &token).await?;
     let (_second_websocket_sink, mut second_websocket_stream) = second_websocket.split();
     sleep(Duration::from_millis(50)).await;
 
     let expected_payload = [0x46, 0x58, 0x21, 0x42].repeat(32_768);
     let fixture_hash = Sha256::digest(&expected_payload);
     let fixture_address = start_http_fixture(expected_payload.clone()).await?;
+    let unauthenticated_create = send_rpc(
+        &public_client,
+        address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "unauthorized-create",
+            "method": "download.create",
+            "params": { "url": format!("http://{fixture_address}/payload.bin") }
+        }),
+    )
+    .await?;
+    assert_eq!(
+        unauthenticated_create.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let unauthorized_create_body: Value =
+        serde_json::from_slice(&unauthenticated_create.bytes().await?)?;
+    assert_eq!(unauthorized_create_body["error"]["code"], -32001);
     let create = post_rpc(
         &client,
         address,
@@ -109,6 +169,14 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
         second_completed_event["params"]["data"]["download"]["id"],
         id
     );
+    let remaining_event = timeout(Duration::from_secs(3), websocket_stream.next())
+        .await?
+        .ok_or_else(|| std::io::Error::other("event stream ended before queue update"))??;
+    let Message::Text(remaining_event) = remaining_event else {
+        return Err(std::io::Error::other("event stream ended before queue update").into());
+    };
+    let remaining_event: Value = serde_json::from_str(remaining_event.as_ref())?;
+    assert_eq!(remaining_event["method"], "queue.updated");
 
     let get = post_rpc(
         &client,
@@ -169,6 +237,61 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
     .await?;
     assert_eq!(unsupported["error"]["code"], -32012);
 
+    let rotated_token = rotate_auth(&restart_config.database_path).await?;
+    let old_token_response = send_rpc(
+        &client,
+        address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "old-token",
+            "method": "download.list"
+        }),
+    )
+    .await?;
+    assert_eq!(
+        old_token_response.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let rotated_client = authenticated_client(&rotated_token)?;
+    let new_token_response = send_rpc(
+        &rotated_client,
+        address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "rotated-token",
+            "method": "download.list"
+        }),
+    )
+    .await?;
+    assert!(new_token_response.status().is_success());
+
+    let revocation_probe = post_rpc(
+        &rotated_client,
+        address,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "revocation-probe",
+            "method": "download.create",
+            "params": { "url": "http://127.0.0.1:9/auth-revocation-probe.bin" }
+        }),
+    )
+    .await?;
+    assert!(revocation_probe.get("result").is_some());
+    timeout(Duration::from_secs(3), async {
+        loop {
+            match websocket_stream.next().await {
+                Some(Ok(Message::Text(_))) => {
+                    return Err(std::io::Error::other(
+                        "revoked WebSocket received a protected event",
+                    ));
+                }
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
+                Some(Ok(_)) => {}
+            }
+        }
+    })
+    .await??;
+
     let _ = shutdown_sender.send(());
     server_task.await??;
 
@@ -179,7 +302,7 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
         let _ = shutdown_receiver.await;
     }));
     let restored = post_rpc(
-        &client,
+        &rotated_client,
         restarted_address,
         json!({
             "jsonrpc": "2.0",
@@ -196,6 +319,20 @@ async fn remote_http_and_event_stream_use_core_download_lifecycle()
     let restored_payload =
         tokio::fs::read(downloads_dir.join(format!("{id}-{restored_name}"))).await?;
     assert_eq!(Sha256::digest(&restored_payload), fixture_hash);
+    let old_after_restart = send_rpc(
+        &client,
+        restarted_address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "old-after-restart",
+            "method": "download.list"
+        }),
+    )
+    .await?;
+    assert_eq!(
+        old_after_restart.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
     let _ = shutdown_sender.send(());
     server_task.await??;
     Ok(())
@@ -225,13 +362,53 @@ async fn post_rpc(
     address: std::net::SocketAddr,
     request: Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let response = client
+    let response = send_rpc(client, address, &request).await?;
+    Ok(serde_json::from_slice(&response.bytes().await?)?)
+}
+
+async fn send_rpc(
+    client: &reqwest::Client,
+    address: std::net::SocketAddr,
+    request: &Value,
+) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
+    client
         .post(format!("http://{address}/rpc"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&request)?)
+        .body(serde_json::to_vec(request)?)
         .send()
-        .await?;
-    Ok(serde_json::from_slice(&response.bytes().await?)?)
+        .await
+        .map_err(Into::into)
+}
+
+fn authenticated_client(token: &str) -> Result<reqwest::Client, Box<dyn std::error::Error>> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    let authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(Box::<dyn std::error::Error>::from)?;
+    headers.insert(reqwest::header::AUTHORIZATION, authorization);
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .map_err(Into::into)
+}
+
+async fn connect_authenticated_websocket(
+    address: std::net::SocketAddr,
+    token: &str,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::handshake::client::Response,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let mut request = format!("ws://{address}/events").into_client_request()?;
+    request.headers_mut().insert(
+        reqwest::header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}"))?,
+    );
+    Ok(connect_async(request).await?)
 }
 
 async fn start_http_fixture(

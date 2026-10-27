@@ -1366,8 +1366,8 @@ cancel, remove, and priority. Remote DTOs omit source URLs and filesystem paths.
 Event streaming uses the existing CoreServices download event bus. Retry, engine
 selection for existing jobs, per-download speed limits, scheduler, plugin, and config
 operations are not advertised unless a future shared service API can support them.
-Unauthenticated access, authorization, TLS, origin validation, SSRF protections, and
-LAN/public deployment remain out of scope; bind only to loopback.
+Authorization, TLS, origin validation, SSRF protections, and LAN/public deployment
+remain out of scope; bind only to loopback.
 
 **Windows:** Server can run as Windows service or standalone process.
 **Android:** Android FetchX acts as a local server for Phase 21I browser integration.
@@ -1377,15 +1377,22 @@ LAN/public deployment remain out of scope; bind only to loopback.
 
 ### Phase 21C -- Authentication and Device Pairing (CRITICAL)
 
+**Status: TOKEN AUTHENTICATION IMPLEMENTED; LOCAL HTTP/WEBSOCKET INTEGRATION TESTED.**
+
 **Platform Coverage:** SHARED CORE + PLATFORM ADAPTER (secure storage differs)
 
-Implement: device identity, pairing, device code, access tokens, refresh tokens,
-sessions, token rotation, token revocation, device list, device removal, session expiration.
+Implemented for the headless server: explicit CLI initialization and rotation of a
+256-bit bearer token, SHA-256 verifier persisted through SQLite app configuration,
+central authenticated HTTP/JSON-RPC dispatch, authenticated WebSocket event access,
+and fail-closed restart behavior. This is a local token-authentication baseline, not a
+pairing/session system.
 
-Secure local/LAN pairing flow. No unauthenticated remote download API.
+Device identity, pairing codes, refresh tokens, device/session management, OS-specific
+secret stores, and LAN exposure remain unimplemented. Authentication alone does not
+make LAN/public deployment safe.
 
-**Windows:** Token storage in Windows Credential Manager or encrypted file.
-**Android:** Token storage in Android Keystore.
+**Windows:** Verifier is in the existing local SQLite configuration database.
+**Android:** No Android authentication client/server integration in this phase.
 
 ---
 

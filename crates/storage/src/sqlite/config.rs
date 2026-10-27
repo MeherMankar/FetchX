@@ -38,6 +38,28 @@ impl SqliteConfigRepository {
         Ok(())
     }
 
+    /// Inserts `value` only when `key` is absent, returning whether it was inserted.
+    pub async fn set_if_absent(&self, key: &str, value: &str) -> Result<bool, StorageError> {
+        let result = sqlx::query(
+            "INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Replaces `value` only when `key` exists, returning whether it was replaced.
+    pub async fn replace_if_present(&self, key: &str, value: &str) -> Result<bool, StorageError> {
+        let result = sqlx::query("UPDATE app_config SET value = ? WHERE key = ?")
+            .bind(value)
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Removes the entry for `key`. Removing a missing key is idempotent.
     pub async fn delete(&self, key: &str) -> Result<(), StorageError> {
         sqlx::query("DELETE FROM app_config WHERE key = ?")

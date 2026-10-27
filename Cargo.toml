@@ -39,7 +39,10 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-r
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
+getrandom = "0.3"
 netstat2 = "0.11.2"
+sha2 = "0.10"
+subtle = "2"
 url = "2"
 clap = { version = "4", features = ["derive", "env"] }
 

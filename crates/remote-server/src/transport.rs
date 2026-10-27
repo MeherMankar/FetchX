@@ -7,7 +7,7 @@ use axum::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode, header::AUTHORIZATION},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -25,6 +25,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 use crate::{
+    auth::{AuthError, AuthenticationService},
     config::ServerConfig,
     dispatch::{RpcError, dispatch, success},
     events,
@@ -35,6 +36,7 @@ struct AppState {
     services: Arc<CoreServices>,
     config: ServerConfig,
     connections: Arc<Semaphore>,
+    authentication: Arc<AuthenticationService>,
     shutdown: watch::Receiver<bool>,
 }
 
@@ -61,10 +63,21 @@ impl RemoteServer {
             .await
             .map_err(|error| ServerError::Core(error.to_string()))?,
         );
+        let authentication =
+            match AuthenticationService::from_config(services.database.config()).await {
+                Ok(authentication) => Arc::new(authentication),
+                Err(error) => {
+                    if let Err(shutdown_error) = services.shutdown().await {
+                        warn!(%shutdown_error, "service shutdown failed after auth startup error");
+                    }
+                    return Err(ServerError::Authentication(error.to_string()));
+                }
+            };
         let (shutdown_sender, shutdown_receiver) = watch::channel(false);
         let state = AppState {
             services: Arc::clone(&services),
             connections: Arc::new(Semaphore::new(config.max_connections)),
+            authentication,
             config,
             shutdown: shutdown_receiver,
         };
@@ -122,6 +135,8 @@ pub enum ServerError {
     Io(#[from] io::Error),
     #[error("could not start FetchX services: {0}")]
     Core(String),
+    #[error("{0}")]
+    Authentication(String),
     #[error("could not gracefully stop FetchX services: {0}")]
     Shutdown(String),
 }
@@ -149,8 +164,15 @@ async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response 
             );
         }
     };
+    let authorization = request.headers().get(AUTHORIZATION).cloned();
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if let Err(error) = verify_authentication(&state, authorization.as_ref(), remaining).await {
+        drop(permit);
+        return authentication_error_response(error);
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
     let body = match timeout(
-        state.config.request_timeout,
+        remaining,
         to_bytes(request.into_body(), state.config.max_request_bytes),
     )
     .await
@@ -215,23 +237,101 @@ fn rpc_response(response: RpcFailure) -> Response {
     axum::Json(response).into_response()
 }
 
-async fn websocket(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+async fn websocket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     let permit = match Arc::clone(&state.connections).try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
+    let Some(authorization) = headers.get(AUTHORIZATION).cloned() else {
+        drop(permit);
+        return authentication_failure();
+    };
+    if let Err(error) =
+        verify_authentication(&state, Some(&authorization), state.config.request_timeout).await
+    {
+        drop(permit);
+        return authentication_error_response(error);
+    }
     let state_for_socket = state.clone();
     upgrade
         .max_message_size(state.config.max_request_bytes)
         .max_frame_size(state.config.max_request_bytes)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            serve_websocket(socket, state_for_socket).await;
+            serve_websocket(socket, state_for_socket, authorization).await;
         })
         .into_response()
 }
 
-async fn serve_websocket(socket: WebSocket, state: AppState) {
+async fn verify_authentication(
+    state: &AppState,
+    authorization: Option<&axum::http::HeaderValue>,
+    timeout_budget: Duration,
+) -> Result<(), AuthenticationFailure> {
+    match timeout(
+        timeout_budget,
+        state.authentication.verify_bearer(authorization),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(AuthError::Unauthorized | AuthError::NotInitialized)) => {
+            Err(AuthenticationFailure::Unauthorized)
+        }
+        Ok(Err(error)) => {
+            warn!(%error, "authentication verifier lookup failed");
+            Err(AuthenticationFailure::Unavailable)
+        }
+        Err(_) => Err(AuthenticationFailure::TimedOut),
+    }
+}
+
+enum AuthenticationFailure {
+    Unauthorized,
+    Unavailable,
+    TimedOut,
+}
+
+fn authentication_error_response(error: AuthenticationFailure) -> Response {
+    match error {
+        AuthenticationFailure::Unauthorized => authentication_failure(),
+        AuthenticationFailure::Unavailable => rpc_response_with_status(
+            RpcError::new(
+                RpcErrorCode::ServiceUnavailable,
+                "authentication unavailable",
+            )
+            .failure(None),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        AuthenticationFailure::TimedOut => rpc_response_with_status(
+            RpcError::new(RpcErrorCode::Timeout, "authentication timed out").failure(None),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    }
+}
+
+fn authentication_failure() -> Response {
+    rpc_response_with_status(
+        RpcError::new(RpcErrorCode::Unauthorized, "authentication required").failure(None),
+        StatusCode::UNAUTHORIZED,
+    )
+}
+
+fn rpc_response_with_status(response: RpcFailure, status: StatusCode) -> Response {
+    let mut response = rpc_response(response);
+    *response.status_mut() = status;
+    response
+}
+
+async fn serve_websocket(
+    socket: WebSocket,
+    state: AppState,
+    authorization: axum::http::HeaderValue,
+) {
     let (mut sink, mut stream) = socket.split();
     let (event_sender, mut event_receiver) =
         mpsc::channel::<EventNotification>(state.config.event_backlog);
@@ -277,6 +377,17 @@ async fn serve_websocket(socket: WebSocket, state: AppState) {
             }
             event = event_receiver.recv() => {
                 let Some(event) = event else { break };
+                if !matches!(
+                    timeout(
+                        state.config.request_timeout,
+                        state.authentication.verify_bearer(Some(&authorization)),
+                    )
+                    .await,
+                    Ok(Ok(()))
+                ) {
+                    debug!("closing remote WebSocket after authentication was revoked");
+                    break;
+                }
                 let value = match events::serialized(&event) {
                     Ok(value) => value,
                     Err(error) => {
@@ -343,13 +454,30 @@ async fn pump_events(
 mod tests {
     use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 
-    use super::{RemoteServer, ServerConfig};
+    use super::{RemoteServer, ServerConfig, ServerError};
+    use crate::initialize_auth;
+
+    #[tokio::test]
+    async fn server_refuses_startup_until_authentication_is_initialized()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let config = test_config(temp.path().to_path_buf());
+        let error = match RemoteServer::start(config).await {
+            Ok(_) => {
+                return Err(std::io::Error::other("server started without authentication").into());
+            }
+            Err(error) => error,
+        };
+        assert!(matches!(error, ServerError::Authentication(_)));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn server_binds_and_serves_health_on_loopback() -> Result<(), Box<dyn std::error::Error>>
     {
         let temp = tempfile::tempdir()?;
         let config = test_config(temp.path().to_path_buf());
+        initialize_auth(&config.database_path).await?;
         let server = RemoteServer::start(config).await?;
         let address = server.local_addr();
         assert_eq!(address.ip(), Ipv4Addr::LOCALHOST);
