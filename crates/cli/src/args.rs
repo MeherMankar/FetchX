@@ -72,6 +72,52 @@ pub enum Command {
 
     /// Run the authenticated local remote-control server.
     Server(ServerOpts),
+
+    /// Control a FetchX server through the authenticated remote protocol.
+    Remote(RemoteOpts),
+}
+
+#[derive(Args, Debug)]
+pub struct RemoteOpts {
+    /// Remote server origin. Defaults to FETCHX_REMOTE_URL.
+    #[arg(long, global = true, value_name = "URL")]
+    pub server: Option<String>,
+
+    #[command(subcommand)]
+    pub command: RemoteCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RemoteCommand {
+    /// Authenticate and verify the remote server connection.
+    Connect {
+        /// Server origin. Overrides --server and FETCHX_REMOTE_URL.
+        url: Option<String>,
+    },
+    /// Show remote server health and protocol capabilities.
+    Status,
+    /// List downloads on the remote server.
+    Downloads,
+    /// Create a download on the remote server.
+    Add {
+        /// HTTP(S) URL or magnet URI.
+        url: String,
+    },
+    /// Pause a remote download.
+    Pause {
+        /// Download ID.
+        id: String,
+    },
+    /// Resume a remote download.
+    Resume {
+        /// Download ID.
+        id: String,
+    },
+    /// Cancel a remote download.
+    Cancel {
+        /// Download ID.
+        id: String,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -274,7 +320,7 @@ mod tests {
     use clap::Parser;
     use std::{net::Ipv4Addr, path::PathBuf};
 
-    use super::{Cli, Command, ServerAction, TorrentCommand};
+    use super::{Cli, Command, RemoteCommand, ServerAction, TorrentCommand};
 
     #[test]
     fn add_accepts_explicit_magnet_option() {
@@ -355,6 +401,38 @@ mod tests {
         assert_eq!(options.port, fetchx_remote_server::DEFAULT_PORT);
         assert!(options.database.is_none());
         assert!(options.action.is_none());
+    }
+
+    #[test]
+    fn remote_commands_parse_server_override_and_operations() {
+        let connect = Cli::try_parse_from([
+            "fetchx",
+            "remote",
+            "--server",
+            "https://fetchx.example.test",
+            "connect",
+        ])
+        .expect("remote connect options should parse");
+        let Command::Remote(options) = connect.command else {
+            panic!("expected remote command");
+        };
+        assert_eq!(
+            options.server.as_deref(),
+            Some("https://fetchx.example.test")
+        );
+        assert!(matches!(
+            options.command,
+            RemoteCommand::Connect { url: None }
+        ));
+
+        let add = Cli::try_parse_from(["fetchx", "remote", "add", "https://example.test/file.bin"])
+            .expect("remote add should parse");
+        let Command::Remote(options) = add.command else {
+            panic!("expected remote command");
+        };
+        assert!(
+            matches!(options.command, RemoteCommand::Add { url } if url == "https://example.test/file.bin")
+        );
     }
 
     #[test]

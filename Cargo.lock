@@ -1785,6 +1785,7 @@ dependencies = [
  "fetchx-models",
  "fetchx-plugin-manager",
  "fetchx-queue",
+ "fetchx-remote-protocol",
  "fetchx-remote-server",
  "fetchx-scheduler",
  "fetchx-storage",

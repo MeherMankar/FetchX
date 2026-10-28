@@ -115,6 +115,8 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
         }
         Plugins(opts) => Ok(commands::plugins::run(opts, cli.json).await),
 
+        Remote(opts) => Ok(commands::remote::run(opts, cli.json).await),
+
         Torrent(opts) => {
             let svc = bootstrap::start().await?;
             use args::TorrentCommand;

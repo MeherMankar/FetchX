@@ -183,6 +183,33 @@ bus — no aggressive polling.  Press `Ctrl+C` to exit cleanly.
 
 ---
 
+### `remote`
+
+The remote commands control another FetchX server using the shared
+`fetchx.rpc.v1` protocol. They do not start local CoreServices or access the
+remote server's database directly.
+
+Set the endpoint and bearer token in the environment. The token is not accepted
+as a command-line argument, saved to disk, or printed by remote commands:
+
+```powershell
+$env:FETCHX_REMOTE_URL = "https://fetchx.example.com"
+$env:FETCHX_REMOTE_TOKEN = "<token from fetchx server init-auth>"
+fetchx remote connect
+fetchx remote status
+fetchx remote downloads
+fetchx remote add https://www.iana.org/robots.txt
+fetchx remote pause <ID>
+fetchx remote resume <ID>
+fetchx remote cancel <ID>
+```
+
+`remote connect <URL>` or `--server <URL>` can override the endpoint for one
+invocation. HTTP is allowed only for loopback endpoints; other servers require
+HTTPS. Redirects are not followed, and responses are size-bounded.
+
+---
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -233,4 +260,3 @@ The CLI uses the **same database and downloads directory** as the desktop app:
 - `--json` output never includes credentials, tokens, or session data.
 - URLs are validated by the same backend logic as the desktop UI.
 - Unsupported URL schemes are rejected before any network activity.
-
