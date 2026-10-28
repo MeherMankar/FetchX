@@ -10,13 +10,15 @@ use fetchx_remote_protocol::{
     CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_GET, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
     DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY,
     DOWNLOAD_SET_SPEED_LIMIT, JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo,
-    RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess, ValidatedRequest,
+    RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess, SYSTEM_WEBSOCKET_TICKET,
+    ValidatedRequest,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::authorization::{AuthenticatedPrincipal, required_permission};
+use crate::tickets::WebSocketTickets;
 
 #[derive(Clone, Copy)]
 pub(crate) struct RpcError {
@@ -64,6 +66,8 @@ pub(crate) async fn dispatch(
     services: &CoreServices,
     principal: AuthenticatedPrincipal,
     request: ValidatedRequest,
+    websocket_tickets: &WebSocketTickets,
+    credential_verifier: [u8; 32],
 ) -> Result<Value, RpcError> {
     let permission = required_permission(&request.command);
     if !principal.allows(permission) {
@@ -74,9 +78,24 @@ pub(crate) async fn dispatch(
         );
         return Err(RpcError::new(RpcErrorCode::Forbidden, "permission denied"));
     }
+    if matches!(&request.command, RemoteCommand::WebSocketTicket) && request.id.is_none() {
+        return Err(RpcError::new(
+            RpcErrorCode::InvalidRequest,
+            "WebSocket ticket requires a request id",
+        ));
+    }
     let result = match request.command {
         RemoteCommand::Discover => serde_json::to_value(discovery_info())
             .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?,
+        RemoteCommand::WebSocketTicket => {
+            let ticket = websocket_tickets.issue(credential_verifier).map_err(|_| {
+                RpcError::new(
+                    RpcErrorCode::ServiceUnavailable,
+                    "WebSocket ticket service unavailable",
+                )
+            })?;
+            json!({ "ticket": ticket, "expires_in_seconds": 30 })
+        }
         RemoteCommand::DownloadCreate(params) => {
             let priority = params.priority.unwrap_or_default();
             let id = if params.url.starts_with("magnet:") {
@@ -170,6 +189,7 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
     // Keep this list aligned with dispatch and events actually exposed by the server.
     let supported = [
         "system.discover",
+        SYSTEM_WEBSOCKET_TICKET,
         DOWNLOAD_CREATE,
         DOWNLOAD_GET,
         DOWNLOAD_LIST,

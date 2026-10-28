@@ -10,13 +10,11 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::{
-        State,
+        Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{
-        HeaderMap, Request, StatusCode,
-        header::{AUTHORIZATION, ORIGIN},
-    },
+    http::{HeaderMap, Request, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -29,6 +27,7 @@ use hyper_util::{
     server::conn::auto::Builder as ConnectionBuilder,
     service::TowerToHyperService,
 };
+use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
 use tokio::{
@@ -53,6 +52,7 @@ struct AppState {
     config: ServerConfig,
     connections: Arc<Semaphore>,
     authentication: Arc<AuthenticationService>,
+    websocket_tickets: crate::tickets::WebSocketTickets,
     shutdown: watch::Receiver<bool>,
     rate_limits: Arc<RateLimiter>,
 }
@@ -103,6 +103,7 @@ impl RemoteServer {
             services: Arc::clone(&services),
             connections: Arc::new(Semaphore::new(config.max_connections)),
             authentication,
+            websocket_tickets: crate::tickets::WebSocketTickets::default(),
             config: config.clone(),
             shutdown: shutdown_receiver,
             rate_limits: Arc::new(RateLimiter::new()),
@@ -111,6 +112,10 @@ impl RemoteServer {
             .route("/health", get(health))
             .route("/rpc", post(rpc))
             .route("/events", get(websocket))
+            .layer(middleware::from_fn_with_state(
+                config.clone(),
+                cors_middleware,
+            ))
             .with_state(state);
         Ok(Self {
             listener,
@@ -160,6 +165,88 @@ impl RemoteServer {
         server_result?;
         shutdown_result
     }
+}
+
+async fn cors_middleware(
+    State(config): State<ServerConfig>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    let browser_api = matches!(path, "/rpc" | "/health");
+    let origin = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+
+    if request.method() == axum::http::Method::OPTIONS && path == "/rpc" {
+        let allowed = origin
+            .as_deref()
+            .is_some_and(|origin| origin_allowed(&config, origin))
+            && request
+                .headers()
+                .get(header::ACCESS_CONTROL_REQUEST_METHOD)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|method| method.eq_ignore_ascii_case("POST"))
+            && preflight_headers_allowed(
+                request
+                    .headers()
+                    .get(header::ACCESS_CONTROL_REQUEST_HEADERS)
+                    .and_then(|value| value.to_str().ok()),
+            );
+        if !allowed {
+            return forbidden_origin_response();
+        }
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        add_cors_headers(&mut response, origin.as_deref().unwrap_or_default());
+        return response;
+    }
+
+    if browser_api
+        && origin
+            .as_deref()
+            .is_some_and(|origin| !origin_allowed(&config, origin))
+    {
+        return forbidden_origin_response();
+    }
+
+    let mut response = next.run(request).await;
+    if browser_api && let Some(origin) = origin {
+        add_cors_headers(&mut response, &origin);
+    }
+    response
+}
+
+fn preflight_headers_allowed(headers: Option<&str>) -> bool {
+    headers.is_none_or(|headers| {
+        headers.split(',').map(str::trim).all(|header| {
+            matches!(
+                header.to_ascii_lowercase().as_str(),
+                "authorization" | "content-type"
+            )
+        })
+    })
+}
+
+fn add_cors_headers(response: &mut Response, origin: &str) {
+    let Ok(origin) = header::HeaderValue::from_str(origin) else {
+        return;
+    };
+    response
+        .headers_mut()
+        .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        header::HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    response.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        header::HeaderValue::from_static("Authorization, Content-Type"),
+    );
+    response
+        .headers_mut()
+        .insert(header::VARY, header::HeaderValue::from_static("Origin"));
 }
 
 fn load_tls_config(config: &crate::TlsConfig) -> Result<rustls::ServerConfig, ServerError> {
@@ -311,15 +398,16 @@ async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response 
             );
         }
     };
-    let authorization = request.headers().get(AUTHORIZATION).cloned();
+    let authorization = request.headers().get(header::AUTHORIZATION).cloned();
     let remaining = deadline.saturating_duration_since(Instant::now());
-    let principal = match verify_authentication(&state, authorization.as_ref(), remaining).await {
-        Ok(principal) => principal,
-        Err(error) => {
-            drop(permit);
-            return authentication_error_response(error);
-        }
-    };
+    let (principal, credential_verifier) =
+        match verify_authentication(&state, authorization.as_ref(), remaining).await {
+            Ok(session) => session,
+            Err(error) => {
+                drop(permit);
+                return authentication_error_response(error);
+            }
+        };
     let remaining = deadline.saturating_duration_since(Instant::now());
     let body = match timeout(
         remaining,
@@ -357,14 +445,34 @@ async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response 
     let Some(id) = request.id.clone() else {
         let _permit = permit;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let result = timeout(remaining, dispatch(&state.services, principal, request)).await;
+        let result = timeout(
+            remaining,
+            dispatch(
+                &state.services,
+                principal,
+                request,
+                &state.websocket_tickets,
+                credential_verifier,
+            ),
+        )
+        .await;
         if result.is_err() {
             warn!("remote JSON-RPC notification timed out");
         }
         return StatusCode::NO_CONTENT.into_response();
     };
     let remaining = deadline.saturating_duration_since(Instant::now());
-    let result = timeout(remaining, dispatch(&state.services, principal, request)).await;
+    let result = timeout(
+        remaining,
+        dispatch(
+            &state.services,
+            principal,
+            request,
+            &state.websocket_tickets,
+            credential_verifier,
+        ),
+    )
+    .await;
     drop(permit);
     match result {
         Ok(Ok(result)) => {
@@ -393,6 +501,7 @@ fn rpc_response(response: RpcFailure) -> Response {
 async fn websocket(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<WebSocketTicketQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Response {
     if state.rate_limits.is_rate_limited("ws") {
@@ -402,27 +511,56 @@ async fn websocket(
         Ok(permit) => permit,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    let origin = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
     if let Some(origin) = origin {
         if !origin_allowed(&state.config, origin) {
             drop(permit);
             return forbidden_origin_response();
         }
     }
-    let Some(authorization) = headers.get(AUTHORIZATION).cloned() else {
-        drop(permit);
-        return authentication_failure();
-    };
-    let principal =
-        match verify_authentication(&state, Some(&authorization), state.config.request_timeout)
-            .await
-        {
-            Ok(principal) => principal,
-            Err(error) => {
+    let session = if let Some(ticket) = query.ticket.as_deref() {
+        let credential_verifier = match state.websocket_tickets.consume(ticket) {
+            Ok(verifier) => verifier,
+            Err(crate::tickets::TicketError::Unauthorized) => {
                 drop(permit);
-                return authentication_error_response(error);
+                return authentication_failure();
+            }
+            Err(crate::tickets::TicketError::Unavailable) => {
+                drop(permit);
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
         };
+        match timeout(
+            state.config.request_timeout,
+            state
+                .authentication
+                .authenticate_verifier(credential_verifier),
+        )
+        .await
+        {
+            Ok(Ok(principal)) => Ok((principal, credential_verifier)),
+            Ok(Err(AuthError::Unauthorized | AuthError::NotInitialized)) => {
+                Err(AuthenticationFailure::Unauthorized)
+            }
+            Ok(Err(error)) => {
+                warn!(%error, "authentication verifier lookup failed");
+                Err(AuthenticationFailure::Unavailable)
+            }
+            Err(_) => Err(AuthenticationFailure::TimedOut),
+        }
+    } else {
+        let authorization = headers.get(header::AUTHORIZATION).cloned();
+        verify_authentication(&state, authorization.as_ref(), state.config.request_timeout).await
+    };
+    let (principal, credential_verifier) = match session {
+        Ok(session) => session,
+        Err(error) => {
+            drop(permit);
+            return authentication_error_response(error);
+        }
+    };
     if !principal.allows(Permission::EventsRead) {
         drop(permit);
         return authorization_failure();
@@ -433,23 +571,30 @@ async fn websocket(
         .max_frame_size(state.config.max_request_bytes)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            serve_websocket(socket, state_for_socket, authorization).await;
+            serve_websocket(socket, state_for_socket, credential_verifier).await;
         })
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct WebSocketTicketQuery {
+    ticket: Option<String>,
 }
 
 async fn verify_authentication(
     state: &AppState,
     authorization: Option<&axum::http::HeaderValue>,
     timeout_budget: Duration,
-) -> Result<AuthenticatedPrincipal, AuthenticationFailure> {
+) -> Result<(AuthenticatedPrincipal, [u8; 32]), AuthenticationFailure> {
     match timeout(
         timeout_budget,
-        state.authentication.authenticate_bearer(authorization),
+        state
+            .authentication
+            .authenticate_bearer_with_verifier(authorization),
     )
     .await
     {
-        Ok(Ok(principal)) => Ok(principal),
+        Ok(Ok(session)) => Ok(session),
         Ok(Err(AuthError::Unauthorized | AuthError::NotInitialized)) => {
             Err(AuthenticationFailure::Unauthorized)
         }
@@ -563,11 +708,7 @@ impl RateLimiter {
     }
 }
 
-async fn serve_websocket(
-    socket: WebSocket,
-    state: AppState,
-    authorization: axum::http::HeaderValue,
-) {
+async fn serve_websocket(socket: WebSocket, state: AppState, credential_verifier: [u8; 32]) {
     let (mut sink, mut stream) = socket.split();
     let (event_sender, mut event_receiver) =
         mpsc::channel::<EventNotification>(state.config.event_backlog);
@@ -615,7 +756,7 @@ async fn serve_websocket(
                 let Some(event) = event else { break };
                 let principal = match timeout(
                     state.config.request_timeout,
-                    state.authentication.authenticate_bearer(Some(&authorization)),
+                    state.authentication.authenticate_verifier(credential_verifier),
                 )
                 .await
                 {

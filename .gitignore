@@ -11,6 +11,12 @@
 /apps/desktop/ui/node_modules/
 /apps/desktop/ui/dist/
 
+# Remote web client
+/apps/remote-ui/node_modules/
+/apps/remote-ui/dist/
+!/apps/remote-ui/package.json
+!/apps/remote-ui/package-lock.json
+
 # Browser extension
 /apps/browser/extension/node_modules/
 /apps/browser/extension/dist/

@@ -7,6 +7,7 @@ mod authorization;
 mod config;
 mod dispatch;
 mod events;
+mod tickets;
 mod transport;
 
 pub use auth::{

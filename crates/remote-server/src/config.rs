@@ -77,6 +77,13 @@ impl ServerConfig {
                 return Err(ServerConfigError::TlsConfiguration);
             }
         }
+        if self
+            .allowed_origins
+            .iter()
+            .any(|origin| !is_valid_origin(origin))
+        {
+            return Err(ServerConfigError::InvalidOrigin);
+        }
         Ok(())
     }
 
@@ -84,6 +91,19 @@ impl ServerConfig {
     pub const fn socket_addr(&self) -> SocketAddr {
         SocketAddr::new(self.bind_ip, self.port)
     }
+}
+
+fn is_valid_origin(value: &str) -> bool {
+    let Ok(url) = url::Url::parse(value) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
 }
 
 fn default_data_dir() -> PathBuf {
@@ -141,6 +161,8 @@ pub enum ServerConfigError {
     EventBacklog,
     #[error("TLS requires a certificate and private key path")]
     TlsConfiguration,
+    #[error("allowed origins must be HTTP(S) origins without paths or credentials")]
+    InvalidOrigin,
 }
 
 #[cfg(test)]
@@ -200,5 +222,27 @@ mod tests {
             ..ServerConfig::default()
         };
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn allowed_origins_must_be_exact_http_origins() {
+        let valid = ServerConfig {
+            allowed_origins: vec!["https://ui.example.test:8443".to_owned()],
+            ..ServerConfig::default()
+        };
+        assert!(valid.validate().is_ok());
+
+        for origin in [
+            "https://ui.example.test/app",
+            "https://user:password@ui.example.test",
+            "file:///tmp/ui",
+            "not a URL",
+        ] {
+            let config = ServerConfig {
+                allowed_origins: vec![origin.to_owned()],
+                ..ServerConfig::default()
+            };
+            assert_eq!(config.validate(), Err(ServerConfigError::InvalidOrigin));
+        }
     }
 }

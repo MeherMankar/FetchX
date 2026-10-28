@@ -32,12 +32,36 @@ impl AuthenticationService {
         &self,
         authorization: Option<&HeaderValue>,
     ) -> Result<AuthenticatedPrincipal, AuthError> {
+        self.authenticate_bearer_with_verifier(authorization)
+            .await
+            .map(|(principal, _)| principal)
+    }
+
+    pub(crate) async fn authenticate_bearer_with_verifier(
+        &self,
+        authorization: Option<&HeaderValue>,
+    ) -> Result<(AuthenticatedPrincipal, [u8; VERIFIER_BYTES]), AuthError> {
         let token = authorization
             .and_then(|value| value.to_str().ok())
             .and_then(parse_bearer_token)
             .ok_or(AuthError::Unauthorized)?;
         let verifier = self.read_verifier().await?;
-        let candidate = Sha256::digest(token.as_bytes());
+        let candidate: [u8; VERIFIER_BYTES] = Sha256::digest(token.as_bytes()).into();
+        if bool::from(candidate.as_slice().ct_eq(verifier.as_slice())) {
+            Ok((
+                AuthenticatedPrincipal::primary(self.read_role().await?),
+                candidate,
+            ))
+        } else {
+            Err(AuthError::Unauthorized)
+        }
+    }
+
+    pub(crate) async fn authenticate_verifier(
+        &self,
+        candidate: [u8; VERIFIER_BYTES],
+    ) -> Result<AuthenticatedPrincipal, AuthError> {
+        let verifier = self.read_verifier().await?;
         if bool::from(candidate.as_slice().ct_eq(verifier.as_slice())) {
             Ok(AuthenticatedPrincipal::primary(self.read_role().await?))
         } else {

@@ -9,6 +9,7 @@ fetchx server
 fetchx server --bind 127.0.0.1 --port 39800
 fetchx server --bind 127.0.0.1 --port 39800 --database C:\FetchX\fetchx.db --downloads C:\FetchX\Downloads
 fetchx server --bind 127.0.0.1 --port 39800 --tls-certificate C:\FetchX\server-cert.pem --tls-private-key C:\FetchX\server-key.pem
+fetchx server --allowed-origin https://fetchx.example.com
 ```
 
 Initialize authentication once before starting the server. `init-auth` creates a
@@ -41,7 +42,17 @@ put real tokens in shell history or scripts.
 The default listener is `127.0.0.1:39800`. The default database and runtime paths
 match the CLI's standard FetchX application-data directory; downloads default to the
 user Downloads folder. `--bind` accepts an IP address (not a hostname), and the CLI
-also accepts `--port`, `--database`, and `--downloads`.
+also accepts `--port`, `--database`, and `--downloads`. Repeat `--allowed-origin`
+to add exact HTTP(S) web-client origins. The server keeps its loopback origins and
+rejects configured origins containing a path, credentials, query, or fragment.
+Use HTTPS for a remotely hosted UI and configure the server's TLS certificate.
+
+The Phase 21F web client is under `apps/remote-ui`. For local development, start
+the server with `--allowed-origin http://127.0.0.1:5173`, then run
+`npm --prefix apps/remote-ui run dev`. A production `dist` bundle can be served
+from a static HTTPS origin; add that exact origin to `--allowed-origin`. The web UI
+uses authenticated JSON-RPC requests and does not persist bearer tokens in browser
+storage.
 
 ## Endpoints
 
@@ -49,9 +60,12 @@ also accepts `--port`, `--database`, and `--downloads`.
 - **AUTHENTICATED:** `POST /rpc` — all JSON-RPC 2.0 methods, including
   `system.discover`, using the `fetchx.rpc.v1` contract. Supply `Authorization: Bearer
   <TOKEN>`.
-- **AUTHENTICATED:** `GET /events` — WebSocket JSON-RPC event notifications. The
-  handshake requires the same `Authorization` header and is rejected before event
-  subscription if authentication fails. Query-string tokens are not accepted.
+- **AUTHENTICATED:** `GET /events` — WebSocket JSON-RPC event notifications. Native
+  clients may authenticate with the bearer `Authorization` header. Browsers cannot
+  set that header on a WebSocket handshake, so the web UI first calls
+  `system.websocketTicket` over authenticated JSON-RPC and supplies the returned
+  short-lived, single-use event ticket. Reusable bearer tokens are never accepted
+  in the query string.
 
 All current JSON-RPC calls, including protocol discovery, require authentication; only
 the health endpoint is public. Missing, malformed, and invalid bearer tokens receive a
@@ -61,11 +75,16 @@ before JSON-RPC dispatch, not separately inside each operation.
 
 Current RPC operations are `system.discover`, `download.create`, `download.get`,
 `download.list`, `download.pause`, `download.resume`, `download.cancel`,
-`download.remove`, and `download.setPriority`. Creation supports HTTP(S) downloads
-through DirectHttp and magnet downloads through the engine selected by CoreServices.
+`download.remove`, `download.setPriority`, and `system.websocketTicket`. Creation
+supports HTTP(S) downloads through DirectHttp and magnet downloads through the engine selected by CoreServices.
 Discovery reports only supported operations and event names. An operation accepted by
 the shared Phase 21A parser but not implemented by CoreServices returns the stable
 `UnsupportedOperation` error; it is not reported as a successful no-op.
+
+The browser UI exposes current download data and queue actions supported by these
+methods. Queue metrics/order, engine management/status, scheduling, remote settings,
+device pairing, and plugin management are not available in the current protocol and
+are shown as unavailable rather than simulated.
 
 Download responses and event payloads include the ID, filename, lifecycle state,
 priority, engine, progress, timestamps, and a non-sensitive error code. They do not
@@ -81,6 +100,10 @@ and 256 queued notifications per WebSocket client. Configuration validation caps
 these at 128 sessions, 300 seconds, and 2,048 queued notifications. WebSocket frames
 use the configured request-size limit. The queue's existing broadcast event capacity
 remains bounded independently.
+The WebSocket ticket table is in-memory, capped at 1,024 pending tickets, and tickets
+expire after 30 seconds. Each ticket is scoped to event access, accepted once, stored
+only as a digest, and tied to the current credential verifier; credential rotation
+invalidates outstanding tickets.
 
 The default bind remains loopback (`127.0.0.1`). The remote server intentionally does
 not expose a public listener by default. Direct HTTP and redirect targets are rejected
@@ -89,8 +112,10 @@ or IPv4-mapped IPv6 local ranges. The downloader validates and pins each resolve
 destination address for the matching connection, including each redirect hop, to
 prevent a second DNS lookup from selecting a different address. Environment proxy settings are
 bypassed for these protected direct requests. WebSocket connections require a
-configured origin allow-list; a missing or forbidden origin is rejected before
-subscription establishment.
+configured origin allow-list; forbidden origins are rejected before subscription
+establishment. HTTP browser requests receive CORS headers only for exact configured
+origins; preflight accepts only the remote RPC method and its authorization/content
+type headers.
 A bounded in-memory rate limiter rejects repeated abusive requests with HTTP 429 while
 preserving the existing 21A/21D authentication and authorization checks.
 
@@ -108,8 +133,9 @@ preserving the existing 21A/21D authentication and authorization checks.
 | Restart bypass | The verifier remains in SQLite and is loaded at startup; startup fails closed if auth is uninitialized or corrupt. |
 | Credential reset abuse | Only an explicit local CLI `rotate-auth` operation changes the token; no hidden recovery token exists. |
 
-Phase 21C provides token authentication only. Authorization, optional TLS,
-WebSocket Origin validation, SSRF protections, and broader remote hardening are
-implemented in later phases. The default bind remains loopback. Changing it does
-not make LAN/public exposure safe; do not expose the server to a LAN, reverse
-proxy, or public internet without reviewing the deployment threat model.
+Browser event tickets are sent in the WebSocket URL because the browser WebSocket
+API does not permit custom Authorization headers. Tickets are random, one-use, and
+short-lived rather than reusable bearer credentials. A reverse proxy should avoid
+logging the `ticket` query parameter. The default bind remains loopback. Changing it
+does not make LAN/public exposure safe; use TLS and review the deployment threat
+model before exposing the server to a LAN, reverse proxy, or public internet.

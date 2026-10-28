@@ -181,6 +181,12 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
                 }
                 return Ok(exit::SUCCESS);
             }
+            let mut allowed_origins = defaults.allowed_origins.clone();
+            for origin in opts.allowed_origins {
+                if !allowed_origins.contains(&origin) {
+                    allowed_origins.push(origin);
+                }
+            }
             let config = fetchx_remote_server::ServerConfig {
                 bind_ip: opts.bind,
                 port: opts.port,
@@ -205,7 +211,7 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
                         );
                     }
                 },
-                allowed_origins: defaults.allowed_origins,
+                allowed_origins,
             };
             let server = fetchx_remote_server::RemoteServer::start(config).await?;
             tracing::info!(address = %server.local_addr(), "FetchX remote server listening");

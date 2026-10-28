@@ -1431,6 +1431,14 @@ Devices, Plugins, System/Health.
 
 Must use same remote protocol as CLI and all other clients. No separate API.
 
+**Implementation status: PARTIAL.** The React/TypeScript remote client uses
+`fetchx.rpc.v1` for Dashboard, Downloads, Queue, and System/Health, including
+authenticated RPC and the WebSocket event stream. Engine management/status,
+Scheduler, Settings, Devices, and Plugins remain explicitly unavailable because
+the current server discovery contract does not expose those operations. The web
+client does not simulate or duplicate those features. A follow-up protocol/core
+scope is required before those views can become functional.
+
 ---
 
 ### Phase 21G -- Docker / NAS Deployment (HIGH)

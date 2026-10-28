@@ -34,6 +34,7 @@ pub const NAMESPACES: &[&str] = &[
 ];
 
 pub const SYSTEM_DISCOVER: &str = "system.discover";
+pub const SYSTEM_WEBSOCKET_TICKET: &str = "system.websocketTicket";
 pub const DOWNLOAD_CREATE: &str = "download.create";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
@@ -123,6 +124,7 @@ pub struct ValidatedRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RemoteCommand {
     Discover,
+    WebSocketTicket,
     DownloadCreate(DownloadCreateParams),
     DownloadGet(DownloadId),
     DownloadList,
@@ -210,6 +212,7 @@ impl ProtocolInfo {
 /// Declared Phase 21A request/event capability names.
 pub const CAPABILITIES: &[&str] = &[
     SYSTEM_DISCOVER,
+    SYSTEM_WEBSOCKET_TICKET,
     DOWNLOAD_CREATE,
     DOWNLOAD_GET,
     DOWNLOAD_LIST,
@@ -372,6 +375,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
 
     let command = match request.method.as_str() {
         SYSTEM_DISCOVER => parse_empty_params(&request).map(|()| RemoteCommand::Discover),
+        SYSTEM_WEBSOCKET_TICKET => {
+            parse_empty_params(&request).map(|()| RemoteCommand::WebSocketTicket)
+        }
         DOWNLOAD_CREATE => parse_params::<DownloadCreateParams>(&request).and_then(|params| {
             if params.url.trim().is_empty() || params.url.len() > MAX_DOWNLOAD_URL_BYTES {
                 Err(invalid_params(&request))
@@ -520,6 +526,10 @@ mod tests {
         assert_eq!(
             parse_request(&encoded(&request(SYSTEM_DISCOVER, None))?)?.command,
             RemoteCommand::Discover
+        );
+        assert_eq!(
+            parse_request(&encoded(&request(SYSTEM_WEBSOCKET_TICKET, None))?)?.command,
+            RemoteCommand::WebSocketTicket
         );
         Ok(())
     }

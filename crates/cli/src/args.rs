@@ -102,6 +102,10 @@ pub struct ServerOpts {
     /// TLS private key PEM file. Must be used with --tls-certificate.
     #[arg(long, requires = "tls_certificate")]
     pub tls_private_key: Option<PathBuf>,
+
+    /// Additional exact browser origin allowed to access the remote UI.
+    #[arg(long = "allowed-origin", value_name = "ORIGIN", action = clap::ArgAction::Append)]
+    pub allowed_origins: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]

@@ -433,6 +433,136 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
     Ok(())
 }
 
+#[tokio::test]
+async fn browser_rpc_cors_and_single_use_websocket_ticket_work()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let mut config = test_config(temp.path().to_path_buf());
+    config
+        .allowed_origins
+        .push("http://localhost:5173".to_owned());
+    let token = initialize_auth(&config.database_path).await?;
+    let server = RemoteServer::start(config.clone()).await?;
+    let address = server.local_addr();
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel();
+    let server_task = tokio::spawn(server.run_until(async {
+        let _ = shutdown_receiver.await;
+    }));
+    let client = authenticated_client(&token)?;
+
+    let preflight = reqwest::Client::new()
+        .request(reqwest::Method::OPTIONS, format!("http://{address}/rpc"))
+        .header(reqwest::header::ORIGIN, "http://localhost:5173")
+        .header(reqwest::header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+        .header(
+            reqwest::header::ACCESS_CONTROL_REQUEST_HEADERS,
+            "authorization,content-type",
+        )
+        .send()
+        .await?;
+    assert_eq!(preflight.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_eq!(
+        preflight
+            .headers()
+            .get(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("http://localhost:5173")
+    );
+
+    let denied_preflight = reqwest::Client::new()
+        .request(reqwest::Method::OPTIONS, format!("http://{address}/rpc"))
+        .header(reqwest::header::ORIGIN, "https://untrusted.example")
+        .header(reqwest::header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+        .header(
+            reqwest::header::ACCESS_CONTROL_REQUEST_HEADERS,
+            "authorization,content-type",
+        )
+        .send()
+        .await?;
+    assert_eq!(denied_preflight.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let ticket_response = client
+        .post(format!("http://{address}/rpc"))
+        .header(reqwest::header::ORIGIN, "http://localhost:5173")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&json!({
+            "jsonrpc": "2.0",
+            "id": "browser-ticket",
+            "method": "system.websocketTicket"
+        }))?)
+        .send()
+        .await?;
+    assert!(ticket_response.status().is_success());
+    assert_eq!(
+        ticket_response
+            .headers()
+            .get(reqwest::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("http://localhost:5173")
+    );
+    let ticket_body: Value = serde_json::from_slice(&ticket_response.bytes().await?)?;
+    let ticket = ticket_body["result"]["ticket"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("WebSocket ticket is missing"))?;
+    assert_eq!(ticket.len(), 69);
+    assert_eq!(ticket_body["result"]["expires_in_seconds"], 30);
+
+    let mut websocket_request =
+        format!("ws://{address}/events?ticket={ticket}").into_client_request()?;
+    websocket_request.headers_mut().insert(
+        reqwest::header::ORIGIN,
+        HeaderValue::from_static("http://localhost:5173"),
+    );
+    let (mut websocket, _) = connect_async(websocket_request).await?;
+    websocket.close(None).await?;
+
+    let mut replay_request =
+        format!("ws://{address}/events?ticket={ticket}").into_client_request()?;
+    replay_request.headers_mut().insert(
+        reqwest::header::ORIGIN,
+        HeaderValue::from_static("http://localhost:5173"),
+    );
+    let Err(tokio_tungstenite::tungstenite::Error::Http(replay_response)) =
+        connect_async(replay_request).await
+    else {
+        return Err(std::io::Error::other("WebSocket ticket was replayable").into());
+    };
+    assert_eq!(replay_response.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let role_ticket_response = client
+        .post(format!("http://{address}/rpc"))
+        .header(reqwest::header::ORIGIN, "http://localhost:5173")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&json!({
+            "jsonrpc": "2.0",
+            "id": "browser-role-ticket",
+            "method": "system.websocketTicket"
+        }))?)
+        .send()
+        .await?;
+    let role_ticket_body: Value = serde_json::from_slice(&role_ticket_response.bytes().await?)?;
+    let role_ticket = role_ticket_body["result"]["ticket"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("role WebSocket ticket is missing"))?;
+    set_auth_role(&config.database_path, Role::ReadOnly).await?;
+    let mut role_request =
+        format!("ws://{address}/events?ticket={role_ticket}").into_client_request()?;
+    role_request.headers_mut().insert(
+        reqwest::header::ORIGIN,
+        HeaderValue::from_static("http://localhost:5173"),
+    );
+    let Err(tokio_tungstenite::tungstenite::Error::Http(role_response)) =
+        connect_async(role_request).await
+    else {
+        return Err(std::io::Error::other("read-only role received event access").into());
+    };
+    assert_eq!(role_response.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let _ = shutdown_sender.send(());
+    server_task.await??;
+    Ok(())
+}
+
 async fn post_rpc(
     client: &reqwest::Client,
     address: std::net::SocketAddr,

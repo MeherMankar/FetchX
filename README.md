@@ -138,7 +138,26 @@ default after authentication is initialized with `fetchx server init-auth`. The 
 is shown once; use `fetchx server rotate-auth` to replace it. See
 [docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md) for authenticated endpoints, token
 handling, supported operations, and security limitations. Authentication is not
-authorization or TLS; do not expose the server beyond loopback.
+authorization. TLS is configurable and required when sending credentials over an
+untrusted network. The server remains loopback-only by default; review
+[docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md) before changing its bind address.
+
+## Remote web client
+
+The Phase 21F React/TypeScript client is in `apps/remote-ui` and uses the existing
+`fetchx.rpc.v1` protocol. Start it for local development with:
+
+```powershell
+fetchx server --allowed-origin http://127.0.0.1:5173
+npm --prefix apps/remote-ui run dev
+```
+
+Open `http://127.0.0.1:5173`, enter the server URL and current token, and connect.
+The bearer token is held in page memory only. Non-loopback servers must use HTTPS.
+Downloads and queue actions use existing RPC methods; engine management,
+scheduling, settings, devices, and plugin management are labeled unavailable until
+the remote protocol supports them. See [docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md)
+for allowed-origin configuration and deployment notes.
 
 ## Build
 

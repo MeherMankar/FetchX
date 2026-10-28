@@ -96,6 +96,7 @@ enum CredentialIdentity {
 pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
     match command {
         RemoteCommand::Discover => Permission::ServerRead,
+        RemoteCommand::WebSocketTicket => Permission::EventsRead,
         RemoteCommand::DownloadGet(_) | RemoteCommand::DownloadList => Permission::DownloadsRead,
         RemoteCommand::DownloadCreate(_) => Permission::DownloadsCreate,
         RemoteCommand::DownloadPause(_)
@@ -121,6 +122,7 @@ mod tests {
         let id = DownloadId::new();
         vec![
             (RemoteCommand::Discover, Permission::ServerRead),
+            (RemoteCommand::WebSocketTicket, Permission::EventsRead),
             (
                 RemoteCommand::DownloadCreate(DownloadCreateParams {
                     url: "https://example.invalid/file".to_owned(),
@@ -177,7 +179,7 @@ mod tests {
 
     #[test]
     fn every_protocol_command_has_an_explicit_permission() {
-        assert_eq!(commands().len(), 12);
+        assert_eq!(commands().len(), 13);
         for (command, expected) in commands() {
             assert_eq!(required_permission(&command), expected);
         }

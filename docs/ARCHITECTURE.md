@@ -66,8 +66,18 @@ Tokens are generated from the OS cryptographic RNG; only a SHA-256 verifier is s
 in the existing SQLite configuration table. The CLI explicitly initializes or rotates
 credentials and displays the plaintext token only for that operation. `/health` is
 public; all RPC methods, including discovery, and the WebSocket event endpoint require
-authentication. Authentication does not provide authorization, TLS, origin validation,
-or SSRF protection; do not bind beyond loopback before later remote-security work.
+authentication. Role authorization is enforced server-side for each RPC and event
+subscription. TLS is opt-in and fail-closed; browser CORS and WebSocket Origin checks
+use exact configured origins. Browser WebSocket clients obtain a short-lived,
+single-use event ticket over authenticated JSON-RPC because browser WebSocket APIs
+cannot set an Authorization header. Tickets are bounded, event-scoped, and invalidated
+by credential rotation.
+
+The Phase 21F React/TypeScript remote web client is a protocol client, not another
+application service. It accesses only `/health`, `system.discover`, and advertised
+JSON-RPC operations; it does not connect to SQLite, CoreServices, the filesystem, or
+engine internals. Views for operations absent from discovery explicitly report that
+they are unavailable rather than simulating server state.
 
 The `queue` crate coordinates persisted download records with the downloader
 abstraction. It recovers interrupted `Preparing`/`Downloading` records to `Queued`,
