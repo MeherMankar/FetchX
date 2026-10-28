@@ -1,0 +1,43 @@
+services:
+  fetchx:
+    image: fetchx:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:${FETCHX_HOST_PORT:-39800}:${FETCHX_PORT:-39800}"
+    environment:
+      FETCHX_BIND: 0.0.0.0
+      FETCHX_PORT: ${FETCHX_PORT:-39800}
+      FETCHX_DATABASE: ${FETCHX_DATABASE:-/data/db/fetchx.db}
+      FETCHX_DOWNLOADS: ${FETCHX_DOWNLOADS:-/data/downloads}
+      FETCHX_ALLOWED_ORIGINS: ${FETCHX_ALLOWED_ORIGINS:-}
+      FETCHX_TLS_CERTIFICATE: ${FETCHX_TLS_CERTIFICATE:-}
+      FETCHX_TLS_PRIVATE_KEY: ${FETCHX_TLS_PRIVATE_KEY:-}
+      FETCHX_HEALTHCHECK_HOST: ${FETCHX_HEALTHCHECK_HOST:-127.0.0.1}
+      FETCHX_HEALTHCHECK_CA: ${FETCHX_HEALTHCHECK_CA:-}
+    volumes:
+      - fetchx-data:/data
+      - ${FETCHX_CERTS_DIR:-./certs}:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fetchx-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  fetchx-data:

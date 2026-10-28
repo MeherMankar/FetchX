@@ -1451,6 +1451,11 @@ configurable resource limits.
 
 Targets: NAS, home server, VPS, Docker host.
 
+**Implementation status: PARTIAL.** A multi-stage container image and hardened
+Compose deployment are documented in [docs/DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md).
+The image build and container runtime have not been validated because the Docker
+Engine is unavailable in the current environment.
+
 ---
 
 ### Phase 21H -- Remote CLI (HIGH)

@@ -159,6 +159,13 @@ scheduling, settings, devices, and plugin management are labeled unavailable unt
 the remote protocol supports them. See [docs/REMOTE_SERVER.md](docs/REMOTE_SERVER.md)
 for allowed-origin configuration and deployment notes.
 
+## Docker and NAS
+
+The headless server can be deployed with Docker Compose using the existing remote
+protocol and security controls. See
+[docs/DOCKER_DEPLOYMENT.md](docs/DOCKER_DEPLOYMENT.md) for image build, one-time
+authentication setup, persistent storage, TLS, healthchecks, and backup guidance.
+
 ## Build
 
 Install the stable Rust toolchain with `rustup`, then run from the repository root:
