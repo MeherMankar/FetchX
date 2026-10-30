@@ -209,6 +209,8 @@ pub enum BrowserErrorCode {
     UnsupportedScheme,
     /// FetchX is running but the desktop is temporarily unavailable.
     DesktopUnavailable,
+    /// FetchX may have accepted the RPC, but the adapter did not receive confirmation.
+    RequestOutcomeUnknown,
     /// The configured target's credentials were rejected.
     AuthenticationFailed,
     /// The authenticated identity cannot perform the requested operation.

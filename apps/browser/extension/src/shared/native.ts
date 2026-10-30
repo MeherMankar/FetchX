@@ -25,12 +25,13 @@ import { PROTOCOL_VERSION } from "../types/protocol";
 export const NATIVE_HOST_NAME = "com.fetchx.native_host";
 
 /** Maximum time to wait for a response from the native host (milliseconds). */
-const RESPONSE_TIMEOUT_MS = 15_000;
+const RESPONSE_TIMEOUT_MS = 70_000;
 
 export class NativeHostError extends Error {
   constructor(
     message: string,
     public readonly cause?: unknown,
+    public readonly outcomeUnknown = false,
   ) {
     super(message);
     this.name = "NativeHostError";
@@ -63,7 +64,7 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
 
     timeoutId = setTimeout(() => {
       cleanup();
-      reject(new NativeHostError("Native host did not respond in time."));
+      reject(new NativeHostError("Native host did not respond in time.", undefined, true));
     }, RESPONSE_TIMEOUT_MS);
 
     port.onDisconnect.addListener(() => {
@@ -72,6 +73,8 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
       reject(
         new NativeHostError(
           runtimeError?.message ?? "Native host disconnected unexpectedly.",
+          undefined,
+          true,
         ),
       );
     });
@@ -79,13 +82,24 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     port.onMessage.addListener((message: unknown) => {
       cleanup();
       if (!isValidResponse(message)) {
-        reject(new NativeHostError("Native host returned an unexpected response shape."));
+        reject(
+          new NativeHostError(
+            "Native host returned an unexpected response shape.",
+            undefined,
+            true,
+          ),
+        );
         return;
       }
       resolve(message);
     });
 
-    port.postMessage(request);
+    try {
+      port.postMessage(request);
+    } catch (error) {
+      cleanup();
+      reject(new NativeHostError("Could not send the request to the native host.", error, true));
+    }
   });
 }
 

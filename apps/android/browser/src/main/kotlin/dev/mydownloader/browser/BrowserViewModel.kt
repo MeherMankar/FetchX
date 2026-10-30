@@ -121,7 +121,7 @@ data class BrowserUiState(
     val mediaFormatError: String? = null,
     val mediaQueueError: String? = null,
     val isQueueingMedia: Boolean = false,
-    val pendingDownload: PendingDownload? = null,
+    val pendingDownloads: List<PendingDownload> = emptyList(),
     val magnetQueued: String? = null,
     val magnetError: String? = null,
     val cloudflareBypassState: CloudflareBypassState = CloudflareBypassState.Idle,
@@ -199,7 +199,9 @@ class BrowserViewModel internal constructor(
             newTm.onNavigationStateChanged = ::updateNavigationState
             newTm.onVideoDetected = ::onVideoDetected
             newTm.onDownloadRequested = { url, filename ->
-                _uiState.update { it.copy(pendingDownload = PendingDownload(url, filename)) }
+                _uiState.update {
+                    it.copy(pendingDownloads = it.pendingDownloads + PendingDownload(url, filename))
+                }
             }
             newTm.onExternalUriRequested = ::openExternalUri
             newTm.onMagnetRequested = ::onMagnetRequested
@@ -292,7 +294,7 @@ class BrowserViewModel internal constructor(
     }
 
     fun clearPendingDownload() {
-        _uiState.update { it.copy(pendingDownload = null) }
+        _uiState.update { it.copy(pendingDownloads = it.pendingDownloads.drop(1)) }
     }
 
     /**

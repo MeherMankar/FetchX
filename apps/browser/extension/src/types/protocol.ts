@@ -73,6 +73,7 @@ export type BrowserErrorCode =
   | "credentials_in_url"
   | "unsupported_scheme"
   | "desktop_unavailable"
+  | "request_outcome_unknown"
   | "authentication_failed"
   | "authorization_failed"
   | "incompatible_server"
@@ -149,6 +150,8 @@ export function userMessageForCode(code: BrowserErrorCode): string {
       return "Only HTTP and HTTPS URLs are supported.";
     case "desktop_unavailable":
       return "FetchX is not running. Please start the application first.";
+    case "request_outcome_unknown":
+      return "FetchX may have accepted the request. Check FetchX before resuming the browser download.";
     case "download_rejected":
       return "FetchX rejected the download. Check the application for details.";
     case "unsupported_version":

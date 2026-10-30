@@ -33,7 +33,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CompletableDeferred
+import org.json.JSONObject
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -148,6 +150,68 @@ class BridgeDownloadRepository(
 
     suspend fun dispatchBrowserRpc(requestJson: String): String = withContext(Dispatchers.IO) {
         service.dispatchBrowserRpc(requestJson)
+    }
+
+    suspend fun addBrowserDownload(url: String, filename: String): String =
+        withContext(Dispatchers.IO) {
+            val requestId = UUID.randomUUID().toString()
+            val response = dispatchBrowserDownloadRequest(
+                requestId = requestId,
+                url = url,
+                filename = filename,
+                includeFilename = true,
+            )
+            val error = response.optJSONObject("error")
+            val errorCode = error?.optInt("code")
+            val compatibleResponse = if (errorCode == -32600 || errorCode == -32602) {
+                dispatchBrowserDownloadRequest(
+                    requestId = requestId,
+                    url = url,
+                    filename = filename,
+                    includeFilename = false,
+                )
+            } else {
+                response
+            }
+            val rpcError = compatibleResponse.optJSONObject("error")
+            if (rpcError != null) {
+                val code = rpcError.optInt("code")
+                val message = if (code == -32011 || code == -32603) {
+                    "FetchX may have accepted the download. Check Downloads before retrying."
+                } else {
+                    rpcError.optString("message").ifBlank { "FetchX rejected the download." }
+                }
+                throw IllegalStateException(message)
+            }
+            compatibleResponse.optJSONObject("result")
+                ?.optString("id")
+                ?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException("FetchX returned an invalid download response.")
+        }
+
+    private suspend fun dispatchBrowserDownloadRequest(
+        requestId: String,
+        url: String,
+        filename: String,
+        includeFilename: Boolean,
+    ): JSONObject {
+        val params = JSONObject().put("url", url)
+        if (includeFilename) params.put("filename", filename)
+        val request = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", requestId)
+            .put("method", "download.create")
+            .put("params", params)
+        return try {
+            JSONObject(dispatchBrowserRpc(request.toString()))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            throw IllegalStateException(
+                "FetchX may have accepted the download. Check Downloads before retrying.",
+                error,
+            )
+        }
     }
 
     override fun observeEvents(): Flow<DownloadEvent> = _events.asSharedFlow()

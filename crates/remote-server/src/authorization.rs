@@ -126,6 +126,7 @@ mod tests {
             (
                 RemoteCommand::DownloadCreate(DownloadCreateParams {
                     url: "https://example.invalid/file".to_owned(),
+                    filename: None,
                     engine: None,
                     priority: None,
                 }),

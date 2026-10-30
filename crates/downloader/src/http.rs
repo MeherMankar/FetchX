@@ -1681,12 +1681,12 @@ fn is_local_or_private_ip(ip: std::net::IpAddr) -> bool {
 
 fn ipv6_embedded_ipv4_is_unsafe(ipv6: std::net::Ipv6Addr) -> bool {
     let segments = ipv6.segments();
-    let embedded = if segments[..4] == [0x0064, 0xff9b, 0, 0] {
+    let embedded = if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
         Some(std::net::Ipv4Addr::new(
-            (segments[4] >> 8) as u8,
-            segments[4] as u8,
-            (segments[5] >> 8) as u8,
-            segments[5] as u8,
+            (segments[6] >> 8) as u8,
+            segments[6] as u8,
+            (segments[7] >> 8) as u8,
+            segments[7] as u8,
         ))
     } else if segments[0] == 0x2002 {
         Some(std::net::Ipv4Addr::new(
@@ -2262,6 +2262,7 @@ mod tests {
         }
         assert!(validate_http_source_url("https://example.com/file.bin").is_ok());
         assert!(validate_http_source_url("http://[::ffff:8.8.8.8]/").is_ok());
+        assert!(validate_http_source_url("https://[64:ff9b::103a:2adc]/").is_ok());
     }
 
     #[test]

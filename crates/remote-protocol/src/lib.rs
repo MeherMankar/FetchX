@@ -21,6 +21,8 @@ pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
 pub const MAX_REQUEST_ID_BYTES: usize = 256;
 /// Maximum length of a download URL in a create request.
 pub const MAX_DOWNLOAD_URL_BYTES: usize = 16_384;
+/// Maximum UTF-8 byte length of a suggested download filename.
+pub const MAX_DOWNLOAD_FILENAME_BYTES: usize = 255;
 
 /// Top-level method namespaces reserved by the remote protocol.
 pub const NAMESPACES: &[&str] = &[
@@ -153,6 +155,8 @@ pub enum RemoteCommand {
 #[serde(deny_unknown_fields)]
 pub struct DownloadCreateParams {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<EngineKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -382,7 +386,12 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
             parse_empty_params(&request).map(|()| RemoteCommand::WebSocketTicket)
         }
         DOWNLOAD_CREATE => parse_params::<DownloadCreateParams>(&request).and_then(|params| {
-            if params.url.trim().is_empty() || params.url.len() > MAX_DOWNLOAD_URL_BYTES {
+            if params.url.trim().is_empty()
+                || params.url.len() > MAX_DOWNLOAD_URL_BYTES
+                || params.filename.as_ref().is_some_and(|filename| {
+                    filename.trim().is_empty() || filename.len() > MAX_DOWNLOAD_FILENAME_BYTES
+                })
+            {
                 Err(invalid_params(&request))
             } else {
                 Ok(RemoteCommand::DownloadCreate(params))
@@ -488,6 +497,29 @@ mod tests {
             parsed.command,
             RemoteCommand::DownloadCreate(DownloadCreateParams {
                 url: "https://example.test/file.bin".to_owned(),
+                filename: None,
+                engine: None,
+                priority: None,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn create_request_accepts_a_suggested_filename() -> Result<(), Box<dyn std::error::Error>> {
+        let body = request(
+            DOWNLOAD_CREATE,
+            Some(serde_json::json!({
+                "url": "https://example.test/file.bin",
+                "filename": "suggested-name.bin"
+            })),
+        );
+        let parsed = parse_request(&encoded(&body)?)?;
+        assert_eq!(
+            parsed.command,
+            RemoteCommand::DownloadCreate(DownloadCreateParams {
+                url: "https://example.test/file.bin".to_owned(),
+                filename: Some("suggested-name.bin".to_owned()),
                 engine: None,
                 priority: None,
             })
@@ -565,6 +597,27 @@ mod tests {
             parse_request(&encoded(&request(
                 DOWNLOAD_CREATE,
                 Some(serde_json::json!({ "url": "  " }))
+            ))?),
+            Err(ProtocolError::InvalidParams { .. })
+        ));
+        assert!(matches!(
+            parse_request(&encoded(&request(
+                DOWNLOAD_CREATE,
+                Some(serde_json::json!({
+                    "url": "https://example.test/file.bin",
+                    "filename": "  "
+                }))
+            ))?),
+            Err(ProtocolError::InvalidParams { .. })
+        ));
+        let oversized_filename = "x".repeat(MAX_DOWNLOAD_FILENAME_BYTES + 1);
+        assert!(matches!(
+            parse_request(&encoded(&request(
+                DOWNLOAD_CREATE,
+                Some(serde_json::json!({
+                    "url": "https://example.test/file.bin",
+                    "filename": oversized_filename
+                }))
             ))?),
             Err(ProtocolError::InvalidParams { .. })
         ));

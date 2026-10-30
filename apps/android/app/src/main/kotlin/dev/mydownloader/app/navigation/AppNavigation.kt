@@ -290,6 +290,38 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                                 }
                             }
                         },
+                        onInterceptBrowserDownload = { url, filename ->
+                            val browserRepo = repo
+                            if (browserRepo == null) {
+                                Toast.makeText(
+                                    context,
+                                    "FetchX is unavailable; this browser response cannot be resumed.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            } else {
+                                coroutineScope.launch {
+                                    try {
+                                        browserRepo.addBrowserDownload(url, filename)
+                                        Toast.makeText(
+                                            context,
+                                            "Download added to FetchX",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                        navController.navigate(Screen.Downloads.route) {
+                                            launchSingleTop = true
+                                        }
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Exception) {
+                                        Toast.makeText(
+                                            context,
+                                            error.message ?: "Could not add browser download",
+                                            Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
+                                }
+                            }
+                        },
                         onPlayVideo = { url ->
                             val scheme = try {
                                 android.net.Uri.parse(url).scheme?.lowercase()

@@ -2,6 +2,7 @@ package dev.fetchx.browser
 
 import android.os.Build
 import android.util.Log
+import android.webkit.URLUtil
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
@@ -302,7 +303,9 @@ class TabManager(
             override fun onExternalResponse(session: GeckoSession, response: org.mozilla.geckoview.WebResponse) {
                 Log.i(TAG, "External download response received")
                 val disposition = response.headers["content-disposition"] ?: response.headers["Content-Disposition"]
-                val filename = disposition?.substringAfter("filename=", "")?.trim('"', ' ', ';')?.takeIf { it.isNotBlank() }
+                val contentType = response.headers["content-type"] ?: response.headers["Content-Type"]
+                val filename = URLUtil.guessFileName(response.uri, disposition, contentType)
+                    .takeIf { it.isNotBlank() }
                 onDownloadRequested?.invoke(response.uri, filename)
             }
         }

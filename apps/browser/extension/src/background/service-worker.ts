@@ -17,6 +17,13 @@ import {
 } from "../shared/native";
 import { PROTOCOL_VERSION } from "../types/protocol";
 import type { RpcRequest, RpcTarget } from "../types/protocol";
+import {
+  claimDownloadEvent,
+  filenameFromBrowserPath,
+  handoffBrowserDownload,
+  isBlockedDomain,
+  type DownloadSubmission,
+} from "./download-interception";
 
 // ────────────────────────────────────────────────────────────
 // Settings (persisted in chrome.storage.local)
@@ -97,6 +104,9 @@ interface CachedDownload {
 }
 
 let taskCache: CachedDownload[] = [];
+const CLAIMED_DOWNLOAD_IDS_KEY = "interceptedBrowserDownloadIds";
+const MAX_CLAIMED_DOWNLOAD_IDS = 512;
+const claimingDownloadIds = new Set<number>();
 
 // ────────────────────────────────────────────────────────────
 // Context menus
@@ -146,37 +156,145 @@ chrome.contextMenus.onClicked.addListener((info, _tab) => {
 // ────────────────────────────────────────────────────────────
 
 chrome.downloads.onCreated.addListener((item) => {
-  void (async () => {
+  void interceptBrowserDownload(item).catch((error: unknown) => {
+    console.error(
+      "Could not process browser download event",
+      error instanceof Error ? error.message : "unknown error",
+    );
+  });
+});
+
+async function interceptBrowserDownload(item: chrome.downloads.DownloadItem): Promise<void> {
     const settings = await getSettings();
     if (!settings.autoIntercept) return;
 
-    // Skip if already handled by our own native host submission
-    if (item.url.startsWith("blob:") || item.url.startsWith("data:")) return;
     if (!isHttpUrl(item.url)) return;
     if (hasEmbeddedCredentials(item.url)) return;
 
-    // Check domain blocklist
-    try {
-      const hostname = new URL(item.url).hostname;
-      if (settings.blockedDomains.some((d) => hostname.endsWith(d))) return;
-    } catch { return; }
+    const hostname = new URL(item.url).hostname;
+    if (isBlockedDomain(hostname, settings.blockedDomains)) return;
 
     // Check size threshold
     const fileSizeBytes = item.fileSize ?? 0;
     const minBytes = settings.minSizeMb * 1024 * 1024;
     if (minBytes > 0 && fileSizeBytes > 0 && fileSizeBytes < minBytes) return;
 
-    // Cancel the browser's own download and hand off to FetchX
-    chrome.downloads.cancel(item.id);
-    chrome.downloads.erase({ id: item.id });
+    if (!await claimBrowserDownloadEvent(item.id)) return;
 
-    const result = await handleAddDownload(item.url);
-    if (result.ok && settings.showNotifications) {
-      const name = item.filename?.split(/[/\\]/).pop() ?? hostnameOf(item.url);
-      notify("Intercepted", `"${name}" handed to FetchX.`);
+    const result = await handoffBrowserDownload(item.id, {
+      pause: (downloadId) => chrome.downloads.pause(downloadId),
+      resume: (downloadId) => chrome.downloads.resume(downloadId),
+      cancel: (downloadId) => chrome.downloads.cancel(downloadId),
+      submit: async () => {
+        const browserPath = await waitForBrowserDownloadFilename(item.id, item.filename);
+        const filename = filenameFromBrowserPath(browserPath);
+        if (!filename) {
+          return {
+            kind: "rejected",
+            message: "The browser did not provide a download filename.",
+          };
+        }
+        return submitBrowserDownload(item.url, filename);
+      },
+    });
+    const displayName = filenameFromBrowserPath(item.filename) ?? hostname;
+
+    switch (result.kind) {
+      case "not_paused":
+        if (settings.showNotifications) {
+          notify("FetchX", `"${displayName}" was not intercepted; the browser download continues.`);
+        }
+        break;
+      case "accepted":
+        if (result.browserDownloadCancelled) {
+          if (settings.showNotifications) {
+            notify("Intercepted", `"${displayName}" handed to FetchX.`);
+          }
+        } else {
+          notify(
+            "FetchX accepted the download",
+            `"${displayName}" may also remain in the browser. Check its Downloads list.`,
+          );
+        }
+        break;
+      case "rejected":
+        if (result.browserDownloadResumed) {
+          if (settings.showNotifications) notify("FetchX", result.message);
+        } else {
+          notify(
+            "FetchX handoff failed",
+            `The browser download could not be resumed. Check the browser Downloads list for "${displayName}".`,
+          );
+        }
+        break;
+      case "unknown":
+        notify(
+          "FetchX handoff unconfirmed",
+          `"${displayName}" remains paused. Check FetchX before resuming the browser download.`,
+        );
+        break;
     }
-  })();
-});
+}
+
+async function claimBrowserDownloadEvent(downloadId: number): Promise<boolean> {
+  return claimDownloadEvent(
+    downloadId,
+    claimingDownloadIds,
+    {
+      load: async () => {
+        const stored = await chrome.storage.local.get(CLAIMED_DOWNLOAD_IDS_KEY);
+        return stored[CLAIMED_DOWNLOAD_IDS_KEY];
+      },
+      save: async (ids) => {
+        await chrome.storage.local.set({ [CLAIMED_DOWNLOAD_IDS_KEY]: ids });
+      },
+    },
+    MAX_CLAIMED_DOWNLOAD_IDS,
+  );
+}
+
+async function waitForBrowserDownloadFilename(
+  downloadId: number,
+  initialFilename: string,
+): Promise<string | undefined> {
+  if (initialFilename) return initialFilename;
+  const current = await chrome.downloads.search({ id: downloadId });
+  if (current[0]?.filename) return current[0].filename;
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      chrome.downloads.onChanged.removeListener(onChanged);
+    };
+    const finish = (filename?: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(filename);
+    };
+    const onChanged = (delta: chrome.downloads.DownloadDelta) => {
+      if (delta.id === downloadId && delta.filename?.current) {
+        finish(delta.filename.current);
+      }
+    };
+
+    chrome.downloads.onChanged.addListener(onChanged);
+    timeoutId = setTimeout(() => finish(), 5_000);
+    void chrome.downloads.search({ id: downloadId }).then(
+      (items) => {
+        if (items[0]?.filename) finish(items[0].filename);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
 
 // ────────────────────────────────────────────────────────────
 // Message handler (popup ↔ background)
@@ -233,40 +351,163 @@ chrome.runtime.onMessage.addListener(
 // ────────────────────────────────────────────────────────────
 
 async function handleAddDownload(url: string): Promise<BrowserResponse> {
-  if (!isHttpUrl(url)) return err("unsupported_scheme", "Only HTTP and HTTPS URLs are supported.");
-  if (hasEmbeddedCredentials(url)) return err("credentials_in_url", "URLs with credentials are not accepted.");
+  if (!isHttpUrl(url)) {
+    return err("unsupported_scheme", "Only HTTP and HTTPS URLs are accepted.");
+  }
+  if (hasEmbeddedCredentials(url)) {
+    return err("credentials_in_url", "URLs containing credentials are not accepted.");
+  }
 
-  try {
-    const target = await getSelectedTarget();
-    const rpcRequest: RpcRequest = {
-      jsonrpc: "2.0",
-      id: crypto.randomUUID(),
-      method: "download.create",
-      params: { url },
-    };
-    const response = await callTargetRpc(toRpcTarget(target), rpcRequest);
-    if (!response.ok || !("rpc_response" in response)) return response;
-    const rpcResponse = response.rpc_response as {
-      result?: { id?: unknown };
-      error?: { code?: unknown };
-    };
-    if (typeof rpcResponse.error === "object" && rpcResponse.error !== null) {
-      return err("download_rejected", "FetchX rejected the download.");
-    }
-    const downloadId = rpcResponse.result?.id;
-    if (typeof downloadId !== "string") {
-      return err("internal_error", "FetchX returned an invalid RPC response.");
-    }
+  const submission = await submitBrowserDownload(url);
+  if (submission.kind === "accepted") {
     void refreshTasks();
     return {
       version: PROTOCOL_VERSION,
       ok: true,
-      download_id: downloadId,
+      download_id: submission.downloadId,
     };
-  } catch (e) {
-    const msg = e instanceof NativeHostError ? e.message : "Could not reach FetchX. Is it running?";
-    return err("desktop_unavailable", msg);
   }
+  if (submission.kind === "unknown") {
+    return err("request_outcome_unknown", submission.message);
+  }
+  return err("download_rejected", submission.message);
+}
+
+async function submitBrowserDownload(
+  url: string,
+  filename?: string,
+): Promise<DownloadSubmission> {
+  if (!isHttpUrl(url)) {
+    return { kind: "rejected", message: "Only HTTP and HTTPS URLs are accepted." };
+  }
+  if (hasEmbeddedCredentials(url)) {
+    return { kind: "rejected", message: "URLs containing credentials are not accepted." };
+  }
+
+  let target: BrowserTarget;
+  try {
+    target = await getSelectedTarget();
+  } catch {
+    return { kind: "rejected", message: "The selected FetchX target could not be loaded." };
+  }
+
+  const rpcRequest: RpcRequest = {
+    jsonrpc: "2.0",
+    id: crypto.randomUUID(),
+    method: "download.create",
+    params: filename ? { url, filename } : { url },
+  };
+
+  try {
+    const response = await callTargetRpc(toRpcTarget(target), rpcRequest);
+    if (!response.ok) {
+      return response.error.code === "request_outcome_unknown"
+        ? {
+          kind: "unknown",
+          message: "FetchX may have accepted the download, but confirmation was not received.",
+        }
+        : { kind: "rejected", message: response.error.message };
+    }
+    if (!("rpc_response" in response)) {
+      return {
+        kind: "unknown",
+        message: "FetchX may have accepted the download, but returned no confirmation.",
+      };
+    }
+
+    let rpcResponse = response.rpc_response;
+    if (!isMatchingRpcResponse(rpcResponse, rpcRequest.id)) {
+      return {
+        kind: "unknown",
+        message: "FetchX may have accepted the download, but returned an invalid confirmation.",
+      };
+    }
+    if (
+      filename
+      && isRpcError(rpcResponse)
+      && (rpcResponse.error.code === -32600 || rpcResponse.error.code === -32602)
+    ) {
+      const legacyRequest = { ...rpcRequest, params: { url } };
+      const legacyResponse = await callTargetRpc(toRpcTarget(target), legacyRequest);
+      if (!legacyResponse.ok) {
+        return legacyResponse.error.code === "request_outcome_unknown"
+          ? {
+            kind: "unknown",
+            message: "FetchX may have accepted the download, but confirmation was not received.",
+          }
+          : { kind: "rejected", message: legacyResponse.error.message };
+      }
+      if (!("rpc_response" in legacyResponse)) {
+        return {
+          kind: "unknown",
+          message: "FetchX may have accepted the download, but returned no confirmation.",
+        };
+      }
+      rpcResponse = legacyResponse.rpc_response;
+      if (!isMatchingRpcResponse(rpcResponse, rpcRequest.id)) {
+        return {
+          kind: "unknown",
+          message: "FetchX may have accepted the download, but returned an invalid confirmation.",
+        };
+      }
+    }
+
+    if (isRpcError(rpcResponse)) {
+      if (rpcResponse.error.code === -32011 || rpcResponse.error.code === -32603) {
+        return {
+          kind: "unknown",
+          message: "FetchX may have accepted the download, but confirmation was not received.",
+        };
+      }
+      return { kind: "rejected", message: "FetchX rejected the download request." };
+    }
+
+    const downloadId = extractRpcDownloadId(rpcResponse.result);
+    if (
+      rpcResponse.id !== rpcRequest.id
+      || downloadId === undefined
+    ) {
+      return {
+        kind: "unknown",
+        message: "FetchX may have accepted the download, but returned an invalid confirmation.",
+      };
+    }
+    return {
+      kind: "accepted",
+      downloadId,
+    };
+  } catch (error) {
+    if (error instanceof NativeHostError && error.outcomeUnknown) {
+      return {
+        kind: "unknown",
+        message: "FetchX may have accepted the download, but confirmation was not received.",
+      };
+    }
+    return {
+      kind: "rejected",
+      message: "FetchX could not be reached; the browser download will continue.",
+    };
+  }
+}
+
+function isRpcError(
+  response: Record<string, unknown>,
+): response is Record<string, unknown> & { error: { code: number } } {
+  if (typeof response.error !== "object" || response.error === null) return false;
+  return typeof (response.error as Record<string, unknown>).code === "number";
+}
+
+function isMatchingRpcResponse(
+  response: Record<string, unknown>,
+  requestId: string | number,
+): boolean {
+  return response.jsonrpc === "2.0" && response.id === requestId;
+}
+
+function extractRpcDownloadId(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const id = (result as Record<string, unknown>).id;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 async function handleBatchDownload(urls: string[]): Promise<{ added: number; failed: number }> {

@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use fetchx_browser_protocol::{BrowserErrorCode, BrowserResponse};
+use fetchx_browser_protocol::{BrowserErrorCode, BrowserResponse, validate_url};
 use fetchx_remote_protocol::{
-    BROWSER_RPC_METHODS, JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ProtocolInfo,
-    RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER, parse_request,
+    BROWSER_RPC_METHODS, DOWNLOAD_CREATE, JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+    ProtocolInfo, RemoteCommand, RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
+    parse_request,
 };
 use futures_util::StreamExt;
 use reqwest::{StatusCode, Url, redirect::Policy};
@@ -96,11 +97,24 @@ pub fn forward_rpc(endpoint: &str, credential_id: &str, request: &RpcRequest) ->
             "The RPC request could not be encoded.",
         );
     };
-    if parse_request(&request_body).is_err() {
+    let parsed_request = match parse_request(&request_body) {
+        Ok(request) => request,
+        Err(_) => {
+            return BrowserResponse::error(
+                None,
+                BrowserErrorCode::InvalidRequest,
+                "The RPC request is invalid.",
+            );
+        }
+    };
+    if matches!(
+        &parsed_request.command,
+        RemoteCommand::DownloadCreate(params) if validate_url(&params.url).is_err()
+    ) {
         return BrowserResponse::error(
             None,
             BrowserErrorCode::InvalidRequest,
-            "The RPC request is invalid.",
+            "Browser downloads require a valid HTTP(S) URL.",
         );
     }
     let token = match get_credential(credential_id, endpoint.as_str()) {
@@ -118,6 +132,7 @@ pub fn forward_rpc(endpoint: &str, credential_id: &str, request: &RpcRequest) ->
 
 fn forward_rpc_with_token(endpoint: Url, token: String, request: &RpcRequest) -> BrowserResponse {
     let request_id = request.id.clone();
+    let may_have_created_download = request.method == DOWNLOAD_CREATE;
     let client = match reqwest::Client::builder()
         .redirect(Policy::none())
         .timeout(RPC_TIMEOUT)
@@ -173,7 +188,15 @@ fn forward_rpc_with_token(endpoint: Url, token: String, request: &RpcRequest) ->
         {
             return Err(BrowserErrorCode::IncompatibleServer);
         }
-        let rpc_response = send_rpc(&client, &rpc_url, &token, &rpc_request).await?;
+        let rpc_response = send_rpc(&client, &rpc_url, &token, &rpc_request)
+            .await
+            .map_err(|code| match (may_have_created_download, code) {
+                (
+                    true,
+                    BrowserErrorCode::DesktopUnavailable | BrowserErrorCode::IncompatibleServer,
+                ) => BrowserErrorCode::RequestOutcomeUnknown,
+                (_, other) => other,
+            })?;
         Ok(rpc_response)
     });
 
@@ -187,6 +210,9 @@ fn forward_rpc_with_token(endpoint: Url, token: String, request: &RpcRequest) ->
                 }
                 BrowserErrorCode::IncompatibleServer => {
                     "The target does not support a compatible FetchX RPC capability."
+                }
+                BrowserErrorCode::RequestOutcomeUnknown => {
+                    "The target may have accepted the download, but confirmation was not received."
                 }
                 _ => "The remote FetchX target is unavailable.",
             };
@@ -410,6 +436,27 @@ mod tests {
                     error.error.code,
                     fetchx_browser_protocol::BrowserErrorCode::UnsupportedMessage
                 );
+            }
+
+            other => panic!("unexpected browser response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remote_browser_download_rejects_non_http_urls_before_network_access() {
+        let response = forward_rpc(
+            "https://fetchx.example.test",
+            "target-1",
+            &RpcRequest {
+                jsonrpc: JSON_RPC_VERSION.to_owned(),
+                id: Some(RpcId::String("browser-download".to_owned())),
+                method: "download.create".to_owned(),
+                params: Some(json!({ "url": "magnet:?xt=urn:btih:example" })),
+            },
+        );
+        match response.body {
+            BrowserResponseBody::Err(error) => {
+                assert_eq!(error.error.code, BrowserErrorCode::InvalidRequest);
             }
             other => panic!("unexpected browser response: {other:?}"),
         }

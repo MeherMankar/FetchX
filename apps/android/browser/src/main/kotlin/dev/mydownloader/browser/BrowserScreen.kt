@@ -164,6 +164,7 @@ fun BrowserScreen(
     onOpenStorage: () -> Unit = {},
     onNavigateToDownloads: () -> Unit = {},
     onDownloadCurrentPage: (url: String, title: String) -> Unit = { _, _ -> },
+    onInterceptBrowserDownload: (url: String, filename: String) -> Unit = { _, _ -> },
     onPlayVideo: (String) -> Unit = {},
     browserVersionName: String = "unknown",
     initialNavigateUrl: String? = null,
@@ -258,14 +259,6 @@ fun BrowserScreen(
     LaunchedEffect(initialNavigateUrl) {
         if (!initialNavigateUrl.isNullOrBlank()) {
             viewModel.navigate(initialNavigateUrl)
-        }
-    }
-
-    // Direct download requests detected from web pages
-    LaunchedEffect(uiState.pendingDownload) {
-        uiState.pendingDownload?.let { download ->
-            onDownloadCurrentPage(download.url, download.filename ?: "Download")
-            viewModel.clearPendingDownload()
         }
     }
 
@@ -1113,6 +1106,7 @@ fun BrowserScreen(
                         TextButton(onClick = { viewModel.requestMediaFormats(video) }) {
                             Text("Retry")
                         }
+
                         if (uiState.mediaFormats.isEmpty()) {
                             TextButton(
                                 onClick = { viewModel.downloadDetectedVideo(video) },
@@ -1185,6 +1179,37 @@ fun BrowserScreen(
             },
             confirmButton = {
                 TextButton(onClick = viewModel::closeMediaFormatPicker) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    uiState.pendingDownloads.firstOrNull()?.let { download ->
+        AlertDialog(
+            onDismissRequest = viewModel::clearPendingDownload,
+            title = { Text("Download with FetchX?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(download.filename ?: "Download")
+                    Text(
+                        "GeckoView cannot handle this response. If you cancel, the browser cannot continue it.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onInterceptBrowserDownload(download.url, download.filename ?: "download")
+                        viewModel.clearPendingDownload()
+                    },
+                ) {
+                    Text("Download")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::clearPendingDownload) {
                     Text("Cancel")
                 }
             },

@@ -1491,6 +1491,19 @@ device discovery, and refresh tokens are not implemented in Phase 21I.
 Phase 22A's broader browser download interception and queue-routing behavior is
 also outside Phase 21I.
 
+**Status: COMPLETE.** The Windows extension/native-host local and authenticated
+remote routing uses the shared `fetchx.rpc.v1` contract. The Android in-app
+GeckoView extension action, popup, and native-message path were live validated
+through the Android bridge and CoreServices: `system.discover`, `download.list`,
+and `download.create` returned through the real popup. An IANA `robots.txt`
+download completed at 24 bytes with SHA-256
+`e5c4b84484ee4216e9373be99380320c25dd94805f99f0a805846f087636553f`;
+its file and database record persisted after force-stop and relaunch. The
+Android test tasks passed (317 tests, no failures, errors, or skips), and the
+targeted Rust Android bridge RPC test passed. The emulator's observed System UI
+ANR was separate from FetchX; no FetchX crash or ANR was observed. No Git
+history changes were made during validation.
+
 ---
 
 ### Phase 22A -- Browser Download Interception (HIGH)
@@ -1501,13 +1514,51 @@ Flow: `Browser -> extension -> FetchX -> URL analysis -> engine selection -> que
 
 Download request MUST enter the shared Rust downloader queue on both platforms.
 
-Support: direct HTTP/HTTPS downloads, filename detection, MIME type, referrer
-(when explicitly available/authorized), multiple simultaneous downloads.
+Support: direct HTTP/HTTPS downloads, filename detection, and multiple
+simultaneous downloads. MIME is determined from FetchX's own HTTP response;
+browser MIME values are not forwarded. Referrer forwarding is excluded until an
+explicit user-consent policy exists.
 
 Do NOT bypass: DRM, CAPTCHA, authentication, access controls, anti-bot protections.
 
 **Windows:** Via native messaging host -> CoreServices.
 **Android:** Via Android FetchX local service -> Bridge -> CoreServices.
+
+**Status: COMPLETE; IMPLEMENTED, TESTED, AND LIVE VALIDATED ON WINDOWS AND ANDROID.**
+Windows interception pauses before RPC submission, cancels only after a
+correlated acceptance, resumes after an explicit rejection, and preserves a
+paused item when the result is ambiguous. Android queues GeckoView external
+responses for confirmation and routes accepted HTTP(S) downloads through the
+bridge. Both paths use the shared `download.create` operation and sanitized
+suggested filenames; browser-specific adapters reject non-HTTP(S) URLs.
+Validation passed for the extension tests (14), TypeScript check, Chromium and
+Firefox builds, workspace Rust tests (660 passed, 0 failed, 7 ignored), and
+Android browser/bridge/app unit-test tasks (317 passed, 0 failures, errors, or
+skips). Strict workspace Clippy is not clean due to two unrelated baseline
+lints in `crates/models/src/progress.rs` and
+`crates/remote-server/src/auth.rs`; no Phase 22A-specific warning remains. The
+Android GeckoView external-response confirmation path was live validated on
+`Pixel_10_Pro`: accepting the `httpbin.org/response-headers` response created a
+completed `direct_http` record with 136/136 bytes. The destination file was
+136 bytes with SHA-256
+`7a13f3e34ecf508e1c5ed12e26a37c4546b34cbfef7ed0f5d307e8640bcb0549`.
+The completed record and file remained present after force-stop and relaunch.
+Windows live validation used Chrome 156 and an isolated profile. A successful
+handoff canceled the browser item only after FetchX acceptance and completed a
+174/174-byte `direct_http` download with SHA-256
+`d42cbf89145094b020e1804e58ef80b769038f13937251193179062c50a15426`; the file
+matched the fixture and the database record/file persisted after desktop
+relaunch. An explicit remote-target rejection resumed Chrome's item, which
+completed at 168 bytes without creating a FetchX record. The test exposed
+Chrome's delayed filename reporting; the extension now waits for the resolved
+filename before submitting `download.create`.
+
+The browser-provided MIME value is not forwarded; Direct HTTP reads
+`Content-Type` from its own response, while Android uses response MIME only to
+derive a suggested filename. Referrer forwarding remains intentionally
+excluded until an explicit user-consent policy exists. Cookies, credentials,
+and other request headers are not forwarded. GeckoView cancellation cannot
+resume an external response.
 
 ---
 

@@ -122,7 +122,14 @@ pub(crate) async fn dispatch(
                     .await
                     .map_err(map_core_error)?
             } else {
-                create_http_download(services, &params.url, params.engine, priority).await?
+                create_http_download(
+                    services,
+                    &params.url,
+                    params.filename.as_deref(),
+                    params.engine,
+                    priority,
+                )
+                .await?
             };
             json!({ "id": id })
         }
@@ -244,6 +251,7 @@ pub(crate) fn safe_download_event(item: &DownloadItem, revision: u64) -> Value {
 async fn create_http_download(
     services: &CoreServices,
     raw_url: &str,
+    suggested_filename: Option<&str>,
     requested_engine: Option<EngineKind>,
     priority: DownloadPriority,
 ) -> Result<DownloadId, RpcError> {
@@ -257,7 +265,11 @@ async fn create_http_download(
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
     let url = url::Url::parse(&validated_url)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
-    let filename = safe_filename(url.path_segments().and_then(Iterator::last));
+    let filename = safe_filename(
+        suggested_filename
+            .filter(|filename| !filename.trim().is_empty())
+            .or_else(|| url.path_segments().and_then(Iterator::last)),
+    );
     let id = DownloadId::new();
     let source = DownloadSource::new(validated_url, EngineKind::DirectHttp)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
@@ -281,6 +293,7 @@ async fn create_http_download(
 
 fn safe_filename(candidate: Option<&str>) -> String {
     let candidate = candidate.unwrap_or("download");
+    let candidate = candidate.rsplit(['/', '\\']).next().unwrap_or(candidate);
     let mut name = candidate
         .chars()
         .map(|character| {
@@ -358,4 +371,22 @@ fn unsupported(method: &'static str) -> RpcError {
         RpcErrorCode::UnsupportedOperation,
         "operation is not supported by this server",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::safe_filename;
+
+    #[test]
+    fn browser_filename_is_reduced_to_a_safe_basename() {
+        assert_eq!(
+            safe_filename(Some(r"..\private\report final?.zip")),
+            "report_final_.zip"
+        );
+        assert_eq!(safe_filename(Some("../../secret.txt")), "secret.txt");
+        assert_eq!(safe_filename(Some(r"..\..\secret.txt")), "secret.txt");
+        assert_eq!(safe_filename(Some(r"C:\Windows\file.txt")), "file.txt");
+        assert_eq!(safe_filename(Some("report?.txt")), "report_.txt");
+        assert_eq!(safe_filename(Some("../../")), "download");
+    }
 }

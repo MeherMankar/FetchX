@@ -19,9 +19,9 @@ apps/desktop  (FetchX desktop application)
 crates/queue  →  EngineDispatcher  →  Download engine
 ```
 
-The browser extension is a **capture-only** layer.  It submits a URL; all
-download logic (engine selection, filename derivation, queueing, retries,
-persistence) remains in the Rust core.
+The browser extension is a browser adapter. It submits an HTTP(S) URL and, when
+available, a suggested filename; authoritative validation, filename
+sanitization, queueing, retries, and persistence remain in the Rust core.
 
 ## Components
 
@@ -165,3 +165,53 @@ Android does not expose an HTTP/WebSocket/LAN listener for external browser
 extensions.
 External Chrome/Firefox-to-Android connectivity and Android remote-target
 selection are not implemented.
+
+## Phase 22A — Browser download interception
+
+**Status: COMPLETE — implemented, tested, and live validated on Windows and
+Android.** Chrome interception acceptance and explicit rejection/fallback were
+observed live on Windows; the Android GeckoView handoff, completed download,
+and relaunch persistence were also observed live.
+
+The Windows extension can intercept eligible HTTP(S) downloads when
+`autoIntercept` is enabled. It pauses the browser item before submitting
+`download.create`; it cancels the browser item only after a correlated success
+response, resumes it after an explicit rejection, and leaves it paused with a
+notification when the result is ambiguous. Chrome/Edge report a download after
+it starts, so the extension cannot guarantee that no bytes transfer before the
+pause takes effect.
+
+On Android, GeckoView external responses are queued for a user confirmation.
+Acceptance submits `download.create` through the Android bridge; cancellation
+cannot resume the response because GeckoView has already reported that it
+cannot handle it. Each response is presented in order rather than replacing an
+earlier pending response.
+
+The Android handoff was live-validated on the `Pixel_10_Pro` emulator with an
+`httpbin.org/response-headers` response. The accepted request completed as a
+136-byte `direct_http` download; its SHA-256 was
+`7a13f3e34ecf508e1c5ed12e26a37c4546b34cbfef7ed0f5d307e8640bcb0549`.
+The app database record and destination file persisted after force-stop and
+relaunch.
+
+Both adapters submit only the HTTP(S) URL and a suggested filename. The shared
+Rust path validates and sanitizes the filename and enqueues the request through
+CoreServices. Browser adapters reject magnet and other non-HTTP schemes. Cookies,
+credentials, referrers, and other request headers are not forwarded.
+On Windows, Chrome 156 live validation confirmed the browser item was paused,
+then canceled only after FetchX accepted the request. The completed
+`direct_http` item contained 174/174 bytes and had SHA-256
+`d42cbf89145094b020e1804e58ef80b769038f13937251193179062c50a15426`, matching
+the fixture byte-for-byte; the database record and file persisted after a
+graceful desktop relaunch. An explicit remote-target rejection resumed Chrome's
+download, which completed at 168 bytes without creating a FetchX record.
+Chrome initially reports an empty filename at `downloads.onCreated`; the
+extension now waits for the resolved filename before submitting the RPC.
+
+The browser MIME value is not forwarded: the Direct HTTP engine obtains
+`Content-Type` from its own response, and Android uses response content type
+only when deriving a suggested filename. This does not prevent correct engine
+selection or response metadata handling. Referrer forwarding is intentionally
+excluded because it can expose browsing context and requires an explicit
+user-consent policy. Cookies, credentials, and other request headers are also
+not forwarded.

@@ -31,6 +31,7 @@ use fetchx_browser_protocol::{
     BrowserErrorCode, BrowserRequest, BrowserRequestBody, BrowserResponse, BrowserRpcTarget,
     NativeMessagingError, read_frame, write_frame,
 };
+use fetchx_remote_protocol::DOWNLOAD_CREATE;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -136,6 +137,10 @@ fn credential_error(code: BrowserErrorCode) -> BrowserResponse {
 }
 
 fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostError> {
+    let may_have_created_download = matches!(
+        &request.body,
+        BrowserRequestBody::Rpc(rpc) if rpc.request.method == DOWNLOAD_CREATE
+    );
     let state = match ipc::read_desktop_state() {
         Ok(s) => s,
         Err(e) => {
@@ -205,17 +210,17 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 warn!(%e, "could not read response from desktop");
-                return Ok(BrowserResponse::error(
-                    None,
+                return Ok(response_error(
+                    may_have_created_download,
                     BrowserErrorCode::DesktopUnavailable,
-                    "FetchX did not respond in time.",
+                    "FetchX did not return a response.",
                 ));
             }
             Err(_) => {
-                return Ok(BrowserResponse::error(
-                    None,
+                return Ok(response_error(
+                    may_have_created_download,
                     BrowserErrorCode::DesktopUnavailable,
-                    "FetchX response timed out.",
+                    "FetchX did not return a response.",
                 ));
             }
         }
@@ -223,20 +228,20 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
         let resp_len = u32::from_le_bytes(len_buf) as usize;
         if resp_len > fetchx_browser_protocol::MAX_MESSAGE_BYTES as usize {
             error!(resp_len, "desktop returned oversized response");
-            return Ok(BrowserResponse::error(
-                None,
-                BrowserErrorCode::InternalError,
-                "An internal error occurred.",
+            return Ok(response_error(
+                may_have_created_download,
+                BrowserErrorCode::IncompatibleServer,
+                "FetchX returned an invalid response.",
             ));
         }
 
         let mut resp_buf = vec![0u8; resp_len];
         if let Err(e) = stream.read_exact(&mut resp_buf).await {
             warn!(%e, "could not read response body from desktop");
-            return Ok(BrowserResponse::error(
-                None,
-                BrowserErrorCode::InternalError,
-                "An internal error occurred.",
+            return Ok(response_error(
+                may_have_created_download,
+                BrowserErrorCode::DesktopUnavailable,
+                "FetchX did not return a complete response.",
             ));
         }
 
@@ -244,14 +249,30 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
             Ok(r) => Ok(r),
             Err(e) => {
                 error!(%e, "desktop returned unrecognised response");
-                Ok(BrowserResponse::error(
-                    None,
+                Ok(response_error(
+                    may_have_created_download,
                     BrowserErrorCode::InternalError,
                     "An internal error occurred.",
                 ))
             }
         }
     })
+}
+
+fn response_error(
+    may_have_created_download: bool,
+    fallback_code: BrowserErrorCode,
+    fallback_message: &'static str,
+) -> BrowserResponse {
+    if may_have_created_download {
+        BrowserResponse::error(
+            None,
+            BrowserErrorCode::RequestOutcomeUnknown,
+            "FetchX may have accepted the download, but confirmation was not received.",
+        )
+    } else {
+        BrowserResponse::error(None, fallback_code, fallback_message)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -11,6 +11,7 @@ mod tickets;
 mod transport;
 
 use fetchx_core_services::CoreServices;
+use fetchx_downloader::validate_http_source_url;
 use fetchx_remote_protocol::{BROWSER_RPC_METHODS, RpcErrorCode, RpcFailure, parse_request};
 use serde_json::Value;
 use std::time::Duration;
@@ -45,6 +46,12 @@ pub async fn dispatch_local_rpc(
     }
     let request_id = request.id.clone();
     let principal = authorization::AuthenticatedPrincipal::primary(Role::Operator);
+    let browser_download_url_is_valid = match &request.command {
+        fetchx_remote_protocol::RemoteCommand::DownloadCreate(params) => {
+            validate_http_source_url(&params.url).is_ok()
+        }
+        _ => true,
+    };
 
     let result = if matches!(
         request.command,
@@ -53,6 +60,11 @@ pub async fn dispatch_local_rpc(
         Err(dispatch::RpcError::new(
             RpcErrorCode::UnsupportedOperation,
             "WebSocket tickets are unavailable to local adapters",
+        ))
+    } else if !browser_download_url_is_valid {
+        Err(dispatch::RpcError::new(
+            RpcErrorCode::InvalidParams,
+            "browser downloads require a valid HTTP(S) URL",
         ))
     } else if !principal.allows(authorization::required_permission(&request.command)) {
         Err(dispatch::RpcError::new(
@@ -145,6 +157,13 @@ mod local_rpc_tests {
         )
         .await?;
         assert!(notification.is_null());
+
+        let unsupported_browser_url = dispatch_local_rpc(
+            &services,
+            br#"{"jsonrpc":"2.0","id":4,"method":"download.create","params":{"url":"magnet:?xt=urn:btih:example"}}"#,
+        )
+        .await?;
+        assert_eq!(unsupported_browser_url["error"]["code"], -32602);
 
         let malformed = dispatch_local_rpc(&services, b"{").await?;
         assert_eq!(malformed["error"]["code"], -32700);
