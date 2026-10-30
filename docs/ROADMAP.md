@@ -155,7 +155,8 @@ Phases 1-20P (Completed)
 | 21A-21E | YES | YES | YES | Protocol and server are platform-independent |
 | 21F-21I | YES | Web/CLI | Web/Android | UI differs; protocol same |
 | 22A-22B | YES | YES | YES | Browser integration uses shared queue |
-| 23A-23D | YES | YES | YES | Plugin security enforced equally |
+| 23A | YES | YES | Evaluator only | Shared policy; Android plugin execution unavailable |
+| 23B-23D | Planned | Planned | Planned | Sandbox, cryptographic signing, and registry work |
 | 24-27 | YES | YES | YES | Both platforms must pass E2E |
 | 28-30 | YES | YES | YES | All networking/intelligence in shared Rust |
 
@@ -1589,14 +1590,26 @@ recovery instead of silently claiming success.
 
 ### Phase 23A -- Plugin Security (HIGH)
 
-**Platform Coverage:** SHARED CORE + BOTH PLATFORM ADAPTERS
+**Platform Coverage:** SHARED CORE + WINDOWS MANAGER + ANDROID POLICY BRIDGE
+
+**Status:** COMPLETE for the Phase 23A security-policy scope. The shared typed
+manifest, fail-closed evaluator, Windows manager enforcement, and Android
+UniFFI policy bridge are implemented and validated. The Android emulator ran the
+built-in security instrumentation successfully: 4 of 4 assertions passed, covering
+unknown/untrusted/revoked trust, missing permission or capability approval,
+unsupported runtime capability, stale fingerprint, malformed manifest, and
+undeclared permission handling. The Android bridge remains deny-closed because no
+plugin runtime or privileged capability adapters exist; it does not claim a
+positive Android plugin grant path. A user-facing approval workflow remains
+future work, outside the Phase 23A runtime contract.
 
 Upgrade plugin architecture with:
 PluginManifest, PluginPermission, PluginCapability, PluginTrust, PluginSignature, PluginVersion.
 
 Permission categories: network, filesystem, downloads, metadata, process, engine, settings.
 
-No silent dangerous permission grants. Both Windows and Android enforce equivalent policy.
+No silent dangerous permission grants. Cryptographic signature verification is
+deferred to Phase 23C; OS sandboxing is deferred to Phase 23B.
 
 ---
 

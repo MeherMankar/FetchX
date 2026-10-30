@@ -72,21 +72,31 @@ impl PluginRegistry {
 mod tests {
     use std::path::PathBuf;
 
-    use fetchx_plugin_api::{Capability, PLUGIN_API_VERSION, PluginManifest};
+    use fetchx_plugin_api::{
+        PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, PluginCapability, PluginCompatibility,
+        PluginManifest, PluginPermission, PluginVersion,
+    };
 
     use super::*;
 
     fn manifest(id: &str) -> PluginManifest {
         PluginManifest {
+            manifest_version: PLUGIN_MANIFEST_VERSION,
             id: id.to_owned(),
             name: "Test".to_owned(),
-            version: "0.1.0".to_owned(),
+            version: PluginVersion::parse("0.1.0").unwrap(),
             api_version: PLUGIN_API_VERSION,
+            compatibility: PluginCompatibility {
+                minimum_api_version: PLUGIN_API_VERSION,
+                maximum_api_version: PLUGIN_API_VERSION,
+            },
             description: "desc".to_owned(),
-            author: "author".to_owned(),
+            publisher: "author".to_owned(),
             executable: PathBuf::from("/opt/plugin"),
-            capabilities: vec![Capability::Engine],
+            permissions: vec![PluginPermission::Engine],
+            capabilities: vec![PluginCapability::EngineDirectHttp],
             platforms: vec![],
+            signature: None,
         }
     }
 

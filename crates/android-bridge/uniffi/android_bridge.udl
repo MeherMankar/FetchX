@@ -224,3 +224,10 @@ interface DownloadService {
 
     void shutdown();
 };
+
+interface PluginSecurityService {
+    constructor();
+
+    [Throws=MobileApiError]
+    string evaluate_policy(string manifest_json, string trust_context_json);
+};

@@ -1,180 +1,336 @@
-//! Plugin manifest schema.
-//!
-//! Each plugin must ship a `plugin.json` file in its directory.
-//! The manifest is validated before any process is started.
+//! Strict, versioned plugin manifest types and validation.
 
-use std::path::PathBuf;
+use std::{collections::HashSet, fmt, path::PathBuf, str::FromStr};
 
-use serde::{Deserialize, Serialize};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use semver::Version;
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
-/// API version the manifest format conforms to.
-/// Increment when breaking manifest schema changes are introduced.
+/// Plugin API version currently supported by the host.
 pub const PLUGIN_API_VERSION: u32 = 1;
-
+/// Manifest schema version currently supported by the host.
+pub const PLUGIN_MANIFEST_VERSION: u32 = 1;
 /// Maximum allowed size of a manifest file in bytes (16 KiB).
 pub const MAX_MANIFEST_BYTES: usize = 16_384;
 
-// ============================================================
-// Capabilities
-// ============================================================
+/// A parsed semantic version. Invalid or non-SemVer input cannot be represented.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PluginVersion(Version);
 
-/// Explicit capability grants.
-///
-/// A plugin may only exercise capabilities listed in its manifest and
-/// accepted by the host.  Unknown capabilities cause the manifest to be
-/// rejected.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Capability {
-    /// The plugin provides a download engine that the queue can dispatch to.
-    Engine,
-    /// The plugin post-processes completed downloads (e.g. transcoding, renaming).
-    PostProcessor,
-    /// The plugin resolves URLs into direct download links.
-    UrlResolver,
-    /// The plugin provides metadata for a given URL or file.
-    Metadata,
+impl PluginVersion {
+    pub fn parse(value: &str) -> Result<Self, semver::Error> {
+        Version::parse(value).map(Self)
+    }
 }
 
-/// Platform the plugin executable supports.
+impl fmt::Display for PluginVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for PluginVersion {
+    type Err = semver::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl Serialize for PluginVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
+}
+
+/// Permissions are coarse user-consent categories; they never grant an
+/// operation by themselves. A capability must also be explicitly approved.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginPermission {
+    Network,
+    FilesystemRead,
+    FilesystemWrite,
+    Downloads,
+    Metadata,
+    Process,
+    Engine,
+    Settings,
+}
+
+/// An individually authorizable plugin operation.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCapability {
+    NetworkHttpRequest,
+    FilesystemRead,
+    FilesystemWrite,
+    DownloadCreate,
+    DownloadList,
+    DownloadPause,
+    DownloadResume,
+    DownloadCancel,
+    DownloadRemove,
+    MetadataRead,
+    ProcessSpawn,
+    EngineDirectHttp,
+    EngineAria2,
+    EngineYtDlp,
+    EngineFfmpeg,
+    SettingsRead,
+    SettingsWrite,
+}
+
+impl PluginCapability {
+    /// Returns the coarse permission that must also be declared and approved.
+    pub fn required_permission(&self) -> PluginPermission {
+        match self {
+            Self::NetworkHttpRequest => PluginPermission::Network,
+            Self::FilesystemRead => PluginPermission::FilesystemRead,
+            Self::FilesystemWrite => PluginPermission::FilesystemWrite,
+            Self::DownloadCreate
+            | Self::DownloadList
+            | Self::DownloadPause
+            | Self::DownloadResume
+            | Self::DownloadCancel
+            | Self::DownloadRemove => PluginPermission::Downloads,
+            Self::MetadataRead => PluginPermission::Metadata,
+            Self::ProcessSpawn => PluginPermission::Process,
+            Self::EngineDirectHttp | Self::EngineAria2 | Self::EngineYtDlp | Self::EngineFfmpeg => {
+                PluginPermission::Engine
+            }
+            Self::SettingsRead | Self::SettingsWrite => PluginPermission::Settings,
+        }
+    }
+}
+
+/// Host platform supported by a plugin.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
     Windows,
     Linux,
     Macos,
+    Android,
     #[serde(rename = "any")]
     Any,
 }
 
-// ============================================================
-// Raw manifest (as stored on disk)
-// ============================================================
-
-/// Validated plugin manifest.
-///
-/// Constructed only through [`PluginManifestRaw::validate`].
-/// All fields have been checked for invariants.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PluginManifest {
-    /// Unique, URL-safe plugin identifier.  Must match `^[a-z0-9_-]{2,64}$`.
-    pub id: String,
-    /// Human-readable display name.
-    pub name: String,
-    /// Semver-compatible version string.
-    pub version: String,
-    /// Plugin API version this manifest targets.
-    pub api_version: u32,
-    /// Short description (≤ 256 characters).
-    pub description: String,
-    /// Plugin author name/contact.
-    pub author: String,
-    /// Absolute path to the plugin executable.
-    pub executable: PathBuf,
-    /// Capabilities this plugin requests.
-    pub capabilities: Vec<Capability>,
-    /// Supported platforms.  Empty means "all".
-    pub platforms: Vec<Platform>,
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCompatibility {
+    pub minimum_api_version: u32,
+    pub maximum_api_version: u32,
 }
 
-/// Raw deserialised manifest before validation.
-///
-/// Received from the JSON file on disk; never trusted directly.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginSignatureAlgorithm {
+    Ed25519,
+}
+
+/// Structural signature metadata only. Phase 23A does not cryptographically
+/// verify this signature; presence must never be treated as trusted identity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginSignature {
+    pub algorithm: PluginSignatureAlgorithm,
+    pub key_id: String,
+    /// Standard base64-encoded signature bytes.
+    pub signature: String,
+}
+
+/// A validated plugin manifest. Parse untrusted JSON with [`parse_manifest`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PluginManifest {
+    pub manifest_version: u32,
+    pub id: String,
+    pub name: String,
+    pub version: PluginVersion,
+    pub api_version: u32,
+    pub compatibility: PluginCompatibility,
+    pub publisher: String,
+    pub description: String,
+    pub executable: PathBuf,
+    pub permissions: Vec<PluginPermission>,
+    pub capabilities: Vec<PluginCapability>,
+    pub platforms: Vec<Platform>,
+    pub signature: Option<PluginSignature>,
+}
+
+impl PluginManifest {
+    /// Revalidates values created outside the manifest parser.
+    pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        let raw = PluginManifestRaw {
+            manifest_version: self.manifest_version,
+            id: self.id.clone(),
+            name: self.name.clone(),
+            version: self.version.to_string(),
+            api_version: self.api_version,
+            compatibility: self.compatibility.clone(),
+            publisher: self.publisher.clone(),
+            description: self.description.clone(),
+            executable: self.executable.clone(),
+            permissions: self.permissions.clone(),
+            capabilities: self.capabilities.clone(),
+            platforms: self.platforms.clone(),
+            signature: self.signature.clone(),
+        };
+        let validated = raw.validate()?;
+        if validated != *self {
+            return Err(ManifestValidationError::InvalidManifest);
+        }
+        Ok(())
+    }
+}
+
+/// Raw deserialized manifest. It is not trusted until [`Self::validate`].
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginManifestRaw {
+    pub manifest_version: u32,
     pub id: String,
     pub name: String,
     pub version: String,
     pub api_version: u32,
+    pub compatibility: PluginCompatibility,
+    pub publisher: String,
     pub description: String,
-    pub author: String,
-    /// Path to the plugin executable.  Must be absolute.
     pub executable: PathBuf,
-    pub capabilities: Vec<Capability>,
+    pub permissions: Vec<PluginPermission>,
+    pub capabilities: Vec<PluginCapability>,
     #[serde(default)]
     pub platforms: Vec<Platform>,
+    #[serde(default)]
+    pub signature: Option<PluginSignature>,
 }
 
 impl PluginManifestRaw {
-    /// Validates all fields and returns a [`PluginManifest`] on success.
     pub fn validate(self) -> Result<PluginManifest, ManifestValidationError> {
-        // ──ID ───────────────────────────────────────────────────────────
-        if self.id.is_empty() || self.id.len() > 64 {
-            return Err(ManifestValidationError::InvalidId(self.id));
+        if self.manifest_version != PLUGIN_MANIFEST_VERSION {
+            return Err(ManifestValidationError::UnsupportedManifestVersion(
+                self.manifest_version,
+            ));
         }
-        if !self
-            .id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        if self.id.len() < 2
+            || self.id.len() > 64
+            || !self
+                .id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
         {
             return Err(ManifestValidationError::InvalidId(self.id));
         }
-        if self.id.len() < 2 {
-            return Err(ManifestValidationError::InvalidId(self.id));
-        }
-
-        // ──Required string fields ───────────────────────────────────────
-        if self.name.trim().is_empty() {
-            return Err(ManifestValidationError::EmptyField("name"));
-        }
-        if self.version.trim().is_empty() {
-            return Err(ManifestValidationError::EmptyField("version"));
-        }
-        if self.author.trim().is_empty() {
-            return Err(ManifestValidationError::EmptyField("author"));
+        for (field, value) in [
+            ("name", self.name.as_str()),
+            ("publisher", self.publisher.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(ManifestValidationError::EmptyField(field));
+            }
         }
         if self.description.len() > 256 {
             return Err(ManifestValidationError::DescriptionTooLong);
         }
-
-        // ──API version ──────────────────────────────────────────────────
         if self.api_version != PLUGIN_API_VERSION {
             return Err(ManifestValidationError::UnsupportedApiVersion(
                 self.api_version,
             ));
         }
-
-        // ──Executable path ──────────────────────────────────────────────
-        // Must be absolute — no relative paths, no path traversal tricks.
+        if self.compatibility.minimum_api_version > self.compatibility.maximum_api_version
+            || !(self.compatibility.minimum_api_version..=self.compatibility.maximum_api_version)
+                .contains(&PLUGIN_API_VERSION)
+        {
+            return Err(ManifestValidationError::IncompatibleApiRange);
+        }
+        let version = PluginVersion::parse(&self.version)
+            .map_err(|_| ManifestValidationError::InvalidVersion(self.version.clone()))?;
         if !self.executable.is_absolute() {
             return Err(ManifestValidationError::ExecutableNotAbsolute(
                 self.executable.to_string_lossy().into_owned(),
             ));
         }
-        // Detect traversal components.
         use std::path::Component;
-        for component in self.executable.components() {
-            if matches!(component, Component::ParentDir) {
-                return Err(ManifestValidationError::PathTraversal(
-                    self.executable.to_string_lossy().into_owned(),
-                ));
-            }
+        if self
+            .executable
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(ManifestValidationError::PathTraversal(
+                self.executable.to_string_lossy().into_owned(),
+            ));
         }
-
-        // ──Capabilities ─────────────────────────────────────────────────
         if self.capabilities.is_empty() {
             return Err(ManifestValidationError::NoCapabilities);
         }
+        ensure_unique(&self.permissions, "permissions")?;
+        ensure_unique(&self.capabilities, "capabilities")?;
+        ensure_unique(&self.platforms, "platforms")?;
+        for capability in &self.capabilities {
+            if !self.permissions.contains(&capability.required_permission()) {
+                return Err(ManifestValidationError::PermissionNotDeclared(
+                    capability.clone(),
+                ));
+            }
+        }
+        if let Some(signature) = &self.signature {
+            validate_signature(signature)?;
+        }
 
         Ok(PluginManifest {
+            manifest_version: self.manifest_version,
             id: self.id,
             name: self.name,
-            version: self.version,
+            version,
             api_version: self.api_version,
+            compatibility: self.compatibility,
+            publisher: self.publisher,
             description: self.description,
-            author: self.author,
             executable: self.executable,
+            permissions: self.permissions,
             capabilities: self.capabilities,
             platforms: self.platforms,
+            signature: self.signature,
         })
     }
 }
 
-// ============================================================
-// Validation errors
-// ============================================================
+fn ensure_unique<T: Eq + std::hash::Hash>(
+    values: &[T],
+    field: &'static str,
+) -> Result<(), ManifestValidationError> {
+    if values.iter().collect::<HashSet<_>>().len() != values.len() {
+        return Err(ManifestValidationError::DuplicateValue(field));
+    }
+    Ok(())
+}
+
+fn validate_signature(signature: &PluginSignature) -> Result<(), ManifestValidationError> {
+    if signature.key_id.trim().is_empty() {
+        return Err(ManifestValidationError::EmptyField("signature.key_id"));
+    }
+    let bytes = STANDARD
+        .decode(&signature.signature)
+        .map_err(|_| ManifestValidationError::MalformedSignature)?;
+    if bytes.len() != 64 {
+        return Err(ManifestValidationError::MalformedSignature);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ManifestValidationError {
@@ -184,21 +340,34 @@ pub enum ManifestValidationError {
     EmptyField(&'static str),
     #[error("description exceeds the 256 character limit")]
     DescriptionTooLong,
-    #[error("api_version {0} is not supported by this host (expected {PLUGIN_API_VERSION})")]
+    #[error("manifest version {0} is not supported (expected {PLUGIN_MANIFEST_VERSION})")]
+    UnsupportedManifestVersion(u32),
+    #[error("api_version {0} is not supported (expected {PLUGIN_API_VERSION})")]
     UnsupportedApiVersion(u32),
+    #[error("host API compatibility range does not include the current API")]
+    IncompatibleApiRange,
+    #[error("plugin version `{0}` is not valid semantic versioning")]
+    InvalidVersion(String),
     #[error("executable path `{0}` must be absolute")]
     ExecutableNotAbsolute(String),
     #[error("executable path `{0}` contains path traversal components")]
     PathTraversal(String),
     #[error("manifest must declare at least one capability")]
     NoCapabilities,
+    #[error("capability {0:?} has no matching declared permission")]
+    PermissionNotDeclared(PluginCapability),
+    #[error("manifest field `{0}` contains duplicate values")]
+    DuplicateValue(&'static str),
+    #[error("signature metadata is malformed")]
+    MalformedSignature,
+    #[error("manifest values are invalid")]
+    InvalidManifest,
     #[error("manifest JSON is invalid: {0}")]
     Json(String),
     #[error("manifest file is too large (max {MAX_MANIFEST_BYTES} bytes)")]
     FileTooLarge,
 }
 
-/// Parse and validate a manifest from a JSON byte slice.
 pub fn parse_manifest(bytes: &[u8]) -> Result<PluginManifest, ManifestValidationError> {
     if bytes.len() > MAX_MANIFEST_BYTES {
         return Err(ManifestValidationError::FileTooLarge);
@@ -208,111 +377,148 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<PluginManifest, ManifestValidation
     raw.validate()
 }
 
-// ============================================================
-// Tests
-// ============================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn minimal_raw(id: &str) -> PluginManifestRaw {
         PluginManifestRaw {
+            manifest_version: PLUGIN_MANIFEST_VERSION,
             id: id.to_owned(),
             name: "Test Plugin".to_owned(),
             version: "0.1.0".to_owned(),
             api_version: PLUGIN_API_VERSION,
+            compatibility: PluginCompatibility {
+                minimum_api_version: PLUGIN_API_VERSION,
+                maximum_api_version: PLUGIN_API_VERSION,
+            },
+            publisher: "Test Publisher".to_owned(),
             description: "A test plugin".to_owned(),
-            author: "Test Author".to_owned(),
             executable: if cfg!(windows) {
                 PathBuf::from(r"C:\plugins\test\test-plugin.exe")
             } else {
                 PathBuf::from("/opt/plugins/test/test-plugin")
             },
-            capabilities: vec![Capability::Engine],
+            permissions: vec![PluginPermission::Engine],
+            capabilities: vec![PluginCapability::EngineDirectHttp],
             platforms: vec![],
+            signature: None,
         }
     }
 
     #[test]
-    fn valid_manifest_passes() {
-        assert!(minimal_raw("my-plugin").validate().is_ok());
+    fn valid_manifest_passes_and_semver_is_typed() {
+        let manifest = minimal_raw("my-plugin").validate().unwrap();
+        assert_eq!(manifest.version.to_string(), "0.1.0");
     }
 
     #[test]
-    fn empty_id_is_rejected() {
+    fn invalid_semver_is_rejected() {
+        let mut raw = minimal_raw("my-plugin");
+        raw.version = "release".to_owned();
         assert!(matches!(
-            minimal_raw("").validate(),
-            Err(ManifestValidationError::InvalidId(_))
+            raw.validate(),
+            Err(ManifestValidationError::InvalidVersion(_))
         ));
     }
 
     #[test]
-    fn id_too_short_is_rejected() {
+    fn wrong_manifest_version_is_rejected() {
+        let mut raw = minimal_raw("my-plugin");
+        raw.manifest_version = 99;
         assert!(matches!(
-            minimal_raw("a").validate(),
-            Err(ManifestValidationError::InvalidId(_))
+            raw.validate(),
+            Err(ManifestValidationError::UnsupportedManifestVersion(99))
         ));
     }
 
     #[test]
-    fn id_with_uppercase_is_rejected() {
-        assert!(matches!(
-            minimal_raw("MyPlugin").validate(),
-            Err(ManifestValidationError::InvalidId(_))
-        ));
-    }
-
-    #[test]
-    fn id_with_spaces_is_rejected() {
-        assert!(matches!(
-            minimal_raw("my plugin").validate(),
-            Err(ManifestValidationError::InvalidId(_))
-        ));
-    }
-
-    #[test]
-    fn unsupported_api_version_is_rejected() {
+    fn unsupported_api_version_and_empty_capabilities_are_rejected() {
         let mut raw = minimal_raw("my-plugin");
         raw.api_version = 99;
         assert!(matches!(
             raw.validate(),
             Err(ManifestValidationError::UnsupportedApiVersion(99))
         ));
+
+        let mut raw = minimal_raw("my-plugin");
+        raw.capabilities.clear();
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::NoCapabilities
+        );
     }
 
     #[test]
-    fn no_capabilities_is_rejected() {
+    fn invalid_ids_are_rejected() {
+        for id in ["", "a", "MyPlugin", "my plugin"] {
+            assert!(matches!(
+                minimal_raw(id).validate(),
+                Err(ManifestValidationError::InvalidId(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn invalid_api_compatibility_is_rejected() {
         let mut raw = minimal_raw("my-plugin");
-        raw.capabilities = vec![];
+        raw.compatibility.minimum_api_version = 2;
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::IncompatibleApiRange
+        );
+    }
+
+    #[test]
+    fn absent_permission_for_capability_is_rejected() {
+        let mut raw = minimal_raw("my-plugin");
+        raw.permissions.clear();
         assert!(matches!(
             raw.validate(),
-            Err(ManifestValidationError::NoCapabilities)
+            Err(ManifestValidationError::PermissionNotDeclared(_))
         ));
     }
 
     #[test]
-    fn empty_name_is_rejected() {
+    fn duplicate_permissions_and_capabilities_are_rejected() {
         let mut raw = minimal_raw("my-plugin");
-        raw.name = "  ".to_owned();
-        assert!(matches!(
-            raw.validate(),
-            Err(ManifestValidationError::EmptyField("name"))
-        ));
+        raw.permissions.push(PluginPermission::Engine);
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::DuplicateValue("permissions")
+        );
+        let mut raw = minimal_raw("my-plugin");
+        raw.capabilities.push(PluginCapability::EngineDirectHttp);
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::DuplicateValue("capabilities")
+        );
     }
 
     #[test]
-    fn description_too_long_is_rejected() {
+    fn empty_name_and_publisher_are_rejected() {
+        let mut raw = minimal_raw("my-plugin");
+        raw.name = " ".to_owned();
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::EmptyField("name")
+        );
+        let mut raw = minimal_raw("my-plugin");
+        raw.publisher.clear();
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::EmptyField("publisher")
+        );
+    }
+
+    #[test]
+    fn description_and_absolute_path_rules_are_enforced() {
         let mut raw = minimal_raw("my-plugin");
         raw.description = "x".repeat(257);
-        assert!(matches!(
-            raw.validate(),
-            Err(ManifestValidationError::DescriptionTooLong)
-        ));
-    }
-
-    #[test]
-    fn relative_executable_path_is_rejected() {
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::DescriptionTooLong
+        );
         let mut raw = minimal_raw("my-plugin");
         raw.executable = PathBuf::from("relative/path/plugin");
         assert!(matches!(
@@ -336,37 +542,44 @@ mod tests {
     }
 
     #[test]
-    fn oversized_manifest_is_rejected() {
-        let json = vec![b'x'; MAX_MANIFEST_BYTES + 1];
+    fn malformed_signature_metadata_is_rejected() {
+        let mut raw = minimal_raw("my-plugin");
+        raw.signature = Some(PluginSignature {
+            algorithm: PluginSignatureAlgorithm::Ed25519,
+            key_id: "publisher-key".to_owned(),
+            signature: "not-base64".to_owned(),
+        });
+        assert_eq!(
+            raw.validate().unwrap_err(),
+            ManifestValidationError::MalformedSignature
+        );
+    }
+
+    #[test]
+    fn valid_signature_shape_is_not_verified_by_manifest_parsing() {
+        let mut raw = minimal_raw("my-plugin");
+        raw.signature = Some(PluginSignature {
+            algorithm: PluginSignatureAlgorithm::Ed25519,
+            key_id: "publisher-key".to_owned(),
+            signature: STANDARD.encode([0_u8; 64]),
+        });
+        assert!(raw.validate().is_ok());
+    }
+
+    #[test]
+    fn unknown_fields_and_oversized_manifests_are_rejected() {
+        let mut raw = serde_json::to_value(minimal_raw("my-plugin")).unwrap();
+        raw.as_object_mut()
+            .unwrap()
+            .insert("unexpected_field".to_owned(), serde_json::Value::Bool(true));
+        let json = serde_json::to_vec(&raw).unwrap();
         assert!(matches!(
             parse_manifest(&json),
-            Err(ManifestValidationError::FileTooLarge)
+            Err(ManifestValidationError::Json(_))
         ));
-    }
-
-    #[test]
-    fn duplicate_id_handled_by_registry() {
-        // Duplicate detection is the registry's job, not the manifest's.
-        // Two manifests with the same ID are individually valid.
-        let a = minimal_raw("my-plugin").validate().unwrap();
-        let b = minimal_raw("my-plugin").validate().unwrap();
-        assert_eq!(a.id, b.id);
-    }
-
-    #[test]
-    fn unknown_fields_rejected_by_deserializer() {
-        let json = br#"{
-            "id": "my-plugin",
-            "name": "Test",
-            "version": "0.1.0",
-            "api_version": 1,
-            "description": "desc",
-            "author": "auth",
-            "executable": "/opt/plugins/test",
-            "capabilities": ["engine"],
-            "platforms": [],
-            "unexpected_field": true
-        }"#;
-        assert!(parse_manifest(json).is_err());
+        assert_eq!(
+            parse_manifest(&vec![b'x'; MAX_MANIFEST_BYTES + 1]).unwrap_err(),
+            ManifestValidationError::FileTooLarge
+        );
     }
 }

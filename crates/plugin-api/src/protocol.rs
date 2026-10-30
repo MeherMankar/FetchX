@@ -19,6 +19,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::manifest::PluginCapability;
+
 /// Current IPC protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -94,8 +96,8 @@ pub enum PluginResponseBody {
 pub struct HelloAckResponse {
     pub plugin_id: String,
     pub plugin_version: String,
-    /// Capabilities the plugin declares (subset of what the manifest claimed).
-    pub capabilities: Vec<String>,
+    /// Capabilities reported by the process, checked against host approval.
+    pub capabilities: Vec<PluginCapability>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -174,7 +176,7 @@ mod tests {
             body: PluginResponseBody::HelloAck(HelloAckResponse {
                 plugin_id: "my-plugin".to_owned(),
                 plugin_version: "0.1.0".to_owned(),
-                capabilities: vec!["engine".to_owned()],
+                capabilities: vec![PluginCapability::EngineDirectHttp],
             }),
         }
     }

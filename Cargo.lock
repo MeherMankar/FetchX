@@ -1808,6 +1808,7 @@ dependencies = [
  "fetchx-downloader",
  "fetchx-media-extractor",
  "fetchx-models",
+ "fetchx-plugin-api",
  "fetchx-queue",
  "fetchx-remote-server",
  "fetchx-scheduler",
@@ -1973,8 +1974,11 @@ dependencies = [
 name = "fetchx-plugin-api"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
 ]
 
@@ -1985,6 +1989,7 @@ dependencies = [
  "fetchx-plugin-api",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

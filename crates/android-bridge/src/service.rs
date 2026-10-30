@@ -17,6 +17,7 @@ use fetchx_downloader::{
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
+use fetchx_plugin_api::{PluginPolicy, PluginTrustContext, PolicyEnvironment, parse_manifest};
 use fetchx_storage::DownloadRepository as _;
 use tokio::{
     fs,
@@ -35,6 +36,43 @@ use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
 
 const MAX_ANDROID_PROGRESS_LINE_BYTES: usize = 1024;
+const MAX_PLUGIN_TRUST_CONTEXT_BYTES: usize = 16_384;
+
+/// Android bridge for evaluating manifests with the shared plugin policy.
+/// The current Android app has no plugin execution or privileged-operation
+/// adapter, so its supported capability set is deliberately empty.
+pub struct PluginSecurityService;
+
+impl PluginSecurityService {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn evaluate_policy(
+        &self,
+        manifest_json: String,
+        trust_context_json: String,
+    ) -> Result<String, MobileApiError> {
+        if trust_context_json.len() > MAX_PLUGIN_TRUST_CONTEXT_BYTES {
+            return Err(MobileApiError::Validation(
+                "plugin trust context exceeds the size limit".to_owned(),
+            ));
+        }
+        let manifest = parse_manifest(manifest_json.as_bytes())
+            .map_err(|error| MobileApiError::Validation(error.to_string()))?;
+        let trust_context: PluginTrustContext =
+            serde_json::from_str(&trust_context_json).map_err(|error| {
+                MobileApiError::Validation(format!("invalid plugin trust context: {error}"))
+            })?;
+        let decision = PluginPolicy::evaluate(
+            &manifest,
+            &trust_context,
+            &PolicyEnvironment::current(Vec::new()),
+        )
+        .map_err(|error| MobileApiError::Validation(error.to_string()))?;
+        serde_json::to_string(&decision).map_err(|error| MobileApiError::Runtime(error.to_string()))
+    }
+}
 
 // ── Inner state that lives only while the service is running ──────────────
 

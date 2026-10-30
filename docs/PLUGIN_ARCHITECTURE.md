@@ -1,12 +1,13 @@
-# Plugin Architecture (Phase 19)
+# Plugin Architecture (Phases 19 and 23A)
 
 ## Overview
 
-FetchX supports external plugins via a secure out-of-process model.
+FetchX has an initial external-plugin process manager.
 Plugins run as separate processes, communicate with the host through a
 length-prefixed JSON protocol, and are discovered from a well-known directory.
+Process separation contains plugin crashes; it is not an OS security sandbox.
 
-The host (FetchX) remains authoritative for:
+For operations routed through FetchX APIs, the host remains authoritative for:
 - download queueing and scheduling
 - engine dispatch
 - persistence
@@ -14,7 +15,9 @@ The host (FetchX) remains authoritative for:
 - resource limits
 - security
 
-Plugins are integration/extension points only.  They cannot bypass the core.
+Plugin processes are not sandboxed and can access OS resources using the host
+user's permissions. The capability policy only governs operations routed through
+host adapters; it does not restrict direct OS access by a trusted executable.
 
 ---
 
@@ -61,15 +64,22 @@ Required fields:
 
 ```json
 {
+  "manifest_version": 1,
   "id":           "my-plugin",
   "name":         "My Plugin",
   "version":      "0.1.0",
   "api_version":  1,
-  "description":  "A short description (≠¤ 256 chars)",
-  "author":       "Author Name",
+  "compatibility": {
+    "minimum_api_version": 1,
+    "maximum_api_version": 1
+  },
+  "description":  "A short description (max 256 chars)",
+  "publisher":    "Publisher Name",
   "executable":   "/absolute/path/to/my-plugin",
-  "capabilities": ["engine"],
-  "platforms":    ["windows", "linux", "macos"]
+  "permissions":  ["downloads"],
+  "capabilities": ["download_create"],
+  "platforms":    ["windows", "linux", "macos", "android"],
+  "signature":    null
 }
 ```
 
@@ -78,13 +88,17 @@ Required fields:
 | Field | Rule |
 |-------|------|
 | `id` | Matches `^[a-z0-9_-]{2,64}$` |
-| `name` | Non-empty |
-| `version` | Non-empty |
-| `api_version` | Must equal current host API version (1) |
-| `description` | ≠¤ 256 characters |
-| `author` | Non-empty |
+| `manifest_version` | Must equal current manifest schema version (1) |
+| `name`, `publisher` | Non-empty |
+| `version` | Valid SemVer |
+| `api_version` | Must equal current plugin API version (1) |
+| `compatibility` | Inclusive host API range containing API version 1 |
+| `description` | At most 256 characters |
 | `executable` | Absolute path, no `..` components |
-| `capabilities` | At least one; values from the known capability set |
+| `permissions` | Known coarse consent categories, no duplicates |
+| `capabilities` | At least one known operation; each requires its matching permission |
+| `platforms` | Optional; empty means all supported host platforms |
+| `signature` | Optional structurally valid Ed25519 metadata; not cryptographically checked |
 
 Maximum manifest file size: **16 KiB**.
 
@@ -92,17 +106,47 @@ Unknown fields cause a deserialisation error (`deny_unknown_fields`).
 
 ---
 
-## Capabilities
+## Permissions and capabilities (Phase 23A)
 
-| Capability | Description |
-|-----------|-------------|
-| `engine` | Plugin provides a download engine the queue can dispatch to |
-| `post_processor` | Plugin post-processes completed downloads |
-| `url_resolver` | Plugin resolves URLs into direct download links |
-| `metadata` | Plugin provides metadata for a URL or file |
+Permissions are broad consent categories: `network`, `filesystem_read`,
+`filesystem_write`, `downloads`, `metadata`, `process`, `engine`, and `settings`.
+Declaring or approving a permission alone does not grant an operation.
 
-A plugin may only exercise capabilities it declared and the host accepted.
-Unknown capability values cause the manifest to be rejected.
+Capabilities are narrower operations, including HTTP requests, filesystem
+read/write, individual download actions, metadata reads, process spawn, specific
+engine integrations, and settings read/write. An operation is granted only when
+the manifest declares its matching permission and capability, the host explicitly
+approves both, the plugin is trusted, the manifest fingerprint matches the approval,
+the platform/API is compatible, and the host runtime supports the capability.
+Unknown values, missing trust, revocation, invalid signature status, stale approval,
+and unsupported operations fail closed.
+
+| Permission | Capabilities requiring it |
+|-----------|-----------------------------|
+| `network` | `network_http_request` |
+| `filesystem_read` | `filesystem_read` |
+| `filesystem_write` | `filesystem_write` |
+| `downloads` | `download_create`, `download_list`, `download_pause`, `download_resume`, `download_cancel`, `download_remove` |
+| `metadata` | `metadata_read` |
+| `process` | `process_spawn` |
+| `engine` | `engine_direct_http`, `engine_aria2`, `engine_yt_dlp`, `engine_ffmpeg` |
+| `settings` | `settings_read`, `settings_write` |
+
+Newly discovered plugins are `unknown` and have no approvals. `PluginManager`
+approvals are currently in-memory and reset when the manager exits; there is no
+user-facing approval workflow or persistent trust store yet. The plugin handshake
+checks that reported identity, version, and capabilities match the approved
+manifest.
+
+Trust states are `unknown`, `trusted`, `untrusted`, and `revoked`. Only `trusted`
+can be evaluated for grants, and both a permission and each individual capability
+must be approved. A signature marked invalid is denied. Unsigned or structurally
+present-but-unverified signatures never establish trust or grant permissions.
+
+Android exposes the same Rust evaluator through the UniFFI bridge. Android does
+not currently have plugin execution or privileged-operation adapters, so its
+supported capability set is empty and requested capabilities are denied. This is
+policy evaluation parity, not an Android plugin runtime.
 
 ---
 
@@ -165,11 +209,12 @@ A failed plugin does not crash the host.
 
 ## Security model
 
-1. **Out-of-process.** Plugins run as separate OS processes with no shared
-   memory. A crashing plugin cannot take down the host.
+1. **Out-of-process, not sandboxed.** A crashing plugin cannot take down the host,
+   but its process otherwise runs with the host user's OS permissions.
 
-2. **No secrets forwarded.** Plugin processes receive no credentials, API
-   keys, aria2 RPC tokens, browser cookies, or session data by default.
+2. **Environment isolation.** The manager clears inherited environment variables
+   before spawn; on Windows it restores only required system/temp variables.
+   This does not restrict filesystem, network, or process access.
 
 3. **Structured process invocation.** The plugin executable is launched with
    `tokio::process::Command::new(executable)` — no shell string construction.
@@ -180,14 +225,26 @@ A failed plugin does not crash the host.
 5. **Absolute executable paths.** Plugin manifests must provide absolute
    paths with no `..` traversal components.
 
-6. **`deny_unknown_fields`.** Manifest JSON and protocol messages use strict
-   deserialisation where supported.
+6. **Fail-closed approvals.** Process start requires explicit trusted status, approval for every requested
+   permission and capability, and a supported runtime adapter. No runtime capabilities
+   are currently registered, so the manager and Android bridge deny every requested
+   operation. Each future host-side privileged operation must also call the shared
+   evaluator immediately before dispatch. The current IPC protocol has no
+   plugin-originated privileged requests.
 
-7. **No unsafe code.** Both `plugin-api` and `plugin-manager` declare
+7. **Strict schemas.** Manifest JSON, trust context, and protocol messages use
+   strict deserialization where supported.
+
+8. **No unsafe code.** Both `plugin-api` and `plugin-manager` declare
    `#![forbid(unsafe_code)]`.
 
-8. **No in-process dynamic loading.** Plugins are NOT Rust dylibs loaded at
+9. **No in-process dynamic loading.** Plugins are NOT Rust dylibs loaded at
    runtime. They are external processes only.
+
+10. **Signatures are not verified.** Signature metadata is validated for shape
+    only. No `verified` state is representable in Phase 23A; signatures do not
+    establish trust. Cryptographic verification and publisher revocation belong
+    to Phase 23C.
 
 ---
 
@@ -216,15 +273,17 @@ secrets, or internal process details.
 
 ---
 
-## What Phase 19 does NOT implement
+## Current limitations and deferred phases
 
 - In-process plugin loading (dylib / WASM)
 - Plugin marketplace or download
-- Plugin authentication/signing enforcement
-- Persistent plugin enable/disable state (SQLite migration)
+- User-facing and persistent permission approval/trust management
+- Android plugin execution
 - Capability-specific engine dispatch (built-in engines remain first-class)
 - Plugin hot-reload or restart-on-crash
-- Plugin sandboxing (filesystem/network isolation)
+- OS-level plugin sandboxing (filesystem/network/process isolation), deferred to Phase 23B
+- Cryptographic signature verification and revocation, deferred to Phase 23C
+- Plugin registry/marketplace, deferred to Phase 23D
 - DRM, CAPTCHA, or access-control bypass
 
 These are deferred to future phases.
@@ -237,4 +296,3 @@ The versioned protocol (`api_version` in the manifest, `version` in every
 message) ensures breaking changes can be introduced without silently
 breaking existing plugins.  When the protocol needs a new message type,
 increment `PROTOCOL_VERSION` and update both `plugin-api` and the host.
-

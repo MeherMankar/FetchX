@@ -332,3 +332,16 @@ not introduced in this foundation phase.
 The main webview capability grants only the event listener permissions required by
 the shell. It has no filesystem, shell, process, or unrestricted-network plugin
 permissions. Engine process management and filesystem publication remain Rust-owned.
+
+## Plugin trust and authorization (Phase 23A)
+
+`plugin-api` owns the shared versioned manifest, typed permissions/capabilities,
+signature metadata, trust context, and fail-closed evaluator. `plugin-manager`
+requires explicit trust and matching per-capability approval before process start,
+and checks the plugin's handshake identity, version, and reported capability subset.
+Trust approvals are currently in-memory. The Android bridge exposes the same
+evaluator, but Android has no plugin execution adapter and therefore supports no
+plugin capabilities yet. Neither platform receives OS-level plugin sandboxing from
+this policy model; filesystem/network/process isolation is deferred to Phase 23B.
+Signature fields are structural metadata only; cryptographic verification is
+deferred to Phase 23C.

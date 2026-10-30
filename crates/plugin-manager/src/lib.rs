@@ -29,8 +29,10 @@ pub mod registry;
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use fetchx_plugin_api::{
-    HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginManifest,
-    PluginResponseBody, parse_manifest, parse_plugin_response,
+    HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginCapability, PluginManifest,
+    PluginPermission, PluginPolicy, PluginPolicyDecision, PluginResponseBody, PluginTrust,
+    PluginTrustContext, PolicyDenialReason, PolicyEnvironment, parse_manifest,
+    parse_plugin_response,
 };
 use thiserror::Error;
 use tokio::{
@@ -53,6 +55,7 @@ pub use registry::{PluginRegistry, PluginRegistryError};
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum time to wait for a plugin to acknowledge a Shutdown request.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const SUPPORTED_PLUGIN_CAPABILITIES: &[PluginCapability] = &[];
 
 // ============================================================
 // Plugin entry (runtime state)
@@ -63,15 +66,17 @@ pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct PluginEntry {
     pub manifest: PluginManifest,
     pub state: PluginLifecycleState,
+    manifest_path: Option<PathBuf>,
     /// Set while the plugin process is running.
     process: Option<Child>,
 }
 
 impl PluginEntry {
-    fn new(manifest: PluginManifest) -> Self {
+    fn new(manifest: PluginManifest, manifest_path: Option<PathBuf>) -> Self {
         Self {
             manifest,
             state: PluginLifecycleState::Registered,
+            manifest_path,
             process: None,
         }
     }
@@ -91,6 +96,7 @@ pub struct PluginManager {
 
 struct ManagerInner {
     entries: HashMap<String, PluginEntry>,
+    trust_contexts: HashMap<String, PluginTrustContext>,
     plugin_dir: PathBuf,
 }
 
@@ -100,6 +106,7 @@ impl PluginManager {
         Arc::new(Self {
             inner: Mutex::new(ManagerInner {
                 entries: HashMap::new(),
+                trust_contexts: HashMap::new(),
                 plugin_dir,
             }),
         })
@@ -143,7 +150,10 @@ impl PluginManager {
             match parse_manifest(&bytes) {
                 Ok(manifest) => {
                     let id = manifest.id.clone();
-                    match self.register(manifest).await {
+                    match self
+                        .register_discovered(manifest, manifest_path.clone())
+                        .await
+                    {
                         Ok(()) => {
                             info!(plugin_id = %id, "plugin registered");
                             result.registered += 1;
@@ -168,13 +178,221 @@ impl PluginManager {
     ///
     /// Returns an error if a plugin with the same ID is already registered.
     pub async fn register(&self, manifest: PluginManifest) -> Result<(), PluginManagerError> {
+        self.register_with_path(manifest, None).await
+    }
+
+    async fn register_discovered(
+        &self,
+        manifest: PluginManifest,
+        manifest_path: PathBuf,
+    ) -> Result<(), PluginManagerError> {
+        self.register_with_path(manifest, Some(manifest_path)).await
+    }
+
+    async fn register_with_path(
+        &self,
+        manifest: PluginManifest,
+        manifest_path: Option<PathBuf>,
+    ) -> Result<(), PluginManagerError> {
+        manifest
+            .validate()
+            .map_err(|error| PluginManagerError::InvalidManifest(error.to_string()))?;
+        let trust_context = PluginTrustContext::unknown(&manifest)
+            .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
         let mut inner = self.inner.lock().await;
         let id = manifest.id.clone();
         if inner.entries.contains_key(&id) {
             return Err(PluginManagerError::DuplicateId(id));
         }
-        inner.entries.insert(id, PluginEntry::new(manifest));
+        inner
+            .entries
+            .insert(id.clone(), PluginEntry::new(manifest, manifest_path));
+        inner.trust_contexts.insert(id, trust_context);
         Ok(())
+    }
+
+    async fn reload_discovered_manifest(&self, id: &str) -> Result<(), PluginManagerError> {
+        let manifest_path = {
+            let inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            entry.manifest_path.clone()
+        };
+        let Some(manifest_path) = manifest_path else {
+            return Ok(());
+        };
+
+        let bytes = match fs::read(&manifest_path).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.revoke_approval(id).await?;
+                return Err(PluginManagerError::ManifestReadFailed {
+                    path: manifest_path.display().to_string(),
+                    reason: error.to_string(),
+                });
+            }
+        };
+        let latest = match parse_manifest(&bytes) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.revoke_approval(id).await?;
+                return Err(PluginManagerError::InvalidManifest(error.to_string()));
+            }
+        };
+
+        let mut inner = self.inner.lock().await;
+        let entry = inner
+            .entries
+            .get_mut(id)
+            .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+        if entry.manifest != latest {
+            let fresh_context = PluginTrustContext::unknown(&latest)
+                .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+            entry.manifest = latest;
+            let was_running = matches!(entry.state, PluginLifecycleState::Running);
+            if !was_running {
+                entry.state = PluginLifecycleState::Registered;
+            }
+            inner.trust_contexts.insert(id.to_owned(), fresh_context);
+            drop(inner);
+            if was_running {
+                self.stop(id).await?;
+            }
+            return Err(PluginManagerError::ManifestChanged);
+        }
+        Ok(())
+    }
+
+    async fn revoke_approval(&self, id: &str) -> Result<(), PluginManagerError> {
+        let stop_running = {
+            let mut inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            let context = PluginTrustContext::unknown(&entry.manifest)
+                .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+            let running = matches!(entry.state, PluginLifecycleState::Running);
+            inner.trust_contexts.insert(id.to_owned(), context);
+            running
+        };
+        if stop_running {
+            self.stop(id).await?;
+        }
+        Ok(())
+    }
+
+    /// Records explicit host approval for declared permissions and
+    /// capabilities. Approvals are in-memory and reset when the manager exits.
+    pub async fn set_trust_decision(
+        &self,
+        id: &str,
+        trust: PluginTrust,
+        approved_permissions: Vec<PluginPermission>,
+        approved_capabilities: Vec<PluginCapability>,
+    ) -> Result<(), PluginManagerError> {
+        let should_stop = {
+            let mut inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            if approved_permissions
+                .iter()
+                .any(|permission| !entry.manifest.permissions.contains(permission))
+                || approved_capabilities
+                    .iter()
+                    .any(|capability| !entry.manifest.capabilities.contains(capability))
+            {
+                return Err(PluginManagerError::InvalidTrustDecision);
+            }
+            let context = PluginTrustContext::for_manifest(
+                &entry.manifest,
+                trust,
+                approved_permissions,
+                approved_capabilities,
+            )
+            .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+            let decision = PluginPolicy::evaluate(
+                &entry.manifest,
+                &context,
+                &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+            )
+            .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+            inner.trust_contexts.insert(id.to_owned(), context);
+            !decision.fully_allowed()
+                && inner
+                    .entries
+                    .get(id)
+                    .is_some_and(|entry| matches!(entry.state, PluginLifecycleState::Running))
+        };
+        if should_stop {
+            self.stop(id).await?;
+        }
+        Ok(())
+    }
+
+    /// Authorizes one operation against the current host trust decision.
+    /// Callers must use this immediately before every privileged operation.
+    pub async fn authorize_capability(
+        &self,
+        id: &str,
+        capability: &PluginCapability,
+    ) -> Result<(), PluginManagerError> {
+        self.reload_discovered_manifest(id).await?;
+        let inner = self.inner.lock().await;
+        let entry = inner
+            .entries
+            .get(id)
+            .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+        let context = inner
+            .trust_contexts
+            .get(id)
+            .ok_or_else(|| PluginManagerError::Policy("missing trust decision".to_owned()))?;
+        let decision = PluginPolicy::evaluate(
+            &entry.manifest,
+            context,
+            &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+        )
+        .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+        if decision.allows(capability) {
+            Ok(())
+        } else {
+            let reason = decision
+                .denied_capabilities
+                .iter()
+                .find(|denial| &denial.capability == capability)
+                .map(|denial| denial.reason.clone())
+                .unwrap_or(PolicyDenialReason::CapabilityNotApproved);
+            Err(PluginManagerError::CapabilityDenied {
+                id: id.to_owned(),
+                capability: capability.clone(),
+                reason,
+            })
+        }
+    }
+
+    pub async fn policy_decision(
+        &self,
+        id: &str,
+    ) -> Result<PluginPolicyDecision, PluginManagerError> {
+        let inner = self.inner.lock().await;
+        let entry = inner
+            .entries
+            .get(id)
+            .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+        let context = inner
+            .trust_contexts
+            .get(id)
+            .ok_or_else(|| PluginManagerError::Policy("missing trust decision".to_owned()))?;
+        PluginPolicy::evaluate(
+            &entry.manifest,
+            context,
+            &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+        )
+        .map_err(|error| PluginManagerError::Policy(error.to_string()))
     }
 
     /// Unregisters a plugin.  The plugin must be stopped before unregistering.
@@ -188,6 +406,7 @@ impl PluginManager {
             return Err(PluginManagerError::MustStopFirst(id.to_owned()));
         }
         inner.entries.remove(id);
+        inner.trust_contexts.remove(id);
         Ok(())
     }
 
@@ -198,18 +417,39 @@ impl PluginManager {
     /// - Arguments are structured; no shell string construction.
     /// - No secrets are forwarded to the plugin process.
     pub async fn start(&self, id: &str) -> Result<(), PluginManagerError> {
+        self.reload_discovered_manifest(id).await?;
         // Clone what we need before dropping the lock.
-        let manifest = {
+        let (manifest, trust_context) = {
             let mut inner = self.inner.lock().await;
             let entry = inner
                 .entries
-                .get_mut(id)
+                .get(id)
                 .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
             if matches!(entry.state, PluginLifecycleState::Running) {
                 return Ok(()); // already running
             }
-            entry.state = PluginLifecycleState::Starting;
-            entry.manifest.clone()
+            let trust_context =
+                inner.trust_contexts.get(id).cloned().ok_or_else(|| {
+                    PluginManagerError::Policy("missing trust decision".to_owned())
+                })?;
+            let decision = PluginPolicy::evaluate(
+                &entry.manifest,
+                &trust_context,
+                &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+            )
+            .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+            if !decision.fully_allowed() {
+                return Err(PluginManagerError::PolicyDenied(
+                    decision.denied_capabilities,
+                ));
+            }
+            let manifest = entry.manifest.clone();
+            inner
+                .entries
+                .get_mut(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?
+                .state = PluginLifecycleState::Starting;
+            (manifest, trust_context)
         };
 
         // Validate the executable exists before spawning.
@@ -226,20 +466,60 @@ impl PluginManager {
         }
 
         // Spawn — no shell, structured args only, no secret env vars.
-        let mut child = Command::new(&manifest.executable)
+        let mut command = Command::new(&manifest.executable);
+        command
+            .env_clear()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null()) // plugin diagnostics go to /dev/null
-            .spawn()
-            .map_err(|e| PluginManagerError::SpawnFailed(e.to_string()))?;
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        for key in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let mut inner = self.inner.lock().await;
+                if let Some(entry) = inner.entries.get_mut(id) {
+                    entry.state = PluginLifecycleState::Failed {
+                        reason: "process could not be started".to_owned(),
+                    };
+                }
+                return Err(PluginManagerError::SpawnFailed(error.to_string()));
+            }
+        };
 
         // Perform handshake within the timeout.
-        let handshake_result =
-            timeout(HANDSHAKE_TIMEOUT, do_handshake(&mut child, &manifest)).await;
+        let handshake_result = timeout(
+            HANDSHAKE_TIMEOUT,
+            do_handshake(&mut child, &manifest, &trust_context.approved_capabilities),
+        )
+        .await;
 
         match handshake_result {
             Ok(Ok(())) => {
                 let mut inner = self.inner.lock().await;
+                let current_context = inner.trust_contexts.get(id);
+                let still_allowed = inner.entries.get(id).is_some_and(|entry| {
+                    current_context.is_some_and(|context| {
+                        PluginPolicy::evaluate(
+                            &entry.manifest,
+                            context,
+                            &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+                        )
+                        .is_ok_and(|decision| decision.fully_allowed())
+                    })
+                });
+                if !still_allowed {
+                    if let Some(entry) = inner.entries.get_mut(id) {
+                        entry.state = PluginLifecycleState::Stopped;
+                    }
+                    drop(inner);
+                    let _ = child.kill().await;
+                    return Err(PluginManagerError::PolicyDenied(Vec::new()));
+                }
                 if let Some(e) = inner.entries.get_mut(id) {
                     e.state = PluginLifecycleState::Running;
                     e.process = Some(child);
@@ -345,7 +625,7 @@ impl PluginManager {
             .map(|e| PluginSummary {
                 id: e.manifest.id.clone(),
                 name: e.manifest.name.clone(),
-                version: e.manifest.version.clone(),
+                version: e.manifest.version.to_string(),
                 state: e.state.clone(),
                 capabilities: e
                     .manifest
@@ -363,7 +643,7 @@ impl PluginManager {
         inner.entries.get(id).map(|e| PluginSummary {
             id: e.manifest.id.clone(),
             name: e.manifest.name.clone(),
-            version: e.manifest.version.clone(),
+            version: e.manifest.version.to_string(),
             state: e.state.clone(),
             capabilities: e
                 .manifest
@@ -382,6 +662,7 @@ impl PluginManager {
 async fn do_handshake(
     child: &mut Child,
     manifest: &PluginManifest,
+    approved_capabilities: &[PluginCapability],
 ) -> Result<(), PluginManagerError> {
     let stdin = child
         .stdin
@@ -439,12 +720,7 @@ async fn do_handshake(
 
     match resp.body {
         PluginResponseBody::HelloAck(ack) => {
-            if ack.plugin_id != manifest.id {
-                return Err(PluginManagerError::HandshakeFailed(format!(
-                    "plugin identified itself as `{}` but manifest says `{}`",
-                    ack.plugin_id, manifest.id
-                )));
-            }
+            validate_hello_ack(manifest, approved_capabilities, &ack)?;
             debug!(plugin_id = %ack.plugin_id, version = %ack.plugin_version, "handshake complete");
             Ok(())
         }
@@ -456,6 +732,42 @@ async fn do_handshake(
             "unexpected response to Hello".to_owned(),
         )),
     }
+}
+
+fn validate_hello_ack(
+    manifest: &PluginManifest,
+    approved_capabilities: &[PluginCapability],
+    ack: &fetchx_plugin_api::protocol::HelloAckResponse,
+) -> Result<(), PluginManagerError> {
+    if ack.plugin_id != manifest.id {
+        return Err(PluginManagerError::HandshakeFailed(format!(
+            "plugin identified itself as `{}` but manifest says `{}`",
+            ack.plugin_id, manifest.id
+        )));
+    }
+    let plugin_version =
+        fetchx_plugin_api::PluginVersion::parse(&ack.plugin_version).map_err(|error| {
+            PluginManagerError::HandshakeFailed(format!(
+                "plugin reported an invalid semantic version: {error}"
+            ))
+        })?;
+    if plugin_version != manifest.version {
+        return Err(PluginManagerError::HandshakeFailed(
+            "plugin version does not match the validated manifest".to_owned(),
+        ));
+    }
+    let mut reported = std::collections::HashSet::new();
+    for capability in &ack.capabilities {
+        if !reported.insert(capability)
+            || !manifest.capabilities.contains(capability)
+            || !approved_capabilities.contains(capability)
+        {
+            return Err(PluginManagerError::HandshakeFailed(
+                "plugin reported an undeclared or unapproved capability".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 // ============================================================
@@ -498,6 +810,24 @@ pub enum PluginManagerError {
     NotFound(String),
     #[error("plugin `{0}` must be stopped before it can be unregistered")]
     MustStopFirst(String),
+    #[error("plugin manifest is invalid: {0}")]
+    InvalidManifest(String),
+    #[error("plugin manifest changed since registration; prior approvals were revoked")]
+    ManifestChanged,
+    #[error("could not reload plugin manifest `{path}`: {reason}")]
+    ManifestReadFailed { path: String, reason: String },
+    #[error("plugin trust decision contains undeclared permissions or capabilities")]
+    InvalidTrustDecision,
+    #[error("plugin policy evaluation failed: {0}")]
+    Policy(String),
+    #[error("plugin policy denied requested capabilities: {0:?}")]
+    PolicyDenied(Vec<fetchx_plugin_api::CapabilityDenial>),
+    #[error("plugin `{id}` is not authorized for capability {capability:?}: {reason:?}")]
+    CapabilityDenied {
+        id: String,
+        capability: PluginCapability,
+        reason: PolicyDenialReason,
+    },
     #[error("plugin executable not found: {0}")]
     ExecutableNotFound(String),
     #[error("could not spawn plugin process: {0}")]
@@ -508,4 +838,258 @@ pub enum PluginManagerError {
     HandshakeFailed(String),
     #[error("I/O error: {0}")]
     Io(#[source] std::io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use fetchx_plugin_api::{
+        PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, PluginCapability, PluginCompatibility,
+        PluginManifest, PluginPermission, PluginVersion,
+    };
+
+    use super::*;
+
+    fn manifest() -> PluginManifest {
+        PluginManifest {
+            manifest_version: PLUGIN_MANIFEST_VERSION,
+            id: "test-plugin".to_owned(),
+            name: "Test Plugin".to_owned(),
+            version: PluginVersion::parse("1.0.0").unwrap(),
+            api_version: PLUGIN_API_VERSION,
+            compatibility: PluginCompatibility {
+                minimum_api_version: PLUGIN_API_VERSION,
+                maximum_api_version: PLUGIN_API_VERSION,
+            },
+            publisher: "Test Publisher".to_owned(),
+            description: "Test plugin".to_owned(),
+            executable: if cfg!(windows) {
+                PathBuf::from(r"C:\nonexistent\fetchx-test-plugin.exe")
+            } else {
+                PathBuf::from("/nonexistent/fetchx-test-plugin")
+            },
+            permissions: vec![PluginPermission::Downloads],
+            capabilities: vec![PluginCapability::DownloadCreate],
+            platforms: vec![],
+            signature: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn unknown_plugin_cannot_start_or_receive_capabilities() {
+        let manager = PluginManager::new(PathBuf::from("unused"));
+        manager.register(manifest()).await.unwrap();
+
+        assert!(matches!(
+            manager
+                .authorize_capability("test-plugin", &PluginCapability::DownloadCreate)
+                .await,
+            Err(PluginManagerError::CapabilityDenied {
+                reason: PolicyDenialReason::TrustUnknown,
+                ..
+            })
+        ));
+        assert!(matches!(
+            manager.start("test-plugin").await,
+            Err(PluginManagerError::PolicyDenied(_))
+        ));
+        assert!(matches!(
+            manager.get("test-plugin").await.unwrap().state,
+            PluginLifecycleState::Registered
+        ));
+    }
+
+    #[tokio::test]
+    async fn approved_capability_is_still_denied_without_a_runtime_adapter() {
+        let manager = PluginManager::new(PathBuf::from("unused"));
+        manager.register(manifest()).await.unwrap();
+        manager
+            .set_trust_decision(
+                "test-plugin",
+                PluginTrust::Trusted,
+                vec![PluginPermission::Downloads],
+                vec![PluginCapability::DownloadCreate],
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            manager
+                .authorize_capability("test-plugin", &PluginCapability::DownloadCreate)
+                .await,
+            Err(PluginManagerError::CapabilityDenied {
+                reason: PolicyDenialReason::CapabilityUnsupported,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn trust_decision_cannot_grant_undeclared_capability() {
+        let manager = PluginManager::new(PathBuf::from("unused"));
+        manager.register(manifest()).await.unwrap();
+
+        assert!(matches!(
+            manager
+                .set_trust_decision(
+                    "test-plugin",
+                    PluginTrust::Trusted,
+                    vec![PluginPermission::Downloads],
+                    vec![PluginCapability::DownloadRemove],
+                )
+                .await,
+            Err(PluginManagerError::InvalidTrustDecision)
+        ));
+    }
+
+    #[tokio::test]
+    async fn approval_for_one_plugin_cannot_be_reused_by_another() {
+        let manager = PluginManager::new(PathBuf::from("unused"));
+        manager.register(manifest()).await.unwrap();
+        let mut second = manifest();
+        second.id = "other-plugin".to_owned();
+        second.executable = if cfg!(windows) {
+            PathBuf::from(r"C:\nonexistent\fetchx-other-plugin.exe")
+        } else {
+            PathBuf::from("/nonexistent/fetchx-other-plugin")
+        };
+        manager.register(second).await.unwrap();
+        manager
+            .set_trust_decision(
+                "test-plugin",
+                PluginTrust::Trusted,
+                vec![PluginPermission::Downloads],
+                vec![PluginCapability::DownloadCreate],
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            manager
+                .authorize_capability("other-plugin", &PluginCapability::DownloadCreate)
+                .await,
+            Err(PluginManagerError::CapabilityDenied {
+                reason: PolicyDenialReason::TrustUnknown,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn changed_discovered_manifest_revokes_prior_approval_before_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest_path = directory.path().join("plugin.json");
+        let original = manifest();
+        tokio::fs::write(&manifest_path, serde_json::to_vec(&original).unwrap())
+            .await
+            .unwrap();
+
+        let manager = PluginManager::new(directory.path().to_path_buf());
+        manager
+            .register_discovered(original.clone(), manifest_path.clone())
+            .await
+            .unwrap();
+        manager
+            .set_trust_decision(
+                "test-plugin",
+                PluginTrust::Trusted,
+                vec![PluginPermission::Downloads],
+                vec![PluginCapability::DownloadCreate],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            manager
+                .policy_decision("test-plugin")
+                .await
+                .unwrap()
+                .denied_capabilities[0]
+                .reason,
+            PolicyDenialReason::CapabilityUnsupported
+        );
+
+        let mut modified = original;
+        modified.publisher = "Changed Publisher".to_owned();
+        tokio::fs::write(&manifest_path, serde_json::to_vec(&modified).unwrap())
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            manager.start("test-plugin").await,
+            Err(PluginManagerError::ManifestChanged)
+        ));
+        assert_eq!(
+            manager
+                .policy_decision("test-plugin")
+                .await
+                .unwrap()
+                .denied_capabilities[0]
+                .reason,
+            PolicyDenialReason::TrustUnknown
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_trust_does_not_skip_executable_validation() {
+        let manager = PluginManager::new(PathBuf::from("unused"));
+        manager.register(manifest()).await.unwrap();
+        manager
+            .set_trust_decision(
+                "test-plugin",
+                PluginTrust::Trusted,
+                vec![PluginPermission::Downloads],
+                vec![PluginCapability::DownloadCreate],
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            manager.start("test-plugin").await,
+            Err(PluginManagerError::PolicyDenied(_))
+        ));
+    }
+
+    #[test]
+    fn handshake_requires_matching_identity_and_version() {
+        let manifest = manifest();
+        let approved = vec![PluginCapability::DownloadCreate];
+        let mut ack = fetchx_plugin_api::protocol::HelloAckResponse {
+            plugin_id: manifest.id.clone(),
+            plugin_version: manifest.version.to_string(),
+            capabilities: approved.clone(),
+        };
+        assert!(validate_hello_ack(&manifest, &approved, &ack).is_ok());
+
+        ack.plugin_id = "other-plugin".to_owned();
+        assert!(matches!(
+            validate_hello_ack(&manifest, &approved, &ack),
+            Err(PluginManagerError::HandshakeFailed(_))
+        ));
+
+        ack.plugin_id = manifest.id.clone();
+        ack.plugin_version = "2.0.0".to_owned();
+        assert!(matches!(
+            validate_hello_ack(&manifest, &approved, &ack),
+            Err(PluginManagerError::HandshakeFailed(_))
+        ));
+    }
+
+    #[test]
+    fn handshake_rejects_unapproved_duplicate_or_undeclared_capability() {
+        let manifest = manifest();
+        let mut ack = fetchx_plugin_api::protocol::HelloAckResponse {
+            plugin_id: manifest.id.clone(),
+            plugin_version: manifest.version.to_string(),
+            capabilities: vec![PluginCapability::DownloadCreate],
+        };
+        assert!(validate_hello_ack(&manifest, &[], &ack).is_err());
+        ack.capabilities = vec![
+            PluginCapability::DownloadCreate,
+            PluginCapability::DownloadCreate,
+        ];
+        assert!(validate_hello_ack(&manifest, &ack.capabilities, &ack).is_err());
+        ack.capabilities = vec![PluginCapability::DownloadRemove];
+        assert!(validate_hello_ack(&manifest, &ack.capabilities, &ack).is_err());
+    }
 }

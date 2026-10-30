@@ -33,4 +33,4 @@ uniffi::include_scaffolding!("android_bridge");
 // Service module defines `DownloadService` which the scaffolding's udl_derive(Object)
 // references. The scaffolding's object glue delegates method calls to this impl.
 pub mod service;
-pub use service::DownloadService;
+pub use service::{DownloadService, PluginSecurityService};

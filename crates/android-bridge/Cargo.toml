@@ -20,6 +20,7 @@ fetchx-core-services = { path = "../core-services" }
 fetchx-core          = { path = "../core" }
 fetchx-downloader    = { path = "../downloader" }
 fetchx-media-extractor = { path = "../media-extractor" }
+fetchx-plugin-api = { path = "../plugin-api" }
 fetchx-models        = { path = "../models" }
 fetchx-queue         = { path = "../queue" }
 fetchx-remote-server = { path = "../remote-server" }

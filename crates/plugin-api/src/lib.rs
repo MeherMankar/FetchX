@@ -30,13 +30,20 @@
 
 pub mod framing;
 pub mod manifest;
+pub mod policy;
 pub mod protocol;
 
 // Re-export commonly used items.
 pub use framing::{FramingError, read_frame, write_frame};
 pub use manifest::{
-    Capability, ManifestValidationError, PLUGIN_API_VERSION, Platform, PluginManifest,
-    PluginManifestRaw, parse_manifest,
+    ManifestValidationError, PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, Platform,
+    PluginCapability, PluginCompatibility, PluginManifest, PluginManifestRaw, PluginPermission,
+    PluginSignature, PluginSignatureAlgorithm, PluginVersion, parse_manifest,
+};
+pub use policy::{
+    CapabilityDenial, PluginPolicy, PluginPolicyDecision, PluginSignatureStatus, PluginTrust,
+    PluginTrustContext, PolicyDenialReason, PolicyEnvironment, PolicyEvaluationError,
+    manifest_fingerprint,
 };
 pub use protocol::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginResponse,
