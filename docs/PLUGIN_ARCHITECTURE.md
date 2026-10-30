@@ -252,6 +252,36 @@ policy remains deny-closed.
 | Android shared signing implementation | IMPLEMENTED | Shared Rust API; Rust tests ran on Windows host |
 | Android plugin execution/live validation | NOT AVAILABLE | No Android plugin runtime or privileged adapter |
 
+## Plugin registry (Phase 23D)
+
+The shared plugin API provides a strict registry-catalog model, a provider
+interface, and a local in-memory provider. Catalog parsing rejects unknown
+fields, oversized responses, duplicate plugin/release/target data, invalid
+identifiers, inconsistent permission/capability declarations, malformed
+compatibility metadata, unsafe filenames, and download URLs with non-HTTPS
+schemes, user info, fragments, or traversal-like paths.
+Provider errors are returned to the caller; an unavailable provider is not
+replaced with an empty successful catalog.
+
+Registry data is untrusted metadata. It cannot deserialize a computed security
+assessment or grant publisher trust, plugin approval, permissions, or runtime
+capabilities. Assessment compares the catalog with a validated signed manifest,
+the caller-supplied artifact SHA-256, the host publisher store, and the current
+compatibility environment. A signature can be cryptographically valid while
+its publisher is untrusted; that state is reported separately and is not
+admitted. `artifact_admission_allowed` means only that the signed artifact
+metadata passes the registry admission checks. It is not a plugin installation
+API and does not authorize runtime operations. Any available Phase 23A policy
+decision is computed separately and still requires explicit approvals and
+runtime capability support.
+
+The artifact assessment compares the caller-supplied SHA-256 with the catalog
+hash and signed manifest hash. The current API does not fetch downloads or
+itself measure artifact bytes/size. There is no remote provider, marketplace
+UI, download/install flow, persistent catalog, or live registry integration.
+The local provider and shared assessment tests ran as part of
+`cargo test -p fetchx-plugin-api`; this is host-side test evidence only.
+
 ---
 
 ## IPC protocol

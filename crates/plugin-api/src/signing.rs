@@ -96,6 +96,16 @@ pub struct PluginPublisherStore {
 }
 
 impl PluginPublisherStore {
+    pub fn publisher_trust(&self, publisher_id: &str) -> Option<&PluginTrust> {
+        self.publishers
+            .get(publisher_id)
+            .map(|publisher| &publisher.trust)
+    }
+
+    pub fn is_plugin_revoked(&self, plugin_id: &str) -> bool {
+        self.revoked_plugins.contains(plugin_id)
+    }
+
     /// Adds a public key to a publisher identity without changing its trust.
     /// The returned key ID is the lowercase SHA-256 fingerprint of the key.
     pub fn add_publisher_key(
@@ -149,6 +159,40 @@ impl PluginPublisherStore {
         manifest: &PluginManifest,
         actual_package_sha256: &str,
     ) -> Result<(), PluginSigningError> {
+        self.verify_signature_cryptographically(manifest, actual_package_sha256)?;
+        let signature = manifest
+            .signature
+            .as_ref()
+            .ok_or(PluginSigningError::Unsigned)?;
+        if self.revoked_plugins.contains(&manifest.id) {
+            return Err(PluginSigningError::RevokedPlugin(manifest.id.clone()));
+        }
+        let publisher = self
+            .publishers
+            .get(&signature.publisher_id)
+            .ok_or_else(|| PluginSigningError::UnknownPublisher(signature.publisher_id.clone()))?;
+        match publisher.trust {
+            PluginTrust::Unknown => Err(PluginSigningError::UnknownPublisher(
+                signature.publisher_id.clone(),
+            )),
+            PluginTrust::Untrusted => Err(PluginSigningError::UntrustedPublisher(
+                signature.publisher_id.clone(),
+            )),
+            PluginTrust::Revoked => Err(PluginSigningError::RevokedPublisher(
+                signature.publisher_id.clone(),
+            )),
+            PluginTrust::Trusted => Ok(()),
+        }
+    }
+
+    /// Performs signature and key verification without interpreting publisher
+    /// trust or revocation. This is for display assessments only; it is not an
+    /// authorization decision.
+    pub fn verify_signature_cryptographically(
+        &self,
+        manifest: &PluginManifest,
+        actual_package_sha256: &str,
+    ) -> Result<(), PluginSigningError> {
         let signature = manifest
             .signature
             .as_ref()
@@ -164,9 +208,6 @@ impl PluginPublisherStore {
         manifest
             .validate()
             .map_err(|error| PluginSigningError::InvalidManifest(error.to_string()))?;
-        if self.revoked_plugins.contains(&manifest.id) {
-            return Err(PluginSigningError::RevokedPlugin(manifest.id.clone()));
-        }
         if !is_sha256_hex(actual_package_sha256)
             || signature.package_sha256 != actual_package_sha256
         {
@@ -177,25 +218,6 @@ impl PluginPublisherStore {
             .publishers
             .get(&signature.publisher_id)
             .ok_or_else(|| PluginSigningError::UnknownPublisher(signature.publisher_id.clone()))?;
-        match publisher.trust {
-            PluginTrust::Unknown => {
-                return Err(PluginSigningError::UnknownPublisher(
-                    signature.publisher_id.clone(),
-                ));
-            }
-            PluginTrust::Untrusted => {
-                return Err(PluginSigningError::UntrustedPublisher(
-                    signature.publisher_id.clone(),
-                ));
-            }
-            PluginTrust::Revoked => {
-                return Err(PluginSigningError::RevokedPublisher(
-                    signature.publisher_id.clone(),
-                ));
-            }
-            PluginTrust::Trusted => {}
-        }
-
         let key_bytes = publisher.keys.get(&signature.key_id).ok_or_else(|| {
             PluginSigningError::UnknownPublisherKey {
                 publisher_id: signature.publisher_id.clone(),

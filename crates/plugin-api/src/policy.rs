@@ -98,6 +98,20 @@ impl PluginTrustContext {
         Ok(context)
     }
 
+    /// Marks an existing approval as signature-verified without changing its
+    /// manifest fingerprint; policy evaluation still rejects stale approvals.
+    pub fn verified_approval_for_manifest(
+        manifest: &PluginManifest,
+        actual_package_sha256: &str,
+        publisher_store: &PluginPublisherStore,
+        approval: &Self,
+    ) -> Result<Self, PolicyEvaluationError> {
+        publisher_store.verify_manifest_signature(manifest, actual_package_sha256)?;
+        let mut verified_approval = approval.clone();
+        verified_approval.signature_status = PluginSignatureStatus::Verified;
+        Ok(verified_approval)
+    }
+
     pub fn unknown(manifest: &PluginManifest) -> Result<Self, PolicyEvaluationError> {
         Self::for_manifest(manifest, PluginTrust::Unknown, Vec::new(), Vec::new())
     }

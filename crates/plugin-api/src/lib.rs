@@ -32,6 +32,7 @@ pub mod framing;
 pub mod manifest;
 pub mod policy;
 pub mod protocol;
+pub mod registry;
 pub mod signing;
 
 // Re-export commonly used items.
@@ -49,6 +50,15 @@ pub use policy::{
 pub use protocol::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginResponse,
     PluginResponseBody, ProtocolError, parse_plugin_response,
+};
+pub use registry::{
+    LocalPluginRegistryProvider, PluginArchitecture, PluginDownload, PluginRegistryAssessment,
+    PluginRegistryAssessmentContext, PluginRegistryCatalog, PluginRegistryCompatibility,
+    PluginRegistryEntry, PluginRegistryEnvironment, PluginRegistryError, PluginRegistryId,
+    PluginRegistryProvider, PluginRegistryPublisher, PluginRegistryRelease, PluginRegistryTarget,
+    RegistryArtifactStatus, RegistryCompatibilityStatus, RegistryManifestStatus,
+    RegistryPublisherStatus, RegistryRevocationStatus, RegistrySignatureStatus,
+    parse_registry_catalog,
 };
 pub use signing::{
     PluginPublisherStore, PluginSigningError, canonical_manifest_signing_bytes, sha256_hex,

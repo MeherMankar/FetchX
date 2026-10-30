@@ -1662,10 +1662,21 @@ Do NOT implement fake "verified" states without actual cryptographic verificatio
 
 ### Phase 23D -- Plugin Registry (MEDIUM)
 
-**Platform Coverage:** SHARED CORE + UI/UX per platform
+**Platform Coverage:** SHARED CORE
 
-Registry contents: plugin name, version, publisher, permissions, signature,
-compatibility, release notes, download information.
+**Status: SHARED REGISTRY MODEL IMPLEMENTED; marketplace scope remains
+deferred.** The shared plugin API defines strict untrusted catalog metadata,
+compatibility and download validation, a provider abstraction with a local
+provider, and computed assessment against Phase 23C signatures and local
+publisher trust. Registry contents include plugin name/version, publisher,
+permissions/capabilities, signature metadata, compatibility, release notes,
+and per-target download information.
+
+The registry does not fetch remote catalogs or artifacts, install plugins,
+grant Phase 23A approvals, bypass Phase 23B runtime checks, or provide
+marketplace UI. Its artifact-admission result is not installation permission;
+the artifact hash is supplied by the caller and is not measured by this API.
+These behaviors require separately scoped implementation and validation.
 
 Not a prerequisite for the core plugin runtime.
 
