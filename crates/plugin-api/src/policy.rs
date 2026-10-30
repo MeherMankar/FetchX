@@ -8,6 +8,7 @@ use crate::manifest::{
     ManifestValidationError, PLUGIN_API_VERSION, Platform, PluginCapability, PluginManifest,
     PluginPermission,
 };
+use crate::signing::{PluginPublisherStore, PluginSigningError};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,14 +19,33 @@ pub enum PluginTrust {
     Revoked,
 }
 
-/// Signature state supplied by host trust infrastructure. This API has no
-/// verified state because Phase 23A does not implement cryptographic checks.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Signature state recorded by the host trust infrastructure. A trusted plugin
+/// must have a verified signature before authorization is granted.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginSignatureStatus {
     Unsigned,
     Unverified,
+    Verified,
     Invalid,
+}
+
+impl<'de> Deserialize<'de> for PluginSignatureStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "unsigned" => Ok(Self::Unsigned),
+            "unverified" => Ok(Self::Unverified),
+            "invalid" => Ok(Self::Invalid),
+            "verified" => Err(serde::de::Error::custom(
+                "verified signature status is host-generated only",
+            )),
+            _ => Err(serde::de::Error::custom("unknown signature status")),
+        }
+    }
 }
 
 /// Host-owned approval record. `manifest_sha256` binds approvals to the exact
@@ -34,7 +54,7 @@ pub enum PluginSignatureStatus {
 #[serde(deny_unknown_fields)]
 pub struct PluginTrustContext {
     pub trust: PluginTrust,
-    pub signature_status: PluginSignatureStatus,
+    signature_status: PluginSignatureStatus,
     pub approved_permissions: Vec<PluginPermission>,
     pub approved_capabilities: Vec<PluginCapability>,
     pub manifest_sha256: String,
@@ -61,6 +81,21 @@ impl PluginTrustContext {
             approved_capabilities,
             manifest_sha256: manifest_fingerprint(manifest)?,
         })
+    }
+
+    pub fn verified_for_manifest(
+        manifest: &PluginManifest,
+        actual_package_sha256: &str,
+        publisher_store: &PluginPublisherStore,
+        trust: PluginTrust,
+        approved_permissions: Vec<PluginPermission>,
+        approved_capabilities: Vec<PluginCapability>,
+    ) -> Result<Self, PolicyEvaluationError> {
+        publisher_store.verify_manifest_signature(manifest, actual_package_sha256)?;
+        let mut context =
+            Self::for_manifest(manifest, trust, approved_permissions, approved_capabilities)?;
+        context.signature_status = PluginSignatureStatus::Verified;
+        Ok(context)
     }
 
     pub fn unknown(manifest: &PluginManifest) -> Result<Self, PolicyEvaluationError> {
@@ -155,6 +190,8 @@ pub enum PolicyEvaluationError {
     InvalidManifest(#[from] ManifestValidationError),
     #[error("could not fingerprint plugin manifest: {0}")]
     Fingerprint(String),
+    #[error("plugin signature verification failed: {0}")]
+    Signing(#[from] PluginSigningError),
 }
 
 pub struct PluginPolicy;
@@ -174,15 +211,13 @@ impl PluginPolicy {
                 PluginTrust::Unknown => Some(PolicyDenialReason::TrustUnknown),
                 PluginTrust::Untrusted => Some(PolicyDenialReason::PluginUntrusted),
                 PluginTrust::Revoked => Some(PolicyDenialReason::TrustRevoked),
-                PluginTrust::Trusted => match trust.signature_status {
-                    PluginSignatureStatus::Invalid => Some(PolicyDenialReason::SignatureInvalid),
-                    PluginSignatureStatus::Unsigned if manifest.signature.is_some() => {
-                        Some(PolicyDenialReason::SignatureStateMismatch)
+                PluginTrust::Trusted => match (&trust.signature_status, &manifest.signature) {
+                    (PluginSignatureStatus::Invalid, _) => {
+                        Some(PolicyDenialReason::SignatureInvalid)
                     }
-                    PluginSignatureStatus::Unverified if manifest.signature.is_none() => {
-                        Some(PolicyDenialReason::SignatureStateMismatch)
-                    }
-                    _ => None,
+                    (PluginSignatureStatus::Verified, Some(_))
+                    | (PluginSignatureStatus::Unsigned, None) => None,
+                    _ => Some(PolicyDenialReason::SignatureStateMismatch),
                 },
             }
         };
@@ -455,8 +490,11 @@ mod tests {
     fn signature_presence_never_auto_trusts_and_invalid_status_denies() {
         let mut manifest = manifest();
         manifest.signature = Some(crate::manifest::PluginSignature {
+            version: crate::manifest::PLUGIN_SIGNATURE_VERSION,
             algorithm: crate::manifest::PluginSignatureAlgorithm::Ed25519,
-            key_id: "key".to_owned(),
+            publisher_id: "test.publisher".to_owned(),
+            key_id: "00".repeat(32),
+            package_sha256: "00".repeat(32),
             signature: base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
                 [0_u8; 64],

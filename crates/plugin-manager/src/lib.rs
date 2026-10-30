@@ -30,10 +30,11 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use fetchx_plugin_api::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginCapability, PluginManifest,
-    PluginPermission, PluginPolicy, PluginPolicyDecision, PluginResponseBody, PluginTrust,
-    PluginTrustContext, PolicyDenialReason, PolicyEnvironment, parse_manifest,
-    parse_plugin_response,
+    PluginPermission, PluginPolicy, PluginPolicyDecision, PluginPublisherStore, PluginResponseBody,
+    PluginSigningError, PluginTrust, PluginTrustContext, PolicyDenialReason, PolicyEnvironment,
+    parse_manifest, parse_plugin_response,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
     fs,
@@ -118,6 +119,7 @@ pub struct PluginEntry {
     pub manifest: PluginManifest,
     pub state: PluginLifecycleState,
     manifest_path: Option<PathBuf>,
+    artifact_root: PathBuf,
     /// Set while the plugin process is running.
     process: Option<Child>,
     /// Crash-loop tracking for the supervisor. This is a guardrail for the host,
@@ -129,10 +131,17 @@ pub struct PluginEntry {
 
 impl PluginEntry {
     fn new(manifest: PluginManifest, manifest_path: Option<PathBuf>) -> Self {
+        let artifact_root = manifest_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(PathBuf::from)
+            .or_else(|| manifest.executable.parent().map(PathBuf::from))
+            .unwrap_or_default();
         Self {
             manifest,
             state: PluginLifecycleState::Registered,
             manifest_path,
+            artifact_root,
             process: None,
             restart_count: 0,
             last_failure: None,
@@ -158,6 +167,7 @@ struct ManagerInner {
     trust_contexts: HashMap<String, PluginTrustContext>,
     plugin_dir: PathBuf,
     sandbox_config: PluginSandboxConfig,
+    publisher_store: PluginPublisherStore,
 }
 
 impl PluginManager {
@@ -209,7 +219,10 @@ impl PluginManager {
     /// Returns the runtime monitoring state for a plugin. The current manager only
     /// enforces process isolation and bounded IPC; it does not pretend to provide
     /// OS-level sandboxing where no host runtime exists.
-    pub async fn sandbox_status(&self, id: &str) -> Result<PluginSandboxStatus, PluginManagerError> {
+    pub async fn sandbox_status(
+        &self,
+        id: &str,
+    ) -> Result<PluginSandboxStatus, PluginManagerError> {
         let inner = self.inner.lock().await;
         let entry = inner
             .entries
@@ -226,14 +239,103 @@ impl PluginManager {
     }
     /// Creates a new manager that scans `plugin_dir` for plugins.
     pub fn new(plugin_dir: PathBuf) -> Arc<Self> {
+        Self::new_with_publisher_store(plugin_dir, PluginPublisherStore::default())
+    }
+
+    /// Creates a manager with an explicitly configured local publisher store.
+    pub fn new_with_publisher_store(
+        plugin_dir: PathBuf,
+        publisher_store: PluginPublisherStore,
+    ) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(ManagerInner {
                 entries: HashMap::new(),
                 trust_contexts: HashMap::new(),
                 plugin_dir,
                 sandbox_config: PluginSandboxConfig::default(),
+                publisher_store,
             }),
         })
+    }
+
+    /// Registers a publisher key without trusting it. The key ID is its
+    /// lowercase SHA-256 fingerprint.
+    pub async fn add_publisher_key(
+        &self,
+        publisher_id: impl Into<String>,
+        public_key_base64: &str,
+    ) -> Result<String, PluginManagerError> {
+        let mut inner = self.inner.lock().await;
+        inner
+            .publisher_store
+            .add_publisher_key(publisher_id, public_key_base64)
+            .map_err(PluginManagerError::Signing)
+    }
+
+    /// Changes an existing publisher's explicit local trust decision. A
+    /// downgrade or revocation also stops any running plugins from that publisher.
+    pub async fn set_publisher_trust(
+        &self,
+        publisher_id: &str,
+        trust: PluginTrust,
+    ) -> Result<(), PluginManagerError> {
+        let running = {
+            let mut inner = self.inner.lock().await;
+            inner
+                .publisher_store
+                .set_publisher_trust(publisher_id, trust.clone())
+                .map_err(PluginManagerError::Signing)?;
+            if trust == PluginTrust::Trusted {
+                Vec::new()
+            } else {
+                inner
+                    .entries
+                    .iter()
+                    .filter(|(_, entry)| {
+                        matches!(entry.state, PluginLifecycleState::Running)
+                            && entry
+                                .manifest
+                                .signature
+                                .as_ref()
+                                .is_some_and(|signature| signature.publisher_id == publisher_id)
+                    })
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            }
+        };
+        for id in running {
+            self.stop(&id).await?;
+        }
+        Ok(())
+    }
+
+    /// Revokes one plugin locally and stops it if it is running.
+    pub async fn revoke_plugin(&self, id: &str) -> Result<(), PluginManagerError> {
+        let running = {
+            let mut inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            let running = matches!(entry.state, PluginLifecycleState::Running);
+            inner.publisher_store.revoke_plugin(id);
+            running
+        };
+        if running {
+            self.stop(id).await?;
+        }
+        Ok(())
+    }
+
+    /// Removes a local plugin revocation. This does not grant publisher trust
+    /// or restore manifest permissions and capabilities.
+    pub async fn restore_plugin(&self, id: &str) -> Result<(), PluginManagerError> {
+        let mut inner = self.inner.lock().await;
+        if !inner.entries.contains_key(id) {
+            return Err(PluginManagerError::NotFound(id.to_owned()));
+        }
+        inner.publisher_store.restore_plugin(id);
+        Ok(())
     }
 
     /// Scans the plugin directory for `plugin.json` manifests, validates each
@@ -466,18 +568,63 @@ impl PluginManager {
         capability: &PluginCapability,
     ) -> Result<(), PluginManagerError> {
         self.reload_discovered_manifest(id).await?;
+        let (initial_manifest, initial_context) = {
+            let inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            let context =
+                inner.trust_contexts.get(id).cloned().ok_or_else(|| {
+                    PluginManagerError::Policy("missing trust decision".to_owned())
+                })?;
+            (entry.manifest.clone(), context)
+        };
+        let initial_decision = PluginPolicy::evaluate(
+            &initial_manifest,
+            &initial_context,
+            &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+        )
+        .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+        if !initial_decision.allows(capability)
+            && !initial_decision.denied_capabilities.iter().any(|denial| {
+                &denial.capability == capability
+                    && denial.reason == PolicyDenialReason::SignatureStateMismatch
+            })
+        {
+            let reason = initial_decision
+                .denied_capabilities
+                .iter()
+                .find(|denial| &denial.capability == capability)
+                .map(|denial| denial.reason.clone())
+                .unwrap_or(PolicyDenialReason::CapabilityNotApproved);
+            return Err(PluginManagerError::CapabilityDenied {
+                id: id.to_owned(),
+                capability: capability.clone(),
+                reason,
+            });
+        }
+        let (manifest, trust_context, publisher_store) = self.verified_context(id).await?;
         let inner = self.inner.lock().await;
         let entry = inner
             .entries
             .get(id)
             .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
-        let context = inner
+        let current_context = inner
             .trust_contexts
             .get(id)
             .ok_or_else(|| PluginManagerError::Policy("missing trust decision".to_owned()))?;
+        if entry.manifest != manifest
+            || current_context.trust != trust_context.trust
+            || current_context.approved_permissions != trust_context.approved_permissions
+            || current_context.approved_capabilities != trust_context.approved_capabilities
+            || inner.publisher_store != publisher_store
+        {
+            return Err(PluginManagerError::ManifestChanged);
+        }
         let decision = PluginPolicy::evaluate(
             &entry.manifest,
-            context,
+            &trust_context,
             &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
         )
         .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
@@ -498,25 +645,92 @@ impl PluginManager {
         }
     }
 
+    async fn verified_context(
+        &self,
+        id: &str,
+    ) -> Result<(PluginManifest, PluginTrustContext, PluginPublisherStore), PluginManagerError>
+    {
+        let (manifest, context, artifact_root, publisher_store) = {
+            let inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            let context =
+                inner.trust_contexts.get(id).cloned().ok_or_else(|| {
+                    PluginManagerError::Policy("missing trust decision".to_owned())
+                })?;
+            (
+                entry.manifest.clone(),
+                context,
+                entry.artifact_root.clone(),
+                inner.publisher_store.clone(),
+            )
+        };
+        validate_executable_in_artifact(&manifest.executable, &artifact_root)?;
+        let package_hash = hash_plugin_artifact_tree(artifact_root).await?;
+        publisher_store.verify_manifest_signature(&manifest, &package_hash)?;
+        let verified_context = PluginTrustContext::verified_for_manifest(
+            &manifest,
+            &package_hash,
+            &publisher_store,
+            context.trust,
+            context.approved_permissions,
+            context.approved_capabilities,
+        )
+        .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+        Ok((manifest, verified_context, publisher_store))
+    }
+
     pub async fn policy_decision(
         &self,
         id: &str,
     ) -> Result<PluginPolicyDecision, PluginManagerError> {
+        let (initial_manifest, initial_context) = {
+            let inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            let context =
+                inner.trust_contexts.get(id).cloned().ok_or_else(|| {
+                    PluginManagerError::Policy("missing trust decision".to_owned())
+                })?;
+            (entry.manifest.clone(), context)
+        };
+        let environment = PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec());
+        let initial_decision =
+            PluginPolicy::evaluate(&initial_manifest, &initial_context, &environment)
+                .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+        if !initial_decision.fully_allowed()
+            && initial_decision
+                .denied_capabilities
+                .iter()
+                .any(|denial| denial.reason != PolicyDenialReason::SignatureStateMismatch)
+        {
+            return Ok(initial_decision);
+        }
+
+        let (manifest, verified_context, publisher_store) = self.verified_context(id).await?;
         let inner = self.inner.lock().await;
         let entry = inner
             .entries
             .get(id)
             .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
-        let context = inner
+        let current_context = inner
             .trust_contexts
             .get(id)
             .ok_or_else(|| PluginManagerError::Policy("missing trust decision".to_owned()))?;
-        PluginPolicy::evaluate(
-            &entry.manifest,
-            context,
-            &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
-        )
-        .map_err(|error| PluginManagerError::Policy(error.to_string()))
+        if entry.manifest != manifest
+            || current_context.trust != verified_context.trust
+            || current_context.approved_permissions != verified_context.approved_permissions
+            || current_context.approved_capabilities != verified_context.approved_capabilities
+            || inner.publisher_store != publisher_store
+        {
+            return Err(PluginManagerError::TrustChanged);
+        }
+        PluginPolicy::evaluate(&entry.manifest, &verified_context, &environment)
+            .map_err(|error| PluginManagerError::Policy(error.to_string()))
     }
 
     /// Unregisters a plugin.  The plugin must be stopped before unregistering.
@@ -542,9 +756,8 @@ impl PluginManager {
     /// - No secrets are forwarded to the plugin process.
     pub async fn start(&self, id: &str) -> Result<(), PluginManagerError> {
         self.reload_discovered_manifest(id).await?;
-        // Clone what we need before dropping the lock.
-        let (manifest, trust_context, sandbox_config) = {
-            let mut inner = self.inner.lock().await;
+        let (snapshot_manifest, snapshot_context, artifact_root, publisher_store, sandbox_config) = {
+            let inner = self.inner.lock().await;
             let entry = inner
                 .entries
                 .get(id)
@@ -559,6 +772,60 @@ impl PluginManager {
                 inner.trust_contexts.get(id).cloned().ok_or_else(|| {
                     PluginManagerError::Policy("missing trust decision".to_owned())
                 })?;
+            let initial_decision = PluginPolicy::evaluate(
+                &entry.manifest,
+                &trust_context,
+                &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+            )
+            .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+            if !initial_decision.fully_allowed()
+                && initial_decision
+                    .denied_capabilities
+                    .iter()
+                    .any(|denial| denial.reason != PolicyDenialReason::SignatureStateMismatch)
+            {
+                return Err(PluginManagerError::PolicyDenied(
+                    initial_decision.denied_capabilities,
+                ));
+            }
+            (
+                entry.manifest.clone(),
+                trust_context,
+                entry.artifact_root.clone(),
+                inner.publisher_store.clone(),
+                inner.sandbox_config.clone(),
+            )
+        };
+
+        validate_executable_in_artifact(&snapshot_manifest.executable, &artifact_root)?;
+        let package_hash = hash_plugin_artifact_tree(artifact_root).await?;
+        publisher_store.verify_manifest_signature(&snapshot_manifest, &package_hash)?;
+        let trust_context = PluginTrustContext::verified_for_manifest(
+            &snapshot_manifest,
+            &package_hash,
+            &publisher_store,
+            snapshot_context.trust.clone(),
+            snapshot_context.approved_permissions.clone(),
+            snapshot_context.approved_capabilities.clone(),
+        )
+        .map_err(|error| PluginManagerError::Policy(error.to_string()))?;
+
+        let manifest = {
+            let mut inner = self.inner.lock().await;
+            let entry = inner
+                .entries
+                .get(id)
+                .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+            let current_context = inner
+                .trust_contexts
+                .get(id)
+                .ok_or_else(|| PluginManagerError::Policy("missing trust decision".to_owned()))?;
+            if entry.manifest != snapshot_manifest
+                || current_context != &snapshot_context
+                || inner.publisher_store != publisher_store
+            {
+                return Err(PluginManagerError::TrustChanged);
+            }
             let decision = PluginPolicy::evaluate(
                 &entry.manifest,
                 &trust_context,
@@ -571,27 +838,16 @@ impl PluginManager {
                 ));
             }
             let manifest = entry.manifest.clone();
-            let sandbox_config = inner.sandbox_config.clone();
+            inner
+                .trust_contexts
+                .insert(id.to_owned(), trust_context.clone());
             inner
                 .entries
                 .get_mut(id)
                 .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?
                 .state = PluginLifecycleState::Starting;
-            (manifest, trust_context, sandbox_config)
+            manifest
         };
-
-        // Validate the executable exists before spawning.
-        if !manifest.executable.is_file() {
-            let mut inner = self.inner.lock().await;
-            if let Some(e) = inner.entries.get_mut(id) {
-                e.state = PluginLifecycleState::Failed {
-                    reason: "executable not found".to_owned(),
-                };
-            }
-            return Err(PluginManagerError::ExecutableNotFound(
-                manifest.executable.to_string_lossy().into_owned(),
-            ));
-        }
 
         // Spawn — no shell, structured args only, no secret env vars.
         let mut command = Command::new(&manifest.executable);
@@ -635,16 +891,17 @@ impl PluginManager {
             Ok(Ok(())) => {
                 let mut inner = self.inner.lock().await;
                 let current_context = inner.trust_contexts.get(id);
-                let still_allowed = inner.entries.get(id).is_some_and(|entry| {
-                    current_context.is_some_and(|context| {
-                        PluginPolicy::evaluate(
-                            &entry.manifest,
-                            context,
-                            &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
-                        )
-                        .is_ok_and(|decision| decision.fully_allowed())
-                    })
-                });
+                let still_allowed = inner.publisher_store == publisher_store
+                    && inner.entries.get(id).is_some_and(|entry| {
+                        current_context.is_some_and(|context| {
+                            PluginPolicy::evaluate(
+                                &entry.manifest,
+                                context,
+                                &PolicyEnvironment::current(SUPPORTED_PLUGIN_CAPABILITIES.to_vec()),
+                            )
+                            .is_ok_and(|decision| decision.fully_allowed())
+                        })
+                    });
                 if !still_allowed {
                     if let Some(entry) = inner.entries.get_mut(id) {
                         entry.state = PluginLifecycleState::Stopped;
@@ -669,7 +926,9 @@ impl PluginManager {
             Ok(Err(handshake_err)) => {
                 // Kill the orphaned process.
                 let _ = child.kill().await;
-                let restart_disabled = self.record_runtime_failure(id, &handshake_err.to_string()).await?;
+                let restart_disabled = self
+                    .record_runtime_failure(id, &handshake_err.to_string())
+                    .await?;
                 if restart_disabled {
                     return Err(PluginManagerError::SandboxDisabled(id.to_owned()));
                 }
@@ -841,9 +1100,13 @@ async fn do_handshake(
         .await
         .map_err(|e| PluginManagerError::HandshakeFailed(e.to_string()))?;
     let resp_len = u32::from_le_bytes(len_buf);
-    sandbox_config.validate_ipc_length(resp_len).map_err(|error| {
-        PluginManagerError::HandshakeFailed(format!("response too large ({resp_len} bytes): {error}"))
-    })?;
+    sandbox_config
+        .validate_ipc_length(resp_len)
+        .map_err(|error| {
+            PluginManagerError::HandshakeFailed(format!(
+                "response too large ({resp_len} bytes): {error}"
+            ))
+        })?;
     let mut buf = vec![0u8; resp_len as usize];
     stdout
         .read_exact(&mut buf)
@@ -950,7 +1213,10 @@ pub enum PluginManagerError {
     #[error("plugin manifest is invalid: {0}")]
     InvalidManifest(String),
     #[error("IPC payload is too large ({payload_len} bytes, max {max_payload_len})")]
-    OversizedPayload { payload_len: u32, max_payload_len: u32 },
+    OversizedPayload {
+        payload_len: u32,
+        max_payload_len: u32,
+    },
     #[error("plugin manifest changed since registration; prior approvals were revoked")]
     ManifestChanged,
     #[error("could not reload plugin manifest `{path}`: {reason}")]
@@ -959,6 +1225,12 @@ pub enum PluginManagerError {
     InvalidTrustDecision,
     #[error("plugin policy evaluation failed: {0}")]
     Policy(String),
+    #[error("plugin signature verification failed: {0}")]
+    Signing(#[from] PluginSigningError),
+    #[error("plugin trust or publisher state changed during verification")]
+    TrustChanged,
+    #[error("could not hash plugin artifact: {0}")]
+    ArtifactHash(String),
     #[error("plugin policy denied requested capabilities: {0:?}")]
     PolicyDenied(Vec<fetchx_plugin_api::CapabilityDenial>),
     #[error("plugin `{id}` is not authorized for capability {capability:?}: {reason:?}")]
@@ -979,13 +1251,117 @@ pub enum PluginManagerError {
     Io(#[source] std::io::Error),
 }
 
+fn validate_executable_in_artifact(
+    executable: &std::path::Path,
+    artifact_root: &std::path::Path,
+) -> Result<(), PluginManagerError> {
+    if !executable.is_file() {
+        return Err(PluginManagerError::ExecutableNotFound(
+            executable.to_string_lossy().into_owned(),
+        ));
+    }
+    let root = std::fs::canonicalize(artifact_root)
+        .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+    let executable_path = std::fs::canonicalize(executable)
+        .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+    if !executable_path.starts_with(root) {
+        return Err(PluginManagerError::ArtifactHash(
+            "plugin executable is outside its artifact directory".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn hash_plugin_artifact_tree(root: PathBuf) -> Result<String, PluginManagerError> {
+    tokio::task::spawn_blocking(move || hash_plugin_artifact_tree_sync(&root))
+        .await
+        .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?
+}
+
+fn hash_plugin_artifact_tree_sync(root: &std::path::Path) -> Result<String, PluginManagerError> {
+    let mut files = Vec::new();
+    collect_artifact_files(root, root, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"FetchX plugin artifact tree v1\0");
+    for (relative_path, absolute_path) in files {
+        let contents = std::fs::read(&absolute_path)
+            .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+        let path_bytes = relative_path.as_bytes();
+        let path_len = u64::try_from(path_bytes.len())
+            .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+        let content_len = u64::try_from(contents.len())
+            .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+        hasher.update(path_len.to_le_bytes());
+        hasher.update(path_bytes);
+        hasher.update(content_len.to_le_bytes());
+        hasher.update(contents);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn collect_artifact_files(
+    root: &std::path::Path,
+    current: &std::path::Path,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<(), PluginManagerError> {
+    let entries = std::fs::read_dir(current)
+        .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+    let mut entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+
+    for entry in entries {
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+        if relative == std::path::Path::new("plugin.json") {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .map_err(|error| PluginManagerError::ArtifactHash(error.to_string()))?;
+        if file_type.is_symlink() {
+            return Err(PluginManagerError::ArtifactHash(
+                "symbolic links are not allowed in plugin artifacts".to_owned(),
+            ));
+        }
+        if file_type.is_dir() {
+            collect_artifact_files(root, &path, files)?;
+        } else if file_type.is_file() {
+            let relative = relative.to_str().ok_or_else(|| {
+                PluginManagerError::ArtifactHash(
+                    "plugin artifact contains a non-Unicode path".to_owned(),
+                )
+            })?;
+            files.push((relative.replace('\\', "/"), path));
+        } else {
+            return Err(PluginManagerError::ArtifactHash(
+                "plugin artifact contains a non-regular file".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use ed25519_dalek::{Signer, SigningKey};
     use fetchx_plugin_api::{
-        PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, PluginCapability, PluginCompatibility,
-        PluginManifest, PluginPermission, PluginVersion,
+        PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, PLUGIN_SIGNATURE_VERSION, PluginCapability,
+        PluginCompatibility, PluginManifest, PluginPermission, PluginPublisherStore,
+        PluginSignature, PluginSignatureAlgorithm, PluginTrust, PluginVersion,
+        canonical_manifest_signing_bytes, sha256_hex,
     };
 
     use super::*;
@@ -1208,6 +1584,127 @@ mod tests {
                 .reason,
             PolicyDenialReason::TrustUnknown
         );
+    }
+
+    #[test]
+    fn artifact_tree_hash_covers_payload_and_resources_but_not_manifest_json() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("resources")).unwrap();
+        std::fs::write(root.join("plugin.exe"), b"payload-v1").unwrap();
+        std::fs::write(root.join("resources").join("icon.bin"), b"resource-v1").unwrap();
+        std::fs::write(root.join("plugin.json"), b"manifest-v1").unwrap();
+        let first = hash_plugin_artifact_tree_sync(root).unwrap();
+
+        std::fs::write(root.join("plugin.json"), b"manifest-v2").unwrap();
+        assert_eq!(hash_plugin_artifact_tree_sync(root).unwrap(), first);
+
+        std::fs::write(root.join("resources").join("icon.bin"), b"resource-v2").unwrap();
+        assert_ne!(hash_plugin_artifact_tree_sync(root).unwrap(), first);
+    }
+
+    #[tokio::test]
+    async fn manager_verifies_signed_artifact_before_start_and_rejects_tampering() {
+        let directory = tempfile::tempdir().unwrap();
+        let plugin_dir = directory.path().join("signed-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let executable = plugin_dir.join(if cfg!(windows) {
+            "plugin.exe"
+        } else {
+            "plugin"
+        });
+        std::fs::write(&executable, b"test executable bytes").unwrap();
+        std::fs::create_dir(plugin_dir.join("resources")).unwrap();
+        std::fs::write(
+            plugin_dir.join("resources").join("asset.bin"),
+            b"test resource bytes",
+        )
+        .unwrap();
+
+        let signing_key = SigningKey::from_bytes(&[11_u8; 32]);
+        let mut manifest = PluginManifest {
+            manifest_version: PLUGIN_MANIFEST_VERSION,
+            id: "signed-plugin".to_owned(),
+            name: "Signed Plugin".to_owned(),
+            version: PluginVersion::parse("1.0.0").unwrap(),
+            api_version: PLUGIN_API_VERSION,
+            compatibility: PluginCompatibility {
+                minimum_api_version: PLUGIN_API_VERSION,
+                maximum_api_version: PLUGIN_API_VERSION,
+            },
+            publisher: "Publisher".to_owned(),
+            description: "Test artifact".to_owned(),
+            executable,
+            permissions: vec![PluginPermission::Downloads],
+            capabilities: vec![PluginCapability::DownloadCreate],
+            platforms: vec![],
+            signature: None,
+        };
+        let package_hash = hash_plugin_artifact_tree_sync(&plugin_dir).unwrap();
+        manifest.signature = Some(PluginSignature {
+            version: PLUGIN_SIGNATURE_VERSION,
+            algorithm: PluginSignatureAlgorithm::Ed25519,
+            publisher_id: "publisher.test".to_owned(),
+            key_id: sha256_hex(&signing_key.verifying_key().to_bytes()),
+            package_sha256: package_hash,
+            signature: STANDARD.encode([0_u8; 64]),
+        });
+        let payload = canonical_manifest_signing_bytes(&manifest).unwrap();
+        manifest.signature.as_mut().unwrap().signature =
+            STANDARD.encode(signing_key.sign(&payload).to_bytes());
+        let manifest_path = plugin_dir.join("plugin.json");
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let mut publisher_store = PluginPublisherStore::default();
+        publisher_store
+            .add_publisher_key(
+                "publisher.test",
+                &STANDARD.encode(signing_key.verifying_key().to_bytes()),
+            )
+            .unwrap();
+        publisher_store
+            .set_publisher_trust("publisher.test", PluginTrust::Trusted)
+            .unwrap();
+        let manager = PluginManager::new_with_publisher_store(
+            directory.path().to_path_buf(),
+            publisher_store,
+        );
+        manager
+            .register_discovered(manifest.clone(), manifest_path)
+            .await
+            .unwrap();
+        manager
+            .set_trust_decision(
+                "signed-plugin",
+                PluginTrust::Trusted,
+                vec![PluginPermission::Downloads],
+                vec![PluginCapability::DownloadCreate],
+            )
+            .await
+            .unwrap();
+
+        let decision = manager.policy_decision("signed-plugin").await.unwrap();
+        assert_eq!(
+            decision.denied_capabilities[0].reason,
+            PolicyDenialReason::CapabilityUnsupported
+        );
+
+        let valid_result = manager.start("signed-plugin").await;
+        assert!(matches!(
+            valid_result,
+            Err(PluginManagerError::PolicyDenied(denials))
+                if denials.iter().all(|denial| {
+                    denial.reason == PolicyDenialReason::CapabilityUnsupported
+                })
+        ));
+
+        std::fs::write(plugin_dir.join("resources").join("asset.bin"), b"tampered").unwrap();
+        assert!(matches!(
+            manager.start("signed-plugin").await,
+            Err(PluginManagerError::Signing(
+                PluginSigningError::PackageHashMismatch
+            ))
+        ));
     }
 
     #[tokio::test]

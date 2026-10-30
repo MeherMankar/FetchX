@@ -1639,8 +1639,22 @@ reported as `NOT ENFORCED` or `NOT AVAILABLE` when they cannot be proven.
 
 **Platform Coverage:** SHARED CORE
 
-Real cryptographic verification: publisher identity, package hash, signature,
-trusted publisher model, revocation.
+**Status: COMPLETE (scope-specific) — shared signing and manager enforcement
+implemented and tested.** Ed25519 signatures use a versioned canonical
+manifest payload bound to the current installed plugin-directory tree hash,
+publisher key fingerprint, plugin version, permissions, and capabilities.
+Explicit local publisher trust and publisher/plugin revocation are enforced
+before manager startup; Phase 23A approval and runtime-support checks remain
+mandatory. The plugin API and manager test suites passed (66 tests total).
+
+Scope limitations: FetchX has no distributable plugin archive, so this signs the
+installed directory artifact model rather than a future archive format. Trust
+and revocation are in-memory for the manager lifetime; persistent trust,
+authenticated key rotation, and remote revocation distribution remain future
+work. Android exposes shared policy/signing code but has no plugin execution
+adapter. Windows manager tests prove signature verification and tamper denial,
+but no positive Windows plugin startup/live validation is available because the
+host currently supports no plugin capabilities.
 
 Do NOT implement fake "verified" states without actual cryptographic verification.
 

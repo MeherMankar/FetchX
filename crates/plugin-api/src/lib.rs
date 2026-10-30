@@ -32,13 +32,14 @@ pub mod framing;
 pub mod manifest;
 pub mod policy;
 pub mod protocol;
+pub mod signing;
 
 // Re-export commonly used items.
 pub use framing::{FramingError, read_frame, write_frame};
 pub use manifest::{
-    ManifestValidationError, PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, Platform,
-    PluginCapability, PluginCompatibility, PluginManifest, PluginManifestRaw, PluginPermission,
-    PluginSignature, PluginSignatureAlgorithm, PluginVersion, parse_manifest,
+    ManifestValidationError, PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION, PLUGIN_SIGNATURE_VERSION,
+    Platform, PluginCapability, PluginCompatibility, PluginManifest, PluginManifestRaw,
+    PluginPermission, PluginSignature, PluginSignatureAlgorithm, PluginVersion, parse_manifest,
 };
 pub use policy::{
     CapabilityDenial, PluginPolicy, PluginPolicyDecision, PluginSignatureStatus, PluginTrust,
@@ -48,4 +49,7 @@ pub use policy::{
 pub use protocol::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginResponse,
     PluginResponseBody, ProtocolError, parse_plugin_response,
+};
+pub use signing::{
+    PluginPublisherStore, PluginSigningError, canonical_manifest_signing_bytes, sha256_hex,
 };

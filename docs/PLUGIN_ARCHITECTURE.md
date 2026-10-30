@@ -1,4 +1,4 @@
-# Plugin Architecture (Phases 19 and 23A)
+# Plugin Architecture (Phases 19 and 23A–23C)
 
 ## Overview
 
@@ -123,7 +123,7 @@ Required fields:
 | `permissions` | Known coarse consent categories, no duplicates |
 | `capabilities` | At least one known operation; each requires its matching permission |
 | `platforms` | Optional; empty means all supported host platforms |
-| `signature` | Optional structurally valid Ed25519 metadata; not cryptographically checked |
+| `signature` | Optional versioned Ed25519 envelope; required for manager startup |
 
 Maximum manifest file size: **16 KiB**.
 
@@ -165,13 +165,92 @@ manifest.
 
 Trust states are `unknown`, `trusted`, `untrusted`, and `revoked`. Only `trusted`
 can be evaluated for grants, and both a permission and each individual capability
-must be approved. A signature marked invalid is denied. Unsigned or structurally
-present-but-unverified signatures never establish trust or grant permissions.
+must be approved. A signature marked invalid is denied. A publisher signature is
+necessary for manager startup, but it does not establish publisher trust or grant
+permissions by itself.
 
-Android exposes the same Rust evaluator through the UniFFI bridge. Android does
-not currently have plugin execution or privileged-operation adapters, so its
-supported capability set is empty and requested capabilities are denied. This is
-policy evaluation parity, not an Android plugin runtime.
+Android exposes the same Rust policy and signing types through the UniFFI bridge.
+Android does not currently have plugin execution or privileged-operation
+adapters, so its supported capability set is empty and requested capabilities
+are denied. Shared signing tests run on the Rust host test target; Android plugin
+execution and live signing integration are not available.
+
+## Plugin signing (Phase 23C)
+
+The shared plugin API verifies Ed25519 signatures using the `ed25519-dalek`
+implementation. Signature metadata is versioned and contains the stable
+`publisher_id`, a `key_id`, the installed-artifact SHA-256, and the standard
+Base64 encoding of the 64-byte signature. `key_id` is the lowercase hexadecimal
+SHA-256 fingerprint of the 32-byte public key. A host-owned publisher store maps
+publisher IDs to explicitly enrolled key fingerprints and trust state; an
+unknown key or publisher is never trusted automatically.
+
+The signature covers a domain-separated canonical JSON representation:
+
+1. Prefix `FetchX plugin signature v1` and a NUL byte.
+2. Serialize the fixed-field-order v1 manifest payload as UTF-8 JSON.
+3. Include the signature version/algorithm, publisher ID, key fingerprint,
+   artifact hash, plugin ID/name/version, API compatibility, display publisher,
+   description, executable path, permissions, capabilities, and platforms.
+4. Include the manifest schema version. Sort permission, capability, and
+   platform arrays by their serialized values. Normalize executable path
+   separators to `/`. Exclude only the signature bytes, which cannot sign
+   themselves.
+
+Manifest parsing rejects unknown fields, duplicate set-like values, malformed
+signature metadata, and unsupported signature versions. Changing the version,
+publisher association, executable path, permissions, or capabilities invalidates
+the signature. The approval fingerprint remains separately checked by the
+Phase 23A policy.
+
+FetchX does not currently have a plugin archive/package format. Its installed
+artifact is a directory containing `plugin.json`, the executable, and optional
+resources. The manager computes a deterministic tree hash over every regular file
+except the root `plugin.json`: sorted UTF-8 relative paths with `/` separators,
+each path and file content prefixed by an unsigned 64-bit little-endian length,
+under the `FetchX plugin artifact tree v1` domain prefix. Symbolic links and
+non-regular entries are rejected. The parsed manifest fields and artifact hash
+are both covered by the signature. This protects the current installed directory
+model; it is not a signature for a future archive/distribution format.
+
+Publisher trust and plugin revocations are enforced by the local
+`PluginPublisherStore`. The manager verifies the installed artifact and signature
+before entering `Starting`, and rechecks the Phase 23A policy before authorizing
+each privileged operation. A valid signature still requires a trusted publisher,
+no publisher/plugin revocation, exact manifest approval, explicit permission
+and capability approvals, and runtime support. New keys can be added under an
+existing publisher for an explicitly administered rotation; adding a key never
+changes trust. There is no authenticated key-rotation chain, persistent trust
+store, or remote revocation service yet. Store decisions currently last for the
+manager process lifetime.
+
+Validation evidence: the plugin API and manager Rust test suites passed on
+Windows, including valid/invalid signatures, wrong/unknown/untrusted/revoked
+publishers, plugin revocation, manifest and version tampering, artifact/resource
+tampering, explicit key rotation enrollment, and manager startup gating. No
+Windows plugin could be positively started because the host currently supports
+no plugin capabilities. Android plugin execution is not available; its shared
+policy remains deny-closed.
+
+### Phase 23C security matrix
+
+| Control | Status | Evidence / scope |
+|---|---|---|
+| Ed25519 verification | TESTED | Real `ed25519-dalek` verification, valid and invalid signatures |
+| Canonical signed payload | TESTED | Versioned domain prefix, fixed JSON fields, sorted set-like values |
+| Installed artifact tree hash | TESTED | Executable/resources hashed; root `plugin.json` fields are signed separately |
+| Distributable package/archive hash | NOT AVAILABLE | No plugin archive format exists |
+| Publisher identity and key fingerprint | TESTED | Signed publisher ID bound to enrolled SHA-256 public-key fingerprint |
+| Trusted publisher store | TESTED | Unknown and untrusted publishers denied; no trust-on-first-use |
+| Unknown/untrusted publisher rejection | TESTED | API signing tests |
+| Publisher/plugin revocation | TESTED | Local in-memory store; no remote or persistent revocation |
+| Version/manifest/permission/capability binding | TESTED | Tampering tests fail verification |
+| Phase 23A approval/fingerprint integration | TESTED | Verified signatures still require explicit approvals and matching fingerprint |
+| Phase 23B startup integration | TESTED | Manager verifies artifact/signature before `Starting`; tamper test denies |
+| Windows signed plugin live startup | NOT AVAILABLE | Runtime supports no plugin capabilities; positive startup cannot pass policy |
+| Windows live tamper/startup validation | NOT VALIDATED | Rust manager tests only; no live plugin process validation |
+| Android shared signing implementation | IMPLEMENTED | Shared Rust API; Rust tests ran on Windows host |
+| Android plugin execution/live validation | NOT AVAILABLE | No Android plugin runtime or privileged adapter |
 
 ---
 
@@ -266,10 +345,10 @@ A failed plugin does not crash the host.
 9. **No in-process dynamic loading.** Plugins are NOT Rust dylibs loaded at
    runtime. They are external processes only.
 
-10. **Signatures are not verified.** Signature metadata is validated for shape
-    only. No `verified` state is representable in Phase 23A; signatures do not
-    establish trust. Cryptographic verification and publisher revocation belong
-    to Phase 23C.
+10. **Signing is not publisher authorization.** Only a signature verified
+    against a key explicitly enrolled in a trusted publisher record can pass
+    the signing gate. Signature presence and publisher-supplied names never
+    establish trust.
 
 ---
 
@@ -307,7 +386,9 @@ secrets, or internal process details.
 - Capability-specific engine dispatch (built-in engines remain first-class)
 - Plugin hot-reload or restart-on-crash
 - OS-level plugin sandboxing (filesystem/network/process isolation), deferred to Phase 23B
-- Cryptographic signature verification and revocation, deferred to Phase 23C
+- Persistent publisher trust, authenticated key rotation, and remote revocation
+  distribution
+- A signed plugin archive/distribution format and its install-time verification
 - Plugin registry/marketplace, deferred to Phase 23D
 - DRM, CAPTCHA, or access-control bypass
 

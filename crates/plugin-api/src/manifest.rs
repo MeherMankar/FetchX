@@ -143,13 +143,18 @@ pub enum PluginSignatureAlgorithm {
     Ed25519,
 }
 
-/// Structural signature metadata only. Phase 23A does not cryptographically
-/// verify this signature; presence must never be treated as trusted identity.
+pub const PLUGIN_SIGNATURE_VERSION: u32 = 1;
+
+/// Ed25519 signature metadata for a signed plugin artifact.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginSignature {
+    pub version: u32,
     pub algorithm: PluginSignatureAlgorithm,
+    pub publisher_id: String,
     pub key_id: String,
+    /// SHA-256 of the installed plugin artifact tree, excluding plugin.json.
+    pub package_sha256: String,
     /// Standard base64-encoded signature bytes.
     pub signature: String,
 }
@@ -320,8 +325,28 @@ fn ensure_unique<T: Eq + std::hash::Hash>(
 }
 
 fn validate_signature(signature: &PluginSignature) -> Result<(), ManifestValidationError> {
+    if signature.version != PLUGIN_SIGNATURE_VERSION {
+        return Err(ManifestValidationError::UnsupportedSignatureVersion(
+            signature.version,
+        ));
+    }
+    if signature.publisher_id.len() < 2
+        || signature.publisher_id.len() > 64
+        || !signature.publisher_id.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        })
+    {
+        return Err(ManifestValidationError::InvalidPublisherId(
+            signature.publisher_id.clone(),
+        ));
+    }
     if signature.key_id.trim().is_empty() {
         return Err(ManifestValidationError::EmptyField("signature.key_id"));
+    }
+    if !is_sha256_hex(&signature.key_id) || !is_sha256_hex(&signature.package_sha256) {
+        return Err(ManifestValidationError::MalformedSignature);
     }
     let bytes = STANDARD
         .decode(&signature.signature)
@@ -332,12 +357,21 @@ fn validate_signature(signature: &PluginSignature) -> Result<(), ManifestValidat
     Ok(())
 }
 
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ManifestValidationError {
     #[error("plugin ID `{0}` is invalid (must match ^[a-z0-9_-]{{2,64}}$)")]
     InvalidId(String),
     #[error("required field `{0}` must not be empty")]
     EmptyField(&'static str),
+    #[error("publisher ID `{0}` is invalid")]
+    InvalidPublisherId(String),
     #[error("description exceeds the 256 character limit")]
     DescriptionTooLong,
     #[error("manifest version {0} is not supported (expected {PLUGIN_MANIFEST_VERSION})")]
@@ -352,6 +386,8 @@ pub enum ManifestValidationError {
     ExecutableNotAbsolute(String),
     #[error("executable path `{0}` contains path traversal components")]
     PathTraversal(String),
+    #[error("plugin signature version {0} is not supported")]
+    UnsupportedSignatureVersion(u32),
     #[error("manifest must declare at least one capability")]
     NoCapabilities,
     #[error("capability {0:?} has no matching declared permission")]
@@ -545,8 +581,11 @@ mod tests {
     fn malformed_signature_metadata_is_rejected() {
         let mut raw = minimal_raw("my-plugin");
         raw.signature = Some(PluginSignature {
+            version: PLUGIN_SIGNATURE_VERSION,
             algorithm: PluginSignatureAlgorithm::Ed25519,
-            key_id: "publisher-key".to_owned(),
+            publisher_id: "test.publisher".to_owned(),
+            key_id: "00".repeat(32),
+            package_sha256: "00".repeat(32),
             signature: "not-base64".to_owned(),
         });
         assert_eq!(
@@ -559,8 +598,11 @@ mod tests {
     fn valid_signature_shape_is_not_verified_by_manifest_parsing() {
         let mut raw = minimal_raw("my-plugin");
         raw.signature = Some(PluginSignature {
+            version: PLUGIN_SIGNATURE_VERSION,
             algorithm: PluginSignatureAlgorithm::Ed25519,
-            key_id: "publisher-key".to_owned(),
+            publisher_id: "test.publisher".to_owned(),
+            key_id: "00".repeat(32),
+            package_sha256: "00".repeat(32),
             signature: STANDARD.encode([0_u8; 64]),
         });
         assert!(raw.validate().is_ok());
