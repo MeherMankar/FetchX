@@ -132,10 +132,36 @@ See [`apps/browser/extension/README.md`](../apps/browser/extension/README.md) an
 
 - Firefox is not tested.  The native messaging API is compatible but the manifest
   format differs slightly; Firefox support is deferred.
-- Automatic download interception (capturing every browser download) is not
-  implemented.  The user must explicitly right-click or use the popup.
+- The extension already has an optional browser-download interception setting.
+  Phase 21I does not introduce or expand interception or download-engine behavior;
+  broader browser download handling remains outside this integration phase.
 - Engine selection (aria2/yt-dlp) is not exposed through the extension.  All
   browser-initiated downloads use Direct HTTP.  The user can change the engine in
   the desktop UI after the download is created.
 - Production packaging (installer, signed extension) is deferred to Phase 22.
 
+## Phase 21I — Browser remote integration
+
+On Windows, the extension selects either the local desktop or a configured
+remote FetchX server. Requests use the shared `fetchx.rpc.v1` protocol. Local
+requests go through native messaging, the desktop's authenticated loopback IPC,
+and CoreServices. Remote requests go through the native host to an HTTPS server;
+the host validates discovery/capabilities and currently forwards only
+`system.discover`, `download.create`, and `download.list`.
+
+Remote bearer credentials are stored by the Windows native host in Windows
+Credential Manager, associated with both the target reference and endpoint.
+They are not stored in extension local storage. Pairing codes, device discovery,
+refresh tokens, and device/session management are not provided.
+
+On Android, the FetchX app bundles a trusted GeckoView extension. It dispatches
+the supported local browser RPC operations through the in-process Android bridge
+to CoreServices. The built-in extension declares GeckoView's `geckoViewAddons`
+permission, required for its native-message delegate. The browser menu's
+**FetchX Remote** entry opens the bundled extension's actual GeckoView
+browser-action popup, which supports connection discovery, listing downloads,
+and submitting an HTTP(S) URL. This is same-device, in-app browser integration;
+Android does not expose an HTTP/WebSocket/LAN listener for external browser
+extensions.
+External Chrome/Firefox-to-Android connectivity and Android remote-target
+selection are not implemented.

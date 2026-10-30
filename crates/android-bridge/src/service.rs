@@ -719,6 +719,22 @@ impl DownloadService {
         })
     }
 
+    /// Dispatches a browser RPC request after the Android adapter has
+    /// authenticated it as coming from the bundled GeckoView extension.
+    pub fn dispatch_browser_rpc(&self, request_json: String) -> Result<String, MobileApiError> {
+        self.with_inner(|inner| {
+            let response = inner
+                .runtime
+                .block_on(fetchx_remote_server::dispatch_local_rpc(
+                    &inner.core,
+                    request_json.as_bytes(),
+                ))
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
+            serde_json::to_string(&response)
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))
+        })
+    }
+
     // ── Event listener ────────────────────────────────────────────────────
 
     /// Registers a Kotlin-implemented event listener. Spawns a background task
@@ -1067,6 +1083,35 @@ mod tests {
         let svc = DownloadService::new(config, None).expect("service creation failed");
         let items = svc.list_downloads().expect("list failed");
         assert!(items.is_empty());
+        svc.shutdown();
+    }
+
+    #[test]
+    fn browser_rpc_dispatch_uses_fetchx_protocol() {
+        let (config, _dir) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+        let response = svc
+            .dispatch_browser_rpc(
+                r#"{"jsonrpc":"2.0","id":1,"method":"system.discover"}"#.to_owned(),
+            )
+            .expect("browser RPC dispatch failed");
+        let response: serde_json::Value =
+            serde_json::from_str(&response).expect("browser RPC response was not JSON");
+        assert_eq!(response["result"]["protocol_version"], "fetchx.rpc.v1");
+        let response = svc
+            .dispatch_browser_rpc(r#"{"jsonrpc":"2.0","id":2,"method":"download.list"}"#.to_owned())
+            .expect("browser download list failed");
+        let response: serde_json::Value =
+            serde_json::from_str(&response).expect("browser RPC response was not JSON");
+        assert_eq!(response["result"]["downloads"], serde_json::json!([]));
+        let response = svc
+            .dispatch_browser_rpc(
+                r#"{"jsonrpc":"2.0","id":3,"method":"download.pause","params":{"id":"00000000-0000-4000-8000-000000000000"}}"#.to_owned(),
+            )
+            .expect("browser RPC dispatch failed");
+        let response: serde_json::Value =
+            serde_json::from_str(&response).expect("browser RPC response was not JSON");
+        assert_eq!(response["error"]["code"], -32601);
         svc.shutdown();
     }
 

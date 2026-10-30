@@ -17,12 +17,15 @@
 //! - Requests are [`#[serde(deny_unknown_fields)]`] to prevent field injection.
 //! - Only `http://` and `https://` URLs are accepted.
 //! - Embedded credentials are rejected by [`validate_url`].
-//! - No cookies, headers, tokens, or credentials are carried.
+//! - Browser cookies and credentials are never forwarded.
+//! - A bearer token is accepted only in the credential-store provisioning
+//!   request and is handled by the native host, not extension storage.
 //! - Responses never include process paths, secrets, or stack traces.
 
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
 /// Current protocol version.  Increment when breaking changes are introduced.
@@ -58,6 +61,12 @@ pub enum BrowserRequestBody {
     AddDownload(AddDownloadRequest),
     /// Ping to check whether the desktop is reachable.
     Ping,
+    /// Forward one supported fetchx.rpc.v1 request to a configured target.
+    Rpc(BrowserRpcRequest),
+    /// Store a remote target bearer token in the native host's OS credential store.
+    StoreCredential(StoreCredentialRequest),
+    /// Remove a remote target bearer token from the native host's OS credential store.
+    DeleteCredential(DeleteCredentialRequest),
 }
 
 /// Payload for an `add_download` browser request.
@@ -74,6 +83,38 @@ pub struct AddDownloadRequest {
     /// will have `request_id: null`.
     #[serde(default)]
     pub request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserRpcRequest {
+    pub target: BrowserRpcTarget,
+    pub request: fetchx_remote_protocol::RpcRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserRpcTarget {
+    Local,
+    Remote {
+        endpoint: String,
+        credential_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoreCredentialRequest {
+    pub credential_id: String,
+    pub endpoint: String,
+    pub token: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteCredentialRequest {
+    pub credential_id: String,
+    pub endpoint: String,
 }
 
 // ============================================================
@@ -112,6 +153,8 @@ pub struct OkResponse {
 pub enum OkPayload {
     AddDownload(AddDownloadOk),
     Pong(PongOk),
+    Rpc(RpcOk),
+    CredentialStored(CredentialStoredOk),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -123,6 +166,16 @@ pub struct AddDownloadOk {
 pub struct PongOk {
     pub pong: bool, // always true
     pub app_version: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RpcOk {
+    pub rpc_response: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CredentialStoredOk {
+    pub stored: bool,
 }
 
 /// An error response.  Messages are safe for users — no paths, secrets, or
@@ -156,6 +209,16 @@ pub enum BrowserErrorCode {
     UnsupportedScheme,
     /// FetchX is running but the desktop is temporarily unavailable.
     DesktopUnavailable,
+    /// The configured target's credentials were rejected.
+    AuthenticationFailed,
+    /// The authenticated identity cannot perform the requested operation.
+    AuthorizationFailed,
+    /// The selected target does not speak a compatible FetchX RPC protocol.
+    IncompatibleServer,
+    /// A target or credential reference is invalid.
+    InvalidTarget,
+    /// OS-backed target credential storage is unavailable.
+    CredentialStoreUnavailable,
     /// The URL was valid but the download was rejected by the queue/engine.
     DownloadRejected,
     /// An unexpected internal error occurred.  Details are not disclosed.
@@ -188,6 +251,28 @@ impl BrowserResponse {
                     pong: true,
                     app_version,
                 }),
+            }),
+        }
+    }
+
+    pub fn rpc(request_id: Option<String>, rpc_response: Value) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            request_id,
+            body: BrowserResponseBody::Ok(OkResponse {
+                ok: true,
+                payload: OkPayload::Rpc(RpcOk { rpc_response }),
+            }),
+        }
+    }
+
+    pub fn credential_stored(request_id: Option<String>) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            request_id,
+            body: BrowserResponseBody::Ok(OkResponse {
+                ok: true,
+                payload: OkPayload::CredentialStored(CredentialStoredOk { stored: true }),
             }),
         }
     }
@@ -466,6 +551,35 @@ mod tests {
         let json = br#"{"version":1,"type":"ping"}"#;
         let req = parse_request(json).unwrap();
         assert!(matches!(req.body, BrowserRequestBody::Ping));
+    }
+
+    #[test]
+    fn rpc_request_parses_with_explicit_target_and_protocol_envelope() {
+        let json = br#"{"version":1,"type":"rpc","target":{"kind":"remote","endpoint":"https://fetchx.example.test","credential_id":"target-1"},"request":{"jsonrpc":"2.0","id":"browser-1","method":"download.list"}}"#;
+        let request = parse_request(json).unwrap();
+        assert!(matches!(
+            request.body,
+            BrowserRequestBody::Rpc(BrowserRpcRequest {
+                target: BrowserRpcTarget::Remote { ref endpoint, ref credential_id },
+                request: fetchx_remote_protocol::RpcRequest { ref method, .. }
+            }) if endpoint == "https://fetchx.example.test"
+                && credential_id == "target-1"
+                && method == "download.list"
+        ));
+    }
+
+    #[test]
+    fn credential_storage_request_is_typed_and_unknown_fields_are_rejected() {
+        let valid = br#"{"version":1,"type":"store_credential","credential_id":"target-1","endpoint":"https://fetchx.example.test","token":"fx_x"}"#;
+        assert!(matches!(
+            parse_request(valid).unwrap().body,
+            BrowserRequestBody::StoreCredential(StoreCredentialRequest { .. })
+        ));
+        let invalid = br#"{"version":1,"type":"store_credential","credential_id":"target-1","endpoint":"https://fetchx.example.test","token":"fx_x","extra":true}"#;
+        assert!(matches!(
+            parse_request(invalid).unwrap_err().body,
+            BrowserResponseBody::Err(_)
+        ));
     }
 
     #[test]

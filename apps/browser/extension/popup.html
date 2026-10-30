@@ -33,6 +33,10 @@
 
       <!-- TAB: Add -->
       <div id="tab-add" class="tab-panel">
+        <label class="target-picker" for="target-select">
+          <span>Send to</span>
+          <select id="target-select"></select>
+        </label>
         <div class="input-group">
           <input
             id="url-input"
@@ -93,6 +97,24 @@
           <button id="settings-close-btn" class="icon-btn-sm">✕</button>
         </div>
         <div class="settings-body">
+          <section class="target-settings">
+            <h2>FetchX targets</h2>
+            <div id="target-list" class="target-list"></div>
+            <label class="setting-row">
+              <span class="setting-label">Target name</span>
+              <input id="target-name" type="text" maxlength="64" autocomplete="off" />
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">HTTPS server URL</span>
+              <input id="target-endpoint" type="url" autocomplete="url" placeholder="https://fetchx.example.com" />
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">Bearer token (stored by Windows)</span>
+              <input id="target-token" type="password" autocomplete="new-password" />
+            </label>
+            <button id="target-add-btn" class="submit-btn submit-btn-sm" type="button">Save remote target</button>
+            <div id="target-result" class="result-banner hidden" role="status"></div>
+          </section>
           <label class="setting-row">
             <span class="setting-label">Auto-intercept downloads</span>
             <input id="set-auto-intercept" type="checkbox" class="toggle" />

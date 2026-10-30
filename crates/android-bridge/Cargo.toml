@@ -22,8 +22,10 @@ fetchx-downloader    = { path = "../downloader" }
 fetchx-media-extractor = { path = "../media-extractor" }
 fetchx-models        = { path = "../models" }
 fetchx-queue         = { path = "../queue" }
+fetchx-remote-server = { path = "../remote-server" }
 fetchx-scheduler     = { path = "../scheduler" }
 fetchx-storage       = { path = "../storage" }
+serde_json.workspace  = true
 uniffi                     = { version = "0.29", features = ["tokio"] }
 tokio.workspace             = true
 thiserror.workspace         = true

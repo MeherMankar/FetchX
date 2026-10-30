@@ -146,6 +146,10 @@ class BridgeDownloadRepository(
         initialSnapshotReady.await()
     }
 
+    suspend fun dispatchBrowserRpc(requestJson: String): String = withContext(Dispatchers.IO) {
+        service.dispatchBrowserRpc(requestJson)
+    }
+
     override fun observeEvents(): Flow<DownloadEvent> = _events.asSharedFlow()
 
     override suspend fun addDownload(

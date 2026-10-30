@@ -12,7 +12,13 @@
  * - The host name must match the registered manifest exactly.
  */
 
-import type { BrowserRequest, BrowserResponse } from "../types/protocol";
+import type {
+  BrowserRequest,
+  BrowserResponse,
+  RpcRequest,
+  RpcTarget,
+} from "../types/protocol";
+import { PROTOCOL_VERSION } from "../types/protocol";
 
 /** The registered native messaging host name.
  *  Must match the `name` field in the native host manifest JSON file. */
@@ -83,12 +89,50 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
   });
 }
 
+export async function callTargetRpc(
+  target: RpcTarget,
+  request: RpcRequest,
+): Promise<BrowserResponse> {
+  return sendToNativeHost({
+    version: PROTOCOL_VERSION,
+    type: "rpc",
+    target,
+    request,
+  });
+}
+
+export async function storeTargetCredential(
+  credentialId: string,
+  endpoint: string,
+  token: string,
+): Promise<BrowserResponse> {
+  return sendToNativeHost({
+    version: PROTOCOL_VERSION,
+    type: "store_credential",
+    credential_id: credentialId,
+    endpoint,
+    token,
+  });
+}
+
+export async function deleteTargetCredential(
+  credentialId: string,
+  endpoint: string,
+): Promise<BrowserResponse> {
+  return sendToNativeHost({
+    version: PROTOCOL_VERSION,
+    type: "delete_credential",
+    credential_id: credentialId,
+    endpoint,
+  });
+}
+
 /** Runtime shape guard — never trust data from the native host blindly. */
 function isValidResponse(value: unknown): value is BrowserResponse {
   if (typeof value !== "object" || value === null) return false;
   const obj = value as Record<string, unknown>;
   return (
-    typeof obj.version === "number" &&
+    obj.version === PROTOCOL_VERSION &&
     typeof obj.ok === "boolean"
   );
 }

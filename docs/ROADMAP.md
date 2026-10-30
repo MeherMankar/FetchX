@@ -132,7 +132,7 @@ Phases 1-20P (Completed)
 |-------|-----------------|-------------|-------------|-------|
 | 1-13 | YES | YES | YES (via Bridge) | Platform adapters for runtime only |
 | 14A-16C | YES | YES | PARTIAL | Desktop UI done; Android consumes same core |
-| 17 | YES | YES | Android adapter planned (Phase 21I) | Browser protocol shared |
+| 17 | YES | YES | In-app GeckoView adapter (Phase 21I) | External browser-to-Android connection not implemented |
 | 18 | YES | YES | Future (21H remote CLI) | CLI uses CoreServices |
 | 19 | YES | YES | PARTIAL | Android plugin host planned |
 | 20A | N/A | N/A | YES | Android foundation only |
@@ -349,9 +349,9 @@ Android (AddDownloadDialog) expose engine selection.
 `crates/browser-protocol` -- shared message types and loopback IPC logic.
 `apps/browser/native-host` -- Windows-side native messaging host.
 `apps/browser/extension` -- MV3 extension (Chrome/Firefox).
-Android integration: planned Phase 21I (browser extension connects to Android FetchX).
-**Cross-platform alignment required:** Android FetchX does not yet accept
-connections from browser extensions.
+Phase 21I provides a built-in GeckoView extension for the FetchX Android app's
+own browser through an in-process bridge. External Chrome/Firefox extensions do
+not connect to Android FetchX over a network listener.
 
 ---
 
@@ -1344,7 +1344,8 @@ network transport, command dispatch, authentication, or authorization; these rem
 in Phases 21B, 21C, and 21D.
 
 **Windows:** Windows .exe acts as a local server and remote client.
-**Android:** Android .apk acts as a remote client (Phase 21I wires browser to it).
+**Android:** Phase 21I's browser integration is an in-app GeckoView adapter to
+CoreServices, not a remote browser client.
 **Shared:** Protocol definition and validation in shared Rust.
 
 ---
@@ -1370,7 +1371,8 @@ Authorization, TLS, origin validation, SSRF protections, and LAN/public deployme
 remain out of scope; bind only to loopback.
 
 **Windows:** Server can run as Windows service or standalone process.
-**Android:** Android FetchX acts as a local server for Phase 21I browser integration.
+**Android:** Phase 21I uses the in-app GeckoView bridge; Android does not start a
+local network server for browser-extension requests.
 **Shared:** CoreServices graph identical to desktop and CLI.
 
 ---
@@ -1473,16 +1475,21 @@ No duplicate business logic in CLI.
 
 ### Phase 21I -- Browser Remote Integration (HIGH)
 
-**Platform Coverage:** SHARED CORE (protocol) + WINDOWS ADAPTER + ANDROID ADAPTER
+**Platform Coverage:** SHARED CORE (protocol) + WINDOWS ADAPTER + ANDROID IN-APP ADAPTER
 
-Allow browser extension and native-messaging integration to target:
-- Local FetchX (Windows .exe or Android .apk)
-- Remote FetchX server
+On Windows, the browser extension targets either the local desktop through
+authenticated loopback IPC or a manually configured remote FetchX server through
+the authenticated remote protocol. Remote target selection applies to the
+Windows extension/native host.
 
-Users select a FetchX server/device. Must use authenticated remote protocol.
-
-**Windows:** Native messaging host updated to support remote routing.
-**Android:** Android FetchX accepts connections from browser extensions.
+**Windows:** Native messaging host supports local and remote routing.
+**Android:** The app's built-in GeckoView extension dispatches browser RPC
+through the Android bridge to CoreServices. This is same-device, in-app browser
+integration; it does not expose a LAN/network RPC listener. External
+Chrome/Firefox-to-Android connections, Android remote-target selection, pairing,
+device discovery, and refresh tokens are not implemented in Phase 21I.
+Phase 22A's broader browser download interception and queue-routing behavior is
+also outside Phase 21I.
 
 ---
 
@@ -1803,7 +1810,7 @@ require dedicated alignment tasks:
 | 11B | aria2 not bundled for Android | Phase 26B |
 | 12 | yt-dlp not bundled for Android | Phase 26B |
 | 13 | FFmpeg not bundled for Android | Phase 26B |
-| 17 | Android does not accept browser-extension connections | Phase 21I |
+| 17 | External browser extensions cannot connect to Android FetchX; in-app GeckoView bridge only | Not implemented in Phase 21I |
 | 19 | Android does not yet support plugin processes | Phase 20P+ |
 | 20D | Windows download UI not aligned with Android UI patterns | Phase 20P |
 | 20N | Windows filename sanitization not formally aligned | Phase 20Q |

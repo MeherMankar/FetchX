@@ -11,15 +11,14 @@ API.
 Browser extension
       ↓  stdin/stdout (4-byte LE length + JSON)
 Native messaging host  (this binary)
-      ↓  loopback TCP + session token
-FetchX desktop application
-      ↓  existing QueueManager / EngineDispatcher
-Download engine
+      ├─ local target → loopback TCP + session token → FetchX desktop application
+      └─ remote target → HTTPS + bearer token → FetchX remote server
 ```
 
 The host reads exactly **one** native-messaging request from stdin, forwards it to
-the running desktop application, writes the response to stdout, and exits.  The
-browser opens a new host process for each request.
+the selected target, writes the response to stdout, and exits. The browser opens
+a new host process for each request. Local download operations continue through
+the desktop's existing CoreServices and queue.
 
 ## Security model
 
@@ -29,7 +28,17 @@ browser opens a new host process for each request.
   cannot read it.
 - Message size is bounded at 64 KiB.  Larger frames are rejected before allocation.
 - No shell execution.  Structured arguments only.
-- The host never handles cookies, credentials, or authentication data.
+- The host never handles cookies or browser credentials.
+- Remote targets must use HTTPS; HTTP is accepted only for loopback testing.
+  Redirects and environment proxies are disabled, requests have timeouts, and
+  response bodies are size-bounded.
+- Remote bearer tokens are stored in Windows Credential Manager, keyed to both
+  the target ID and a fingerprint of its endpoint. Tokens are not stored in
+  browser extension storage. The host verifies `fetchx.rpc.v1` discovery and
+  currently allows only `system.discover`, `download.create`, and
+  `download.list` for browser RPC forwarding.
+- Credential-backed remote targets are supported by the Windows host. Other
+  platforms can continue to use the local desktop target.
 
 ## Building
 
@@ -90,4 +99,3 @@ the extension is packed.
 For production deployment, a packed extension has a stable ID derived from its
 signing key.  See [Chrome's documentation](https://developer.chrome.com/docs/extensions/reference/manifest/key)
 for details on generating a stable ID.
-

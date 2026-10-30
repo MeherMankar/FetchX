@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.fetchx.core.download.YtDlpFormat
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import java.io.IOException
 import java.lang.ref.WeakReference
@@ -82,6 +83,7 @@ data class BrowserUiState(
     val showPrivacySettings: Boolean = false,
     val privacySettings: PrivacySettings = PrivacySettings(),
     val showExtensions: Boolean = false,
+    val fetchxRemotePopupSession: GeckoSession? = null,
     val extensionManagerState: ExtensionManagerState = ExtensionManagerState(isLoading = true),
     val isImportingExtension: Boolean = false,
     val firefoxAddonsCatalogState: FirefoxAddonsCatalogState = FirefoxAddonsCatalogState(),
@@ -183,6 +185,9 @@ class BrowserViewModel internal constructor(
             extensionManager = it
         }
         GeckoRuntimeHolder.onVideoDetectedFromExtension = ::onVideoDetected
+        GeckoRuntimeHolder.setFetchxRemotePopupSessionListener { session ->
+            _uiState.update { it.copy(fetchxRemotePopupSession = session) }
+        }
         val listener: () -> Unit = ::syncExtensionManagerState
         extensionStateListener = listener
         manager.onStateChanged = listener
@@ -750,6 +755,12 @@ class BrowserViewModel internal constructor(
         extensionManager?.refresh()
     }
 
+    fun clickFetchxRemoteAction(): Boolean = GeckoRuntimeHolder.clickFetchxRemoteAction()
+
+    fun closeFetchxRemotePopup() {
+        GeckoRuntimeHolder.closeFetchxRemotePopup()
+    }
+
     fun installExtension(uri: Uri) {
         val manager = extensionManager
         val context = applicationContext
@@ -1308,6 +1319,8 @@ class BrowserViewModel internal constructor(
         }
         extensionStateListener = null
         extensionManager = null
+        GeckoRuntimeHolder.closeFetchxRemotePopup()
+        GeckoRuntimeHolder.setFetchxRemotePopupSessionListener(null)
         applicationContext = null
         trackerBlockingController.onStateChanged = null
         privacyController.onSettingsChanged = null

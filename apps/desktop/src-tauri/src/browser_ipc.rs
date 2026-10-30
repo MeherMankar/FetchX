@@ -27,6 +27,7 @@ use fetchx_browser_protocol::{
     BrowserErrorCode, BrowserRequest, BrowserRequestBody, BrowserResponse, MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION, validate_url,
 };
+use fetchx_remote_server::dispatch_local_rpc;
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -217,6 +218,42 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
     match request.body {
         BrowserRequestBody::Ping => {
             BrowserResponse::pong(None, env!("CARGO_PKG_VERSION").to_owned())
+        }
+
+        BrowserRequestBody::Rpc(browser_rpc) => {
+            let Some(services) = app_state.core_services.as_deref() else {
+                return BrowserResponse::error(
+                    None,
+                    BrowserErrorCode::DesktopUnavailable,
+                    "The FetchX RPC service is unavailable.",
+                );
+            };
+            let body = match serde_json::to_vec(&browser_rpc.request) {
+                Ok(body) => body,
+                Err(_) => {
+                    return BrowserResponse::error(
+                        None,
+                        BrowserErrorCode::InvalidRequest,
+                        "The RPC request is invalid.",
+                    );
+                }
+            };
+            match dispatch_local_rpc(services, &body).await {
+                Ok(response) => BrowserResponse::rpc(None, response),
+                Err(_) => BrowserResponse::error(
+                    None,
+                    BrowserErrorCode::InternalError,
+                    "FetchX could not process the RPC request.",
+                ),
+            }
+        }
+
+        BrowserRequestBody::StoreCredential(_) | BrowserRequestBody::DeleteCredential(_) => {
+            BrowserResponse::error(
+                None,
+                BrowserErrorCode::UnsupportedMessage,
+                "Credential management is handled by the native messaging host.",
+            )
         }
 
         BrowserRequestBody::AddDownload(browser_req) => {

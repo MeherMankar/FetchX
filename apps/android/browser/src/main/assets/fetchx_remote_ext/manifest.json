@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "FetchX Remote",
+  "version": "1.0.8",
+  "description": "Connects the FetchX Android browser to its local authenticated RPC adapter.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "fetchx-remote@fetchx.dev"
+    }
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "permissions": ["geckoViewAddons", "nativeMessaging"],
+  "browser_action": {
+    "default_title": "FetchX",
+    "default_popup": "popup.html"
+  }
+}

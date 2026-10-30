@@ -1,5 +1,6 @@
 package dev.fetchx.browser
 
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -137,6 +138,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel as composeViewModel
 import kotlinx.coroutines.delay
+import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -168,6 +170,7 @@ fun BrowserScreen(
     viewModel: BrowserViewModel = composeViewModel(factory = BrowserViewModel.Factory),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val activeTab = uiState.activeTab
     val extensionPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -853,6 +856,16 @@ fun BrowserScreen(
                         closeMenu()
                         viewModel.openExtensions()
                     },
+                    onOpenFetchxRemote = {
+                        closeMenu()
+                        if (!viewModel.clickFetchxRemoteAction()) {
+                            Toast.makeText(
+                                context,
+                                "FetchX Remote extension is not ready",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    },
                     onOpenSpaces = {
                         closeMenu()
                         viewModel.openSpaceSwitcher()
@@ -881,7 +894,6 @@ fun BrowserScreen(
             }
 
             // GeckoView
-            val context = LocalContext.current
             AndroidView(
                 factory = { ctx ->
                     GeckoView(ctx).also { viewModel.attachView(it, GeckoRuntimeHolder.getOrCreate(ctx)) }
@@ -1348,6 +1360,13 @@ fun BrowserScreen(
         )
     }
 
+    uiState.fetchxRemotePopupSession?.let { session ->
+        FetchxRemotePopupDialog(
+            session = session,
+            onDismiss = viewModel::closeFetchxRemotePopup,
+        )
+    }
+
     if (uiState.showExtensions) {
         ExtensionsDialog(
             state = uiState.extensionManagerState,
@@ -1368,6 +1387,49 @@ fun BrowserScreen(
             request = request,
             onResolve = viewModel::resolveExtensionPermissionRequest,
         )
+    }
+}
+
+@Composable
+private fun FetchxRemotePopupDialog(
+    session: GeckoSession,
+    onDismiss: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .height(440.dp),
+            shape = RoundedCornerShape(20.dp),
+            tonalElevation = 8.dp,
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .padding(start = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "FetchX Remote",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close FetchX Remote")
+                    }
+                }
+                AndroidView(
+                    factory = { context -> GeckoView(context).also { it.setSession(session) } },
+                    onRelease = { it.releaseSession() },
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 
@@ -1824,6 +1886,7 @@ private fun BrowserMenuSheet(
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onOpenFetchxRemote: () -> Unit,
     onOpenExtensions: () -> Unit,
     onOpenSpaces: () -> Unit,
     onOpenThemePicker: () -> Unit,
@@ -2004,6 +2067,12 @@ private fun BrowserMenuSheet(
             HorizontalDivider(modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
 
             // Customization & Settings
+            BrowserMenuItemRow(
+                icon = Icons.Default.Extension,
+                title = "FetchX Remote",
+                subtitle = "Connect or add a download",
+                onClick = onOpenFetchxRemote,
+            )
             BrowserMenuItemRow(
                 icon = Icons.Default.Extension,
                 title = "Extensions",

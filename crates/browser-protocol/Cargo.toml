@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+fetchx-remote-protocol = { path = "../remote-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -12,4 +13,3 @@ url.workspace = true
 
 [lints]
 workspace = true
-

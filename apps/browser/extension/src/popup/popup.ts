@@ -1,7 +1,15 @@
 import "./popup.css";
-import { PROTOCOL_VERSION, isError, userMessageForCode } from "../types/protocol";
-import { NativeHostError, hasEmbeddedCredentials, isHttpUrl, sendToNativeHost } from "../shared/native";
-import type { ExtensionSettings } from "../background/service-worker";
+import { isError, userMessageForCode } from "../types/protocol";
+import type { BrowserResponse, RpcRequest, RpcTarget } from "../types/protocol";
+import {
+  NativeHostError,
+  callTargetRpc,
+  deleteTargetCredential,
+  hasEmbeddedCredentials,
+  isHttpUrl,
+  storeTargetCredential,
+} from "../shared/native";
+import type { BrowserTarget, ExtensionSettings } from "../background/service-worker";
 
 // ──DOM refs ──────────────────────────────────────────────────────────────
 
@@ -27,6 +35,13 @@ const settingsSave = q<HTMLButtonElement>("#settings-save-btn");
 const setAutoIntercept = q<HTMLInputElement>("#set-auto-intercept");
 const setMinSize   = q<HTMLInputElement>("#set-min-size");
 const setNotif     = q<HTMLInputElement>("#set-notifications");
+const targetSelect = q<HTMLSelectElement>("#target-select");
+const targetList   = q<HTMLElement>("#target-list");
+const targetName   = q<HTMLInputElement>("#target-name");
+const targetEndpoint = q<HTMLInputElement>("#target-endpoint");
+const targetToken  = q<HTMLInputElement>("#target-token");
+const targetAddBtn = q<HTMLButtonElement>("#target-add-btn");
+const targetResult = q<HTMLElement>("#target-result");
 
 function q<T extends Element>(sel: string): T {
   return document.querySelector<T>(sel)!;
@@ -102,7 +117,7 @@ async function submit() {
   submitBtn.disabled = true;
   btnText.textContent = "Sending…";
   try {
-    const resp = await chrome.runtime.sendMessage({ type: "add_download", url }) as ReturnType<typeof sendToNativeHost> extends Promise<infer R> ? R : never;
+    const resp = await chrome.runtime.sendMessage({ type: "add_download", url }) as BrowserResponse;
     if (isError(resp)) {
       showResult("error", userMessageForCode(resp.error.code));
     } else {
@@ -280,12 +295,15 @@ async function downloadSelected() {
 
 settingsBtn.addEventListener("click", () => { void loadSettings(); settingsPanel.classList.remove("hidden"); });
 settingsClose.addEventListener("click", () => settingsPanel.classList.add("hidden"));
+targetSelect.addEventListener("change", () => void selectTarget(targetSelect.value));
+targetAddBtn.addEventListener("click", () => void addRemoteTarget());
 
 async function loadSettings() {
   const s = await chrome.runtime.sendMessage({ type: "get_settings" }) as ExtensionSettings;
   setAutoIntercept.checked = s.autoIntercept;
   setMinSize.value = String(s.minSizeMb);
   setNotif.checked = s.showNotifications;
+  await loadTargets();
 }
 
 settingsSave.addEventListener("click", () => void saveSettings());
@@ -300,6 +318,212 @@ async function saveSettings() {
   settingsPanel.classList.add("hidden");
 }
 
+const LOCAL_TARGET: BrowserTarget = {
+  id: "local-windows",
+  name: "This PC",
+  kind: "local",
+};
+
+async function loadTargets() {
+  const stored = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+  const remoteTargets = Array.isArray(stored.browserTargets)
+    ? stored.browserTargets.filter(isBrowserTarget)
+    : [];
+  const targets = [LOCAL_TARGET, ...remoteTargets.filter((target) => target.kind === "remote")];
+  const selectedId = typeof stored.selectedTargetId === "string"
+    && targets.some((target) => target.id === stored.selectedTargetId)
+    ? stored.selectedTargetId
+    : LOCAL_TARGET.id;
+
+  targetSelect.replaceChildren();
+  for (const target of targets) {
+    const option = document.createElement("option");
+    option.value = target.id;
+    option.textContent = target.name;
+    targetSelect.append(option);
+  }
+  targetSelect.value = selectedId;
+
+  targetList.replaceChildren();
+  for (const target of remoteTargets) {
+    const row = document.createElement("div");
+    row.className = "target-row";
+    const label = document.createElement("span");
+    label.textContent = `${target.name} · ${target.endpoint}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "target-remove";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => void removeTarget(target));
+    row.append(label, remove);
+    targetList.append(row);
+  }
+}
+
+async function selectTarget(targetId: string) {
+  await chrome.storage.local.set({ selectedTargetId: targetId });
+  setStatus("checking", "Checking target…");
+  await checkConnection();
+  void chrome.runtime.sendMessage({ type: "target_changed" });
+}
+
+async function addRemoteTarget() {
+  const name = targetName.value.trim();
+  const endpoint = validateRemoteEndpoint(targetEndpoint.value.trim());
+  const token = targetToken.value;
+  if (!name || !endpoint || !token) {
+    showTargetResult("error", "Enter a name, HTTPS server origin, and bearer token.");
+    return;
+  }
+  targetAddBtn.disabled = true;
+  showTargetResult("success", "Saving credential securely…");
+  const credentialId = crypto.randomUUID();
+  let credentialStored = false;
+  try {
+    const stored = await storeTargetCredential(credentialId, endpoint, token);
+    targetToken.value = "";
+    if (!stored.ok) throw new Error(userMessageForCode(stored.error.code));
+    credentialStored = true;
+    const target: BrowserTarget = {
+      id: credentialId,
+      name,
+      kind: "remote",
+      endpoint,
+      credential_id: credentialId,
+    };
+    const current = await chrome.storage.local.get("browserTargets");
+    const targets = Array.isArray(current.browserTargets)
+      ? current.browserTargets.filter(isBrowserTarget).filter((entry) => entry.kind === "remote")
+      : [];
+    await chrome.storage.local.set({
+      browserTargets: [...targets, target],
+      selectedTargetId: target.id,
+    });
+    targetName.value = "";
+    targetEndpoint.value = "";
+    await loadTargets();
+    showTargetResult("success", "Target added. The token is stored by Windows, not in extension storage.");
+    await checkConnection();
+  } catch (error) {
+    if (credentialStored) {
+      await deleteTargetCredential(credentialId, endpoint);
+    }
+    showTargetResult(
+      "error",
+      error instanceof Error ? error.message : "Could not save this target.",
+    );
+  } finally {
+    targetToken.value = "";
+    targetAddBtn.disabled = false;
+  }
+}
+
+async function removeTarget(target: BrowserTarget) {
+  if (target.kind !== "remote") return;
+  try {
+    const deleted = await deleteTargetCredential(target.credential_id, target.endpoint);
+    if (!deleted.ok) {
+      showTargetResult("error", userMessageForCode(deleted.error.code));
+      return;
+    }
+    const current = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+    const targets = Array.isArray(current.browserTargets)
+      ? current.browserTargets.filter(isBrowserTarget).filter((entry) => entry.id !== target.id)
+      : [];
+    await chrome.storage.local.set({
+      browserTargets: targets,
+      selectedTargetId: current.selectedTargetId === target.id
+        ? LOCAL_TARGET.id
+        : current.selectedTargetId,
+    });
+    await loadTargets();
+    await checkConnection();
+  } catch (error) {
+    showTargetResult(
+      "error",
+      error instanceof Error ? error.message : "Could not remove this target.",
+    );
+  }
+}
+
+async function selectedRpcTarget(): Promise<RpcTarget> {
+  const stored = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+  const targets = Array.isArray(stored.browserTargets)
+    ? stored.browserTargets.filter(isBrowserTarget)
+    : [];
+  const target = targets.find((entry) => entry.id === stored.selectedTargetId) ?? LOCAL_TARGET;
+  if (target.kind === "local") return { kind: "local" };
+  return {
+    kind: "remote",
+    endpoint: target.endpoint,
+    credential_id: target.credential_id,
+  };
+}
+
+async function checkConnection() {
+  try {
+    const request: RpcRequest = {
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "system.discover",
+    };
+    const response = await callTargetRpc(await selectedRpcTarget(), request);
+    if (!response.ok || !("rpc_response" in response)) {
+      if (response.ok) {
+        setStatus("disconnected", "Target returned an invalid RPC response.");
+        return;
+      }
+      setStatus("disconnected", userMessageForCode(response.error.code));
+      return;
+    }
+    const rpcResponse = response.rpc_response;
+    if ("error" in rpcResponse) {
+      setStatus("disconnected", "Target rejected the RPC request.");
+      return;
+    }
+    const result = rpcResponse.result as { protocol_version?: unknown } | undefined;
+    if (result?.protocol_version !== "fetchx.rpc.v1") {
+      setStatus("disconnected", "Incompatible FetchX RPC server");
+      return;
+    }
+    setStatus("connected", "Connected · fetchx.rpc.v1");
+  } catch (error) {
+    setStatus(
+      "disconnected",
+      error instanceof NativeHostError ? error.message : "Could not reach the selected target.",
+    );
+  }
+}
+
+function validateRemoteEndpoint(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password
+      || (url.pathname !== "/" && url.pathname !== "")
+      || url.search || url.hash) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isBrowserTarget(
+  value: unknown,
+): value is Extract<BrowserTarget, { kind: "remote" }> {
+  if (typeof value !== "object" || value === null) return false;
+  const target = value as Record<string, unknown>;
+  return typeof target.id === "string"
+    && typeof target.name === "string"
+    && target.kind === "remote"
+    && typeof target.endpoint === "string"
+    && typeof target.credential_id === "string";
+}
+
+function showTargetResult(kind: "success" | "error", message: string) {
+  targetResult.textContent = message;
+  targetResult.className = `result-banner ${kind}`;
+}
+
 // ──Helpers ───────────────────────────────────────────────────────────────
 
 function esc(s: string): string {
@@ -311,14 +535,11 @@ function esc(s: string): string {
 async function init() {
   void fillTab();
   try {
-    const resp = await sendToNativeHost({ version: PROTOCOL_VERSION, type: "ping" });
-    if (resp.ok && "pong" in resp && resp.pong) {
-      const ver = "app_version" in resp ? ` · v${resp.app_version}` : "";
-      setStatus("connected", `Connected${ver}`);
-    } else {
-      setStatus("disconnected", "Not running");
-    }
-  } catch { setStatus("disconnected", "Not running"); }
+    await loadTargets();
+    await checkConnection();
+  } catch {
+    setStatus("disconnected", "Could not load FetchX target settings.");
+  }
 }
 
 void init();

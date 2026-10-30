@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FetchX</title>
+  </head>
+  <body>
+    <main>
+      <h1>FetchX Android</h1>
+      <p>Submit a URL to this device through FetchX.</p>
+      <button id="connect" type="button">Check connection</button>
+      <button id="list-downloads" type="button">List downloads</button>
+      <form id="download-form">
+        <label for="download-url">HTTP or HTTPS URL</label>
+        <input id="download-url" type="url" autocomplete="url" required>
+        <button id="download" type="submit">Add to FetchX</button>
+      </form>
+      <output id="result" aria-live="polite"></output>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

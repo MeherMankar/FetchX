@@ -217,6 +217,9 @@ interface DownloadService {
     [Throws=MobileApiError]
     TorrentTelemetryDto? get_torrent_telemetry(string id);
 
+    [Throws=MobileApiError]
+    string dispatch_browser_rpc(string request_json);
+
     void add_event_listener(DownloadEventListener listener);
 
     void shutdown();

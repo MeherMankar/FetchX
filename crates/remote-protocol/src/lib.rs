@@ -38,6 +38,7 @@ pub const SYSTEM_WEBSOCKET_TICKET: &str = "system.websocketTicket";
 pub const DOWNLOAD_CREATE: &str = "download.create";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
+pub const BROWSER_RPC_METHODS: &[&str] = &[SYSTEM_DISCOVER, DOWNLOAD_CREATE, DOWNLOAD_LIST];
 pub const DOWNLOAD_PAUSE: &str = "download.pause";
 pub const DOWNLOAD_RESUME: &str = "download.resume";
 pub const DOWNLOAD_CANCEL: &str = "download.cancel";
@@ -118,6 +119,7 @@ pub enum RpcErrorCode {
 pub struct ValidatedRequest {
     /// Omitted for JSON-RPC notifications, which must not receive a response.
     pub id: Option<RpcId>,
+    pub method: String,
     pub command: RemoteCommand,
 }
 
@@ -373,6 +375,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
         return Err(ProtocolError::RequestIdTooLarge);
     }
 
+    let method = request.method.clone();
     let command = match request.method.as_str() {
         SYSTEM_DISCOVER => parse_empty_params(&request).map(|()| RemoteCommand::Discover),
         SYSTEM_WEBSOCKET_TICKET => {
@@ -425,6 +428,7 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
 
     Ok(ValidatedRequest {
         id: request.id,
+        method,
         command,
     })
 }

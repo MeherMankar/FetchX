@@ -19,15 +19,17 @@
 //! - Message size is bounded by MAX_MESSAGE_BYTES (64 KiB).
 //! - No shell execution.
 //! - No arbitrary filesystem access.
-//! - No credentials, cookies, or secrets are handled here.
+//! - Browser cookies and passwords are never accessed.
+//! - A remote bearer token is handled only by explicit credential provisioning
+//!   and is stored in the operating system credential store.
 
 #![forbid(unsafe_code)]
 
 use std::io::{self, BufReader, BufWriter};
 
 use fetchx_browser_protocol::{
-    BrowserErrorCode, BrowserRequest, BrowserResponse, NativeMessagingError, read_frame,
-    write_frame,
+    BrowserErrorCode, BrowserRequest, BrowserRequestBody, BrowserResponse, BrowserRpcTarget,
+    NativeMessagingError, read_frame, write_frame,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -37,6 +39,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 mod ipc;
+mod remote;
 
 fn main() {
     // All diagnostics to stderr — stdout is protocol traffic only.
@@ -90,9 +93,46 @@ fn run_once() -> Result<(), HostError> {
     info!(version = request.version, "received browser request");
 
     // Forward to the desktop and write the response.
-    let response = forward_to_desktop(request)?;
+    let BrowserRequest { version, body } = request;
+    let response = match body {
+        BrowserRequestBody::Rpc(rpc) => match rpc.target {
+            BrowserRpcTarget::Local => forward_to_desktop(BrowserRequest {
+                version,
+                body: BrowserRequestBody::Rpc(rpc),
+            })?,
+            BrowserRpcTarget::Remote {
+                endpoint,
+                credential_id,
+            } => remote::forward_rpc(&endpoint, &credential_id, &rpc.request),
+        },
+        BrowserRequestBody::StoreCredential(credential) => {
+            match remote::store_credential(
+                &credential.credential_id,
+                &credential.endpoint,
+                &credential.token,
+            ) {
+                Ok(()) => BrowserResponse::credential_stored(None),
+                Err(code) => credential_error(code),
+            }
+        }
+        BrowserRequestBody::DeleteCredential(credential) => {
+            match remote::delete_credential(&credential.credential_id, &credential.endpoint) {
+                Ok(()) => BrowserResponse::credential_stored(None),
+                Err(code) => credential_error(code),
+            }
+        }
+        body => forward_to_desktop(BrowserRequest { version, body })?,
+    };
     write_frame(&mut writer, &response)?;
     Ok(())
+}
+
+fn credential_error(code: BrowserErrorCode) -> BrowserResponse {
+    let message = match code {
+        BrowserErrorCode::InvalidTarget => "The target or credential is invalid.",
+        _ => "The operating system credential store is unavailable.",
+    };
+    BrowserResponse::error(None, code, message)
 }
 
 fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostError> {

@@ -8,14 +8,15 @@
  * 4. Download task cache for popup's task list
  */
 
-import type { BrowserResponse } from "../types/protocol";
+import type { BrowserErrorCode, BrowserResponse } from "../types/protocol";
 import {
   NativeHostError,
+  callTargetRpc,
   hasEmbeddedCredentials,
   isHttpUrl,
-  sendToNativeHost,
 } from "../shared/native";
 import { PROTOCOL_VERSION } from "../types/protocol";
+import type { RpcRequest, RpcTarget } from "../types/protocol";
 
 // ────────────────────────────────────────────────────────────
 // Settings (persisted in chrome.storage.local)
@@ -38,6 +39,35 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   blockedDomains: [],
   showNotifications: true,
 };
+
+export type BrowserTarget =
+  | {
+    id: string;
+    name: string;
+    kind: "local";
+  }
+  | {
+    id: string;
+    name: string;
+    kind: "remote";
+    endpoint: string;
+    credential_id: string;
+  };
+
+const LOCAL_TARGET: BrowserTarget = {
+  id: "local-windows",
+  name: "This PC",
+  kind: "local",
+};
+
+async function getSelectedTarget(): Promise<BrowserTarget> {
+  const stored = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+  const targets = Array.isArray(stored.browserTargets)
+    ? stored.browserTargets.filter(isBrowserTarget)
+    : [];
+  const selected = targets.find((target) => target.id === stored.selectedTargetId);
+  return selected ?? LOCAL_TARGET;
+}
 
 async function getSettings(): Promise<ExtensionSettings> {
   const stored = await chrome.storage.local.get("settings");
@@ -76,6 +106,11 @@ const MENU_LINK = "md-link";
 const MENU_PAGE = "md-page";
 
 chrome.runtime.onInstalled.addListener(() => {
+  void chrome.storage.local.get("browserTargets").then((stored) => {
+    if (!Array.isArray(stored.browserTargets)) {
+      return chrome.storage.local.set({ browserTargets: [] });
+    }
+  });
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: MENU_LINK,
@@ -182,6 +217,10 @@ chrome.runtime.onMessage.addListener(
       case "refresh_tasks":
         void refreshTasks().then(() => sendResponse(taskCache));
         return true;
+
+      case "target_changed":
+        void refreshTasks().then(() => sendResponse({ ok: true }));
+        return true;
     }
 
     sendResponse(null);
@@ -198,14 +237,32 @@ async function handleAddDownload(url: string): Promise<BrowserResponse> {
   if (hasEmbeddedCredentials(url)) return err("credentials_in_url", "URLs with credentials are not accepted.");
 
   try {
-    const resp = await sendToNativeHost({
+    const target = await getSelectedTarget();
+    const rpcRequest: RpcRequest = {
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "download.create",
+      params: { url },
+    };
+    const response = await callTargetRpc(toRpcTarget(target), rpcRequest);
+    if (!response.ok || !("rpc_response" in response)) return response;
+    const rpcResponse = response.rpc_response as {
+      result?: { id?: unknown };
+      error?: { code?: unknown };
+    };
+    if (typeof rpcResponse.error === "object" && rpcResponse.error !== null) {
+      return err("download_rejected", "FetchX rejected the download.");
+    }
+    const downloadId = rpcResponse.result?.id;
+    if (typeof downloadId !== "string") {
+      return err("internal_error", "FetchX returned an invalid RPC response.");
+    }
+    void refreshTasks();
+    return {
       version: PROTOCOL_VERSION,
-      type: "add_download",
-      url,
-      request_id: crypto.randomUUID(),
-    });
-    if (resp.ok) void refreshTasks();
-    return resp;
+      ok: true,
+      download_id: downloadId,
+    };
   } catch (e) {
     const msg = e instanceof NativeHostError ? e.message : "Could not reach FetchX. Is it running?";
     return err("desktop_unavailable", msg);
@@ -228,15 +285,41 @@ async function handleBatchDownload(urls: string[]): Promise<{ added: number; fai
 
 async function refreshTasks(): Promise<void> {
   try {
-    const resp = await sendToNativeHost({
-      version: PROTOCOL_VERSION,
-      type: "list_downloads",
-    } as never);
-    const r = resp as never as { ok: boolean; downloads?: CachedDownload[] };
-    if (r.ok && Array.isArray(r.downloads)) {
-      taskCache = r.downloads.slice(0, 20);
+    const target = await getSelectedTarget();
+    const response = await callTargetRpc(toRpcTarget(target), {
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "download.list",
+    });
+    if (!response.ok || !("rpc_response" in response)) return;
+    const rpcResponse = response.rpc_response as {
+      result?: { downloads?: CachedDownload[] };
+    };
+    const downloads = rpcResponse.result?.downloads;
+    if (Array.isArray(downloads)) {
+      taskCache = downloads.slice(0, 20);
     }
   } catch { /* optional */ }
+}
+
+function toRpcTarget(target: BrowserTarget): RpcTarget {
+  if (target.kind === "local") return { kind: "local" };
+  return {
+    kind: "remote",
+    endpoint: target.endpoint,
+    credential_id: target.credential_id,
+  };
+}
+
+function isBrowserTarget(value: unknown): value is BrowserTarget {
+  if (typeof value !== "object" || value === null) return false;
+  const target = value as Record<string, unknown>;
+  return typeof target.id === "string"
+    && typeof target.name === "string"
+    && (target.kind === "local"
+      || (target.kind === "remote"
+        && typeof target.endpoint === "string"
+        && typeof target.credential_id === "string"));
 }
 
 // ────────────────────────────────────────────────────────────
@@ -247,8 +330,8 @@ function isMsg(v: unknown): v is Msg {
   return typeof v === "object" && v !== null && typeof (v as Msg).type === "string";
 }
 
-function err(code: string, message: string): BrowserResponse {
-  return { version: PROTOCOL_VERSION, ok: false, error: { code: code as never, message } };
+function err(code: BrowserErrorCode, message: string): BrowserResponse {
+  return { version: PROTOCOL_VERSION, ok: false, error: { code, message } };
 }
 
 function hostnameOf(url: string): string {

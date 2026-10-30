@@ -77,6 +77,16 @@ body {
 .tab-panel { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
 .tab-panel.hidden { display: none; }
 
+.target-picker {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-dim); font-size: 11px; font-weight: 600;
+}
+.target-picker select {
+  flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); font: inherit;
+}
+
 /* ──Input group ──*/
 .input-group { display: flex; gap: 6px; }
 .url-input {
@@ -235,6 +245,17 @@ body {
 }
 .settings-title { font-size: 13px; font-weight: 650; }
 .settings-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.target-settings { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.target-settings h2 { font-size: 12px; color: var(--text-muted); }
+.target-settings input {
+  width: 100%; min-width: 0; height: 30px; padding: 0 7px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text); font: inherit;
+}
+.target-list { display: flex; flex-direction: column; gap: 5px; }
+.target-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+.target-remove { color: var(--error); background: transparent; border: 0; cursor: pointer; font: inherit; }
+.target-result { font-size: 11px; }
 
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .setting-label { font-size: 12px; color: var(--text-muted); }
