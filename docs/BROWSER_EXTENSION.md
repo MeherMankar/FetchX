@@ -3,7 +3,7 @@
 ## Architecture
 
 ```
-Browser (Chrome / Edge)
+Browser (Chrome / Edge / Firefox)
         │
         │  Native Messaging (stdin/stdout, 4-byte LE length + JSON)
         ▼
@@ -29,7 +29,7 @@ sanitization, queueing, retries, and persistence remain in the Rust core.
 |------|-------------|
 | `crates/browser-protocol/` | Shared Rust crate: protocol types, URL validation, native-messaging framing |
 | `apps/browser/native-host/` | Rust binary: reads stdin, connects to desktop, writes stdout |
-| `apps/browser/extension/` | TypeScript Manifest V3 extension |
+| `apps/browser/extension/` | TypeScript Chrome/Edge Manifest V3 and Firefox Manifest V2 adapters |
 
 ## Protocol
 
@@ -121,24 +121,27 @@ removed on desktop shutdown.
 - Response messages never contain filesystem paths, process arguments, RPC secrets,
   SQL errors, or stack traces.
 - No shell execution anywhere in the extension, host, or desktop integration.
-- Extension permissions: `contextMenus`, `nativeMessaging` only.
+- Extension permissions include `contextMenus`, `nativeMessaging`, `downloads`,
+  `tabs`, `storage`, `notifications`, and `<all_urls>` for the existing scanner
+  and download-interception features. The extension does not request cookie,
+  history, or `webRequest` permissions.
 
 ## Development setup
 
 See [`apps/browser/extension/README.md`](../apps/browser/extension/README.md) and
 [`apps/browser/native-host/README.md`](../apps/browser/native-host/README.md).
 
-## Known limitations (Phase 17)
+## Cross-phase notes
 
-- Firefox is not tested.  The native messaging API is compatible but the manifest
-  format differs slightly; Firefox support is deferred.
+- Firefox support is implemented and live validated in Phase 22B. Its Manifest V2
+  package and `allowed_extensions` host manifest are separate from Chromium's.
 - The extension already has an optional browser-download interception setting.
   Phase 21I does not introduce or expand interception or download-engine behavior;
   broader browser download handling remains outside this integration phase.
 - Engine selection (aria2/yt-dlp) is not exposed through the extension.  All
   browser-initiated downloads use Direct HTTP.  The user can change the engine in
   the desktop UI after the download is created.
-- Production packaging (installer, signed extension) is deferred to Phase 22.
+- Signed release packaging and store distribution remain in Phase 26A.
 
 ## Phase 21I — Browser remote integration
 
@@ -215,3 +218,34 @@ selection or response metadata handling. Referrer forwarding is intentionally
 excluded because it can expose browsing context and requires an explicit
 user-consent policy. Cookies, credentials, and other request headers are also
 not forwarded.
+
+## Phase 22B — Firefox extension
+
+**Status: COMPLETE — implemented, tested, and live validated on Windows with
+Firefox 159.** Firefox selects the Promise-based `browser` API namespace and
+uses the shared download interception and RPC logic. The Firefox native-host
+manifest is separate from the Chromium manifest and allows only the fixed
+`FetchX@FetchX.app` extension ID.
+
+Live validation installed the built Firefox package and exercised the real
+extension-to-native-host-to-FetchX path. An accepted HTTP attachment completed
+as a 215/215-byte `direct_http` download with SHA-256
+`d35b5042ab9dbf1a9fa341fbcbbe6a8f6c9323bbd3f726fbd624d0d800e936cc`. Its
+database record and file remained present with the same hash after force-stop
+and relaunch. A localhost URL rejected by FetchX created no database record;
+Firefox resumed and completed the exact 2 MiB fixture with SHA-256
+`acb637086b283599695da7148d2881691e36e4825bc7731dbf77df3f0df53537`.
+An unavailable native host also returned a definite rejection and exercised
+the same browser fallback.
+
+The extension test suite passed (26 tests), TypeScript checking passed, and
+both Chromium and Firefox packages built successfully. Rust formatting, check,
+and workspace tests passed (660 passed, 0 failed, 7 ignored). Strict Clippy
+remains blocked by the pre-existing `collapsible_if` warning in
+`crates/models/src/progress.rs`.
+
+**Known Firefox limitation:** a paused download cannot always be resumed if
+the origin does not support HTTP range requests. In that case Firefox reports
+the item as interrupted and FetchX notifies the user that browser recovery
+failed; ambiguous native-host outcomes remain paused to avoid duplicate
+downloads.

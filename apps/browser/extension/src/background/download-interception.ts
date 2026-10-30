@@ -21,6 +21,86 @@ export interface DownloadEventClaimStore {
   save(downloadIds: number[]): Promise<void>;
 }
 
+export interface DownloadMetadataPort {
+  search(downloadId: number): Promise<Array<{ filename?: string }>>;
+  addChangedListener(
+    listener: (delta: { id: number; filename?: { current?: string } }) => void,
+  ): void;
+  removeChangedListener(
+    listener: (delta: { id: number; filename?: { current?: string } }) => void,
+  ): void;
+}
+
+export async function resolveDownloadFilename(
+  downloadId: number,
+  initialFilename: string,
+  port: DownloadMetadataPort,
+  timeoutMs = 5_000,
+): Promise<string | undefined> {
+  if (initialFilename) return initialFilename;
+  const current = await port.search(downloadId);
+  if (current[0]?.filename) return current[0].filename;
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      port.removeChangedListener(onChanged);
+    };
+    const finish = (filename?: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(filename);
+    };
+    const onChanged = (delta: { id: number; filename?: { current?: string } }) => {
+      if (delta.id === downloadId && delta.filename?.current) {
+        finish(delta.filename.current);
+      }
+    };
+
+    port.addChangedListener(onChanged);
+    timeoutId = setTimeout(() => finish(), timeoutMs);
+    void port.search(downloadId).then(
+      (items) => {
+        if (items[0]?.filename) finish(items[0].filename);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+export async function submitDownloadWithResolvedFilename(
+  item: { id: number; url: string; filename: string },
+  metadata: DownloadMetadataPort,
+  submit: (url: string, filename: string) => Promise<DownloadSubmission>,
+): Promise<DownloadSubmission> {
+  let browserPath: string | undefined;
+  try {
+    browserPath = await resolveDownloadFilename(item.id, item.filename, metadata);
+  } catch {
+    return {
+      kind: "rejected",
+      message: "Browser download details could not be read; the browser download will continue.",
+    };
+  }
+
+  const filename = filenameFromBrowserPath(browserPath);
+  if (!filename) {
+    return {
+      kind: "rejected",
+      message: "The browser did not provide a download filename.",
+    };
+  }
+  return submit(item.url, filename);
+}
+
 export async function claimDownloadEvent(
   downloadId: number,
   claimingDownloadIds: Set<number>,

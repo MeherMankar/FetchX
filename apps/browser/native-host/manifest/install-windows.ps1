@@ -25,7 +25,7 @@ $ManifestPath = "$ManifestDir\$HostName.json"
 
 # Derive the native host binary path relative to this script.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+$RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..\..")).Path
 $HostBinary = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 
 $ChromeKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
@@ -75,4 +75,3 @@ foreach ($Key in @($ChromeKey, $EdgeKey)) {
 Write-Host ""
 Write-Host "Installation complete."
 Write-Host "Restart Chrome/Edge for changes to take effect."
-

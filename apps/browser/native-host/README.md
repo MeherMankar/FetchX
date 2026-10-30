@@ -1,9 +1,8 @@
 # FetchX Native Messaging Host
 
 This is the Rust binary that bridges the browser extension to the FetchX
-desktop application.  The browser launches it as a child process via the
-[Chrome Native Messaging](https://developer.chrome.com/docs/apps/nativeMessaging/)
-API.
+desktop application. The browser launches it as a child process through its
+native messaging API (Chrome/Edge or Firefox).
 
 ## How it works
 
@@ -69,6 +68,25 @@ To uninstall:
 .\install-windows.ps1 -ExtensionId "your32characterextensionidhere" -Uninstall
 ```
 
+### Firefox
+
+Firefox uses a separate host manifest and registry entry. Its manifest allows
+the fixed extension ID `FetchX@FetchX.app` in `allowed_extensions`, so it does
+not overwrite the Chrome/Edge `allowed_origins` manifest.
+
+After building the release binary, run:
+
+```powershell
+cd apps\browser\native-host\manifest
+.\install-firefox-windows.ps1
+```
+
+Restart Firefox after installation. To uninstall the Firefox registration:
+
+```powershell
+.\install-firefox-windows.ps1 -Uninstall
+```
+
 ## State file location
 
 The desktop application writes a JSON state file on startup so the native host
@@ -84,9 +102,10 @@ The state file is removed when FetchX shuts down.
 
 ## Extension ID
 
-The native messaging host manifest must list the exact extension ID in its
-`allowed_origins` array.  The ID changes depending on the machine and whether
-the extension is packed.
+The native messaging host manifest must allow the exact extension ID. Chrome
+and Edge use `allowed_origins`; Firefox uses `allowed_extensions`. The
+development Chromium ID changes depending on the machine and whether the
+extension is packed; Firefox uses the fixed ID `FetchX@FetchX.app`.
 
 **Development flow:**
 

@@ -1,7 +1,8 @@
 # FetchX Native Messaging Host — Firefox Installation Script (Windows)
 #
-# Firefox uses a different registry path and a different extension ID format
-# compared to Chrome/Edge.
+# Firefox uses a different registry path and extension-ID allowlist than
+# Chrome/Edge. Its manifest is separate so installing either browser cannot
+# overwrite the other's allowed-extension list.
 #
 # Usage:
 #   .\install-firefox-windows.ps1 [-Uninstall]
@@ -15,10 +16,10 @@ param([switch]$Uninstall)
 $HostName    = "com.fetchx.native_host"
 $ExtensionId = "FetchX@FetchX.app"
 $ManifestDir = "$env:APPDATA\fetchx\native-host"
-$ManifestPath = "$ManifestDir\$HostName.json"
+$ManifestPath = "$ManifestDir\$HostName.firefox.json"
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$RepoRoot    = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+$RepoRoot    = (Resolve-Path (Join-Path $ScriptDir "..\..\..\..")).Path
 $HostBinary  = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 
 # Firefox uses HKCU\Software\Mozilla\NativeMessagingHosts
@@ -56,6 +57,6 @@ Write-Host "Wrote manifest to: $ManifestPath"
 New-Item -Path $FirefoxKey -Force | Out-Null
 Set-ItemProperty -Path $FirefoxKey -Name "(Default)" -Value $ManifestPath
 Write-Host "Registered Firefox native messaging host: $FirefoxKey"
+Write-Host "The Firefox manifest is separate from the Chrome/Edge manifest."
 Write-Host ""
 Write-Host "Restart Firefox for changes to take effect."
-

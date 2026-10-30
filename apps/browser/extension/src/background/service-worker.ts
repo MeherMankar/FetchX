@@ -15,6 +15,7 @@ import {
   hasEmbeddedCredentials,
   isHttpUrl,
 } from "../shared/native";
+import { browserApi } from "../shared/browser-api";
 import { PROTOCOL_VERSION } from "../types/protocol";
 import type { RpcRequest, RpcTarget } from "../types/protocol";
 import {
@@ -22,6 +23,7 @@ import {
   filenameFromBrowserPath,
   handoffBrowserDownload,
   isBlockedDomain,
+  submitDownloadWithResolvedFilename,
   type DownloadSubmission,
 } from "./download-interception";
 
@@ -68,7 +70,7 @@ const LOCAL_TARGET: BrowserTarget = {
 };
 
 async function getSelectedTarget(): Promise<BrowserTarget> {
-  const stored = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+  const stored = await browserApi.storage.local.get(["browserTargets", "selectedTargetId"]);
   const targets = Array.isArray(stored.browserTargets)
     ? stored.browserTargets.filter(isBrowserTarget)
     : [];
@@ -77,14 +79,14 @@ async function getSelectedTarget(): Promise<BrowserTarget> {
 }
 
 async function getSettings(): Promise<ExtensionSettings> {
-  const stored = await chrome.storage.local.get("settings");
+  const stored = await browserApi.storage.local.get("settings");
   return { ...DEFAULT_SETTINGS, ...(stored.settings ?? {}) } as ExtensionSettings;
 }
 
 async function saveSettings(settings: Partial<ExtensionSettings>): Promise<ExtensionSettings> {
   const current = await getSettings();
   const updated = { ...current, ...settings };
-  await chrome.storage.local.set({ settings: updated });
+  await browserApi.storage.local.set({ settings: updated });
   return updated;
 }
 
@@ -115,19 +117,19 @@ const claimingDownloadIds = new Set<number>();
 const MENU_LINK = "md-link";
 const MENU_PAGE = "md-page";
 
-chrome.runtime.onInstalled.addListener(() => {
-  void chrome.storage.local.get("browserTargets").then((stored) => {
+browserApi.runtime.onInstalled.addListener(() => {
+  void browserApi.storage.local.get("browserTargets").then((stored) => {
     if (!Array.isArray(stored.browserTargets)) {
-      return chrome.storage.local.set({ browserTargets: [] });
+      return browserApi.storage.local.set({ browserTargets: [] });
     }
   });
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
+  void browserApi.contextMenus.removeAll().then(() => {
+    browserApi.contextMenus.create({
       id: MENU_LINK,
       title: "Download link with FetchX",
       contexts: ["link"],
     });
-    chrome.contextMenus.create({
+    browserApi.contextMenus.create({
       id: MENU_PAGE,
       title: "Download page URL with FetchX",
       contexts: ["page"],
@@ -135,7 +137,7 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-chrome.contextMenus.onClicked.addListener((info, _tab) => {
+browserApi.contextMenus.onClicked.addListener((info, _tab) => {
   const url = info.linkUrl ?? info.pageUrl;
   if (!url) return;
   void handleAddDownload(url).then((result) => {
@@ -155,7 +157,7 @@ chrome.contextMenus.onClicked.addListener((info, _tab) => {
 // Auto-intercept browser downloads
 // ────────────────────────────────────────────────────────────
 
-chrome.downloads.onCreated.addListener((item) => {
+browserApi.downloads.onCreated.addListener((item) => {
   void interceptBrowserDownload(item).catch((error: unknown) => {
     console.error(
       "Could not process browser download event",
@@ -164,7 +166,14 @@ chrome.downloads.onCreated.addListener((item) => {
   });
 });
 
-async function interceptBrowserDownload(item: chrome.downloads.DownloadItem): Promise<void> {
+interface BrowserDownloadItem {
+  id: number;
+  url: string;
+  filename: string;
+  fileSize: number;
+}
+
+async function interceptBrowserDownload(item: BrowserDownloadItem): Promise<void> {
     const settings = await getSettings();
     if (!settings.autoIntercept) return;
 
@@ -182,20 +191,14 @@ async function interceptBrowserDownload(item: chrome.downloads.DownloadItem): Pr
     if (!await claimBrowserDownloadEvent(item.id)) return;
 
     const result = await handoffBrowserDownload(item.id, {
-      pause: (downloadId) => chrome.downloads.pause(downloadId),
-      resume: (downloadId) => chrome.downloads.resume(downloadId),
-      cancel: (downloadId) => chrome.downloads.cancel(downloadId),
-      submit: async () => {
-        const browserPath = await waitForBrowserDownloadFilename(item.id, item.filename);
-        const filename = filenameFromBrowserPath(browserPath);
-        if (!filename) {
-          return {
-            kind: "rejected",
-            message: "The browser did not provide a download filename.",
-          };
-        }
-        return submitBrowserDownload(item.url, filename);
-      },
+      pause: (downloadId) => browserApi.downloads.pause(downloadId),
+      resume: (downloadId) => browserApi.downloads.resume(downloadId),
+      cancel: (downloadId) => browserApi.downloads.cancel(downloadId),
+      submit: () => submitDownloadWithResolvedFilename(item, {
+          search: async (downloadId) => browserApi.downloads.search({ id: downloadId }),
+          addChangedListener: (listener) => browserApi.downloads.onChanged.addListener(listener),
+          removeChangedListener: (listener) => browserApi.downloads.onChanged.removeListener(listener),
+        }, submitBrowserDownload),
     });
     const displayName = filenameFromBrowserPath(item.filename) ?? hostname;
 
@@ -242,58 +245,15 @@ async function claimBrowserDownloadEvent(downloadId: number): Promise<boolean> {
     claimingDownloadIds,
     {
       load: async () => {
-        const stored = await chrome.storage.local.get(CLAIMED_DOWNLOAD_IDS_KEY);
+        const stored = await browserApi.storage.local.get(CLAIMED_DOWNLOAD_IDS_KEY);
         return stored[CLAIMED_DOWNLOAD_IDS_KEY];
       },
       save: async (ids) => {
-        await chrome.storage.local.set({ [CLAIMED_DOWNLOAD_IDS_KEY]: ids });
+        await browserApi.storage.local.set({ [CLAIMED_DOWNLOAD_IDS_KEY]: ids });
       },
     },
     MAX_CLAIMED_DOWNLOAD_IDS,
   );
-}
-
-async function waitForBrowserDownloadFilename(
-  downloadId: number,
-  initialFilename: string,
-): Promise<string | undefined> {
-  if (initialFilename) return initialFilename;
-  const current = await chrome.downloads.search({ id: downloadId });
-  if (current[0]?.filename) return current[0].filename;
-
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let timeoutId: ReturnType<typeof setTimeout>;
-    const cleanup = () => {
-      clearTimeout(timeoutId);
-      chrome.downloads.onChanged.removeListener(onChanged);
-    };
-    const finish = (filename?: string) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(filename);
-    };
-    const onChanged = (delta: chrome.downloads.DownloadDelta) => {
-      if (delta.id === downloadId && delta.filename?.current) {
-        finish(delta.filename.current);
-      }
-    };
-
-    chrome.downloads.onChanged.addListener(onChanged);
-    timeoutId = setTimeout(() => finish(), 5_000);
-    void chrome.downloads.search({ id: downloadId }).then(
-      (items) => {
-        if (items[0]?.filename) finish(items[0].filename);
-      },
-      (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      },
-    );
-  });
 }
 
 // ────────────────────────────────────────────────────────────
@@ -302,7 +262,7 @@ async function waitForBrowserDownloadFilename(
 
 interface Msg { type: string; [k: string]: unknown }
 
-chrome.runtime.onMessage.addListener(
+browserApi.runtime.onMessage.addListener(
   (message: unknown, _sender, sendResponse): boolean => {
     if (!isMsg(message)) { sendResponse(null); return false; }
 
@@ -581,7 +541,7 @@ function hostnameOf(url: string): string {
 
 function notify(title: string, message: string): void {
   try {
-    chrome.notifications?.create({
+    void browserApi.notifications?.create({
       type: "basic",
       iconUrl: "icons/icon48.png",
       title,

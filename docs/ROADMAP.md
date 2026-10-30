@@ -1569,6 +1569,22 @@ resume an external response.
 Complete Firefox support alongside existing Chrome/Edge support.
 Shared browser-protocol crate; only extension manifest format differs.
 
+**Status: COMPLETE — implemented, tested, and live validated on Windows with
+Firefox 159.** The Firefox Manifest V2 adapter uses the shared interception
+and RPC logic, with a separate native-host manifest and Firefox extension-ID
+allowlist. A real accepted download completed at 215/215 bytes, matched its
+expected SHA-256, and persisted in both the filesystem and database after
+force-stop/relaunch. Explicit FetchX rejection and unavailable-native-host
+fallbacks were live-tested with a 2 MiB range-capable fixture; the rejected
+request created no FetchX record. Extension tests (26), TypeScript checking,
+Chromium/Firefox builds, Rust formatting/check, and workspace tests (660 passed,
+0 failed, 7 ignored) passed. Strict Clippy remains blocked by a pre-existing
+`collapsible_if` warning in `crates/models/src/progress.rs`.
+
+Known limitation: Firefox may not resume a paused download when the origin
+does not support HTTP range requests; the extension reports the failed browser
+recovery instead of silently claiming success.
+
 ---
 
 ### Phase 23A -- Plugin Security (HIGH)

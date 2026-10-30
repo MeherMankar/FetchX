@@ -2,8 +2,9 @@
  * Typed Native Messaging client.
  *
  * Connects to the FetchX native host, sends one request, and returns
- * the response.  Each call opens a fresh port connection (Native Messaging
- * connections are stateless per-message in Manifest V3 service workers).
+ * the response. Each call opens a fresh port because the native host handles
+ * one request and exits; this works in both Chromium service workers and
+ * Firefox background scripts.
  *
  * Security:
  * - The host is identified by the registered native messaging host name.
@@ -19,6 +20,10 @@ import type {
   RpcTarget,
 } from "../types/protocol";
 import { PROTOCOL_VERSION } from "../types/protocol";
+import { connectNative, type NativePort } from "./browser-api";
+import { isNativeHostUnavailableError } from "./native-host-error";
+
+export { hasEmbeddedCredentials, isHttpUrl } from "./url-validation";
 
 /** The registered native messaging host name.
  *  Must match the `name` field in the native host manifest JSON file. */
@@ -47,7 +52,7 @@ export class NativeHostError extends Error {
  */
 export async function sendToNativeHost(request: BrowserRequest): Promise<BrowserResponse> {
   return new Promise<BrowserResponse>((resolve, reject) => {
-    let port: chrome.runtime.Port;
+    let port: NativePort;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = () => {
@@ -56,7 +61,7 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     };
 
     try {
-      port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+      port = connectNative(NATIVE_HOST_NAME);
     } catch (err) {
       reject(new NativeHostError("Could not connect to FetchX native host.", err));
       return;
@@ -67,14 +72,17 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
       reject(new NativeHostError("Native host did not respond in time.", undefined, true));
     }, RESPONSE_TIMEOUT_MS);
 
-    port.onDisconnect.addListener(() => {
+    port.onDisconnect.addListener((disconnectedPort) => {
       cleanup();
-      const runtimeError = chrome.runtime.lastError;
+      const firefoxError = "error" in disconnectedPort ? disconnectedPort.error : undefined;
+      const runtimeError = typeof browser === "undefined" ? chrome.runtime.lastError : undefined;
+      const errorMessage = firefoxError?.message ?? runtimeError?.message;
+      const hostUnavailable = isNativeHostUnavailableError(errorMessage);
       reject(
         new NativeHostError(
-          runtimeError?.message ?? "Native host disconnected unexpectedly.",
+          errorMessage ?? "Native host disconnected unexpectedly.",
           undefined,
-          true,
+          !hostUnavailable,
         ),
       );
     });
@@ -149,30 +157,4 @@ function isValidResponse(value: unknown): value is BrowserResponse {
     obj.version === PROTOCOL_VERSION &&
     typeof obj.ok === "boolean"
   );
-}
-
-/**
- * Validates a URL client-side for fast UX feedback.
- * The native host and desktop application perform the authoritative check.
- */
-export function isHttpUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Returns true if the URL contains embedded credentials.
- * Mirrors the server-side check.
- */
-export function hasEmbeddedCredentials(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.username !== "" || parsed.password !== "";
-  } catch {
-    return false;
-  }
 }

@@ -9,6 +9,7 @@ import {
   isHttpUrl,
   storeTargetCredential,
 } from "../shared/native";
+import { browserApi, sendRuntimeMessage } from "../shared/browser-api";
 import type { BrowserTarget, ExtensionSettings } from "../background/service-worker";
 
 // ──DOM refs ──────────────────────────────────────────────────────────────
@@ -98,7 +99,7 @@ useTabBtn.addEventListener("click", () => void fillTab());
 
 async function fillTab() {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && isHttpUrl(tab.url) && !hasEmbeddedCredentials(tab.url)) {
       urlInput.value = tab.url; clearResult(); updateSubmit();
     } else {
@@ -117,7 +118,7 @@ async function submit() {
   submitBtn.disabled = true;
   btnText.textContent = "Sending…";
   try {
-    const resp = await chrome.runtime.sendMessage({ type: "add_download", url }) as BrowserResponse;
+    const resp = await sendRuntimeMessage<BrowserResponse>({ type: "add_download", url });
     if (isError(resp)) {
       showResult("error", userMessageForCode(resp.error.code));
     } else {
@@ -177,13 +178,13 @@ function renderTasks(downloads: DL[]) {
 async function loadTasks() {
   taskList.innerHTML = '<p class="empty-msg">Loading…</p>';
   try {
-    const tasks = await chrome.runtime.sendMessage({ type: "get_tasks" }) as DL[];
+    const tasks = await sendRuntimeMessage<DL[]>({ type: "get_tasks" });
     renderTasks(Array.isArray(tasks) ? tasks : []);
   } catch { taskList.innerHTML = '<p class="empty-msg">Could not load tasks</p>'; }
 }
 
 refreshBtn.addEventListener("click", () => {
-  void chrome.runtime.sendMessage({ type: "refresh_tasks" }).then(() => loadTasks());
+  void sendRuntimeMessage<unknown>({ type: "refresh_tasks" }).then(() => loadTasks());
 });
 
 // ──Resources tab ─────────────────────────────────────────────────────────
@@ -209,9 +210,9 @@ async function scanPage() {
   scanBtn.textContent = "Scanning…";
   scanBtn.disabled = true;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error("No active tab");
-    const results = await chrome.tabs.sendMessage(tab.id, { type: "scan_resources" }) as Resource[];
+    const results = await browserApi.tabs.sendMessage(tab.id, { type: "scan_resources" }) as Resource[];
     currentResources = Array.isArray(results) ? results : [];
     selectedUrls.clear();
     scanEmpty.classList.add("hidden");
@@ -272,10 +273,10 @@ async function downloadSelected() {
   dlSelectedBtn.disabled = true;
   dlSelectedBtn.textContent = "Sending…";
   try {
-    const result = await chrome.runtime.sendMessage({
+    const result = await sendRuntimeMessage<{ added: number; failed: number }>({
       type: "add_batch",
       urls: [...selectedUrls],
-    }) as { added: number; failed: number };
+    });
     selectedUrls.clear();
     renderResources();
     const msg = result.failed === 0
@@ -299,7 +300,7 @@ targetSelect.addEventListener("change", () => void selectTarget(targetSelect.val
 targetAddBtn.addEventListener("click", () => void addRemoteTarget());
 
 async function loadSettings() {
-  const s = await chrome.runtime.sendMessage({ type: "get_settings" }) as ExtensionSettings;
+  const s = await sendRuntimeMessage<ExtensionSettings>({ type: "get_settings" });
   setAutoIntercept.checked = s.autoIntercept;
   setMinSize.value = String(s.minSizeMb);
   setNotif.checked = s.showNotifications;
@@ -314,7 +315,7 @@ async function saveSettings() {
     minSizeMb: Number(setMinSize.value) || 0,
     showNotifications: setNotif.checked,
   };
-  await chrome.runtime.sendMessage({ type: "save_settings", settings });
+  await sendRuntimeMessage<unknown>({ type: "save_settings", settings });
   settingsPanel.classList.add("hidden");
 }
 
@@ -325,7 +326,7 @@ const LOCAL_TARGET: BrowserTarget = {
 };
 
 async function loadTargets() {
-  const stored = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+  const stored = await browserApi.storage.local.get(["browserTargets", "selectedTargetId"]);
   const remoteTargets = Array.isArray(stored.browserTargets)
     ? stored.browserTargets.filter(isBrowserTarget)
     : [];
@@ -361,10 +362,10 @@ async function loadTargets() {
 }
 
 async function selectTarget(targetId: string) {
-  await chrome.storage.local.set({ selectedTargetId: targetId });
+  await browserApi.storage.local.set({ selectedTargetId: targetId });
   setStatus("checking", "Checking target…");
   await checkConnection();
-  void chrome.runtime.sendMessage({ type: "target_changed" });
+  void sendRuntimeMessage<unknown>({ type: "target_changed" });
 }
 
 async function addRemoteTarget() {
@@ -391,11 +392,11 @@ async function addRemoteTarget() {
       endpoint,
       credential_id: credentialId,
     };
-    const current = await chrome.storage.local.get("browserTargets");
+    const current = await browserApi.storage.local.get("browserTargets");
     const targets = Array.isArray(current.browserTargets)
       ? current.browserTargets.filter(isBrowserTarget).filter((entry) => entry.kind === "remote")
       : [];
-    await chrome.storage.local.set({
+    await browserApi.storage.local.set({
       browserTargets: [...targets, target],
       selectedTargetId: target.id,
     });
@@ -426,11 +427,11 @@ async function removeTarget(target: BrowserTarget) {
       showTargetResult("error", userMessageForCode(deleted.error.code));
       return;
     }
-    const current = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+    const current = await browserApi.storage.local.get(["browserTargets", "selectedTargetId"]);
     const targets = Array.isArray(current.browserTargets)
       ? current.browserTargets.filter(isBrowserTarget).filter((entry) => entry.id !== target.id)
       : [];
-    await chrome.storage.local.set({
+    await browserApi.storage.local.set({
       browserTargets: targets,
       selectedTargetId: current.selectedTargetId === target.id
         ? LOCAL_TARGET.id
@@ -447,7 +448,7 @@ async function removeTarget(target: BrowserTarget) {
 }
 
 async function selectedRpcTarget(): Promise<RpcTarget> {
-  const stored = await chrome.storage.local.get(["browserTargets", "selectedTargetId"]);
+  const stored = await browserApi.storage.local.get(["browserTargets", "selectedTargetId"]);
   const targets = Array.isArray(stored.browserTargets)
     ? stored.browserTargets.filter(isBrowserTarget)
     : [];

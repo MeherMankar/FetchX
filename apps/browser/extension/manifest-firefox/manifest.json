@@ -7,7 +7,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "FetchX@FetchX.app",
-      "strict_min_version": "109.0"
+      "strict_min_version": "115.0"
     }
   },
 
@@ -52,4 +52,3 @@
     "128": "icons/icon128.png"
   }
 }
-

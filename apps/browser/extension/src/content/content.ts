@@ -97,7 +97,7 @@ function scanResources(): ResourceItem[] {
 }
 
 // Listen for messages from the popup / background
-chrome.runtime.onMessage.addListener(
+(typeof browser === "undefined" ? chrome.runtime : browser.runtime).onMessage.addListener(
   (message: unknown, _sender, sendResponse): boolean => {
     if (
       typeof message === "object" &&

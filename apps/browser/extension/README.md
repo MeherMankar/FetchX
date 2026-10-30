@@ -1,7 +1,8 @@
 # FetchX Browser Extension
 
-A minimal Manifest V3 browser extension that lets you send HTTP/HTTPS links
-from Chrome or Microsoft Edge to the FetchX desktop application.
+A browser extension that sends HTTP/HTTPS links from Chrome, Microsoft Edge,
+or Firefox to the FetchX desktop application. Chrome and Edge use Manifest V3;
+Firefox uses its separate Manifest V2 package.
 
 ## Features
 
@@ -11,9 +12,9 @@ from Chrome or Microsoft Edge to the FetchX desktop application.
 - Displays connection status for the selected target
 - Existing optional download interception and page-resource scanning features
 
-Remote target support only adds explicit target selection and RPC forwarding. It
-does not add or change the extension's existing interception or page-scanning
-behavior.
+Remote target support only adds explicit target selection and RPC forwarding.
+Firefox uses the same browser-interception and native messaging behavior via a
+small browser API adapter; download logic remains shared.
 
 The extension does not download files itself, access cookies or browser
 passwords, or bypass DRM, CAPTCHA, or access controls.
@@ -57,7 +58,7 @@ npm install
 npm run build
 ```
 
-Build output goes to `dist/`.
+Build output goes to `dist-chromium/` and `dist-firefox/`.
 
 ## Loading as an unpacked extension (development)
 
@@ -66,6 +67,19 @@ Build output goes to `dist/`.
 3. Click **Load unpacked**.
 4. Select the `apps/browser/extension/` directory (the one containing `manifest.json`).
 5. Note the extension ID shown on the card — you will need it when installing the native host.
+
+## Loading in Firefox (development)
+
+1. Build the extension with `npm run build`.
+2. Open `about:debugging#/runtime/this-firefox`.
+3. Click **Load Temporary Add-on** and select `dist-firefox/manifest.json`.
+4. Build the native host with `cargo build --release -p fetchx-native-host`.
+5. From `apps/browser/native-host/manifest`, run
+   `.\install-firefox-windows.ps1`, then restart Firefox.
+
+Firefox uses the fixed extension ID `FetchX@FetchX.app` and a separate native
+host manifest/registry entry from Chrome and Edge. To remove its registration,
+run `.\install-firefox-windows.ps1 -Uninstall`.
 
 ## Protocol
 
@@ -111,7 +125,13 @@ Error response:
 |---------|--------|
 | Google Chrome | ✅ Supported |
 | Microsoft Edge | ✅ Supported (Chromium) |
-| Firefox | ⚠  Not tested in Phase 17 |
+| Firefox | ✅ Supported (Firefox 115+, Manifest V2) |
+
+Firefox 159 was live-validated on Windows for successful native-host handoff,
+download completion, file integrity, and persistence across FetchX relaunch.
+When an intercepted Firefox download must fall back, the origin must support
+HTTP range requests for Firefox to resume it; otherwise FetchX reports that the
+browser download could not be resumed.
 
 ## Permissions used
 
