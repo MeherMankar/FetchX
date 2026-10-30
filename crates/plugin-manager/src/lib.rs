@@ -55,11 +55,62 @@ pub use registry::{PluginRegistry, PluginRegistryError};
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum time to wait for a plugin to acknowledge a Shutdown request.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Maximum allowed IPC payload for plugin messages. The current runtime remains
+/// process-scoped and deny-closed; the bound is enforced at the host boundary.
+pub const MAX_PLUGIN_IPC_PAYLOAD_BYTES: u32 = 65_536;
+/// Number of crashes within a short window before the manager disables a plugin.
+pub const MAX_RESTART_ATTEMPTS: u32 = 3;
+pub const CRASH_LOOP_WINDOW: Duration = Duration::from_secs(60);
+pub const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 const SUPPORTED_PLUGIN_CAPABILITIES: &[PluginCapability] = &[];
 
-// ============================================================
-// Plugin entry (runtime state)
-// ============================================================
+/// Host-enforced sandbox configuration for the plugin supervisor. These values are
+/// intentionally conservative and reflect the runtime features that the current
+/// host actually provides; they are not a claim of OS-level sandboxing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginSandboxConfig {
+    pub max_ipc_payload_bytes: u32,
+    pub startup_timeout: Duration,
+    pub shutdown_timeout: Duration,
+    pub max_restart_attempts: u32,
+    pub restart_backoff: Duration,
+    pub crash_loop_window: Duration,
+}
+
+impl Default for PluginSandboxConfig {
+    fn default() -> Self {
+        Self {
+            max_ipc_payload_bytes: MAX_PLUGIN_IPC_PAYLOAD_BYTES,
+            startup_timeout: HANDSHAKE_TIMEOUT,
+            shutdown_timeout: SHUTDOWN_TIMEOUT,
+            max_restart_attempts: MAX_RESTART_ATTEMPTS,
+            restart_backoff: RESTART_BACKOFF,
+            crash_loop_window: CRASH_LOOP_WINDOW,
+        }
+    }
+}
+
+impl PluginSandboxConfig {
+    pub fn validate_ipc_length(&self, payload_len: u32) -> Result<(), PluginManagerError> {
+        if payload_len > self.max_ipc_payload_bytes {
+            return Err(PluginManagerError::OversizedPayload {
+                payload_len,
+                max_payload_len: self.max_ipc_payload_bytes,
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PluginSandboxStatus {
+    pub max_ipc_payload_bytes: u32,
+    pub startup_timeout: Duration,
+    pub shutdown_timeout: Duration,
+    pub restart_count: u32,
+    pub sandbox_disabled: bool,
+    pub crash_loop_detected: bool,
+}
 
 /// Runtime record for a registered plugin.
 #[derive(Debug)]
@@ -69,6 +120,11 @@ pub struct PluginEntry {
     manifest_path: Option<PathBuf>,
     /// Set while the plugin process is running.
     process: Option<Child>,
+    /// Crash-loop tracking for the supervisor. This is a guardrail for the host,
+    /// not a claim of OS-level sandbox enforcement.
+    restart_count: u32,
+    last_failure: Option<Instant>,
+    sandbox_disabled: bool,
 }
 
 impl PluginEntry {
@@ -78,6 +134,9 @@ impl PluginEntry {
             state: PluginLifecycleState::Registered,
             manifest_path,
             process: None,
+            restart_count: 0,
+            last_failure: None,
+            sandbox_disabled: false,
         }
     }
 }
@@ -98,9 +157,73 @@ struct ManagerInner {
     entries: HashMap<String, PluginEntry>,
     trust_contexts: HashMap<String, PluginTrustContext>,
     plugin_dir: PathBuf,
+    sandbox_config: PluginSandboxConfig,
 }
 
 impl PluginManager {
+    /// Returns the host-enforced sandbox limits currently applied by the manager.
+    pub async fn sandbox_config(&self) -> PluginSandboxConfig {
+        let inner = self.inner.lock().await;
+        inner.sandbox_config.clone()
+    }
+
+    /// Records a runtime failure and returns `true` when the plugin has crossed the
+    /// configured crash-loop threshold while the sandbox remains enabled.
+    pub async fn record_runtime_failure(
+        &self,
+        id: &str,
+        reason: &str,
+    ) -> Result<bool, PluginManagerError> {
+        let mut inner = self.inner.lock().await;
+        let crash_loop_window = inner.sandbox_config.crash_loop_window;
+        let max_restart_attempts = inner.sandbox_config.max_restart_attempts;
+        let Some(entry) = inner.entries.get_mut(id) else {
+            return Err(PluginManagerError::NotFound(id.to_owned()));
+        };
+
+        let now = Instant::now();
+        match entry.last_failure {
+            Some(last_failure) if now.duration_since(last_failure) <= crash_loop_window => {
+                entry.restart_count += 1;
+            }
+            _ => {
+                entry.restart_count = 1;
+                entry.last_failure = Some(now);
+            }
+        }
+
+        if entry.restart_count >= max_restart_attempts {
+            entry.sandbox_disabled = true;
+            entry.state = PluginLifecycleState::Failed {
+                reason: format!("restart limit reached after {reason}"),
+            };
+            return Ok(true);
+        }
+
+        entry.state = PluginLifecycleState::Failed {
+            reason: reason.to_owned(),
+        };
+        Ok(false)
+    }
+
+    /// Returns the runtime monitoring state for a plugin. The current manager only
+    /// enforces process isolation and bounded IPC; it does not pretend to provide
+    /// OS-level sandboxing where no host runtime exists.
+    pub async fn sandbox_status(&self, id: &str) -> Result<PluginSandboxStatus, PluginManagerError> {
+        let inner = self.inner.lock().await;
+        let entry = inner
+            .entries
+            .get(id)
+            .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
+        Ok(PluginSandboxStatus {
+            max_ipc_payload_bytes: inner.sandbox_config.max_ipc_payload_bytes,
+            startup_timeout: inner.sandbox_config.startup_timeout,
+            shutdown_timeout: inner.sandbox_config.shutdown_timeout,
+            restart_count: entry.restart_count,
+            sandbox_disabled: entry.sandbox_disabled,
+            crash_loop_detected: entry.restart_count >= inner.sandbox_config.max_restart_attempts,
+        })
+    }
     /// Creates a new manager that scans `plugin_dir` for plugins.
     pub fn new(plugin_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self {
@@ -108,6 +231,7 @@ impl PluginManager {
                 entries: HashMap::new(),
                 trust_contexts: HashMap::new(),
                 plugin_dir,
+                sandbox_config: PluginSandboxConfig::default(),
             }),
         })
     }
@@ -419,7 +543,7 @@ impl PluginManager {
     pub async fn start(&self, id: &str) -> Result<(), PluginManagerError> {
         self.reload_discovered_manifest(id).await?;
         // Clone what we need before dropping the lock.
-        let (manifest, trust_context) = {
+        let (manifest, trust_context, sandbox_config) = {
             let mut inner = self.inner.lock().await;
             let entry = inner
                 .entries
@@ -427,6 +551,9 @@ impl PluginManager {
                 .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?;
             if matches!(entry.state, PluginLifecycleState::Running) {
                 return Ok(()); // already running
+            }
+            if entry.sandbox_disabled {
+                return Err(PluginManagerError::SandboxDisabled(id.to_owned()));
             }
             let trust_context =
                 inner.trust_contexts.get(id).cloned().ok_or_else(|| {
@@ -444,12 +571,13 @@ impl PluginManager {
                 ));
             }
             let manifest = entry.manifest.clone();
+            let sandbox_config = inner.sandbox_config.clone();
             inner
                 .entries
                 .get_mut(id)
                 .ok_or_else(|| PluginManagerError::NotFound(id.to_owned()))?
                 .state = PluginLifecycleState::Starting;
-            (manifest, trust_context)
+            (manifest, trust_context, sandbox_config)
         };
 
         // Validate the executable exists before spawning.
@@ -493,8 +621,13 @@ impl PluginManager {
 
         // Perform handshake within the timeout.
         let handshake_result = timeout(
-            HANDSHAKE_TIMEOUT,
-            do_handshake(&mut child, &manifest, &trust_context.approved_capabilities),
+            sandbox_config.startup_timeout,
+            do_handshake(
+                &mut child,
+                &manifest,
+                &trust_context.approved_capabilities,
+                &sandbox_config,
+            ),
         )
         .await;
 
@@ -515,6 +648,9 @@ impl PluginManager {
                 if !still_allowed {
                     if let Some(entry) = inner.entries.get_mut(id) {
                         entry.state = PluginLifecycleState::Stopped;
+                        entry.restart_count = 0;
+                        entry.last_failure = None;
+                        entry.sandbox_disabled = false;
                     }
                     drop(inner);
                     let _ = child.kill().await;
@@ -523,6 +659,9 @@ impl PluginManager {
                 if let Some(e) = inner.entries.get_mut(id) {
                     e.state = PluginLifecycleState::Running;
                     e.process = Some(child);
+                    e.restart_count = 0;
+                    e.last_failure = None;
+                    e.sandbox_disabled = false;
                 }
                 info!(plugin_id = %id, "plugin started and handshake complete");
                 Ok(())
@@ -530,22 +669,19 @@ impl PluginManager {
             Ok(Err(handshake_err)) => {
                 // Kill the orphaned process.
                 let _ = child.kill().await;
-                let mut inner = self.inner.lock().await;
-                if let Some(e) = inner.entries.get_mut(id) {
-                    e.state = PluginLifecycleState::Failed {
-                        reason: handshake_err.to_string(),
-                    };
+                let restart_disabled = self.record_runtime_failure(id, &handshake_err.to_string()).await?;
+                if restart_disabled {
+                    return Err(PluginManagerError::SandboxDisabled(id.to_owned()));
                 }
                 Err(handshake_err)
             }
             Err(_elapsed) => {
                 let _ = child.kill().await;
-                let reason = "handshake timed out".to_owned();
-                let mut inner = self.inner.lock().await;
-                if let Some(e) = inner.entries.get_mut(id) {
-                    e.state = PluginLifecycleState::Failed {
-                        reason: reason.clone(),
-                    };
+                let restart_disabled = self
+                    .record_runtime_failure(id, "handshake timed out")
+                    .await?;
+                if restart_disabled {
+                    return Err(PluginManagerError::SandboxDisabled(id.to_owned()));
                 }
                 Err(PluginManagerError::HandshakeTimeout)
             }
@@ -663,6 +799,7 @@ async fn do_handshake(
     child: &mut Child,
     manifest: &PluginManifest,
     approved_capabilities: &[PluginCapability],
+    sandbox_config: &PluginSandboxConfig,
 ) -> Result<(), PluginManagerError> {
     let stdin = child
         .stdin
@@ -704,11 +841,9 @@ async fn do_handshake(
         .await
         .map_err(|e| PluginManagerError::HandshakeFailed(e.to_string()))?;
     let resp_len = u32::from_le_bytes(len_buf);
-    if resp_len > fetchx_plugin_api::protocol::MAX_IPC_PAYLOAD_BYTES {
-        return Err(PluginManagerError::HandshakeFailed(format!(
-            "response too large ({resp_len} bytes)"
-        )));
-    }
+    sandbox_config.validate_ipc_length(resp_len).map_err(|error| {
+        PluginManagerError::HandshakeFailed(format!("response too large ({resp_len} bytes): {error}"))
+    })?;
     let mut buf = vec![0u8; resp_len as usize];
     stdout
         .read_exact(&mut buf)
@@ -810,8 +945,12 @@ pub enum PluginManagerError {
     NotFound(String),
     #[error("plugin `{0}` must be stopped before it can be unregistered")]
     MustStopFirst(String),
+    #[error("plugin `{0}` was disabled by the supervisor after repeated runtime failures")]
+    SandboxDisabled(String),
     #[error("plugin manifest is invalid: {0}")]
     InvalidManifest(String),
+    #[error("IPC payload is too large ({payload_len} bytes, max {max_payload_len})")]
+    OversizedPayload { payload_len: u32, max_payload_len: u32 },
     #[error("plugin manifest changed since registration; prior approvals were revoked")]
     ManifestChanged,
     #[error("could not reload plugin manifest `{path}`: {reason}")]
@@ -922,6 +1061,47 @@ mod tests {
                 reason: PolicyDenialReason::CapabilityUnsupported,
                 ..
             })
+        ));
+    }
+
+    #[tokio::test]
+    async fn plugin_runtime_failure_triggers_crash_loop_detection() {
+        let manager = PluginManager::new(PathBuf::from("unused"));
+        manager.register(manifest()).await.unwrap();
+
+        let disabled = manager
+            .record_runtime_failure("test-plugin", "failure 1")
+            .await
+            .unwrap();
+        assert!(!disabled);
+
+        let disabled = manager
+            .record_runtime_failure("test-plugin", "failure 2")
+            .await
+            .unwrap();
+        assert!(!disabled);
+
+        let disabled = manager
+            .record_runtime_failure("test-plugin", "failure 3")
+            .await
+            .unwrap();
+        assert!(disabled);
+
+        assert!(matches!(
+            manager.start("test-plugin").await,
+            Err(PluginManagerError::SandboxDisabled(_))
+        ));
+    }
+
+    #[test]
+    fn oversized_ipc_lengths_are_rejected() {
+        let config = PluginSandboxConfig::default();
+        let max = config.max_ipc_payload_bytes;
+
+        assert!(config.validate_ipc_length(max).is_ok());
+        assert!(matches!(
+            config.validate_ipc_length(max + 1),
+            Err(PluginManagerError::OversizedPayload { .. })
         ));
     }
 

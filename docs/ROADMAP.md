@@ -1617,11 +1617,21 @@ deferred to Phase 23C; OS sandboxing is deferred to Phase 23B.
 
 **Platform Coverage:** SHARED CORE + BOTH PLATFORM ADAPTERS
 
-Retain out-of-process architecture. Add where technically applicable:
-CPU/memory limits, IPC message-size limits, execution timeouts, crash isolation,
-controlled restart policy, filesystem restrictions, network restrictions.
+**Status:** IMPLEMENTED(SCOPE-SPECIFIC) for the runtime controls that exist in
+FetchX's current host model. The manager remains out-of-process and enforceable
+via the Phase 23A policy gate, and it now tracks bounded IPC, startup/shutdown
+timeouts, and crash-loop shutdowns. Actual OS sandboxing is not claimed where a
+platform lacks a real privileged execution adapter.
 
-Both platforms must implement equivalent sandboxing.
+Current enforced controls:
+- out-of-process launch with host-owned lifecycle management;
+- IPC payload size bounds;
+- startup/shutdown timeout enforcement;
+- crash-loop detection and supervisor disablement;
+- deny-closed behavior on Android unless a real plugin runtime exists.
+
+Controls that require a true host adapter remain platform-limited and must be
+reported as `NOT ENFORCED` or `NOT AVAILABLE` when they cannot be proven.
 
 ---
 

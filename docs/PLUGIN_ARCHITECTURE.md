@@ -39,6 +39,31 @@ Plugin process (external binary)
 
 ---
 
+## Sandbox hardening (Phase 23B)
+
+The Phase 23A trust policy remains the mandatory gate for all plugin operations.
+The Phase 23B runtime layer adds supervisor-side guardrails around execution when
+an actual plugin process exists, without claiming OS-level isolation that the
+host does not provide.
+
+Current enforced host controls:
+
+- process separation: the plugin is launched as a child process, never in the
+  host process;
+- bounded IPC: plugin payloads are rejected above the configured payload limit;
+- startup timeout: the manager waits for a bounded handshake window;
+- shutdown timeout: the manager waits for a graceful exit, then terminates the
+  process if needed;
+- crash-loop guard: repeated failures within a short window disable the plugin
+  until the host explicitly restores it.
+
+Current limitations:
+
+- no OS sandbox is assumed or claimed;
+- Android remains deny-closed unless a real privileged plugin runtime is added;
+- filesystem, network, CPU, and memory caps are only valid when the host runtime
+  can actually enforce them, otherwise they are reported as not available.
+
 ## Plugin directory
 
 Plugins are installed as subdirectories of the application data directory:
