@@ -18,7 +18,6 @@ require(configuredReleaseSigningVariables == 0 || configuredReleaseSigningVariab
 val ciArm64Only = providers.gradleProperty("ciArm64Only").orNull == "true"
 val appVersion = providers.gradleProperty("appVersion").orElse("0.0.0-dev").get().removePrefix("v")
 val appVersionCode = providers.gradleProperty("appVersionCode").orElse("1").get().toInt()
-
 android {
     namespace = "dev.fetchx.app"
     compileSdk {
@@ -31,6 +30,7 @@ android {
         applicationId = "dev.fetchx.app"
         minSdk = 26
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = appVersionCode
         versionName = appVersion
         ndk {
@@ -128,4 +128,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

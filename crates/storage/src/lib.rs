@@ -2,11 +2,18 @@
 
 mod database;
 mod error;
+mod export;
+mod maintenance;
 mod repository;
 mod sqlite;
 
 pub use database::Database;
 pub use error::StorageError;
+pub use export::{DatabaseExport, EXPORT_FORMAT_VERSION, ExportResult, ImportResult};
+pub use maintenance::{
+    BackupResult, CURRENT_SCHEMA_VERSION, CheckStatus, DatabaseCheck, DatabaseSchemaState,
+    MIN_SUPPORTED_SCHEMA_VERSION, SchemaMigrationStatus,
+};
 pub use repository::{
     DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
     TorrentSourceType,

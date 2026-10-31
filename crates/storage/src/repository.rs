@@ -4,6 +4,7 @@ use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, Timestamp,
     TorrentMetadata,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::StorageError;
 
@@ -85,7 +86,8 @@ pub trait DownloadRepository: Send + Sync {
 }
 
 /// Durable torrent-specific metadata for aria2 magnet/.torrent downloads.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TorrentMetadataRow {
     pub download_id: DownloadId,
     pub source_type: TorrentSourceType,
@@ -110,14 +112,16 @@ pub struct TorrentMetadataRow {
 }
 
 /// Source of a torrent download.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TorrentSourceType {
     Magnet,
     TorrentFile,
 }
 
 /// Seeding lifecycle of a torrent task.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TorrentSeedState {
     Downloading,
     Seeding,
@@ -157,6 +161,11 @@ pub trait TorrentMetadataRepository: Send + Sync {
         &self,
         gid: &str,
     ) -> impl Future<Output = Result<Option<TorrentMetadataRow>, StorageError>> + Send;
+
+    /// Lists all persisted torrent metadata in deterministic creation order.
+    fn list_torrent_metadata(
+        &self,
+    ) -> impl Future<Output = Result<Vec<TorrentMetadataRow>, StorageError>> + Send;
 
     /// Lists torrent metadata rows for downloads that may still need aria2 reconciliation.
     ///

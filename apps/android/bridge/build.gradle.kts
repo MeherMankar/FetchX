@@ -82,6 +82,9 @@ android {
             // are not checked in — only .gitkeep placeholders.
             jniLibs.directories += "src/main/jniLibs"
         }
+        getByName("androidTest") {
+            assets.directories.add(repositoryRoot.resolve("migrations").absolutePath)
+        }
     }
 }
 

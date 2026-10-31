@@ -186,6 +186,15 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         row.map(row_to_metadata).transpose()
     }
 
+    async fn list_torrent_metadata(&self) -> Result<Vec<TorrentMetadataRow>, StorageError> {
+        let rows = sqlx::query(&format!(
+            "{SELECT_COLUMNS} ORDER BY created_at, download_id"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_metadata).collect()
+    }
+
     async fn list_active_torrent_downloads(&self) -> Result<Vec<TorrentMetadataRow>, StorageError> {
         let rows = sqlx::query(&format!(
             "{SELECT_COLUMNS}

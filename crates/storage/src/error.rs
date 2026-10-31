@@ -18,6 +18,19 @@ pub enum StorageError {
     IntegerOutOfRange { field: &'static str },
     #[error("destination path cannot be represented as UTF-8")]
     NonUtf8Destination,
+    #[error("database schema is unsupported: {0}")]
+    UnsupportedSchema(String),
+    #[error("database recovery snapshot failed: {0}")]
+    RecoverySnapshot(String),
+    #[error("database migration failed: {message}; recovery snapshot: {backup_path}")]
+    MigrationRecovery {
+        message: String,
+        backup_path: String,
+    },
+    #[error("database backup validation failed: {0}")]
+    BackupValidation(String),
+    #[error("database maintenance operation failed: {0}")]
+    Maintenance(String),
 }
 
 impl StorageError {

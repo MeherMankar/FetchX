@@ -1686,14 +1686,34 @@ Not a prerequisite for the core plugin runtime.
 
 **Platform Coverage:** SHARED CORE + PLATFORM ADAPTER (filesystem paths differ)
 
-Add: database backup, migration validation, schema version diagnostics,
-repair/check mode, export, import, safe migration failure handling.
+**Status: STORAGE MAINTENANCE AND CLI IMPLEMENTED; ISOLATED ANDROID MIGRATION AND
+PERSISTENCE VALIDATED; WINDOWS RUNTIME VALIDATION REMAINS OPEN.** Storage provides
+read-only integrity/schema diagnostics, validates
+migration history, snapshots existing databases before applying migrations, and
+refuses unsupported future or inconsistent schemas. SQLite snapshot backups are
+validated before success. A migration failure retains the recovery snapshot and
+original database.
 
 CLI commands: `fetchx db check`, `fetchx db repair`, `fetchx db backup`,
-`fetchx db export`, `fetchx db import`.
+`fetchx db export`, and `fetchx db import`. Repair is intentionally conservative and
+does not attempt destructive corruption recovery. Versioned exports omit local
+configuration/secrets and refuse likely credential-bearing URLs or private tracker
+data. Import validates paths under an allowed downloads root, takes a recovery backup,
+resolves existing symlinks to prevent path escape, requeues interrupted work, and
+transactionally replaces download, schedule, and
+torrent metadata. Other FetchX processes must be stopped before import.
 
-Both Windows and Android must safely handle persisted state migrations.
-Only the filesystem adapter differs (Windows path vs Android app-storage path).
+Storage unit tests cover diagnostics, migration snapshots/failure, backup validation,
+export/import round trips, interrupted-work recovery, and rejected inputs. On a
+Pixel_10_Pro Android 17 emulator, an isolated `dev.fetchx.app.phase24test` installation
+migrated a schema-v10 app-private fixture to v11, preserved its paused download, passed
+SQLite integrity validation, and retained a valid pre-migration snapshot. After an
+OS-level force-stop, a second app instrumentation run relaunched the application and
+revalidated the migrated record, schema, and integrity. The existing
+`dev.fetchx.app.debug` installation/database was not modified. This validates the
+Android migration and process-restart persistence path only; Windows runtime migration
+and broader platform persistence checks remain separate release validation. The Android
+application has no CLI maintenance surface; database maintenance commands remain CLI-only.
 
 ---
 

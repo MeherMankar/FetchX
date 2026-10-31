@@ -40,7 +40,7 @@ fn app_data_dir() -> PathBuf {
 }
 
 /// Platform-specific downloads directory.
-fn downloads_dir() -> PathBuf {
+pub fn downloads_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
         std::env::var_os("USERPROFILE")
@@ -53,6 +53,11 @@ fn downloads_dir() -> PathBuf {
             .map(|h| PathBuf::from(h).join("Downloads"))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
     }
+}
+
+/// Returns the standard FetchX SQLite database path without starting services.
+pub fn database_path() -> PathBuf {
+    app_data_dir().join("fetchx.db")
 }
 
 /// Start the shared core services using the same paths as the desktop app.

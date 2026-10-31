@@ -70,6 +70,9 @@ pub enum Command {
     /// Torrent-specific commands.
     Torrent(TorrentOpts),
 
+    /// Database diagnostics, backups, and data transfer.
+    Db(DbOpts),
+
     /// Run the authenticated local remote-control server.
     Server(ServerOpts),
 
@@ -85,6 +88,57 @@ pub struct RemoteOpts {
 
     #[command(subcommand)]
     pub command: RemoteCommand,
+}
+
+#[derive(Args, Debug)]
+pub struct DbOpts {
+    #[command(subcommand)]
+    pub command: DbCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DbCommand {
+    /// Check database integrity and schema without changing it.
+    Check {
+        /// SQLite database path (defaults to the standard FetchX data directory).
+        #[arg(long)]
+        database: Option<PathBuf>,
+    },
+    /// Report whether a database can be safely repaired; never performs destructive recovery.
+    Repair {
+        /// SQLite database path (defaults to the standard FetchX data directory).
+        #[arg(long)]
+        database: Option<PathBuf>,
+    },
+    /// Create and validate a consistent SQLite snapshot.
+    Backup {
+        /// SQLite database path (defaults to the standard FetchX data directory).
+        #[arg(long)]
+        database: Option<PathBuf>,
+        /// Backup file (defaults to a timestamped sibling of the database).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Export non-secret download and torrent metadata to versioned JSON.
+    Export {
+        /// SQLite database path (defaults to the standard FetchX data directory).
+        #[arg(long)]
+        database: Option<PathBuf>,
+        /// Export file (defaults to a timestamped JSON sibling of the database).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Replace local download metadata from a validated versioned export.
+    Import {
+        /// Versioned JSON export file.
+        input: PathBuf,
+        /// SQLite database path (defaults to the standard FetchX data directory).
+        #[arg(long)]
+        database: Option<PathBuf>,
+        /// Allowed root for imported download and torrent paths.
+        #[arg(long)]
+        downloads_root: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -318,9 +372,12 @@ pub enum TorrentCommand {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
-    use std::{net::Ipv4Addr, path::PathBuf};
+    use std::{
+        net::Ipv4Addr,
+        path::{Path, PathBuf},
+    };
 
-    use super::{Cli, Command, RemoteCommand, ServerAction, TorrentCommand};
+    use super::{Cli, Command, DbCommand, RemoteCommand, ServerAction, TorrentCommand};
 
     #[test]
     fn add_accepts_explicit_magnet_option() {
@@ -492,5 +549,33 @@ mod tests {
             panic!("expected server command");
         };
         assert!(matches!(options.action, Some(ServerAction::ShowRole)));
+    }
+
+    #[test]
+    fn database_maintenance_commands_parse_paths() {
+        let cli = Cli::try_parse_from([
+            "fetchx",
+            "db",
+            "import",
+            "backup.json",
+            "--database",
+            "fetchx.db",
+            "--downloads-root",
+            "Downloads",
+        ])
+        .expect("database import options should parse");
+        let Command::Db(options) = cli.command else {
+            panic!("expected database command");
+        };
+        assert!(matches!(
+            options.command,
+            DbCommand::Import {
+                input,
+                database: Some(database),
+                downloads_root: Some(downloads_root),
+            } if input == Path::new("backup.json")
+                && database == Path::new("fetchx.db")
+                && downloads_root == Path::new("Downloads")
+        ));
     }
 }

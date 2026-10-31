@@ -10,7 +10,7 @@ use crate::{
     SqliteConfigRepository, SqliteDownloadRepository, SqliteTorrentMetadataRepository, StorageError,
 };
 
-static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
+pub(crate) static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
     migrations: Cow::Owned(vec![
         Migration::new(
             1,
@@ -114,7 +114,8 @@ static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
 /// Owns the SQLite connection pool and initializes the schema on connection.
 #[derive(Clone)]
 pub struct Database {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
+    pub(crate) path: Option<std::path::PathBuf>,
 }
 
 impl Database {
@@ -131,43 +132,86 @@ impl Database {
         let mut options = SqliteConnectOptions::from_str(database_url)
             .map_err(StorageError::InvalidDatabaseUrl)?;
         let is_in_memory = options.get_filename() == Path::new(":memory:");
+        let path = (!is_in_memory).then(|| options.get_filename().to_path_buf());
         options = options
             .create_if_missing(true)
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(5));
 
-        Self::connect_with_options(options, is_in_memory).await
+        Self::connect_with_options(options, is_in_memory, path).await
     }
 
     /// Connects to a file-backed database without interpreting the path as a URL.
     ///
     /// This preserves legal path characters such as percent signs and question marks.
     pub async fn connect_path(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        let database_path = path.as_ref().to_path_buf();
         let options = SqliteConnectOptions::new()
-            .filename(path)
+            .filename(&database_path)
             .create_if_missing(true)
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(5));
 
-        Self::connect_with_options(options, false).await
+        Self::connect_with_options(options, false, Some(database_path)).await
+    }
+
+    /// Opens an existing file without creating it or applying migrations.
+    pub async fn open_existing_path(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::open_path_with_options(path, false).await
+    }
+
+    /// Opens an existing file read-only without applying migrations.
+    pub async fn open_read_only_path(path: impl AsRef<Path>) -> Result<Self, StorageError> {
+        Self::open_path_with_options(path, true).await
+    }
+
+    async fn open_path_with_options(
+        path: impl AsRef<Path>,
+        read_only: bool,
+    ) -> Result<Self, StorageError> {
+        let path = path.as_ref();
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .read_only(read_only)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await?;
+        Ok(Self {
+            pool,
+            path: Some(path.to_path_buf()),
+        })
     }
 
     async fn connect_with_options(
         options: SqliteConnectOptions,
         is_in_memory: bool,
+        path: Option<std::path::PathBuf>,
     ) -> Result<Self, StorageError> {
         let pool = SqlitePoolOptions::new()
             .max_connections(if is_in_memory { 1 } else { 5 })
             .connect_with(options)
             .await?;
-        let database = Self { pool };
+        let database = Self { pool, path };
         database.migrate().await?;
         Ok(database)
     }
 
     /// Applies pending embedded migrations. Safe to call after `connect`.
     pub async fn migrate(&self) -> Result<(), StorageError> {
-        MIGRATOR.run(&self.pool).await?;
+        let recovery_snapshot = crate::maintenance::prepare_migration(self).await?;
+        if let Err(error) = MIGRATOR.run(&self.pool).await {
+            if let Some(path) = recovery_snapshot {
+                return Err(StorageError::MigrationRecovery {
+                    message: error.to_string(),
+                    backup_path: path.display().to_string(),
+                });
+            }
+            return Err(StorageError::Migration(error));
+        }
         Ok(())
     }
 

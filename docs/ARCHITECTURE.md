@@ -46,6 +46,26 @@ timeout are configured for connections. File-backed databases use a five-connect
 pool; in-memory databases use one connection so pooled operations share the same
 database. The caller's journal mode is left unchanged rather than forcing WAL.
 
+Storage maintenance opens existing databases without creating files or applying
+migrations for read-only health checks. Checks report SQLite integrity, foreign-key
+violations, required tables and indexes, migration history, and row counts. Before
+applying pending migrations to an existing database, storage creates and validates a
+SQLite snapshot; unsupported future schemas and inconsistent migration histories are
+refused. The CLI exposes `fetchx db check|repair|backup|export|import`. `repair` is
+deliberately non-destructive: it reports when a healthy database needs no repair and
+refuses automatic repair when diagnostics are unhealthy. Backups are consistent
+SQLite snapshots and are validated before success is reported.
+
+Versioned JSON exports contain download records, schedules, and torrent metadata, but
+exclude `app_config` so engine credentials and remote-authentication state remain local.
+Exports also refuse source URLs, magnet trackers, or torrent metadata that may contain
+credentials. Imports validate the complete document, constrain absolute download and
+torrent paths (including existing symlink resolution) to the configured downloads root,
+normalize interrupted work to queued,
+create a validated recovery backup, and replace records in a transaction. Other FetchX
+processes must be stopped during import; the Android application has no CLI maintenance
+surface and continues to use its app-private database path and shared migration code.
+
 The `remote-protocol` crate defines the transport-independent FetchX JSON-RPC 2.0
 envelopes, stable `fetchx.rpc.v1` discovery metadata, request identifiers, supported
 download commands, and event notification names. It bounds and validates incoming
