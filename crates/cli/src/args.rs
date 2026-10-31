@@ -73,6 +73,13 @@ pub enum Command {
     /// Database diagnostics, backups, and data transfer.
     Db(DbOpts),
 
+    /// Print a read-only, secret-free diagnostics snapshot.
+    Diagnostics {
+        /// SQLite database path (defaults to the standard FetchX data directory).
+        #[arg(long)]
+        database: Option<PathBuf>,
+    },
+
     /// Run the authenticated local remote-control server.
     Server(ServerOpts),
 

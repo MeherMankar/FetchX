@@ -46,6 +46,17 @@ timeout are configured for connections. File-backed databases use a five-connect
 pool; in-memory databases use one connection so pooled operations share the same
 database. The caller's journal mode is left unchanged rather than forcing WAL.
 
+Diagnostics use shared typed models and a bounded in-memory recorder. CoreServices
+assembles live queue, engine, and read-only storage health into a JSON snapshot; the
+CLI's `diagnostics` command checks an existing database without creating it or applying
+migrations. The Android bridge exposes the CoreServices snapshot to Kotlin. Event names,
+correlation IDs, and error codes are constrained; snapshots do not contain source URLs,
+credentials, database paths, or raw error text. RPC request telemetry uses internal
+random request IDs, aggregate outcome counters, and elapsed-time log fields, without
+adding a remote diagnostics RPC endpoint. Queue snapshots report current/average
+download speed, database snapshots report health-check latency, and torrent upload
+totals are nullable when an active engine cannot provide them.
+
 Storage maintenance opens existing databases without creating files or applying
 migrations for read-only health checks. Checks report SQLite integrity, foreign-key
 violations, required tables and indexes, migration history, and row counts. Before

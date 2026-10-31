@@ -1746,8 +1746,11 @@ async fn load_resource_identity(
     };
     match serde_json::from_slice(&bytes) {
         Ok(identity) => Ok(Some(identity)),
-        Err(error) => {
-            warn!(path = %path.display(), %error, "ignoring invalid HTTP resume metadata");
+        Err(_error) => {
+            warn!(
+                error_code = "HTTP_RESUME_METADATA_INVALID",
+                "ignoring invalid HTTP resume metadata"
+            );
             Ok(None)
         }
     }
@@ -1828,7 +1831,10 @@ async fn remove_published_temporary(path: &Path) {
     if let Err(error) = fs::remove_file(path).await
         && error.kind() != std::io::ErrorKind::NotFound
     {
-        warn!(path = %path.display(), %error, "could not remove finalized temporary file");
+        warn!(
+            error_code = "HTTP_TEMPORARY_FILE_CLEANUP_FAILED",
+            "could not remove finalized temporary file"
+        );
     }
 }
 

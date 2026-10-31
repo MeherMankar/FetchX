@@ -10,8 +10,9 @@ use fetchx_downloader::{
     ManagedDownloadEngine, ResourceDemand,
 };
 use fetchx_models::{
-    DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadStatus,
-    EngineKind, ResourcePolicy, ResourcePressure,
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, DownloadError,
+    DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadStatus, EngineKind,
+    ResourcePolicy, ResourcePressure, global_diagnostics,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
@@ -68,6 +69,7 @@ pub struct QueueSnapshot {
     pub queued: Vec<DownloadId>,
     pub paused: Vec<DownloadId>,
     pub active: Vec<ActiveDownload>,
+    pub max_active_downloads: usize,
     pub global_connection_limit: usize,
     pub resource_pressure: ResourcePressure,
 }
@@ -228,7 +230,19 @@ impl QueueManager {
     }
 
     pub async fn enqueue(&self, item: DownloadItem) -> Result<(), QueueError> {
-        self.request(|reply| Command::Enqueue { item, reply }).await
+        let id = item.id();
+        self.request(|reply| Command::Enqueue { item, reply })
+            .await?;
+        global_diagnostics().increment(DiagnosticCounter::QueueEnqueued);
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Queue,
+                "download_enqueued",
+                DiagnosticLevel::Info,
+            )
+            .with_download_id(id.to_string()),
+        );
+        Ok(())
     }
 
     /// Persists a new item and defers it in one actor operation.
@@ -257,15 +271,43 @@ impl QueueManager {
     }
 
     pub async fn pause(&self, id: DownloadId) -> Result<(), QueueError> {
-        self.request(|reply| Command::Pause { id, reply }).await
+        self.request(|reply| Command::Pause { id, reply }).await?;
+        global_diagnostics().increment(DiagnosticCounter::QueuePaused);
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Queue,
+                "download_pause_requested",
+                DiagnosticLevel::Info,
+            )
+            .with_download_id(id.to_string()),
+        );
+        Ok(())
     }
 
     pub async fn resume(&self, id: DownloadId) -> Result<(), QueueError> {
-        self.request(|reply| Command::Resume { id, reply }).await
+        self.request(|reply| Command::Resume { id, reply }).await?;
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Queue,
+                "download_resume_requested",
+                DiagnosticLevel::Info,
+            )
+            .with_download_id(id.to_string()),
+        );
+        Ok(())
     }
 
     pub async fn cancel(&self, id: DownloadId) -> Result<(), QueueError> {
-        self.request(|reply| Command::Cancel { id, reply }).await
+        self.request(|reply| Command::Cancel { id, reply }).await?;
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Queue,
+                "download_cancel_requested",
+                DiagnosticLevel::Info,
+            )
+            .with_download_id(id.to_string()),
+        );
+        Ok(())
     }
 
     /// Removes a download record after any active worker has stopped.
@@ -772,6 +814,15 @@ where
                 remove_waiters: Vec::new(),
             },
         );
+        global_diagnostics().increment(DiagnosticCounter::QueueDequeued);
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Queue,
+                "download_dispatched",
+                DiagnosticLevel::Info,
+            )
+            .with_download_id(id.to_string()),
+        );
     }
     Ok(())
 }
@@ -1259,6 +1310,7 @@ where
                     queued,
                     paused,
                     active: active_items,
+                    max_active_downloads: config.max_active_downloads,
                     global_connection_limit: config.global_connection_limit,
                     resource_pressure: *pressure,
                 })

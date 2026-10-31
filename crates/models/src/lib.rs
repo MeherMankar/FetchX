@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod diagnostics;
 mod download;
 mod engine;
 mod error;
@@ -11,6 +12,13 @@ mod schedule;
 mod timestamp;
 mod torrent;
 
+pub use diagnostics::{
+    ApplicationDiagnostics, DEFAULT_DIAGNOSTIC_EVENT_LIMIT, DIAGNOSTICS_SCHEMA_VERSION,
+    DiagnosticComponent, DiagnosticComponentStatus, DiagnosticCounter, DiagnosticEvent,
+    DiagnosticHealth, DiagnosticLevel, DiagnosticMetrics, DiagnosticsRecorder, DiagnosticsSnapshot,
+    EngineDiagnostics, PluginDiagnostics, QueueDiagnostics, RpcDiagnostics, StorageDiagnostics,
+    global_diagnostics, redact_sensitive_text, sanitize_url,
+};
 pub use download::{
     DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus, FileName,
     FileNameError, MagnetInfo, parse_magnet_uri,

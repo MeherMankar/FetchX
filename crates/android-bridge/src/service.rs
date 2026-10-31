@@ -15,7 +15,8 @@ use fetchx_downloader::{
     YtDlpRunnerFuture, is_hls_url, parse_format_output,
 };
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+    DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId, DownloadItem,
+    DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, global_diagnostics,
 };
 use fetchx_plugin_api::{PluginPolicy, PluginTrustContext, PolicyEnvironment, parse_manifest};
 use fetchx_storage::DownloadRepository as _;
@@ -195,6 +196,12 @@ impl DownloadService {
                 ytdlp_runner,
             ))
             .map_err(MobileApiError::from)?;
+        tracing::info!("Android native bridge initialized");
+        global_diagnostics().record(DiagnosticEvent::new(
+            DiagnosticComponent::Android,
+            "native_bridge_initialized",
+            DiagnosticLevel::Info,
+        ));
 
         Ok(Self {
             inner: Mutex::new(Some(ServiceInner { runtime, core })),
@@ -228,6 +235,20 @@ impl DownloadService {
                 .block_on(inner.core.repository.list())
                 .map_err(|e| MobileApiError::Storage(e.to_string()))?;
             Ok(items.iter().map(item_to_dto).collect())
+        })
+    }
+
+    pub fn diagnostics_snapshot(&self) -> Result<String, MobileApiError> {
+        self.with_inner(|inner| {
+            let snapshot = inner.runtime.block_on(inner.core.diagnostics_snapshot());
+            serde_json::to_string(&snapshot).map_err(|_| {
+                global_diagnostics().record(DiagnosticEvent::new(
+                    DiagnosticComponent::Android,
+                    "diagnostics_serialization_failed",
+                    DiagnosticLevel::Error,
+                ));
+                MobileApiError::Runtime("diagnostics snapshot is unavailable".to_owned())
+            })
         })
     }
 

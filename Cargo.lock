@@ -1837,6 +1837,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1882,6 +1883,8 @@ dependencies = [
  "fetchx-storage",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1893,6 +1896,7 @@ dependencies = [
  "fetchx-media-extractor",
  "fetchx-models",
  "fetchx-queue",
+ "fetchx-remote-protocol",
  "fetchx-scheduler",
  "fetchx-storage",
  "serde",
@@ -2030,6 +2034,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
+ "fetchx-models",
  "fetchx-plugin-api",
  "serde",
  "serde_json",
@@ -2091,6 +2096,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -2118,6 +2124,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
 ]
 

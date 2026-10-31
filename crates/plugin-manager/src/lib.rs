@@ -28,6 +28,9 @@ pub mod registry;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
+use fetchx_models::{
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, global_diagnostics,
+};
 use fetchx_plugin_api::{
     HelloRequest, HostRequest, HostRequestBody, PROTOCOL_VERSION, PluginCapability, PluginManifest,
     PluginPermission, PluginPolicy, PluginPolicyDecision, PluginPublisherStore, PluginResponseBody,
@@ -201,12 +204,35 @@ impl PluginManager {
                 entry.last_failure = Some(now);
             }
         }
+        global_diagnostics().increment(DiagnosticCounter::PluginCrashes);
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Plugins,
+                "plugin_runtime_failure",
+                DiagnosticLevel::Error,
+            )
+            .with_plugin_id(id)
+            .with_error_code("PLUGIN_RUNTIME_FAILURE"),
+        );
+        if entry.restart_count > 1 {
+            global_diagnostics().increment(DiagnosticCounter::PluginRestarts);
+        }
 
         if entry.restart_count >= max_restart_attempts {
             entry.sandbox_disabled = true;
             entry.state = PluginLifecycleState::Failed {
                 reason: format!("restart limit reached after {reason}"),
             };
+            global_diagnostics().increment(DiagnosticCounter::PluginsDisabled);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Plugins,
+                    "plugin_disabled_after_crash_loop",
+                    DiagnosticLevel::Error,
+                )
+                .with_plugin_id(id)
+                .with_error_code("PLUGIN_CRASH_LOOP"),
+            );
             return Ok(true);
         }
 
@@ -669,7 +695,19 @@ impl PluginManager {
         };
         validate_executable_in_artifact(&manifest.executable, &artifact_root)?;
         let package_hash = hash_plugin_artifact_tree(artifact_root).await?;
-        publisher_store.verify_manifest_signature(&manifest, &package_hash)?;
+        if let Err(error) = publisher_store.verify_manifest_signature(&manifest, &package_hash) {
+            global_diagnostics().increment(DiagnosticCounter::PluginVerificationFailures);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Plugins,
+                    "plugin_verification_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_plugin_id(id)
+                .with_error_code("PLUGIN_VERIFICATION_FAILED"),
+            );
+            return Err(PluginManagerError::Signing(error));
+        }
         let verified_context = PluginTrustContext::verified_for_manifest(
             &manifest,
             &package_hash,
@@ -799,7 +837,21 @@ impl PluginManager {
 
         validate_executable_in_artifact(&snapshot_manifest.executable, &artifact_root)?;
         let package_hash = hash_plugin_artifact_tree(artifact_root).await?;
-        publisher_store.verify_manifest_signature(&snapshot_manifest, &package_hash)?;
+        if let Err(error) =
+            publisher_store.verify_manifest_signature(&snapshot_manifest, &package_hash)
+        {
+            global_diagnostics().increment(DiagnosticCounter::PluginVerificationFailures);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Plugins,
+                    "plugin_verification_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_plugin_id(id)
+                .with_error_code("PLUGIN_VERIFICATION_FAILED"),
+            );
+            return Err(PluginManagerError::Signing(error));
+        }
         let trust_context = PluginTrustContext::verified_for_manifest(
             &snapshot_manifest,
             &package_hash,
@@ -920,6 +972,15 @@ impl PluginManager {
                     e.last_failure = None;
                     e.sandbox_disabled = false;
                 }
+                global_diagnostics().increment(DiagnosticCounter::PluginStarts);
+                global_diagnostics().record(
+                    DiagnosticEvent::new(
+                        DiagnosticComponent::Plugins,
+                        "plugin_started",
+                        DiagnosticLevel::Info,
+                    )
+                    .with_plugin_id(id),
+                );
                 info!(plugin_id = %id, "plugin started and handshake complete");
                 Ok(())
             }
@@ -989,6 +1050,14 @@ impl PluginManager {
             e.state = PluginLifecycleState::Stopped;
             e.process = None;
         }
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Plugins,
+                "plugin_stopped",
+                DiagnosticLevel::Info,
+            )
+            .with_plugin_id(id),
+        );
         info!(plugin_id = %id, "plugin stopped");
         Ok(())
     }

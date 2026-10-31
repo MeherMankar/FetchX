@@ -113,6 +113,19 @@ The dependency versions and shared configuration are centralized in the root
 `Cargo.toml`. Crate manifests opt into dependencies as the corresponding functionality
 is implemented.
 
+## Diagnostics
+
+`fetchx diagnostics --json` prints a read-only snapshot; use `--database <PATH>` to
+inspect a specific existing database. It does not start the runtime, create a missing
+database, or run migrations. Live CoreServices snapshots include bounded in-memory
+events, process-local counters, queue/engine aggregates, and storage health. Android
+exposes the same JSON snapshot through its Rust bridge.
+
+Snapshots omit source URLs, credentials, database paths, raw errors, and request
+payloads. Event history is bounded to 128 entries by default. Torrent upload totals are
+reported only when the active engine provides telemetry. Components that the current
+host does not initialize are reported as unavailable rather than inferred to be healthy.
+
 ## Workspace
 
 - `crates/models` — shared domain and data structures

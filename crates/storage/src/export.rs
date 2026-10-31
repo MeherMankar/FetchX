@@ -5,7 +5,10 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use fetchx_models::{DownloadItem, DownloadSchedule, DownloadSource, DownloadStatus, Timestamp};
+use fetchx_models::{
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, DownloadItem,
+    DownloadSchedule, DownloadSource, DownloadStatus, Timestamp, global_diagnostics,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, Transaction};
 use url::Url;
@@ -55,7 +58,33 @@ impl Database {
         &self,
         destination: impl AsRef<Path>,
     ) -> Result<ExportResult, StorageError> {
-        let destination = destination.as_ref();
+        let result = self.export_to_inner(destination.as_ref()).await;
+        if result.is_err() {
+            global_diagnostics().increment(DiagnosticCounter::StorageExportFailures);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Storage,
+                    "export_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_error_code("STORAGE_EXPORT_FAILED"),
+            );
+            tracing::warn!(
+                error_code = "STORAGE_EXPORT_FAILED",
+                "database export failed"
+            );
+        } else {
+            global_diagnostics().record(DiagnosticEvent::new(
+                DiagnosticComponent::Storage,
+                "export_completed",
+                DiagnosticLevel::Info,
+            ));
+            tracing::info!("database export completed");
+        }
+        result
+    }
+
+    async fn export_to_inner(&self, destination: &Path) -> Result<ExportResult, StorageError> {
         if destination.exists() {
             return Err(StorageError::Maintenance(
                 "export destination already exists".to_owned(),
@@ -119,7 +148,39 @@ impl Database {
         source: impl AsRef<Path>,
         allowed_download_root: impl AsRef<Path>,
     ) -> Result<ImportResult, StorageError> {
-        let source = source.as_ref();
+        let result = self
+            .import_from_inner(source.as_ref(), allowed_download_root.as_ref())
+            .await;
+        if result.is_err() {
+            global_diagnostics().increment(DiagnosticCounter::StorageImportFailures);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Storage,
+                    "import_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_error_code("STORAGE_IMPORT_FAILED"),
+            );
+            tracing::warn!(
+                error_code = "STORAGE_IMPORT_FAILED",
+                "database import failed"
+            );
+        } else {
+            global_diagnostics().record(DiagnosticEvent::new(
+                DiagnosticComponent::Storage,
+                "import_completed",
+                DiagnosticLevel::Info,
+            ));
+            tracing::info!("database import completed");
+        }
+        result
+    }
+
+    async fn import_from_inner(
+        &self,
+        source: &Path,
+        allowed_download_root: &Path,
+    ) -> Result<ImportResult, StorageError> {
         let file_size = std::fs::metadata(source)
             .map_err(|error| StorageError::Maintenance(error.to_string()))?
             .len();
@@ -149,7 +210,7 @@ impl Database {
                 )
             })
             .count();
-        validate_export(&mut document, allowed_download_root.as_ref())?;
+        validate_export(&mut document, allowed_download_root)?;
 
         let health = self.check().await?;
         if !health.is_healthy() {

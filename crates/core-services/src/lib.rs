@@ -39,10 +39,12 @@ use fetchx_media_extractor::{
     ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry,
     UnsupportedExtractor, YtDlpExtractor,
 };
-use fetchx_models::EngineKind;
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadPriority, DownloadSource, FileName, Timestamp,
-    TorrentFileSelection, TorrentMetadata, parse_magnet_uri, parse_torrent_metainfo,
+    ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
+    DiagnosticHealth, DiagnosticsSnapshot, DownloadId, DownloadItem, DownloadPriority,
+    DownloadSource, DownloadStatus, EngineDiagnostics, EngineKind, FileName, PluginDiagnostics,
+    QueueDiagnostics, RpcDiagnostics, StorageDiagnostics, Timestamp, TorrentFileSelection,
+    TorrentMetadata, global_diagnostics, parse_magnet_uri, parse_torrent_metainfo,
 };
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
@@ -243,6 +245,277 @@ impl CoreServices {
     #[must_use]
     pub fn downloads_dir(&self) -> &std::path::Path {
         &self.downloads_dir
+    }
+
+    /// Builds a bounded snapshot containing aggregate state and no user configuration.
+    pub async fn diagnostics_snapshot(&self) -> DiagnosticsSnapshot {
+        let metrics = global_diagnostics().metrics();
+        let recent_events = global_diagnostics().recent_events();
+        let queue_result = self.queue.snapshot().await;
+        let storage_check_started = std::time::Instant::now();
+        let storage_result = self.database.check().await;
+        let database_check_latency_ms =
+            u64::try_from(storage_check_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        let (queue, queue_health, engines) = match queue_result {
+            Ok(snapshot) => {
+                let mut queue = QueueDiagnostics {
+                    health: DiagnosticHealth::Healthy,
+                    total_downloads: snapshot.items.len() as u64,
+                    active_downloads: snapshot.active.len() as u64,
+                    queued_downloads: snapshot.queued.len() as u64,
+                    paused_downloads: snapshot.paused.len() as u64,
+                    failed_downloads: 0,
+                    completed_downloads: 0,
+                    cancelled_downloads: 0,
+                    max_active_downloads: Some(snapshot.max_active_downloads as u64),
+                    global_connection_limit: Some(snapshot.global_connection_limit as u64),
+                    bytes_downloaded: 0,
+                    bytes_uploaded: None,
+                    current_speed_bytes_per_second: 0,
+                    average_speed_bytes_per_second: 0,
+                };
+                let engine_kinds = [
+                    (EngineKind::DirectHttp, "direct_http"),
+                    (EngineKind::Aria2, "aria2"),
+                    (EngineKind::YtDlp, "yt_dlp"),
+                    (EngineKind::Hls, "hls"),
+                    (EngineKind::NativeTorrent, "native_torrent"),
+                    (EngineKind::Ftp, "ftp"),
+                    (EngineKind::Ftps, "ftps"),
+                    (EngineKind::Sftp, "sftp"),
+                    (EngineKind::Metalink, "metalink"),
+                ];
+                for item in &snapshot.items {
+                    queue.bytes_downloaded = queue
+                        .bytes_downloaded
+                        .saturating_add(item.progress().downloaded_bytes());
+                    if item.status() == DownloadStatus::Downloading {
+                        queue.current_speed_bytes_per_second = queue
+                            .current_speed_bytes_per_second
+                            .saturating_add(item.progress().speed_bytes_per_second().unwrap_or(0));
+                    }
+                    match item.status() {
+                        DownloadStatus::Failed => queue.failed_downloads += 1,
+                        DownloadStatus::Completed | DownloadStatus::Seeding => {
+                            queue.completed_downloads += 1;
+                        }
+                        DownloadStatus::Cancelled | DownloadStatus::Stopped => {
+                            queue.cancelled_downloads += 1;
+                        }
+                        _ => {}
+                    }
+                }
+                let mut uploaded_bytes = 0_u64;
+                let mut has_upload_telemetry = false;
+                for active in &snapshot.active {
+                    if !matches!(
+                        active.item.source().engine(),
+                        EngineKind::Aria2 | EngineKind::NativeTorrent
+                    ) {
+                        continue;
+                    }
+                    match self.torrent_telemetry(active.item.id()).await {
+                        Ok(Some(telemetry)) => {
+                            if let Some(bytes) = telemetry.uploaded_bytes {
+                                uploaded_bytes = uploaded_bytes.saturating_add(bytes);
+                                has_upload_telemetry = true;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(_) => {
+                            global_diagnostics().record(
+                                fetchx_models::DiagnosticEvent::new(
+                                    fetchx_models::DiagnosticComponent::Downloader,
+                                    "torrent_telemetry_unavailable",
+                                    fetchx_models::DiagnosticLevel::Warn,
+                                )
+                                .with_error_code("TORRENT_TELEMETRY_UNAVAILABLE"),
+                            );
+                        }
+                    }
+                }
+                queue.bytes_uploaded = has_upload_telemetry.then_some(uploaded_bytes);
+                let downloading_count = snapshot
+                    .active
+                    .iter()
+                    .filter(|active| active.item.status() == DownloadStatus::Downloading)
+                    .count() as u64;
+                queue.average_speed_bytes_per_second = queue
+                    .current_speed_bytes_per_second
+                    .checked_div(downloading_count)
+                    .unwrap_or_default();
+                let engines = engine_kinds
+                    .into_iter()
+                    .map(|(kind, name)| {
+                        let health = self.engine_health(kind);
+                        EngineDiagnostics {
+                            engine: name.to_owned(),
+                            health,
+                            active_downloads: snapshot
+                                .active
+                                .iter()
+                                .filter(|active| active.item.source().engine() == kind)
+                                .count() as u64,
+                        }
+                    })
+                    .collect();
+                (queue, DiagnosticHealth::Healthy, engines)
+            }
+            Err(_) => (
+                QueueDiagnostics {
+                    health: DiagnosticHealth::Unavailable,
+                    total_downloads: 0,
+                    active_downloads: 0,
+                    queued_downloads: 0,
+                    paused_downloads: 0,
+                    failed_downloads: 0,
+                    completed_downloads: 0,
+                    cancelled_downloads: 0,
+                    max_active_downloads: None,
+                    global_connection_limit: None,
+                    bytes_downloaded: 0,
+                    bytes_uploaded: None,
+                    current_speed_bytes_per_second: 0,
+                    average_speed_bytes_per_second: 0,
+                },
+                DiagnosticHealth::Unavailable,
+                Vec::new(),
+            ),
+        };
+        let (storage, storage_health) = match storage_result {
+            Ok(check) => {
+                let health = if check.is_healthy() {
+                    DiagnosticHealth::Healthy
+                } else {
+                    DiagnosticHealth::Unhealthy
+                };
+                (
+                    StorageDiagnostics {
+                        health,
+                        schema_version: check.schema.database_schema_version,
+                        database_check_latency_ms: Some(database_check_latency_ms),
+                        migration_state: Some(format!("{:?}", check.schema.state)),
+                        integrity: Some(format!("{:?}", check.sqlite_integrity)),
+                        database_size_bytes: check.database_size_bytes,
+                        error_code: (!check.is_healthy())
+                            .then(|| "STORAGE_HEALTH_CHECK_FAILED".to_owned()),
+                    },
+                    health,
+                )
+            }
+            Err(_) => (
+                StorageDiagnostics {
+                    health: DiagnosticHealth::Unavailable,
+                    schema_version: None,
+                    database_check_latency_ms: Some(database_check_latency_ms),
+                    migration_state: None,
+                    integrity: None,
+                    database_size_bytes: None,
+                    error_code: Some("STORAGE_UNAVAILABLE".to_owned()),
+                },
+                DiagnosticHealth::Unavailable,
+            ),
+        };
+        let downloader_health =
+            if self.engine_health(EngineKind::DirectHttp) == DiagnosticHealth::Healthy {
+                DiagnosticHealth::Healthy
+            } else {
+                DiagnosticHealth::Unhealthy
+            };
+        let core_health = if queue_health == DiagnosticHealth::Healthy
+            && storage_health == DiagnosticHealth::Healthy
+            && downloader_health == DiagnosticHealth::Healthy
+        {
+            DiagnosticHealth::Healthy
+        } else {
+            DiagnosticHealth::Degraded
+        };
+        let components = vec![
+            DiagnosticComponentStatus {
+                health: core_health,
+                error_code: None,
+            },
+            DiagnosticComponentStatus {
+                health: queue_health,
+                error_code: (queue_health != DiagnosticHealth::Healthy)
+                    .then(|| "QUEUE_UNAVAILABLE".to_owned()),
+            },
+            DiagnosticComponentStatus {
+                health: downloader_health,
+                error_code: (downloader_health != DiagnosticHealth::Healthy)
+                    .then(|| "DOWNLOAD_ENGINE_UNAVAILABLE".to_owned()),
+            },
+            DiagnosticComponentStatus {
+                health: storage_health,
+                error_code: storage.error_code.clone(),
+            },
+            DiagnosticComponentStatus {
+                health: DiagnosticHealth::Unavailable,
+                error_code: None,
+            },
+            DiagnosticComponentStatus {
+                health: DiagnosticHealth::Unavailable,
+                error_code: None,
+            },
+        ];
+        let overall_health = if core_health == DiagnosticHealth::Healthy {
+            DiagnosticHealth::Healthy
+        } else {
+            DiagnosticHealth::Degraded
+        };
+
+        DiagnosticsSnapshot {
+            schema_version: DIAGNOSTICS_SCHEMA_VERSION,
+            generated_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+                .unwrap_or_default(),
+            health: overall_health,
+            application: ApplicationDiagnostics {
+                name: "FetchX".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                protocol_version: fetchx_remote_protocol::PROTOCOL_VERSION.to_owned(),
+                target_os: std::env::consts::OS.to_owned(),
+                target_arch: std::env::consts::ARCH.to_owned(),
+            },
+            components,
+            queue,
+            engines,
+            storage,
+            rpc: RpcDiagnostics {
+                health: DiagnosticHealth::Unavailable,
+                active_connections: None,
+                metrics,
+            },
+            plugins: PluginDiagnostics {
+                health: DiagnosticHealth::Unavailable,
+                discovered_plugins: None,
+                running_plugins: None,
+                metrics,
+            },
+            metrics,
+            recent_events,
+        }
+    }
+
+    fn engine_health(&self, engine: EngineKind) -> DiagnosticHealth {
+        use EngineAvailability::{Available, Disabled, Unavailable};
+        let availability = match engine {
+            EngineKind::DirectHttp | EngineKind::Hls => return DiagnosticHealth::Healthy,
+            EngineKind::Aria2 => &self.engine_runtime.status.aria2,
+            EngineKind::YtDlp => &self.engine_runtime.status.yt_dlp,
+            EngineKind::NativeTorrent => &self.engine_runtime.status.native_torrent,
+            EngineKind::Ftp | EngineKind::Ftps => &self.engine_runtime.status.ftp,
+            EngineKind::Sftp => &self.engine_runtime.status.sftp,
+            EngineKind::Metalink => &self.engine_runtime.status.metalink,
+        };
+        match availability {
+            Available { .. } => DiagnosticHealth::Healthy,
+            Disabled => DiagnosticHealth::Unavailable,
+            Unavailable { .. } => DiagnosticHealth::Degraded,
+        }
     }
 
     /// Extract media formats for `url` using the registered media extractor pipeline.
@@ -1514,6 +1787,27 @@ mod tests {
         let (first, second) = tokio::join!(services.shutdown(), services.shutdown());
         first?;
         second?;
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn diagnostics_snapshot_reports_healthy_storage_without_exposing_paths()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let database_path = root.path().join("fetchx.db");
+        let services = CoreServices::start(config(root.path())).await?;
+
+        let snapshot = services.diagnostics_snapshot().await;
+        let serialized = serde_json::to_string(&snapshot)?;
+        assert_eq!(
+            snapshot.storage.health,
+            fetchx_models::DiagnosticHealth::Healthy
+        );
+        assert!(snapshot.storage.database_check_latency_ms.is_some());
+        assert_eq!(snapshot.queue.total_downloads, 0);
+        assert!(!serialized.contains(&database_path.display().to_string()));
+
         services.shutdown().await?;
         Ok(())
     }

@@ -1,6 +1,7 @@
 pub mod add;
 pub mod config;
 pub mod db;
+pub mod diagnostics;
 pub mod engines;
 pub mod lifecycle;
 pub mod list;

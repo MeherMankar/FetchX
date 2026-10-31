@@ -130,6 +130,9 @@ interface DownloadService {
     sequence<DownloadInfoDto> list_downloads();
 
     [Throws=MobileApiError]
+    string diagnostics_snapshot();
+
+    [Throws=MobileApiError]
     DownloadInfoDto? get_download(string id);
 
     [Throws=MobileApiError]

@@ -1,5 +1,8 @@
 use std::{borrow::Cow, path::Path, str::FromStr, sync::LazyLock, time::Duration};
 
+use fetchx_models::{
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, global_diagnostics,
+};
 use sqlx::{
     SqlitePool,
     migrate::{Migration, MigrationType, Migrator},
@@ -202,17 +205,50 @@ impl Database {
 
     /// Applies pending embedded migrations. Safe to call after `connect`.
     pub async fn migrate(&self) -> Result<(), StorageError> {
-        let recovery_snapshot = crate::maintenance::prepare_migration(self).await?;
-        if let Err(error) = MIGRATOR.run(&self.pool).await {
-            if let Some(path) = recovery_snapshot {
-                return Err(StorageError::MigrationRecovery {
-                    message: error.to_string(),
-                    backup_path: path.display().to_string(),
-                });
+        let diagnostics = global_diagnostics();
+        diagnostics.increment(DiagnosticCounter::StorageMigrationAttempts);
+        diagnostics.record(DiagnosticEvent::new(
+            DiagnosticComponent::Storage,
+            "migration_started",
+            DiagnosticLevel::Info,
+        ));
+        let result = async {
+            let recovery_snapshot = crate::maintenance::prepare_migration(self).await?;
+            if let Err(error) = MIGRATOR.run(&self.pool).await {
+                if let Some(path) = recovery_snapshot {
+                    return Err(StorageError::MigrationRecovery {
+                        message: error.to_string(),
+                        backup_path: path.display().to_string(),
+                    });
+                }
+                return Err(StorageError::Migration(error));
             }
-            return Err(StorageError::Migration(error));
+            Ok(())
         }
-        Ok(())
+        .await;
+        if result.is_err() {
+            diagnostics.increment(DiagnosticCounter::StorageMigrationFailures);
+            diagnostics.record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Storage,
+                    "migration_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_error_code("STORAGE_MIGRATION_FAILED"),
+            );
+            tracing::warn!(
+                error_code = "STORAGE_MIGRATION_FAILED",
+                "database migration failed"
+            );
+        } else {
+            diagnostics.record(DiagnosticEvent::new(
+                DiagnosticComponent::Storage,
+                "migration_completed",
+                DiagnosticLevel::Info,
+            ));
+            tracing::info!("database migration completed");
+        }
+        result
     }
 
     /// Returns a repository for download records.

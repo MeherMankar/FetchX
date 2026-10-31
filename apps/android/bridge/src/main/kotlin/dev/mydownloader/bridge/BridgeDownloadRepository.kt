@@ -148,6 +148,10 @@ class BridgeDownloadRepository(
         initialSnapshotReady.await()
     }
 
+    suspend fun diagnosticsSnapshot(): String = withContext(Dispatchers.IO) {
+        service.diagnosticsSnapshot()
+    }
+
     suspend fun dispatchBrowserRpc(requestJson: String): String = withContext(Dispatchers.IO) {
         service.dispatchBrowserRpc(requestJson)
     }

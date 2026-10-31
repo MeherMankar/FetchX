@@ -19,6 +19,9 @@ use axum::{
     routing::{get, post},
 };
 use fetchx_core_services::{CoreServices, CoreServicesConfig};
+use fetchx_models::{
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, global_diagnostics,
+};
 use fetchx_queue::DownloadEvent;
 use fetchx_remote_protocol::{EventNotification, RpcErrorCode, RpcFailure, parse_request};
 use futures_util::{SinkExt, StreamExt};
@@ -385,6 +388,60 @@ async fn health(State(state): State<AppState>) -> Response {
 }
 
 async fn rpc(State(state): State<AppState>, request: Request<Body>) -> Response {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let started_at = Instant::now();
+    let response = rpc_inner(state, request).await;
+    let status = response.status();
+    let diagnostics = global_diagnostics();
+    diagnostics.increment(DiagnosticCounter::RpcRequests);
+    let (event, level, error_code) = if status == StatusCode::TOO_MANY_REQUESTS {
+        diagnostics.increment(DiagnosticCounter::RpcRateLimited);
+        (
+            "request_rate_limited",
+            DiagnosticLevel::Warn,
+            Some("RPC_RATE_LIMITED"),
+        )
+    } else if status == StatusCode::UNAUTHORIZED {
+        diagnostics.increment(DiagnosticCounter::RpcAuthenticationFailures);
+        (
+            "authentication_failed",
+            DiagnosticLevel::Warn,
+            Some("RPC_AUTHENTICATION_FAILED"),
+        )
+    } else if status == StatusCode::FORBIDDEN {
+        diagnostics.increment(DiagnosticCounter::RpcAuthorizationFailures);
+        (
+            "authorization_failed",
+            DiagnosticLevel::Warn,
+            Some("RPC_AUTHORIZATION_FAILED"),
+        )
+    } else if status.is_success() {
+        diagnostics.increment(DiagnosticCounter::RpcSuccesses);
+        ("request_completed", DiagnosticLevel::Info, None)
+    } else {
+        diagnostics.increment(DiagnosticCounter::RpcFailures);
+        (
+            "request_failed",
+            DiagnosticLevel::Warn,
+            Some("RPC_REQUEST_FAILED"),
+        )
+    };
+    let mut diagnostic_event = DiagnosticEvent::new(DiagnosticComponent::Rpc, event, level)
+        .with_request_id(request_id.clone());
+    if let Some(error_code) = error_code {
+        diagnostic_event = diagnostic_event.with_error_code(error_code);
+    }
+    diagnostics.record(diagnostic_event);
+    tracing::info!(
+        request_id,
+        status_code = status.as_u16(),
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        "remote RPC request finished"
+    );
+    response
+}
+
+async fn rpc_inner(state: AppState, request: Request<Body>) -> Response {
     if state.rate_limits.is_rate_limited("rpc") {
         return rate_limit_response();
     }

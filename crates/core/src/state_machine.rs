@@ -1,8 +1,10 @@
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadItemError, DownloadStatus, Timestamp, TimestampError,
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, DownloadId,
+    DownloadItem, DownloadItemError, DownloadStatus, Timestamp, TimestampError, global_diagnostics,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Validates a lifecycle transition without performing I/O or changing any state.
 pub fn validate_transition(
@@ -131,6 +133,7 @@ where
         to: DownloadStatus,
         error: Option<fetchx_models::DownloadError>,
     ) -> Result<DownloadItem, StateMachineError> {
+        let operation_id = Uuid::new_v4().to_string();
         let mut item = self
             .repository
             .get(id)
@@ -150,9 +153,66 @@ where
             .update_if_status_current(&item, from)
             .await?
         {
+            let recorder = global_diagnostics();
+            let (event, level) = match to {
+                DownloadStatus::Completed => {
+                    recorder.increment(DiagnosticCounter::DownloadsCompleted);
+                    ("download_completed", DiagnosticLevel::Info)
+                }
+                DownloadStatus::Failed => {
+                    recorder.increment(DiagnosticCounter::DownloadsFailed);
+                    recorder.increment(DiagnosticCounter::EngineFailures);
+                    ("download_failed", DiagnosticLevel::Error)
+                }
+                DownloadStatus::Cancelled => {
+                    recorder.increment(DiagnosticCounter::DownloadsCancelled);
+                    ("download_cancelled", DiagnosticLevel::Info)
+                }
+                DownloadStatus::Preparing
+                    if matches!(from, DownloadStatus::Failed | DownloadStatus::Cancelled) =>
+                {
+                    recorder.increment(DiagnosticCounter::DownloadsRetried);
+                    ("download_retried", DiagnosticLevel::Info)
+                }
+                DownloadStatus::Preparing | DownloadStatus::MetadataAcquiring
+                    if from == DownloadStatus::Queued =>
+                {
+                    recorder.increment(DiagnosticCounter::DownloadsStarted);
+                    ("download_started", DiagnosticLevel::Info)
+                }
+                _ => ("download_transition", DiagnosticLevel::Debug),
+            };
+            recorder.record(
+                DiagnosticEvent::new(DiagnosticComponent::Core, event, level)
+                    .with_download_id(id.to_string())
+                    .with_operation_id(operation_id.clone()),
+            );
+            tracing::info!(
+                download_id = %id,
+                operation_id,
+                from = ?from,
+                to = ?to,
+                "download lifecycle transition persisted"
+            );
             return Ok(item);
         }
 
+        tracing::warn!(
+            download_id = %id,
+            operation_id,
+            from = ?from,
+            to = ?to,
+            "download lifecycle transition lost a concurrent update"
+        );
+        global_diagnostics().record(
+            DiagnosticEvent::new(
+                DiagnosticComponent::Core,
+                "download_transition_conflict",
+                DiagnosticLevel::Warn,
+            )
+            .with_download_id(id.to_string())
+            .with_operation_id(operation_id),
+        );
         match self.repository.get(id).await? {
             None => Err(StateMachineError::NotFound(id)),
             Some(current) => Err(StateMachineError::ConcurrentTransition {

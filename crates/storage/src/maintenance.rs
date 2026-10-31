@@ -5,6 +5,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use fetchx_models::{
+    DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, global_diagnostics,
+};
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
@@ -164,6 +167,17 @@ impl Database {
                 (CheckStatus::Failed, 0)
             }
         };
+        if sqlite_integrity == CheckStatus::Failed || foreign_keys == CheckStatus::Failed {
+            global_diagnostics().increment(DiagnosticCounter::StorageIntegrityFailures);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Storage,
+                    "integrity_check_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_error_code("STORAGE_INTEGRITY_FAILED"),
+            );
+        }
         let tables = list_schema_objects(&self.pool, "table").await;
         let indexes = list_schema_objects(&self.pool, "index").await;
         let missing_tables = match &tables {
@@ -269,7 +283,33 @@ impl Database {
         &self,
         destination: impl AsRef<Path>,
     ) -> Result<BackupResult, StorageError> {
-        let destination = destination.as_ref();
+        let result = self.backup_to_inner(destination.as_ref()).await;
+        if result.is_err() {
+            global_diagnostics().increment(DiagnosticCounter::StorageBackupFailures);
+            global_diagnostics().record(
+                DiagnosticEvent::new(
+                    DiagnosticComponent::Storage,
+                    "backup_failed",
+                    DiagnosticLevel::Error,
+                )
+                .with_error_code("STORAGE_BACKUP_FAILED"),
+            );
+            tracing::warn!(
+                error_code = "STORAGE_BACKUP_FAILED",
+                "database backup failed"
+            );
+        } else {
+            global_diagnostics().record(DiagnosticEvent::new(
+                DiagnosticComponent::Storage,
+                "backup_completed",
+                DiagnosticLevel::Info,
+            ));
+            tracing::info!("database backup completed");
+        }
+        result
+    }
+
+    async fn backup_to_inner(&self, destination: &Path) -> Result<BackupResult, StorageError> {
         if destination.exists() {
             return Err(StorageError::Maintenance(
                 "backup destination already exists".to_owned(),

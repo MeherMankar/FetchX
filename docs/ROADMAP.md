@@ -1721,14 +1721,25 @@ application has no CLI maintenance surface; database maintenance commands remain
 
 **Platform Coverage:** SHARED CORE + UI/UX per platform
 
-Shared metrics: `downloads_total`, `downloads_active`, `downloads_failed`,
-`bytes_downloaded`, `bytes_uploaded`, `average_speed`, `retry_count`,
-`engine_failures`, `queue_depth`, `database_latency`, `rpc_requests`, `plugin_crashes`.
+**Status: SHARED DIAGNOSTICS, CLI, AND ANDROID BRIDGE IMPLEMENTED; PHYSICAL-DEVICE
+INSTRUMENTATION VALIDATED; BROADER RUNTIME VALIDATION OPEN.** On the V2135 Android 13
+device, the Phase 25 diagnostics instrumentation test passed (1 test, 0 failures),
+verifying bridge snapshot availability, healthy storage status, and omission of the
+private database path. The test used an isolated application ID to avoid replacing the
+existing debug installation. This does not validate broader download, RPC, plugin, or
+storage-maintenance runtime behavior. Shared snapshots include queue counts/throughput,
+download lifecycle and queue counters, storage health/migration/integrity results, RPC
+outcomes, plugin lifecycle counters, and bounded recent events. Queue state provides
+total/active counts, downloaded bytes, current and average speed; upload bytes are
+included when active torrent telemetry is available. Storage reports health-check latency.
+`fetchx diagnostics --json` performs a read-only database inspection; CoreServices
+snapshots are exposed through the Android bridge. RPC request IDs are generated
+internally and no diagnostic RPC method is published.
 
-Diagnostics command produces a safe diagnostic bundle.
-NEVER include: passwords, tokens, cookies, session strings, API keys, credentials.
-
-Both Android and Windows must expose useful diagnostics.
+Snapshots and events omit passwords, tokens, cookies, session strings, API keys,
+credentials, source URLs, database paths, request payloads, and raw error strings.
+Metrics and history are process-local. Runtime validation and any metrics not currently
+backed by an observable source remain open; do not treat source tests as live evidence.
 
 ---
 
