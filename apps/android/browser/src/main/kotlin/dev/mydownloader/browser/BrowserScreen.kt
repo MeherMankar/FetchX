@@ -327,8 +327,8 @@ fun BrowserScreen(
                     }
 
                 Surface(
-                    color = Color(0xFF1C1B22),
-                    border = BorderStroke(0.5.dp, Color(0xFF383741)),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
                     tonalElevation = 3.dp,
                 ) {
@@ -363,8 +363,8 @@ fun BrowserScreen(
                                     Surface(
                                         onClick = { viewModel.openSearchEngineSelector() },
                                         shape = RoundedCornerShape(10.dp),
-                                        color = Color(0xFF2B2A33),
-                                        border = BorderStroke(0.5.dp, Color(0xFF383741)),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                                         modifier = Modifier.padding(start = 6.dp),
                                     ) {
                                         Row(
@@ -380,7 +380,7 @@ fun BrowserScreen(
                                                 Icons.Default.ArrowDropDown,
                                                 contentDescription = "Select engine",
                                                 modifier = Modifier.size(16.dp),
-                                                tint = Color(0xFF93929D),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
                                         }
                                     }
@@ -461,7 +461,7 @@ fun BrowserScreen(
                                     Icon(
                                         Icons.Default.Lock,
                                         contentDescription = "Secure HTTPS",
-                                        tint = Color(0xFF34A853),
+                                        tint = MaterialTheme.colorScheme.tertiary,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 } else {
@@ -483,8 +483,8 @@ fun BrowserScreen(
                                     )
                                 },
                                 shape = RoundedCornerShape(22.dp),
-                                color = Color(0xFF2B2A33),
-                                border = BorderStroke(1.dp, Color(0xFF383741)),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(42.dp),
@@ -695,15 +695,12 @@ fun BrowserScreen(
 
                 BrowserBottomBar(
                     canGoBack = activeTab?.canGoBack == true,
-                    canGoForward = activeTab?.canGoForward == true,
                     tabCount = uiState.tabs.size,
                     onBack = { viewModel.goBack() },
-                    onForward = { viewModel.goForward() },
                     onHome = {
-                        viewModel.navigate("about:blank")
-                        viewModel.syncUrlInput("")
+                    viewModel.navigate("about:blank")
+                    viewModel.syncUrlInput("")
                     },
-                    onNewTab = { viewModel.newTabInCurrentSpace() },
                     onDownloads = onNavigateToDownloads,
                     onTabs = { viewModel.openTabOverview() },
                     onMenu = openMenu,
@@ -1505,7 +1502,7 @@ private fun EssentialsPage(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF1C1B22))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             modifier = Modifier
@@ -1542,7 +1539,7 @@ private fun EssentialsPage(
                         fontWeight = FontWeight.Bold,
                         letterSpacing = (-0.3).sp,
                     ),
-                    color = Color(0xFFFBFBFE),
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
             }
 
@@ -1552,8 +1549,8 @@ private fun EssentialsPage(
             Surface(
                 onClick = onSearchTap,
                 shape = RoundedCornerShape(24.dp),
-                color = Color(0xFF2B2A33),
-                border = BorderStroke(1.dp, Color(0xFF383741)),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
@@ -1565,14 +1562,14 @@ private fun EssentialsPage(
                     Icon(
                         Icons.Default.Search,
                         contentDescription = null,
-                        tint = Color(0xFF93929D),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(Modifier.width(12.dp))
                     Text(
                         text = "Search or enter address",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF93929D),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -1591,17 +1588,17 @@ private fun EssentialsPage(
                     style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                     ),
-                    color = Color(0xFFFBFBFE),
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
                 Surface(
                     onClick = onOpenSpaces,
                     shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF2B2A33),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
                 ) {
                     Text(
                         text = profileName,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF93929D),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
@@ -1628,8 +1625,8 @@ private fun EssentialsPage(
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0xFF2B2A33),
-                            border = BorderStroke(1.dp, Color(0xFF383741)),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.size(50.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
@@ -1638,7 +1635,7 @@ private fun EssentialsPage(
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold,
                                     ),
-                                    color = Color(0xFFFBFBFE),
+                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                         }
@@ -1646,7 +1643,7 @@ private fun EssentialsPage(
                         Text(
                             text = item.title,
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFDCDCE5),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1659,8 +1656,8 @@ private fun EssentialsPage(
             // ── Jump Back In / Library Quick Strip (Fenix Style) ───────────
             Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = Color(0xFF2B2A33),
-                border = BorderStroke(0.5.dp, Color(0xFF383741)),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
@@ -1703,7 +1700,8 @@ private fun EssentialsPage(
                     Icon(
                         Icons.Default.Shield,
                         contentDescription = null,
-                        tint = if (blockedCount > 0) Color(0xFF34A853) else Color(0xFF93929D),
+                        tint = if (blockedCount > 0) MaterialTheme.colorScheme.tertiary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(8.dp))
@@ -1711,7 +1709,7 @@ private fun EssentialsPage(
                         text = if (blockedCount > 0) "$blockedCount trackers blocked"
                                else "Enhanced tracking protection active",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF93929D),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -1732,14 +1730,14 @@ private fun QuickActionChip(
         Icon(
             icon,
             contentDescription = label,
-            tint = Color(0xFFDCDCE5),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp),
         )
         Spacer(Modifier.height(4.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = Color(0xFF93929D),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -1748,12 +1746,9 @@ private fun QuickActionChip(
 @Composable
 private fun BrowserBottomBar(
     canGoBack: Boolean,
-    canGoForward: Boolean,
     tabCount: Int,
     onBack: () -> Unit,
-    onForward: () -> Unit,
     onHome: () -> Unit,
-    onNewTab: () -> Unit,
     onDownloads: () -> Unit,
     onTabs: () -> Unit,
     onMenu: () -> Unit,
@@ -1761,15 +1756,15 @@ private fun BrowserBottomBar(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = Color(0xFF1C1B22),
-        border = BorderStroke(0.5.dp, Color(0xFF383741)),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-                .height(52.dp)
+                .height(56.dp)
                 .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceAround,
@@ -1778,51 +1773,38 @@ private fun BrowserBottomBar(
             IconButton(
                 onClick = onBack,
                 enabled = canGoBack,
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = if (canGoBack) Color(0xFFFBFBFE) else Color(0xFF484753),
+                    tint = if (canGoBack) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
                     modifier = Modifier.size(20.dp),
                 )
             }
 
-            // 2. Forward button
-            IconButton(
-                onClick = onForward,
-                enabled = canGoForward,
-                modifier = Modifier.size(44.dp),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Forward",
-                    tint = if (canGoForward) Color(0xFFFBFBFE) else Color(0xFF484753),
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-
-            // 3. Home button
+            // 2. Home button
             IconButton(
                 onClick = onHome,
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.Default.Home,
                     contentDescription = "Home",
-                    tint = Color(0xFFFBFBFE),
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp),
                 )
             }
 
-            // 4. Tabs badge (Standard Fenix squircle)
+            // 3. Tabs badge
             IconButton(
                 onClick = onTabs,
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    border = BorderStroke(1.5.dp, Color(0xFFFBFBFE)),
+                    border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.onSurface),
                     color = Color.Transparent,
                     modifier = Modifier.size(22.dp),
                 ) {
@@ -1833,21 +1815,34 @@ private fun BrowserBottomBar(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                             ),
-                            color = Color(0xFFFBFBFE),
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
             }
 
+            // 4. Downloads
+            IconButton(
+                onClick = onDownloads,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = "Downloads",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
             // 5. 3-dot Menu
             IconButton(
                 onClick = onMenu,
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     Icons.Default.MoreVert,
                     contentDescription = "Menu",
-                    tint = Color(0xFFFBFBFE),
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(20.dp),
                 )
             }

@@ -9,9 +9,61 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.isSystemInDarkTheme
 
-private val DarkColorScheme = darkColorScheme()
-private val LightColorScheme = lightColorScheme()
+private val FetchXDarkColorScheme = darkColorScheme(
+    primary = Color(0xFF9CCBFF),
+    onPrimary = Color(0xFF003258),
+    primaryContainer = Color(0xFF164A75),
+    onPrimaryContainer = Color(0xFFD1E8FF),
+    secondary = Color(0xFFB8C8DA),
+    onSecondary = Color(0xFF22313F),
+    secondaryContainer = Color(0xFF394957),
+    onSecondaryContainer = Color(0xFFD4E5F5),
+    tertiary = Color(0xFF8FD0B0),
+    onTertiary = Color(0xFF003822),
+    tertiaryContainer = Color(0xFF005333),
+    onTertiaryContainer = Color(0xFFAAEFC7),
+    background = Color(0xFF101418),
+    onBackground = Color(0xFFE1E2E5),
+    surface = Color(0xFF101418),
+    onSurface = Color(0xFFE1E2E5),
+    surfaceVariant = Color(0xFF41474E),
+    onSurfaceVariant = Color(0xFFC1C7CF),
+    outline = Color(0xFF8B9198),
+    outlineVariant = Color(0xFF41474E),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
+)
+
+private val FetchXLightColorScheme = lightColorScheme(
+    primary = Color(0xFF00639A),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFCDE5FF),
+    onPrimaryContainer = Color(0xFF001D33),
+    secondary = Color(0xFF50606F),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFD4E5F5),
+    onSecondaryContainer = Color(0xFF0D1D2A),
+    tertiary = Color(0xFF006D42),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFF9AF6C2),
+    onTertiaryContainer = Color(0xFF002110),
+    background = Color(0xFFF9F9FC),
+    onBackground = Color(0xFF191C20),
+    surface = Color(0xFFF9F9FC),
+    onSurface = Color(0xFF191C20),
+    surfaceVariant = Color(0xFFDDE3EA),
+    onSurfaceVariant = Color(0xFF41474E),
+    outline = Color(0xFF72787F),
+    outlineVariant = Color(0xFFC1C7CF),
+    error = Color(0xFFBA1A1A),
+    onError = Color.White,
+    errorContainer = Color(0xFFFFDAD6),
+    onErrorContainer = Color(0xFF410002),
+)
 
 /**
  * FetchX Material 3 theme.
@@ -23,7 +75,7 @@ private val LightColorScheme = lightColorScheme()
  */
 @Composable
 fun FetchXTheme(
-    darkTheme: Boolean = false,
+    darkTheme: Boolean = isSystemInDarkTheme(),
     seedColor: Color? = null,
     content: @Composable () -> Unit,
 ) {
@@ -50,8 +102,8 @@ fun FetchXTheme(
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         // Fallback static scheme
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+        darkTheme -> FetchXDarkColorScheme
+        else -> FetchXLightColorScheme
     }
 
     MaterialTheme(
