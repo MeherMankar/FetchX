@@ -297,7 +297,7 @@ where
         }
         let url = parse_http_url_with_private_policy(
             item.source().url(),
-            self.allow_private_test_target(),
+            self.allow_loopback_benchmark_target(),
         )?;
         let destination = item.destination().to_path_buf();
         let temporary_path = temporary_path(&destination);
@@ -660,8 +660,9 @@ where
     ) -> Result<Response, DownloadEngineError> {
         let mut url = initial_url.clone();
         for redirect_count in 0..=10 {
-            let allow_private = redirect_count == 0 && self.allow_private_test_target();
-            let client = self.client_for_url(&url, allow_private).await?;
+            let allow_loopback_fixture =
+                redirect_count == 0 && self.allow_loopback_benchmark_target();
+            let client = self.client_for_url(&url, allow_loopback_fixture).await?;
             let mut request = client.get(url.clone());
             if let Some(start) = range_start {
                 request = request.header(RANGE, format!("bytes={start}-"));
@@ -698,7 +699,7 @@ where
     async fn client_for_url(
         &self,
         url: &Url,
-        allow_private: bool,
+        allow_loopback_fixture: bool,
     ) -> Result<Client, DownloadEngineError> {
         let host = url.host_str().ok_or(DownloadEngineError::InvalidUrl)?;
         let port = url
@@ -713,10 +714,9 @@ where
                 .collect::<Vec<_>>()
         };
         if addresses.is_empty()
-            || (!allow_private
-                && addresses
-                    .iter()
-                    .any(|address| is_local_or_private_ip(address.ip())))
+            || addresses
+                .iter()
+                .any(|address| is_blocked_target(address.ip(), allow_loopback_fixture))
         {
             return Err(DownloadEngineError::InvalidUrl);
         }
@@ -733,13 +733,13 @@ where
     }
 
     #[cfg(test)]
-    fn allow_private_test_target(&self) -> bool {
+    fn allow_loopback_benchmark_target(&self) -> bool {
         true
     }
 
     #[cfg(not(test))]
-    fn allow_private_test_target(&self) -> bool {
-        false
+    fn allow_loopback_benchmark_target(&self) -> bool {
+        cfg!(feature = "phase28-benchmark-local-http")
     }
 
     async fn download_segmented(
@@ -759,7 +759,7 @@ where
         } = context;
         let temporary_path = temporary_path(item.destination());
         let segment_client = self
-            .client_for_url(&url, self.allow_private_test_target())
+            .client_for_url(&url, self.allow_loopback_benchmark_target())
             .await?;
         let mut segments = segments::plan_segments(total_size, segment_count, |index| {
             segment_file_path(&temporary_path, segment_count, total_size, index)
@@ -1679,6 +1679,10 @@ fn is_local_or_private_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
+fn is_blocked_target(ip: std::net::IpAddr, allow_loopback_fixture: bool) -> bool {
+    is_local_or_private_ip(ip) && !(allow_loopback_fixture && ip.is_loopback())
+}
+
 fn ipv6_embedded_ipv4_is_unsafe(ipv6: std::net::Ipv6Addr) -> bool {
     let segments = ipv6.segments();
     let embedded = if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
@@ -2244,7 +2248,7 @@ async fn publish_without_replacement(
 
 #[cfg(test)]
 mod tests {
-    use super::{redirect_target_is_safe, validate_http_source_url};
+    use super::{is_blocked_target, redirect_target_is_safe, validate_http_source_url};
     use reqwest::Url;
 
     #[test]
@@ -2281,5 +2285,25 @@ mod tests {
         assert!(redirect_target_is_safe(&source, &public));
         assert!(!redirect_target_is_safe(&source, &private));
         assert!(!redirect_target_is_safe(&source, &downgrade));
+    }
+
+    #[test]
+    fn benchmark_exception_allows_only_loopback_targets() {
+        assert!(!is_blocked_target(
+            "127.0.0.1".parse().expect("IPv4 loopback"),
+            true
+        ));
+        assert!(is_blocked_target(
+            "10.0.0.1".parse().expect("private IPv4"),
+            true
+        ));
+        assert!(is_blocked_target(
+            "::1".parse().expect("IPv6 loopback"),
+            false
+        ));
+        assert!(!is_blocked_target(
+            "8.8.8.8".parse().expect("public IPv4"),
+            false
+        ));
     }
 }

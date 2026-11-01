@@ -1844,6 +1844,32 @@ connection pooling, Tor routing integration.
 Reuse Phase 20M research. The proxy/routing logic lives in shared Rust.
 Only the OS-specific socket/networking adapter differs between Windows and Android.
 
+#### Phase 28 performance evidence
+
+**Status: COMPLETE — SCOPE-SPECIFIC / ENVIRONMENT-LIMITED** for desktop
+performance and resource validation of existing shared-core behavior. The
+deterministic HTTP benchmark covered payloads from 1 to 100 MiB, concurrency
+through 12 requested downloads, queue scale through 1,000 items, fairness,
+cancellation, pause/resume, bounded retries, mid-body interruption semantics,
+and available CPU/memory/disk measurements. Detailed methodology, results,
+and limitations are documented in
+[PHASE28_BENCHMARK_REPORT.md](./PHASE28_BENCHMARK_REPORT.md).
+
+Mid-body body-stream decode errors are intentionally non-transient under the
+current retry policy: no automatic retry occurs, the partial file and Failed
+state are preserved, and workers/connections are released. Safe manual
+range-based resume is a separate behavior.
+
+Limitations: Android performance was not validated because no device/emulator
+was available; real torrent performance was not validated because no
+reproducible peer/seeder environment was available; the sustained cycle stage
+ran 583.3 seconds rather than the requested 600 seconds; memory-leak absence
+and exact per-process physical disk I/O are not proven; strict workspace
+Clippy remains blocked by a pre-existing unrelated `clippy::collapsible_if`
+in `crates/models/src/progress.rs:21`. This performance evidence does not
+implement or validate the proxy, SOCKS5, DNS-policy, or Tor-routing features
+listed above.
+
 ---
 
 ### Phase 29 -- Download Intelligence (MEDIUM)

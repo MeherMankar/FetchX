@@ -2021,17 +2021,37 @@ async fn http_failures_persist_failed_state_and_safe_error() -> Result<(), Box<d
 #[tokio::test]
 async fn truncated_response_fails_and_preserves_the_partial_file() -> Result<(), Box<dyn Error>> {
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
-    let mut response = ServerResponse::ok(b"partial".to_vec());
-    response.content_length = Some(64);
-    let (url, server) = start_server(response).await?;
+    let response = scripted_response(200, &[("Content-Length", "64")], b"partial");
+    let (url, server) = start_scripted_server(vec![response]).await?;
     let destination = directory.destination("truncated.bin");
     let item = make_item(&url, &destination)?;
     let id = item.id();
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
 
-    assert!(engine.download(id, receiver).await.is_err());
-    server.await?;
+    let error = engine
+        .download(id, receiver)
+        .await
+        .expect_err("truncated response must fail without an automatic retry");
+    match &error {
+        DownloadEngineError::Request(request_error) => {
+            assert!(
+                request_error.is_decode(),
+                "truncated response should be classified as a decode failure"
+            );
+            assert!(
+                !crate::retry::RetryPolicy::is_transient_request(request_error),
+                "decode failures are intentionally excluded from automatic request retries"
+            );
+        }
+        other => panic!("unexpected truncation error: {other:?}"),
+    }
+    let requests = server.await?;
+    assert_eq!(
+        requests.len(),
+        1,
+        "body interruption is not automatically retried"
+    );
     let persisted = database
         .downloads()
         .get(id)
@@ -2040,7 +2060,9 @@ async fn truncated_response_fails_and_preserves_the_partial_file() -> Result<(),
     assert_eq!(persisted.status(), DownloadStatus::Failed);
     assert!(persisted.progress().downloaded_bytes() <= 7);
     assert!(!destination.exists());
-    assert!(PathBuf::from(format!("{}.part", destination.display())).exists());
+    let partial = PathBuf::from(format!("{}.part", destination.display()));
+    assert!(partial.exists());
+    assert_eq!(tokio::fs::metadata(partial).await?.len(), 7);
     Ok(())
 }
 
