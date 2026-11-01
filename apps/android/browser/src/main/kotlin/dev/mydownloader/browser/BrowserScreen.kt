@@ -327,8 +327,8 @@ fun BrowserScreen(
                     }
 
                 Surface(
-                    color = Color(0xFF0C1017),
-                    border = BorderStroke(0.5.dp, Color(0xFF1E2638)),
+                    color = Color(0xFF1C1B22),
+                    border = BorderStroke(0.5.dp, Color(0xFF383741)),
                     modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
                     tonalElevation = 3.dp,
                 ) {
@@ -363,8 +363,8 @@ fun BrowserScreen(
                                     Surface(
                                         onClick = { viewModel.openSearchEngineSelector() },
                                         shape = RoundedCornerShape(10.dp),
-                                        color = Color(0xFF141A24),
-                                        border = BorderStroke(0.5.dp, Color(0xFF232D3F)),
+                                        color = Color(0xFF2B2A33),
+                                        border = BorderStroke(0.5.dp, Color(0xFF383741)),
                                         modifier = Modifier.padding(start = 6.dp),
                                     ) {
                                         Row(
@@ -380,7 +380,7 @@ fun BrowserScreen(
                                                 Icons.Default.ArrowDropDown,
                                                 contentDescription = "Select engine",
                                                 modifier = Modifier.size(16.dp),
-                                                tint = Color(0xFF94A3B8),
+                                                tint = Color(0xFF93929D),
                                             )
                                         }
                                     }
@@ -423,10 +423,6 @@ fun BrowserScreen(
                                     .focusRequester(urlFocusRequester),
                             )
                         }
-                        SearchEngineQuickBar(
-                            selectedEngine = uiState.selectedSearchEngine,
-                            onSelectEngine = { viewModel.selectSearchEngine(it) },
-                        )
                     } else {
                         val url = uiState.activeTab?.url.orEmpty()
                         val isBlank = url == "about:blank" || url.isBlank()
@@ -487,8 +483,8 @@ fun BrowserScreen(
                                     )
                                 },
                                 shape = RoundedCornerShape(22.dp),
-                                color = Color(0xFF141A24),
-                                border = BorderStroke(1.dp, Color(0xFF232D3F)),
+                                color = Color(0xFF2B2A33),
+                                border = BorderStroke(1.dp, Color(0xFF383741)),
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(42.dp),
@@ -1509,26 +1505,18 @@ private fun EssentialsPage(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                    colors = listOf(
-                        spaceAccentColor.copy(alpha = 0.10f),
-                        Color(0xFF090D14),
-                        Color(0xFF090D14),
-                    )
-                )
-            )
+            .background(Color(0xFF1C1B22))
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 24.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // ── Modern Brand Logo & Title ──────────────────────────────────
+            // ── Fenix Brand Header ─────────────────────────────────────────
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center,
@@ -1536,75 +1524,39 @@ private fun EssentialsPage(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = spaceAccentColor,
-                    shadowElevation = 4.dp,
-                    modifier = Modifier.size(34.dp),
+                    modifier = Modifier.size(32.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Default.Language,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }
                 Spacer(Modifier.width(10.dp))
                 Text(
                     text = "FetchX",
-                    style = MaterialTheme.typography.headlineMedium.copy(
+                    style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Bold,
-                        letterSpacing = androidx.compose.ui.unit.TextUnit(-0.5f, androidx.compose.ui.unit.TextUnitType.Sp),
+                        letterSpacing = (-0.3).sp,
                     ),
-                    color = Color(0xFFF1F5F9),
+                    color = Color(0xFFFBFBFE),
                 )
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(20.dp))
 
-            // ── Space / Profile Selector Capsule ───────────────────────────
-            Surface(
-                onClick = onOpenSpaces,
-                shape = RoundedCornerShape(16.dp),
-                color = Color(0xFF141A24),
-                border = BorderStroke(1.dp, spaceAccentColor.copy(alpha = 0.35f)),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .background(spaceAccentColor, CircleShape),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = profileName,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFCBD5E1),
-                    )
-                    Icon(
-                        Icons.Default.ArrowDropDown,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = Color(0xFF94A3B8),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // ── Hero Search Bar (Sleek Glassmorphic Pill) ───────────────────
+            // ── Fenix Search Bar Capsule ───────────────────────────────────
             Surface(
                 onClick = onSearchTap,
-                shape = RoundedCornerShape(26.dp),
-                color = Color(0xFF141A24),
-                border = BorderStroke(1.dp, Color(0xFF263244)),
-                shadowElevation = 6.dp,
+                shape = RoundedCornerShape(24.dp),
+                color = Color(0xFF2B2A33),
+                border = BorderStroke(1.dp, Color(0xFF383741)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(48.dp),
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1613,79 +1565,51 @@ private fun EssentialsPage(
                     Icon(
                         Icons.Default.Search,
                         contentDescription = null,
-                        tint = spaceAccentColor,
-                        modifier = Modifier.size(22.dp),
+                        tint = Color(0xFF93929D),
+                        modifier = Modifier.size(20.dp),
                     )
                     Spacer(Modifier.width(12.dp))
                     Text(
-                        text = "Search or type URL",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = Color(0xFF94A3B8),
+                        text = "Search or enter address",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF93929D),
                         modifier = Modifier.weight(1f),
                     )
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(28.dp))
 
-            // ── Quick Action Shortcuts (Bookmarks, History, Downloads, Shield) ─
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                QuickActionChip(
-                    icon = Icons.Default.Bookmarks,
-                    label = "Bookmarks",
-                    accentTint = Color(0xFFF59E0B),
-                    onClick = onOpenBookmarks,
-                )
-                QuickActionChip(
-                    icon = Icons.Default.History,
-                    label = "History",
-                    accentTint = Color(0xFFA855F7),
-                    onClick = onOpenHistory,
-                )
-                QuickActionChip(
-                    icon = Icons.Default.Download,
-                    label = "Downloads",
-                    accentTint = Color(0xFF38BDF8),
-                    onClick = onOpenDownloads,
-                )
-                QuickActionChip(
-                    icon = Icons.Default.Shield,
-                    label = "Protection",
-                    accentTint = Color(0xFF22C55E),
-                    onClick = onOpenTrackerDetails,
-                )
-            }
-
-            Spacer(Modifier.height(30.dp))
-
-            // ── Favorites Header ───────────────────────────────────────────
+            // ── Shortcuts Header (Fenix Style) ─────────────────────────────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "Favorites",
-                    style = MaterialTheme.typography.titleMedium.copy(
+                    text = "Shortcuts",
+                    style = MaterialTheme.typography.titleSmall.copy(
                         fontWeight = FontWeight.Bold,
                     ),
-                    color = Color(0xFFF1F5F9),
+                    color = Color(0xFFFBFBFE),
                 )
-                if (essentials.isEmpty()) {
+                Surface(
+                    onClick = onOpenSpaces,
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF2B2A33),
+                ) {
                     Text(
-                        text = "Suggested",
+                        text = profileName,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF64748B),
+                        color = Color(0xFF93929D),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
             }
 
             Spacer(Modifier.height(14.dp))
 
-            // ── Favorites Grid (Sleek Rounded Squircle Tiles) ──────────────
+            // ── Fenix Circular Shortcuts Grid ──────────────────────────────
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 modifier = Modifier
@@ -1696,30 +1620,25 @@ private fun EssentialsPage(
                 userScrollEnabled = false,
             ) {
                 gridItems(displaySites.take(8), key = { it.id }) { item ->
-                    val tileColor = try {
-                        Color(android.graphics.Color.parseColor(item.colorHex))
-                    } catch (_: Exception) { spaceAccentColor }
-
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .clickable { onNavigate(item.url) }
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = tileColor.copy(alpha = 0.22f),
-                            border = BorderStroke(1.dp, tileColor.copy(alpha = 0.45f)),
-                            shadowElevation = 2.dp,
-                            modifier = Modifier.size(54.dp),
+                            shape = CircleShape,
+                            color = Color(0xFF2B2A33),
+                            border = BorderStroke(1.dp, Color(0xFF383741)),
+                            modifier = Modifier.size(50.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Text(
                                     text = item.initial,
-                                    style = MaterialTheme.typography.titleLarge.copy(
+                                    style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold,
                                     ),
-                                    color = tileColor,
+                                    color = Color(0xFFFBFBFE),
                                 )
                             }
                         }
@@ -1727,7 +1646,7 @@ private fun EssentialsPage(
                         Text(
                             text = item.title,
                             style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFCBD5E1),
+                            color = Color(0xFFDCDCE5),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1735,51 +1654,65 @@ private fun EssentialsPage(
                 }
             }
 
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(24.dp))
 
-            // ── Tracking Protection Banner Card ────────────────────────────
+            // ── Jump Back In / Library Quick Strip (Fenix Style) ───────────
             Surface(
-                onClick = onOpenTrackerDetails,
-                shape = RoundedCornerShape(18.dp),
-                color = Color(0xFF121722),
-                border = BorderStroke(1.dp, Color(0xFF222B3B)),
-                shadowElevation = 2.dp,
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF2B2A33),
+                border = BorderStroke(0.5.dp, Color(0xFF383741)),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(16.dp),
                 ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = Color(0xFF22C55E).copy(alpha = 0.15f),
-                        modifier = Modifier.size(42.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Default.Shield,
-                                contentDescription = null,
-                                tint = Color(0xFF22C55E),
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Tracking Protection",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                            color = Color(0xFFF1F5F9),
-                        )
-                        Text(
-                            text = if (blockedCount > 0) "$blockedCount trackers and ads blocked"
-                                   else "Enhanced tracking protection active",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFF94A3B8),
-                        )
-                    }
+                    QuickActionChip(
+                        icon = Icons.Default.Bookmarks,
+                        label = "Bookmarks",
+                        onClick = onOpenBookmarks,
+                    )
+                    QuickActionChip(
+                        icon = Icons.Default.History,
+                        label = "History",
+                        onClick = onOpenHistory,
+                    )
+                    QuickActionChip(
+                        icon = Icons.Default.Download,
+                        label = "Downloads",
+                        onClick = onOpenDownloads,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // ── Enhanced Tracking Protection Status Pill ───────────────────
+            Surface(
+                onClick = onOpenTrackerDetails,
+                shape = RoundedCornerShape(16.dp),
+                color = Color.Transparent,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Shield,
+                        contentDescription = null,
+                        tint = if (blockedCount > 0) Color(0xFF34A853) else Color(0xFF93929D),
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (blockedCount > 0) "$blockedCount trackers blocked"
+                               else "Enhanced tracking protection active",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF93929D),
+                    )
                 }
             }
         }
@@ -1790,35 +1723,23 @@ private fun EssentialsPage(
 private fun QuickActionChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    accentTint: Color = Color(0xFF4F8EF7),
     onClick: () -> Unit,
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.clickable(onClick = onClick),
     ) {
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = Color(0xFF141A24),
-            border = BorderStroke(1.dp, Color(0xFF232D3F)),
-            shadowElevation = 3.dp,
-            modifier = Modifier.size(48.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    icon,
-                    contentDescription = label,
-                    tint = accentTint,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
-        }
-        Spacer(Modifier.height(6.dp))
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = Color(0xFFDCDCE5),
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.height(4.dp))
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium,
-            color = Color(0xFF94A3B8),
+            color = Color(0xFF93929D),
         )
     }
 }
@@ -1840,169 +1761,100 @@ private fun BrowserBottomBar(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = Color(0xFF0A0E15),
-        border = BorderStroke(0.5.dp, Color(0xFF1A2030)),
+        color = Color(0xFF1C1B22),
+        border = BorderStroke(0.5.dp, Color(0xFF383741)),
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-                .height(56.dp)
-                .padding(horizontal = 6.dp),
+                .height(52.dp)
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceAround,
         ) {
-            // ── Left group: Back / Forward (pill container) ────────────────
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color(0xFF111827),
-                border = BorderStroke(0.5.dp, Color(0xFF1E2638)),
-                modifier = Modifier.height(40.dp),
+            // 1. Back button
+            IconButton(
+                onClick = onBack,
+                enabled = canGoBack,
+                modifier = Modifier.size(44.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 2.dp),
-                ) {
-                    IconButton(
-                        onClick = onBack,
-                        enabled = canGoBack,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = if (canGoBack) Color(0xFFCBD5E1)
-                                   else Color(0xFF334155),
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .width(0.5.dp)
-                            .height(20.dp)
-                            .background(Color(0xFF1E2638)),
-                    )
-                    IconButton(
-                        onClick = onForward,
-                        enabled = canGoForward,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "Forward",
-                            tint = if (canGoForward) Color(0xFFCBD5E1)
-                                   else Color(0xFF334155),
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = if (canGoBack) Color(0xFFFBFBFE) else Color(0xFF484753),
+                    modifier = Modifier.size(20.dp),
+                )
             }
 
-            Spacer(Modifier.weight(1f))
+            // 2. Forward button
+            IconButton(
+                onClick = onForward,
+                enabled = canGoForward,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "Forward",
+                    tint = if (canGoForward) Color(0xFFFBFBFE) else Color(0xFF484753),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
 
-            // ── Center: Home button (accent pill) ──────────────────────────
-            Surface(
+            // 3. Home button
+            IconButton(
                 onClick = onHome,
-                shape = RoundedCornerShape(14.dp),
-                color = accentColor.copy(alpha = 0.12f),
-                border = BorderStroke(0.5.dp, accentColor.copy(alpha = 0.3f)),
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier.size(44.dp),
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.Home,
-                        contentDescription = "Home",
-                        tint = accentColor,
-                        modifier = Modifier.size(20.dp),
-                    )
+                Icon(
+                    Icons.Default.Home,
+                    contentDescription = "Home",
+                    tint = Color(0xFFFBFBFE),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            // 4. Tabs badge (Standard Fenix squircle)
+            IconButton(
+                onClick = onTabs,
+                modifier = Modifier.size(44.dp),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.5.dp, Color(0xFFFBFBFE)),
+                    color = Color.Transparent,
+                    modifier = Modifier.size(22.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = if (tabCount > 99) "∞" else tabCount.toString(),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                            ),
+                            color = Color(0xFFFBFBFE),
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.weight(1f))
-
-            // ── Right group: Downloads / Tabs / Menu (pill container) ──────
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color(0xFF111827),
-                border = BorderStroke(0.5.dp, Color(0xFF1E2638)),
-                modifier = Modifier.height(40.dp),
+            // 5. 3-dot Menu
+            IconButton(
+                onClick = onMenu,
+                modifier = Modifier.size(44.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 2.dp),
-                ) {
-                    // Downloads
-                    IconButton(
-                        onClick = onDownloads,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = "Downloads",
-                            tint = Color(0xFFCBD5E1),
-                            modifier = Modifier.size(19.dp),
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .width(0.5.dp)
-                            .height(20.dp)
-                            .background(Color(0xFF1E2638)),
-                    )
-
-                    // Tabs counter
-                    Surface(
-                        onClick = onTabs,
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color.Transparent,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                border = BorderStroke(1.5.dp, accentColor.copy(alpha = 0.7f)),
-                                color = Color.Transparent,
-                                modifier = Modifier.size(22.dp),
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = if (tabCount > 99) "\u221E" else tabCount.toString(),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 11.sp,
-                                        ),
-                                        color = accentColor,
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .width(0.5.dp)
-                            .height(20.dp)
-                            .background(Color(0xFF1E2638)),
-                    )
-
-                    // Menu
-                    IconButton(
-                        onClick = onMenu,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = "Browser menu",
-                            tint = Color(0xFFCBD5E1),
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "Menu",
+                    tint = Color(0xFFFBFBFE),
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
     }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2038,7 +1890,7 @@ private fun BrowserMenuSheet(
         onDismissRequest = onDismiss,
         dragHandle = null,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-        containerColor = Color(0xFF0C1017),
+        containerColor = Color(0xFF1C1B22),
         scrimColor = Color.Black.copy(alpha = 0.5f),
     ) {
         Column(
@@ -2067,27 +1919,27 @@ private fun BrowserMenuSheet(
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                         ),
-                        color = Color(0xFFF1F5F9),
+                        color = Color(0xFFFBFBFE),
                     )
                 }
                 Surface(
                     onClick = onDismiss,
                     shape = CircleShape,
-                    color = Color(0xFF1A2130),
+                    color = Color(0xFF383741),
                     modifier = Modifier.size(30.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(Icons.Default.Close, contentDescription = "Close menu",
-                            tint = Color(0xFF94A3B8), modifier = Modifier.size(16.dp))
+                            tint = Color(0xFF93929D), modifier = Modifier.size(16.dp))
                     }
                 }
             }
 
             // Quick Actions Grid (labeled icon buttons)
             Surface(
-                color = Color(0xFF111827),
+                color = Color(0xFF2B2A33),
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFF1E2638)),
+                border = BorderStroke(1.dp, Color(0xFF383741)),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -2116,7 +1968,7 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (activeTab?.canGoBack == true) Color(0xFF1A2130)
+                            color = if (activeTab?.canGoBack == true) Color(0xFF383741)
                                    else Color(0xFF0F1520),
                             modifier = Modifier.size(42.dp),
                         ) {
@@ -2124,7 +1976,7 @@ private fun BrowserMenuSheet(
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
                                     contentDescription = "Back",
-                                    tint = if (activeTab?.canGoBack == true) Color(0xFFCBD5E1)
+                                    tint = if (activeTab?.canGoBack == true) Color(0xFFDCDCE5)
                                            else Color(0xFF334155),
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -2132,7 +1984,7 @@ private fun BrowserMenuSheet(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text("Back", style = MaterialTheme.typography.labelSmall,
-                            color = if (activeTab?.canGoBack == true) Color(0xFF94A3B8) else Color(0xFF334155))
+                            color = if (activeTab?.canGoBack == true) Color(0xFF93929D) else Color(0xFF334155))
                     }
                     // Forward
                     Column(
@@ -2144,7 +1996,7 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (activeTab?.canGoForward == true) Color(0xFF1A2130)
+                            color = if (activeTab?.canGoForward == true) Color(0xFF383741)
                                    else Color(0xFF0F1520),
                             modifier = Modifier.size(42.dp),
                         ) {
@@ -2152,7 +2004,7 @@ private fun BrowserMenuSheet(
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowForward,
                                     contentDescription = "Forward",
-                                    tint = if (activeTab?.canGoForward == true) Color(0xFFCBD5E1)
+                                    tint = if (activeTab?.canGoForward == true) Color(0xFFDCDCE5)
                                            else Color(0xFF334155),
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -2160,7 +2012,7 @@ private fun BrowserMenuSheet(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text("Forward", style = MaterialTheme.typography.labelSmall,
-                            color = if (activeTab?.canGoForward == true) Color(0xFF94A3B8) else Color(0xFF334155))
+                            color = if (activeTab?.canGoForward == true) Color(0xFF93929D) else Color(0xFF334155))
                     }
                     // Reload
                     Column(
@@ -2169,16 +2021,16 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF1A2130),
+                            color = Color(0xFF383741),
                             modifier = Modifier.size(42.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Reload",
-                                    tint = Color(0xFFCBD5E1), modifier = Modifier.size(20.dp))
+                                    tint = Color(0xFFDCDCE5), modifier = Modifier.size(20.dp))
                             }
                         }
                         Spacer(Modifier.height(4.dp))
-                        Text("Reload", style = MaterialTheme.typography.labelSmall, color = Color(0xFF94A3B8))
+                        Text("Reload", style = MaterialTheme.typography.labelSmall, color = Color(0xFF93929D))
                     }
                     // Bookmark
                     Column(
@@ -2191,7 +2043,7 @@ private fun BrowserMenuSheet(
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = if (isBookmarked) spaceAccentColor.copy(alpha = 0.15f)
-                                   else if (canBookmark) Color(0xFF1A2130) else Color(0xFF0F1520),
+                                   else if (canBookmark) Color(0xFF383741) else Color(0xFF0F1520),
                             border = if (isBookmarked) BorderStroke(1.dp, spaceAccentColor.copy(alpha = 0.4f)) else null,
                             modifier = Modifier.size(42.dp),
                         ) {
@@ -2200,7 +2052,7 @@ private fun BrowserMenuSheet(
                                     if (isBookmarked) Icons.Default.Star else Icons.Default.StarOutline,
                                     contentDescription = if (isBookmarked) "Remove bookmark" else "Bookmark",
                                     tint = if (isBookmarked) spaceAccentColor
-                                           else if (canBookmark) Color(0xFFCBD5E1) else Color(0xFF334155),
+                                           else if (canBookmark) Color(0xFFDCDCE5) else Color(0xFF334155),
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
@@ -2209,7 +2061,7 @@ private fun BrowserMenuSheet(
                         Text(if (isBookmarked) "Saved" else "Save",
                             style = MaterialTheme.typography.labelSmall,
                             color = if (isBookmarked) spaceAccentColor
-                                   else if (canBookmark) Color(0xFF94A3B8) else Color(0xFF334155))
+                                   else if (canBookmark) Color(0xFF93929D) else Color(0xFF334155))
                     }
                     // Download
                     Column(
@@ -2252,19 +2104,19 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF64748B),
+                color = Color(0xFF93929D),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Add,
                 title = "New Tab",
-                iconTint = Color(0xFF4F8EF7),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onNewTab,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.GridView,
                 title = "Tabs Overview",
-                iconTint = Color(0xFF4F8EF7),
+                iconTint = Color(0xFFDCDCE5),
                 badgeText = "${uiState.tabs.size} open",
                 onClick = onOpenTabs,
             )
@@ -2272,7 +2124,7 @@ private fun BrowserMenuSheet(
                 BrowserMenuItemRow(
                     icon = Icons.Default.AutoStories,
                     title = if (uiState.readerModeActive) "Turn Off Reader Mode" else "Reader Mode",
-                    iconTint = Color(0xFFA78BFA),
+                    iconTint = Color(0xFFDCDCE5),
                     badgeText = if (uiState.readerModeActive) "Active" else null,
                     badgeColor = Color(0xFFA78BFA).copy(alpha = 0.18f),
                     onClick = onToggleReaderMode,
@@ -2288,13 +2140,13 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF64748B),
+                color = Color(0xFF93929D),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Shield,
                 title = "Tracking Protection",
-                iconTint = Color(0xFF22C55E),
+                iconTint = Color(0xFFDCDCE5),
                 badgeText = "${uiState.activeTabBlockedRequests} blocked",
                 badgeColor = Color(0xFF22C55E).copy(alpha = 0.15f),
                 onClick = onOpenTrackerDetails,
@@ -2302,7 +2154,7 @@ private fun BrowserMenuSheet(
             BrowserMenuItemRow(
                 icon = Icons.Default.Security,
                 title = "Privacy & Security",
-                iconTint = Color(0xFF22C55E),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onOpenPrivacySettings,
             )
 
@@ -2315,26 +2167,26 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF64748B),
+                color = Color(0xFF93929D),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Bookmarks,
                 title = "Bookmarks",
-                iconTint = Color(0xFFFBBF24),
+                iconTint = Color(0xFFDCDCE5),
                 badgeText = if (uiState.bookmarks.isNotEmpty()) "${uiState.bookmarks.size}" else null,
                 onClick = onOpenBookmarks,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.History,
                 title = "History",
-                iconTint = Color(0xFFFBBF24),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onOpenHistory,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Download,
                 title = "Downloads",
-                iconTint = Color(0xFF38BDF8),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onOpenDownloads,
             )
 
@@ -2347,20 +2199,20 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF64748B),
+                color = Color(0xFF93929D),
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Extension,
                 title = "FetchX Remote",
                 subtitle = "Connect or add a download",
-                iconTint = Color(0xFFF472B6),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onOpenFetchxRemote,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Extension,
                 title = "Extensions",
-                iconTint = Color(0xFFF472B6),
+                iconTint = Color(0xFFDCDCE5),
                 badgeText = if (uiState.extensionManagerState.extensions.isNotEmpty())
                     "${uiState.extensionManagerState.extensions.size}" else null,
                 onClick = onOpenExtensions,
@@ -2369,37 +2221,37 @@ private fun BrowserMenuSheet(
                 icon = Icons.Default.Workspaces,
                 title = "Spaces & Profiles",
                 subtitle = uiState.selectedProfile?.name ?: "Default",
-                iconTint = Color(0xFFA78BFA),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onOpenSpaces,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Palette,
                 title = "Theme & Appearance",
-                iconTint = Color(0xFFA78BFA),
+                iconTint = Color(0xFFDCDCE5),
                 onClick = onOpenThemePicker,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Fullscreen,
                 title = "Compact Mode",
-                iconTint = Color(0xFF94A3B8),
+                iconTint = Color(0xFF93929D),
                 onClick = onToggleCompactMode,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Settings,
                 title = "Browser Settings",
-                iconTint = Color(0xFF94A3B8),
+                iconTint = Color(0xFF93929D),
                 onClick = onOpenSettings,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Storage,
                 title = "Storage Usage",
-                iconTint = Color(0xFF94A3B8),
+                iconTint = Color(0xFF93929D),
                 onClick = onOpenStorage,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Update,
                 title = "Check for Updates",
-                iconTint = Color(0xFF94A3B8),
+                iconTint = Color(0xFF93929D),
                 onClick = onOpenUpdates,
             )
         }
@@ -2413,7 +2265,7 @@ private fun BrowserMenuItemRow(
     subtitle: String? = null,
     badgeText: String? = null,
     badgeColor: Color? = null,
-    iconTint: Color = Color(0xFF94A3B8),
+    iconTint: Color = Color(0xFF93929D),
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
@@ -2451,28 +2303,28 @@ private fun BrowserMenuItemRow(
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.Medium,
                     ),
-                    color = if (enabled) Color(0xFFE2E8F0)
+                    color = if (enabled) Color(0xFFFBFBFE)
                            else Color(0xFF475569),
                 )
                 if (!subtitle.isNullOrBlank()) {
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF64748B),
+                        color = Color(0xFF93929D),
                     )
                 }
             }
             if (!badgeText.isNullOrBlank()) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = badgeColor ?: Color(0xFF1A2130),
+                    color = badgeColor ?: Color(0xFF383741),
                 ) {
                     Text(
                         text = badgeText,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Medium,
                         ),
-                        color = Color(0xFFCBD5E1),
+                        color = Color(0xFFDCDCE5),
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     )
                 }
@@ -2644,22 +2496,10 @@ fun SearchEngineIcon(
     modifier: Modifier = Modifier,
     size: androidx.compose.ui.unit.Dp = 20.dp,
 ) {
-    val (bgColor, iconTint) = when (engine) {
-        SearchEngine.GOOGLE -> Color(0xFF4285F4) to Color.White
-        SearchEngine.BING -> Color(0xFF008373) to Color.White
-        SearchEngine.DUCKDUCKGO -> Color(0xFFDE5833) to Color.White
-        SearchEngine.BRAVE -> Color(0xFFFB542B) to Color.White
-        SearchEngine.STARTPAGE -> Color(0xFF437BEB) to Color.White
-        SearchEngine.ECOSIA -> Color(0xFF008060) to Color.White
-        SearchEngine.KAGI -> Color(0xFFFAC032) to Color(0xFF1E293B)
-        SearchEngine.MOJEEK -> Color(0xFF0C60C8) to Color.White
-        SearchEngine.WIKIPEDIA -> Color(0xFF334155) to Color.White
-        SearchEngine.YOUTUBE -> Color(0xFFFF0000) to Color.White
-    }
-
     Surface(
         shape = RoundedCornerShape(size * 0.28f),
-        color = bgColor,
+        color = Color(0xFF2B2A33),
+        border = BorderStroke(0.5.dp, Color(0xFF383741)),
         modifier = modifier.size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -2668,89 +2508,89 @@ fun SearchEngineIcon(
                     Text(
                         text = "G",
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Black,
-                            fontSize = (size.value * 0.58f).sp,
-                            lineHeight = (size.value * 0.58f).sp,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = (size.value * 0.55f).sp,
+                            lineHeight = (size.value * 0.55f).sp,
                         ),
-                        color = iconTint,
+                        color = Color(0xFFFBFBFE),
                     )
                 }
                 SearchEngine.BING -> {
                     Text(
                         text = "b",
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = (size.value * 0.60f).sp,
-                            lineHeight = (size.value * 0.60f).sp,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = (size.value * 0.58f).sp,
+                            lineHeight = (size.value * 0.58f).sp,
                         ),
-                        color = iconTint,
+                        color = Color(0xFFFBFBFE),
                     )
                 }
                 SearchEngine.DUCKDUCKGO -> {
                     Text(
                         text = "D",
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Black,
-                            fontSize = (size.value * 0.58f).sp,
-                            lineHeight = (size.value * 0.58f).sp,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = (size.value * 0.55f).sp,
+                            lineHeight = (size.value * 0.55f).sp,
                         ),
-                        color = iconTint,
+                        color = Color(0xFFFBFBFE),
                     )
                 }
                 SearchEngine.BRAVE -> {
                     Icon(
                         Icons.Default.Shield,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.62f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.60f),
                     )
                 }
                 SearchEngine.STARTPAGE -> {
                     Icon(
                         Icons.Default.Search,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.62f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.60f),
                     )
                 }
                 SearchEngine.ECOSIA -> {
                     Icon(
                         Icons.Default.Eco,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.62f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.60f),
                     )
                 }
                 SearchEngine.KAGI -> {
                     Icon(
                         Icons.Default.Star,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.62f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.60f),
                     )
                 }
                 SearchEngine.MOJEEK -> {
                     Icon(
                         Icons.Default.Explore,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.62f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.60f),
                     )
                 }
                 SearchEngine.WIKIPEDIA -> {
                     Icon(
                         Icons.AutoMirrored.Filled.MenuBook,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.58f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.55f),
                     )
                 }
                 SearchEngine.YOUTUBE -> {
                     Icon(
                         Icons.Default.PlayArrow,
                         contentDescription = engine.displayName,
-                        tint = iconTint,
-                        modifier = Modifier.size(size * 0.64f),
+                        tint = Color(0xFFFBFBFE),
+                        modifier = Modifier.size(size * 0.62f),
                     )
                 }
             }
@@ -2758,41 +2598,6 @@ fun SearchEngineIcon(
     }
 }
 
-@Composable
-private fun SearchEngineQuickBar(
-    selectedEngine: SearchEngine,
-    onSelectEngine: (SearchEngine) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LazyRow(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        items(SearchEngine.entries) { engine ->
-            val isSelected = engine == selectedEngine
-            Surface(
-                onClick = { onSelectEngine(engine) },
-                shape = RoundedCornerShape(12.dp),
-                color = if (isSelected) Color(0xFF1E293B) else Color(0xFF111827),
-                border = BorderStroke(
-                    width = if (isSelected) 1.5.dp else 0.5.dp,
-                    color = if (isSelected) Color(0xFF4F8EF7) else Color(0xFF1E2638),
-                ),
-                modifier = Modifier.height(34.dp),
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                ) {
-                    SearchEngineIcon(engine = engine, size = 20.dp)
-                }
-            }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2904,10 +2709,10 @@ private fun TabGridSheet(
 
     val backgroundColor = Color(0xFF0A0E17)
     val cardBg = Color(0xFF141923)
-    val cardBorder = Color(0xFF232D3F)
+    val cardBorder = Color(0xFF383741)
     val previewSurfaceColor = Color(0xFF0D121B)
-    val primaryTextColor = Color(0xFFF1F5F9)
-    val secondaryTextColor = Color(0xFF94A3B8)
+    val primaryTextColor = Color(0xFFFBFBFE)
+    val secondaryTextColor = Color(0xFF93929D)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -3589,14 +3394,14 @@ private fun BrowserTabStrip(
                         Icon(
                             imageVector = Icons.Default.Language,
                             contentDescription = null,
-                            tint = if (isActive) spaceAccentColor else Color(0xFF94A3B8),
+                            tint = if (isActive) spaceAccentColor else Color(0xFF93929D),
                             modifier = Modifier.size(14.dp),
                         )
                         Text(
                             text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (isActive) Color(0xFFF1F5F9) else Color(0xFF94A3B8),
+                            color = if (isActive) Color(0xFFFBFBFE) else Color(0xFF93929D),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
@@ -3608,7 +3413,7 @@ private fun BrowserTabStrip(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Close tab",
-                                tint = Color(0xFF94A3B8),
+                                tint = Color(0xFF93929D),
                                 modifier = Modifier.size(12.dp),
                             )
                         }
@@ -3624,7 +3429,7 @@ private fun BrowserTabStrip(
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = "New Tab",
-                    tint = Color(0xFF94A3B8),
+                    tint = Color(0xFF93929D),
                     modifier = Modifier.size(16.dp),
                 )
             }
@@ -4293,8 +4098,8 @@ private fun VideoDownloadBanner(
 ) {
     Surface(
         shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-        color = Color(0xFF111827),
-        border = BorderStroke(1.dp, Color(0xFF1E2638)),
+        color = Color(0xFF2B2A33),
+        border = BorderStroke(1.dp, Color(0xFF383741)),
         shadowElevation = 8.dp,
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -4324,20 +4129,20 @@ private fun VideoDownloadBanner(
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
-                    color = Color(0xFFF1F5F9),
+                    color = Color(0xFFFBFBFE),
                 )
                 Text(
                     video.suggestedFilename,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = Color(0xFF94A3B8),
+                    color = Color(0xFF93929D),
                 )
                 if (extraCount > 0) {
                     Text(
                         "+$extraCount more",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF64748B),
+                        color = Color(0xFF93929D),
                     )
                 }
             }
@@ -4361,12 +4166,12 @@ private fun VideoDownloadBanner(
             Surface(
                 onClick = onDismiss,
                 shape = CircleShape,
-                color = Color(0xFF1A2130),
+                color = Color(0xFF383741),
                 modifier = Modifier.size(30.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(Icons.Default.Close, "Dismiss",
-                        tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                        tint = Color(0xFF93929D), modifier = Modifier.size(14.dp))
                 }
             }
         }
