@@ -48,6 +48,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Eco
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -358,24 +362,25 @@ fun BrowserScreen(
                                 leadingIcon = {
                                     Surface(
                                         onClick = { viewModel.openSearchEngineSelector() },
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = Color(0xFF141A24),
+                                        border = BorderStroke(0.5.dp, Color(0xFF232D3F)),
                                         modifier = Modifier.padding(start = 6.dp),
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                                         ) {
-                                            Text(
-                                                uiState.selectedSearchEngine.displayName.split(" ").first(),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary,
+                                            SearchEngineIcon(
+                                                engine = uiState.selectedSearchEngine,
+                                                size = 20.dp,
                                             )
+                                            Spacer(Modifier.width(2.dp))
                                             Icon(
                                                 Icons.Default.ArrowDropDown,
                                                 contentDescription = "Select engine",
                                                 modifier = Modifier.size(16.dp),
-                                                tint = MaterialTheme.colorScheme.primary,
+                                                tint = Color(0xFF94A3B8),
                                             )
                                         }
                                     }
@@ -418,6 +423,10 @@ fun BrowserScreen(
                                     .focusRequester(urlFocusRequester),
                             )
                         }
+                        SearchEngineQuickBar(
+                            selectedEngine = uiState.selectedSearchEngine,
+                            onSelectEngine = { viewModel.selectSearchEngine(it) },
+                        )
                     } else {
                         val url = uiState.activeTab?.url.orEmpty()
                         val isBlank = url == "about:blank" || url.isBlank()
@@ -448,11 +457,9 @@ fun BrowserScreen(
                                 modifier = Modifier.size(36.dp),
                             ) {
                                 if (isBlank) {
-                                    Icon(
-                                        Icons.Default.TravelExplore,
-                                        contentDescription = "Search engine",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp),
+                                    SearchEngineIcon(
+                                        engine = uiState.selectedSearchEngine,
+                                        size = 20.dp,
                                     )
                                 } else if (isHttps) {
                                     Icon(
@@ -2630,6 +2637,163 @@ private fun ThemePickerDialog(
     )
 }
 
+
+@Composable
+fun SearchEngineIcon(
+    engine: SearchEngine,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 20.dp,
+) {
+    val (bgColor, iconTint) = when (engine) {
+        SearchEngine.GOOGLE -> Color(0xFF4285F4) to Color.White
+        SearchEngine.BING -> Color(0xFF008373) to Color.White
+        SearchEngine.DUCKDUCKGO -> Color(0xFFDE5833) to Color.White
+        SearchEngine.BRAVE -> Color(0xFFFB542B) to Color.White
+        SearchEngine.STARTPAGE -> Color(0xFF437BEB) to Color.White
+        SearchEngine.ECOSIA -> Color(0xFF008060) to Color.White
+        SearchEngine.KAGI -> Color(0xFFFAC032) to Color(0xFF1E293B)
+        SearchEngine.MOJEEK -> Color(0xFF0C60C8) to Color.White
+        SearchEngine.WIKIPEDIA -> Color(0xFF334155) to Color.White
+        SearchEngine.YOUTUBE -> Color(0xFFFF0000) to Color.White
+    }
+
+    Surface(
+        shape = RoundedCornerShape(size * 0.28f),
+        color = bgColor,
+        modifier = modifier.size(size),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            when (engine) {
+                SearchEngine.GOOGLE -> {
+                    Text(
+                        text = "G",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Black,
+                            fontSize = (size.value * 0.58f).sp,
+                            lineHeight = (size.value * 0.58f).sp,
+                        ),
+                        color = iconTint,
+                    )
+                }
+                SearchEngine.BING -> {
+                    Text(
+                        text = "b",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = (size.value * 0.60f).sp,
+                            lineHeight = (size.value * 0.60f).sp,
+                        ),
+                        color = iconTint,
+                    )
+                }
+                SearchEngine.DUCKDUCKGO -> {
+                    Text(
+                        text = "D",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Black,
+                            fontSize = (size.value * 0.58f).sp,
+                            lineHeight = (size.value * 0.58f).sp,
+                        ),
+                        color = iconTint,
+                    )
+                }
+                SearchEngine.BRAVE -> {
+                    Icon(
+                        Icons.Default.Shield,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.62f),
+                    )
+                }
+                SearchEngine.STARTPAGE -> {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.62f),
+                    )
+                }
+                SearchEngine.ECOSIA -> {
+                    Icon(
+                        Icons.Default.Eco,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.62f),
+                    )
+                }
+                SearchEngine.KAGI -> {
+                    Icon(
+                        Icons.Default.Star,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.62f),
+                    )
+                }
+                SearchEngine.MOJEEK -> {
+                    Icon(
+                        Icons.Default.Explore,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.62f),
+                    )
+                }
+                SearchEngine.WIKIPEDIA -> {
+                    Icon(
+                        Icons.AutoMirrored.Filled.MenuBook,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.58f),
+                    )
+                }
+                SearchEngine.YOUTUBE -> {
+                    Icon(
+                        Icons.Default.PlayArrow,
+                        contentDescription = engine.displayName,
+                        tint = iconTint,
+                        modifier = Modifier.size(size * 0.64f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchEngineQuickBar(
+    selectedEngine: SearchEngine,
+    onSelectEngine: (SearchEngine) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LazyRow(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        items(SearchEngine.entries) { engine ->
+            val isSelected = engine == selectedEngine
+            Surface(
+                onClick = { onSelectEngine(engine) },
+                shape = RoundedCornerShape(12.dp),
+                color = if (isSelected) Color(0xFF1E293B) else Color(0xFF111827),
+                border = BorderStroke(
+                    width = if (isSelected) 1.5.dp else 0.5.dp,
+                    color = if (isSelected) Color(0xFF4F8EF7) else Color(0xFF1E2638),
+                ),
+                modifier = Modifier.height(34.dp),
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    SearchEngineIcon(engine = engine, size = 20.dp)
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SearchEngineSelectorDialog(
@@ -2651,25 +2815,10 @@ private fun SearchEngineSelectorDialog(
                             .clickable { onSelect(engine) }
                             .padding(vertical = 10.dp, horizontal = 4.dp),
                     ) {
-                        Surface(
-                            shape = MaterialTheme.shapes.small,
-                            color = if (isSelected)
-                                MaterialTheme.colorScheme.primaryContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = engine.displayName.take(2),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = if (isSelected)
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    else
-                                        MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
+                        SearchEngineIcon(
+                            engine = engine,
+                            size = 32.dp,
+                        )
                         Column(
                             modifier = Modifier
                                 .weight(1f)
