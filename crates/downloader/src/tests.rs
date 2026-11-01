@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -13,9 +14,11 @@ use fetchx_models::{
     FileName, Timestamp,
 };
 use fetchx_storage::{Database, DownloadRepository};
+use sha2::Digest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    process::Command,
     sync::{Mutex as AsyncMutex, oneshot, watch},
     task::JoinHandle,
     time::sleep,
@@ -110,6 +113,46 @@ async fn start_server(
     Ok((format!("http://{address}/file"), task))
 }
 
+async fn start_process_recovery_server(
+    body: Vec<u8>,
+) -> Result<(String, JoinHandle<Vec<String>>, oneshot::Sender<()>), std::io::Error> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (shutdown, mut shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        loop {
+            let accepted = tokio::select! {
+                _ = &mut shutdown_rx => break,
+                accepted = listener.accept() => accepted,
+            };
+            let Ok((mut stream, _)) = accepted else {
+                break;
+            };
+            let Some(request) = read_request(&mut stream).await else {
+                continue;
+            };
+            requests.push(request);
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\nETag: \"process-recovery-v1\"\r\n\r\n",
+                body.len()
+            );
+            if stream.write_all(headers.as_bytes()).await.is_err() {
+                continue;
+            }
+            for chunk in body.chunks(16 * 1024) {
+                if stream.write_all(chunk).await.is_err() || stream.flush().await.is_err() {
+                    break;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        }
+        requests
+    });
+
+    Ok((format!("http://{address}/process-recovery"), task, shutdown))
+}
+
 pub(crate) async fn start_scripted_server(
     responses: Vec<ScriptedResponse>,
 ) -> Result<(String, JoinHandle<Vec<String>>), std::io::Error> {
@@ -156,6 +199,59 @@ pub(crate) async fn start_scripted_server(
     });
 
     Ok((format!("http://{address}/file"), task))
+}
+
+async fn start_retry_control_server(
+    body: Vec<u8>,
+) -> Result<
+    (
+        String,
+        oneshot::Receiver<()>,
+        Arc<AsyncMutex<Vec<String>>>,
+        JoinHandle<()>,
+    ),
+    std::io::Error,
+> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (retry_sender, retry_started) = oneshot::channel();
+    let requests = Arc::new(AsyncMutex::new(Vec::new()));
+    let requests_for_server = Arc::clone(&requests);
+    let task = tokio::spawn(async move {
+        let Ok((mut first, _)) = listener.accept().await else {
+            return;
+        };
+        if let Some(request) = read_request(&mut first).await {
+            requests_for_server.lock().await.push(request);
+        }
+        let response = b"HTTP/1.1 503 Retry\r\nContent-Length: 0\r\nRetry-After: 30\r\nConnection: close\r\n\r\n";
+        if first.write_all(response).await.is_err() || first.flush().await.is_err() {
+            return;
+        }
+        let _ = retry_sender.send(());
+
+        let Ok((mut second, _)) = listener.accept().await else {
+            return;
+        };
+        if let Some(request) = read_request(&mut second).await {
+            requests_for_server.lock().await.push(request);
+        }
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        if second.write_all(headers.as_bytes()).await.is_ok() {
+            let _ = second.write_all(&body).await;
+            let _ = second.flush().await;
+        }
+    });
+
+    Ok((
+        format!("http://{address}/retry-control"),
+        retry_started,
+        requests,
+        task,
+    ))
 }
 
 async fn start_redirect_server(
@@ -1484,6 +1580,305 @@ async fn resumes_using_actual_partial_size_and_validates_final_content()
 }
 
 #[tokio::test]
+async fn reopens_file_database_and_recovers_interrupted_http_download() -> Result<(), Box<dyn Error>>
+{
+    const TOTAL: usize = 2 * 1024 * 1024;
+    const PARTIAL: usize = 768 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 251) as u8).collect();
+    let remaining = &body[PARTIAL..];
+    let response = scripted_response(
+        206,
+        &[
+            (
+                "Content-Range",
+                &format!("bytes {PARTIAL}-{}/{TOTAL}", TOTAL - 1),
+            ),
+            ("ETag", "\"crash-recovery-v1\""),
+        ],
+        remaining,
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let directory = TestDirectory::new()?;
+    let database_path = directory.destination("recovery.sqlite");
+    let destination = directory.destination("recovered.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+
+    let database = Database::connect_path(&database_path).await?;
+    let repository = database.downloads();
+    let mut item = make_item(&url, &destination)?;
+    item.set_progress_at(
+        DownloadProgress::new(PARTIAL as u64, Some(TOTAL as u64), None, None)?,
+        Timestamp::from_unix_millis(2),
+    )?;
+    let id = item.id();
+    repository.create(&item).await?;
+    let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
+    state_machine
+        .transition(id, DownloadStatus::Preparing)
+        .await?;
+    state_machine
+        .transition(id, DownloadStatus::Downloading)
+        .await?;
+    tokio::fs::write(&partial_path, &body[..PARTIAL]).await?;
+    write_resume_identity(&destination, &url, "\"crash-recovery-v1\"").await?;
+
+    drop(database);
+    drop(state_machine);
+    drop(repository);
+
+    let reopened_database = Database::connect_path(&database_path).await?;
+    let repository = reopened_database.downloads();
+    let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
+    let recovered = state_machine
+        .recover_interrupted(id)
+        .await?
+        .ok_or("downloading item was not recovered")?;
+    assert_eq!(recovered.status(), DownloadStatus::Queued);
+    assert_eq!(recovered.progress().downloaded_bytes(), PARTIAL as u64);
+
+    let engine = DirectHttpEngine::new(repository.clone())?;
+    let (_sender, cancellation) = watch::channel(false);
+    let completed = engine.download(id, cancellation).await?;
+    let requests = server.await?;
+    assert_eq!(range_header(&requests[0]), Some("bytes=786432-"));
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    let actual_body = tokio::fs::read(&destination).await?;
+    assert_eq!(actual_body, body);
+    let actual_hash = hex::encode(sha2::Sha256::digest(&actual_body));
+    let expected_hash = hex::encode(sha2::Sha256::digest(&body));
+    assert_eq!(actual_hash, expected_hash);
+    assert_eq!(
+        repository
+            .get(id)
+            .await?
+            .ok_or("recovered download disappeared from persistence")?
+            .status(),
+        DownloadStatus::Completed
+    );
+
+    drop(engine);
+    drop(state_machine);
+    drop(repository);
+    drop(reopened_database);
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_partial_file_is_not_resumed_and_download_restarts_from_zero()
+-> Result<(), Box<dyn Error>> {
+    let body = b"fresh content after partial loss".to_vec();
+    let (url, server) = start_scripted_server(vec![scripted_response(200, &[], &body)]).await?;
+    let config = HttpEngineConfig {
+        minimum_segmented_file_size: u64::MAX,
+        ..HttpEngineConfig::default()
+    };
+    let (database, engine, directory) = setup_engine(config).await?;
+    let destination = directory.destination("missing-partial.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let state_machine = fetchx_core::DownloadStateMachine::new(database.downloads());
+    state_machine
+        .transition(id, DownloadStatus::Preparing)
+        .await?;
+    state_machine
+        .transition(id, DownloadStatus::Downloading)
+        .await?;
+    tokio::fs::write(&partial_path, b"stale partial bytes").await?;
+    write_resume_identity(&destination, &url, "\"stale-v1\"").await?;
+    tokio::fs::remove_file(&partial_path).await?;
+
+    let recovered = state_machine
+        .recover_interrupted(id)
+        .await?
+        .ok_or("downloading item was not recovered")?;
+    assert_eq!(recovered.status(), DownloadStatus::Queued);
+
+    let (_sender, cancellation) = watch::channel(false);
+    let completed = engine.download(id, cancellation).await?;
+    let requests = server.await?;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(range_header(&requests[0]), None);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(
+        database.downloads().get(id).await?.unwrap().status(),
+        DownloadStatus::Completed
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn abrupt_subprocess_termination_recovers_and_completes_http_download()
+-> Result<(), Box<dyn Error>> {
+    const CHILD_MODE: &str = "FETCHX_PROCESS_RECOVERY_CHILD";
+    const DATABASE_PATH: &str = "FETCHX_PROCESS_RECOVERY_DATABASE";
+    const DOWNLOAD_ID: &str = "FETCHX_PROCESS_RECOVERY_DOWNLOAD";
+
+    if std::env::var_os(CHILD_MODE).is_some() {
+        let database_path = std::env::var_os(DATABASE_PATH).ok_or("missing child database path")?;
+        let id = std::env::var(DOWNLOAD_ID)?.parse::<DownloadId>()?;
+        let database = Database::connect_path(PathBuf::from(database_path)).await?;
+        let engine = DirectHttpEngine::new(database.downloads())?;
+        let (_sender, cancellation) = watch::channel(false);
+        let _ = engine.download(id, cancellation).await;
+        return Ok(());
+    }
+
+    let directory = TestDirectory::new()?;
+    let database_path = directory.destination("process-recovery.sqlite");
+    let destination = directory.destination("process-recovery.bin");
+    let body: Vec<u8> = (0..2 * 1024 * 1024)
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let expected_hash = hex::encode(sha2::Sha256::digest(&body));
+    let (url, server, stop_server) = start_process_recovery_server(body.clone()).await?;
+
+    let database = Database::connect_path(&database_path).await?;
+    let repository = database.downloads();
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    repository.create(&item).await?;
+
+    let executable = std::env::current_exe()?;
+    let mut child = Command::new(executable)
+        .arg("--exact")
+        .arg("tests::abrupt_subprocess_termination_recovers_and_completes_http_download")
+        .arg("--nocapture")
+        .env(CHILD_MODE, "1")
+        .env(DATABASE_PATH, &database_path)
+        .env(DOWNLOAD_ID, id.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    let (interrupted_item, partial_size) = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Err::<_, Box<dyn Error>>(
+                    std::io::Error::other(format!(
+                        "download subprocess exited before interruption: {status}"
+                    ))
+                    .into(),
+                );
+            }
+            let current = repository.get(id).await?;
+            if current
+                .as_ref()
+                .is_some_and(|item| item.status() == DownloadStatus::Completed)
+            {
+                return Err::<_, Box<dyn Error>>(
+                    std::io::Error::other("download completed before it could be interrupted")
+                        .into(),
+                );
+            }
+            if let Some(current) =
+                current.filter(|item| item.status() == DownloadStatus::Downloading)
+                && let Ok(metadata) = tokio::fs::metadata(&partial_path).await
+                && metadata.len() > 0
+            {
+                return Ok::<_, Box<dyn Error>>((current, metadata.len()));
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await??;
+    assert_eq!(interrupted_item.status(), DownloadStatus::Downloading);
+    assert!(partial_size > 0 && partial_size < body.len() as u64);
+
+    child.kill().await?;
+    let child_status = child.wait().await?;
+    assert!(
+        !child_status.success(),
+        "subprocess termination must be abrupt"
+    );
+    assert_eq!(
+        repository.get(id).await?.unwrap().status(),
+        DownloadStatus::Downloading,
+        "the database must retain the interrupted active state"
+    );
+    assert_eq!(
+        tokio::fs::metadata(&partial_path).await?.len(),
+        partial_size
+    );
+
+    let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
+    let recovered = state_machine
+        .recover_interrupted(id)
+        .await?
+        .ok_or("interrupted download was not requeued")?;
+    assert_eq!(recovered.status(), DownloadStatus::Queued);
+
+    let engine = DirectHttpEngine::new(repository.clone())?;
+    let (_sender, cancellation) = watch::channel(false);
+    let completed = engine.download(id, cancellation).await?;
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    let _ = stop_server.send(());
+    let requests = server.await?;
+    assert_eq!(requests.len(), 2);
+    let expected_range = format!("bytes={partial_size}-");
+    assert_eq!(range_header(&requests[1]), Some(expected_range.as_str()));
+    let actual_body = tokio::fs::read(&destination).await?;
+    assert_eq!(actual_body, body);
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(&actual_body)),
+        expected_hash
+    );
+    assert_eq!(
+        repository.get(id).await?.unwrap().status(),
+        DownloadStatus::Completed
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn injected_write_failures_persist_failed_without_retry_or_publication()
+-> Result<(), Box<dyn Error>> {
+    for kind in [
+        std::io::ErrorKind::Other,
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::StorageFull,
+    ] {
+        let body = b"write fault payload";
+        let (url, server) = start_scripted_server(vec![scripted_response(200, &[], body)]).await?;
+        let config = HttpEngineConfig {
+            minimum_segmented_file_size: u64::MAX,
+            ..HttpEngineConfig::default()
+        };
+        let (database, engine, directory) = setup_engine(config).await?;
+        let destination = directory.destination("write-failure.bin");
+        let item = make_item(&url, &destination)?;
+        let id = item.id();
+        database.downloads().create(&item).await?;
+        crate::http::inject_next_write_failure(id, kind);
+        let (_sender, cancellation) = watch::channel(false);
+
+        assert!(matches!(
+            engine.download(id, cancellation).await,
+            Err(DownloadEngineError::Io(error)) if error.kind() == kind
+        ));
+        assert_eq!(server.await?.len(), 1, "write errors are not retried");
+        assert!(
+            !destination.exists(),
+            "failed payload must not be published"
+        );
+        let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+        assert!(partial_path.exists(), "partial data remains recoverable");
+        let persisted = database
+            .downloads()
+            .get(id)
+            .await?
+            .ok_or("failed download not found")?;
+        assert_eq!(persisted.status(), DownloadStatus::Failed);
+        assert!(persisted.error().is_some());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_partial_responses_never_append_or_publish() -> Result<(), Box<dyn Error>> {
     let config = HttpEngineConfig {
         progress_bytes_interval: 1,
@@ -1751,7 +2146,22 @@ async fn final_publication_does_not_overwrite_a_concurrent_destination()
         Err(DownloadEngineError::DestinationExists)
     ));
     server.await?;
-    assert_eq!(tokio::fs::read(destination).await?, b"existing owner");
+    assert_eq!(tokio::fs::read(&destination).await?, b"existing owner");
+    let persisted = database
+        .downloads()
+        .get(id)
+        .await?
+        .ok_or("failed finalization download not found")?;
+    assert_eq!(persisted.status(), DownloadStatus::Failed);
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    assert!(
+        partial_path.exists(),
+        "failed publication keeps recoverable data"
+    );
+    assert!(
+        persisted.status() != DownloadStatus::Completed,
+        "publication failure must not mark the download completed"
+    );
     Ok(())
 }
 
@@ -1968,12 +2378,126 @@ async fn transient_connection_failure_is_retried() -> Result<(), Box<dyn Error>>
     let (url, server) = start_disconnect_then_success_server(body.clone()).await?;
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
     let destination = directory.destination("connection-retry.bin");
-    let completed = run_download(&engine, &database, make_item(&url, &destination)?).await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    let completed = run_download(&engine, &database, item).await?;
     let requests = server.await?;
 
     assert_eq!(requests.len(), 2);
     assert_eq!(tokio::fs::read(destination).await?, body);
     assert_eq!(completed.status(), DownloadStatus::Completed);
+    let id_string = id.to_string();
+    let retry_events = fetchx_models::global_diagnostics()
+        .recent_events()
+        .into_iter()
+        .filter(|event| event.download_id.as_deref() == Some(id_string.as_str()))
+        .collect::<Vec<_>>();
+    assert!(retry_events.iter().any(|event| {
+        event.event == "retry_started"
+            && event.error_code.as_deref() == Some("HTTP_TRANSIENT_REQUEST")
+    }));
+    let serialized = serde_json::to_string(&retry_events)?;
+    assert!(!serialized.contains(&url));
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_during_retry_backoff_does_not_resurrect_download()
+-> Result<(), Box<dyn Error>> {
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("cancel-retry.bin");
+    let (url, retry_started, requests, server) =
+        start_retry_control_server(b"must not be downloaded".to_vec()).await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+
+    let engine = Arc::new(engine);
+    let (cancel_sender, cancellation) = watch::channel(false);
+    let (_pause_sender, pause) = watch::channel(false);
+    let (_limit_sender, connection_limit) = watch::channel(4);
+    let download = tokio::spawn(async move {
+        engine
+            .download_managed(
+                id,
+                ManagedDownloadControl {
+                    cancellation,
+                    pause,
+                    connection_limit,
+                    resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
+                },
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), retry_started).await??;
+    cancel_sender.send(true)?;
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), download).await??,
+        Err(DownloadEngineError::Cancelled)
+    ));
+    assert_eq!(
+        database.downloads().get(id).await?.unwrap().status(),
+        DownloadStatus::Cancelled
+    );
+    assert_eq!(requests.lock().await.len(), 1);
+    assert!(!destination.exists());
+    server.abort();
+    let _ = server.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn pause_during_retry_backoff_stays_paused_until_explicit_resume()
+-> Result<(), Box<dyn Error>> {
+    let body = b"completed only after explicit resume".to_vec();
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("pause-retry.bin");
+    let (url, retry_started, requests, server) = start_retry_control_server(body.clone()).await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+
+    let engine = Arc::new(engine);
+    let (_cancel_sender, cancellation) = watch::channel(false);
+    let (pause_sender, pause) = watch::channel(false);
+    let (_limit_sender, connection_limit) = watch::channel(4);
+    let first_engine = Arc::clone(&engine);
+    let download = tokio::spawn(async move {
+        first_engine
+            .download_managed(
+                id,
+                ManagedDownloadControl {
+                    cancellation,
+                    pause,
+                    connection_limit,
+                    resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
+                },
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), retry_started).await??;
+    pause_sender.send(true)?;
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), download).await??,
+        Err(DownloadEngineError::Paused)
+    ));
+    assert_eq!(
+        database.downloads().get(id).await?.unwrap().status(),
+        DownloadStatus::Paused
+    );
+    assert_eq!(requests.lock().await.len(), 1);
+    assert!(!destination.exists());
+
+    let (_resume_cancel_sender, resume_cancellation) = watch::channel(false);
+    let completed = engine.download(id, resume_cancellation).await?;
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(requests.lock().await.len(), 2);
+    server.await?;
     Ok(())
 }
 
@@ -2013,6 +2537,34 @@ async fn http_failures_persist_failed_state_and_safe_error() -> Result<(), Box<d
         assert_eq!(persisted.status(), DownloadStatus::Failed);
         assert!(persisted.error().is_some());
         assert!(!directory.destination("failed.bin").exists());
+        if status == 503 {
+            let id_string = id.to_string();
+            let retry_events = fetchx_models::global_diagnostics()
+                .recent_events()
+                .into_iter()
+                .filter(|event| event.download_id.as_deref() == Some(id_string.as_str()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                retry_events
+                    .iter()
+                    .filter(|event| {
+                        event.event == "retry_started"
+                            && event.error_code.as_deref() == Some("HTTP_TRANSIENT_STATUS")
+                    })
+                    .count(),
+                3
+            );
+            assert_eq!(
+                retry_events
+                    .iter()
+                    .filter(|event| {
+                        event.event == "retry_exhausted"
+                            && event.error_code.as_deref() == Some("HTTP_TRANSIENT_STATUS")
+                    })
+                    .count(),
+                1
+            );
+        }
     }
 
     Ok(())

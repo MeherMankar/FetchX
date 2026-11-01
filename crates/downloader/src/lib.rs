@@ -36,6 +36,8 @@ pub use ffmpeg::{
 };
 pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
+#[cfg(feature = "phase30-queue-fault-injection")]
+pub use http::inject_next_write_failure;
 pub use http::{DirectHttpEngine, HttpEngineConfig, validate_http_source_url};
 pub use media_extractor_adapter::{YtDlpProcessRunnerAdapter, parse_yt_dlp_json_to_raw_formats};
 pub use metalink::{MetalinkEngine, MetalinkFile, MetalinkMirror};

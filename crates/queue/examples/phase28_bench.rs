@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(feature = "phase30-queue-fault-injection")]
+use fetchx_downloader::inject_next_write_failure;
 use fetchx_downloader::{DirectHttpEngine, HttpEngineConfig};
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus, EngineKind,
@@ -770,6 +772,99 @@ async fn run_queue_stress(server: &LocalFixture, count: usize) -> Result<(), Box
     Ok(())
 }
 
+#[cfg(feature = "phase30-queue-fault-injection")]
+async fn run_fault_injected_queue_stress(
+    server: &LocalFixture,
+    count: usize,
+) -> Result<(), Box<dyn Error>> {
+    server.metrics.reset().await;
+    let harness = Harness::new(3, 6).await?;
+    let bytes_per_item = 4 * 1024;
+    let expected_hash = fixture_hash(bytes_per_item);
+    let mut ids = Vec::with_capacity(count);
+    let mut destinations = HashMap::with_capacity(count);
+    for index in 0..count {
+        let key = format!("queue-fault-{count}-{index}");
+        let item = harness.item(&server.url(bytes_per_item, &key, "ok"), &key)?;
+        let id = item.id();
+        if index == 0 {
+            inject_next_write_failure(id, std::io::ErrorKind::StorageFull);
+        }
+        destinations.insert(id, item.destination().to_path_buf());
+        ids.push(id);
+        harness.queue.enqueue(item).await?;
+    }
+
+    let (statuses, observed) = wait_for_terminal(&harness, &ids, DEFAULT_TIMEOUT).await?;
+    let items = harness.repository.list().await?;
+    let by_id = items
+        .into_iter()
+        .map(|item| (item.id(), item))
+        .collect::<HashMap<_, _>>();
+    let failed = statuses
+        .iter()
+        .filter(|status| **status == DownloadStatus::Failed)
+        .count();
+    let completed = statuses
+        .iter()
+        .filter(|status| **status == DownloadStatus::Completed)
+        .count();
+    for id in &ids {
+        let item = by_id.get(id).ok_or("queue lost a persisted stress item")?;
+        if item.status() == DownloadStatus::Completed {
+            let actual_hash = file_hash(
+                destinations
+                    .get(id)
+                    .ok_or("completed item has no destination")?,
+            )
+            .await?;
+            if actual_hash != expected_hash {
+                return Err(format!("successful item {id} hash mismatch").into());
+            }
+        }
+    }
+    let failed_destination = destinations
+        .get(&ids[0])
+        .ok_or("failed item has no destination")?;
+    let failed_partial = PathBuf::from(format!("{}.part", failed_destination.display()));
+    let snapshot = harness.queue.snapshot().await?;
+    let server_active = server.metrics.active.load(Ordering::Relaxed);
+    println!(
+        "QUEUE_FAULT items={count} failed={failed} completed={completed} expected_hash={expected_hash} max_workers={} max_allocated_connections={} active_after={} queued_after={} server_active_after={server_active} failed_partial_exists={} result={}",
+        observed.active_workers,
+        observed.allocated_connections,
+        snapshot.active.len(),
+        snapshot.queued.len(),
+        failed_partial.exists(),
+        if failed == 1
+            && completed == count - 1
+            && snapshot.active.is_empty()
+            && snapshot.queued.is_empty()
+            && observed.active_workers <= 3
+            && observed.allocated_connections <= 6
+            && server_active == 0
+            && failed_partial.exists()
+        {
+            "PASS"
+        } else {
+            "FAIL"
+        },
+    );
+    if failed != 1
+        || completed != count - 1
+        || !snapshot.active.is_empty()
+        || !snapshot.queued.is_empty()
+        || observed.active_workers > 3
+        || observed.allocated_connections > 6
+        || server_active != 0
+        || !failed_partial.exists()
+    {
+        return Err(format!("fault-injected queue stress failed for {count} items").into());
+    }
+    harness.shutdown().await?;
+    Ok(())
+}
+
 async fn run_fairness(server: &LocalFixture) -> Result<(), Box<dyn Error>> {
     server.metrics.reset().await;
     let harness = Harness::new(1, 1).await?;
@@ -1303,6 +1398,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for count in [10, 100, 1_000] {
         set_stage(&format!("queue_{count}"))?;
         run_queue_stress(&server, count).await?;
+    }
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    for count in [10, 50, 100] {
+        set_stage(&format!("queue_fault_{count}"))?;
+        run_fault_injected_queue_stress(&server, count).await?;
     }
     set_stage("fairness")?;
     run_fairness(&server).await?;

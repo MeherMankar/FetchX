@@ -260,6 +260,7 @@ mod tests {
         DownloadStatus, EngineKind, FileName, Timestamp,
     };
     use fetchx_storage::{Database, DownloadRepository};
+    use uuid::Uuid;
 
     use super::{DownloadStateMachine, StateMachineError, validate_transition};
 
@@ -407,6 +408,40 @@ mod tests {
         assert!(completed.updated_at() > queued.updated_at());
         assert!(downloading.updated_at() >= preparing.updated_at());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_only_database_failure_preserves_prior_lifecycle_state()
+    -> Result<(), Box<dyn Error>> {
+        let path =
+            std::env::temp_dir().join(format!("fetchx-core-read-only-{}.db", Uuid::new_v4()));
+        let database = Database::connect_path(&path).await?;
+        let repository = database.downloads();
+        let queued = item(DownloadStatus::Queued)?;
+        let id = queued.id();
+        repository.create(&queued).await?;
+        drop(repository);
+        database.close().await;
+
+        {
+            let read_only = Database::open_read_only_path(&path).await?;
+            let read_only_repository = read_only.downloads();
+            let result = DownloadStateMachine::new(read_only_repository.clone())
+                .transition(id, DownloadStatus::Preparing)
+                .await;
+            assert!(matches!(result, Err(StateMachineError::Storage(_))));
+            assert_eq!(
+                read_only_repository
+                    .get(id)
+                    .await?
+                    .map(|item| item.status()),
+                Some(DownloadStatus::Queued)
+            );
+            drop(read_only_repository);
+            read_only.close().await;
+        }
+        std::fs::remove_file(path)?;
         Ok(())
     }
 

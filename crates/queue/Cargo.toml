@@ -15,6 +15,10 @@ tracing.workspace = true
 
 [features]
 phase28-benchmark = ["fetchx-downloader/phase28-benchmark-local-http"]
+phase30-queue-fault-injection = [
+    "fetchx-downloader/phase28-benchmark-local-http",
+    "fetchx-downloader/phase30-queue-fault-injection",
+]
 
 [lints]
 workspace = true

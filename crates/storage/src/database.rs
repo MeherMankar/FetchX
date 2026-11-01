@@ -269,6 +269,11 @@ impl Database {
         SqliteTorrentMetadataRepository::new(self.pool.clone())
     }
 
+    /// Closes all database connections and waits for active operations to finish.
+    pub async fn close(self) {
+        self.pool.close().await;
+    }
+
     #[cfg(test)]
     pub(crate) const fn pool(&self) -> &SqlitePool {
         &self.pool

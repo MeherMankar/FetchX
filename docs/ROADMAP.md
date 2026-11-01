@@ -121,7 +121,9 @@ Phases 1-20P (Completed)
         |
 29 Download Intelligence
         |
-30 Cloud / Device Sync
+30 Production Reliability / Failure Recovery
+        |
+31 Cloud / Device Sync
 ```
 
 ---
@@ -1892,7 +1894,63 @@ Both Windows and Android consume the same classifier logic.
 
 ---
 
-### Phase 30 -- Cloud / Device Sync (FUTURE)
+### Phase 30 -- Production Reliability, Resilience & Failure Recovery (HIGH)
+
+**Platform Coverage:** SHARED CORE; platform-specific runtime validation
+
+Harden existing download lifecycle behavior under process interruption,
+shutdown, network and filesystem failures, persistence errors, and queue
+failures. Reuse the existing state machine, retry policy, SQLite storage,
+queue recovery, diagnostics, and engine abstractions; add deterministic
+integration and subprocess tests where safe and practical.
+
+Validate interrupted-download recovery, retryable network failures and
+exhaustion, persistence consistency, filesystem error reporting, queue
+resource cleanup, legal state transitions, and idempotent lifecycle operations.
+Report Android and remote/RPC validation separately; do not claim runtime
+coverage without execution evidence. Do not duplicate retry mechanisms or
+change the intentional non-retryable classification of mid-body decode errors
+without evidence.
+
+This phase is reliability hardening of existing capabilities. It does not
+implement Download Intelligence, introduce unrelated features, or imply that
+all platform/crash scenarios are live validated.
+
+**Current status: PARTIAL.** Retry diagnostics, injected filesystem-failure
+cases, missing-partial recovery, retry cancellation/pause behavior, and a
+subprocess crash-recovery harness pass. The downloader library suite passed
+(270 passed, 3 ignored), including killing and recovering an isolated
+downloader test process; this does not validate recovery of the FetchX Windows
+application. The queue suite passed (35 tests), including a queue-drain test
+after injected StorageFull errors; the storage suite passed (35 tests).
+Changed-crate Clippy passed with the known unrelated warning allowed.
+The original queue regression injects `StorageFull` engine errors across
+multiple serialized items and verifies failed items persist, later downloads
+complete, and the queue drains; the separate opt-in regression below covers
+the actual downloader filesystem path.
+An opt-in `phase30-queue-fault-injection` regression now routes a controlled
+`StorageFull` failure through the real QueueManager, EngineDispatcher, and
+DirectHttpEngine body-write path. It verifies the failed item remains
+unpublished, the queue releases its single active slot, and a subsequent
+queued item completes with the expected payload hash.
+The core state-machine suite also verifies that a read-only SQLite database
+rejects a lifecycle persistence update while preserving the prior persisted
+state; this is deterministic storage-failure coverage, not live application
+fault injection.
+Workspace check and tests now pass under the reduced-memory Cargo profile;
+strict workspace Clippy remains blocked by the pre-existing
+`clippy::collapsible_if` warning in `crates/models/src/progress.rs:21`.
+An isolated Android `phase30Test` package built, installed, and launched with a
+separate UID and private database. This validates isolated startup only, not a
+bridge-backed download. Android active-download recovery, live Android bridge
+download execution, Windows app process recovery, remote download completion,
+real OS permission/disk-full behavior, and queue cleanup after an actual
+filesystem write failure remain unvalidated. See
+[`PHASE30_RELIABILITY_REPORT.md`](./PHASE30_RELIABILITY_REPORT.md).
+
+---
+
+### Phase 31 -- Cloud / Device Sync (FUTURE)
 
 **Platform Coverage:** SHARED CORE + PLATFORM ADAPTER (secure storage)
 
@@ -1966,9 +2024,9 @@ The objective is architectural improvement, not Motrix duplication.
 | Priority | Phases |
 |----------|--------|
 | CRITICAL | 20P, 20Q, 21A, 21B, 21C, 21D, 21E, 26A |
-| HIGH | 20R, 20S, 20B-A, 20B-B, 20B-C, 20B-D, 20B-E, 20B-F, 20B-G, 21F, 21G, 21H, 21I, 22A, 22B, 23A, 23B, 23C, 26B, 26C, 27 |
+| HIGH | 20R, 20S, 20B-A, 20B-B, 20B-C, 20B-D, 20B-E, 20B-F, 20B-G, 21F, 21G, 21H, 21I, 22A, 22B, 23A, 23B, 23C, 26B, 26C, 27, 30 |
 | MEDIUM | 20B-H, 23D, 24, 25, 28, 29 |
-| FUTURE | 30 |
+| FUTURE | 31 |
 
 ---
 

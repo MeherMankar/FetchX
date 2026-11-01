@@ -69,6 +69,11 @@ android {
             applicationIdSuffix = ".debug"
             isDebuggable = true
         }
+        create("phase30Test") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".phase30test"
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     compileOptions {

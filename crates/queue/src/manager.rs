@@ -1704,11 +1704,16 @@ mod tests {
         error::Error,
         ffi::OsString,
         path::{Path, PathBuf},
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::Duration,
     };
 
     use fetchx_core::DownloadStateMachine;
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    use fetchx_downloader::inject_next_write_failure;
     use fetchx_downloader::{
         Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
         DownloadEngineError, EngineDispatcher, ManagedDownloadControl, ManagedDownloadEngine,
@@ -1720,6 +1725,10 @@ mod tests {
         FileName, ResourcePolicy, ResourcePressure, ResourceProfile, Timestamp,
     };
     use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    use sha2::{Digest, Sha256};
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    use tokio::sync::oneshot;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -1737,6 +1746,11 @@ mod tests {
         release: watch::Receiver<bool>,
         supports_yt_dlp_pause: bool,
         desired_connections: usize,
+    }
+
+    struct FilesystemFailureEngine {
+        repository: SqliteDownloadRepository,
+        calls: AtomicUsize,
     }
 
     struct TorrentCompletionEngine {
@@ -1806,6 +1820,66 @@ mod tests {
             _cancellation: watch::Receiver<bool>,
         ) -> Result<DownloadItem, DownloadEngineError> {
             Err(DownloadEngineError::InvalidConfiguration)
+        }
+    }
+
+    impl DownloadEngine for FilesystemFailureEngine {
+        async fn download(
+            &self,
+            _id: DownloadId,
+            _cancellation: watch::Receiver<bool>,
+        ) -> Result<DownloadItem, DownloadEngineError> {
+            Err(DownloadEngineError::InvalidConfiguration)
+        }
+    }
+
+    impl ManagedDownloadEngine for FilesystemFailureEngine {
+        async fn download_managed(
+            &self,
+            id: DownloadId,
+            control: ManagedDownloadControl,
+        ) -> Result<DownloadItem, DownloadEngineError> {
+            let state_machine = DownloadStateMachine::new(self.repository.clone());
+            let item = self
+                .repository
+                .get(id)
+                .await?
+                .ok_or(DownloadEngineError::NotFound(id))?;
+            if item.status() == DownloadStatus::Queued {
+                state_machine
+                    .transition(id, DownloadStatus::Preparing)
+                    .await?;
+            }
+            state_machine
+                .transition(id, DownloadStatus::Downloading)
+                .await?;
+
+            if let Some(demand) = control.resource_demand {
+                demand
+                    .send(ResourceDemand {
+                        download_id: id,
+                        desired_concurrency: 1,
+                        active_concurrency: 1,
+                    })
+                    .await
+                    .map_err(|_| DownloadEngineError::ResourceManagerUnavailable)?;
+            }
+
+            if self.calls.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) {
+                return Err(DownloadEngineError::Io(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "injected filesystem write failure",
+                )));
+            }
+
+            state_machine
+                .transition(id, DownloadStatus::Completed)
+                .await
+                .map_err(Into::into)
+        }
+
+        fn supports_active_pause(&self, _engine: EngineKind) -> bool {
+            true
         }
     }
 
@@ -2137,6 +2211,120 @@ mod tests {
             }
         });
         Ok((endpoint, requests, task))
+    }
+
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    async fn start_retry_fixture() -> Result<
+        (
+            String,
+            oneshot::Receiver<()>,
+            oneshot::Receiver<()>,
+            oneshot::Sender<()>,
+            JoinHandle<()>,
+        ),
+        Box<dyn Error>,
+    > {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let (retry_started_sender, retry_started) = oneshot::channel();
+        let (active_retry_sender, active_retry_started) = oneshot::channel();
+        let (release_sender, mut release) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut a_gets = 0;
+            let mut retry_started_sender = Some(retry_started_sender);
+            let mut active_retry_sender = Some(active_retry_sender);
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let Ok(count) = stream.read(&mut buffer).await else {
+                        return;
+                    };
+                    if count == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request);
+                let mut fields = request
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .split_whitespace();
+                let method = fields.next().unwrap_or_default();
+                let path = fields.next().unwrap_or_default();
+                if method == "HEAD" {
+                    let response =
+                        b"HTTP/1.1 200 OK\r\ncontent-length: 21\r\nconnection: close\r\n\r\n";
+                    let _ = stream.write_all(response).await;
+                    continue;
+                }
+                if path == "/a" {
+                    a_gets += 1;
+                    if a_gets == 1 {
+                        let response = b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+                        let _ = stream.write_all(response).await;
+                        if let Some(sender) = retry_started_sender.take() {
+                            let _ = sender.send(());
+                        }
+                        continue;
+                    }
+                    if let Some(sender) = active_retry_sender.take() {
+                        let _ = sender.send(());
+                    }
+                    let _ = (&mut release).await;
+                }
+                let body = b"successful queue item";
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes()).await;
+                let _ = stream.write_all(body).await;
+            }
+        });
+        Ok((
+            format!("http://{address}"),
+            retry_started,
+            active_retry_started,
+            release_sender,
+            task,
+        ))
+    }
+
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    async fn direct_http_queue()
+    -> Result<(Database, SqliteDownloadRepository, QueueManager), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
+        let aria2 = Arc::new(Aria2Engine::with_poll_interval(
+            repository.clone(),
+            Aria2Client::new(Aria2ClientConfig::new(
+                "http://127.0.0.1:1/jsonrpc".to_owned(),
+                Some("queue-test-token".to_owned()),
+                Duration::from_secs(1),
+            ))?,
+            Duration::from_millis(10),
+        ));
+        let dispatcher = Arc::new(EngineDispatcher::new(
+            repository.clone(),
+            direct_http,
+            aria2,
+        ));
+        let manager = QueueManager::new(
+            repository.clone(),
+            dispatcher,
+            QueueConfig {
+                max_active_downloads: 1,
+                global_connection_limit: 1,
+            },
+        )
+        .await?;
+        Ok((database, repository, manager))
     }
 
     #[tokio::test]
@@ -2709,6 +2897,277 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    #[tokio::test]
+    async fn real_http_filesystem_failure_releases_queue_resources() -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let payload = b"queue-managed-http-fixture".to_vec();
+        let expected_hash = Sha256::digest(&payload);
+        let server_payload = payload.clone();
+        let server = tokio::spawn(async move {
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().await?;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\netag: \"queue-fixture\"\r\nconnection: close\r\n\r\n",
+                    server_payload.len()
+                );
+                stream.write_all(response.as_bytes()).await?;
+                stream.write_all(&server_payload).await?;
+                stream.shutdown().await?;
+            }
+            Ok::<_, std::io::Error>(())
+        });
+
+        let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
+        let aria2 = Arc::new(Aria2Engine::with_poll_interval(
+            repository.clone(),
+            Aria2Client::new(Aria2ClientConfig::new(
+                "http://127.0.0.1:1/jsonrpc".to_owned(),
+                Some("queue-test-token".to_owned()),
+                Duration::from_secs(1),
+            ))?,
+            Duration::from_millis(10),
+        ));
+        let dispatcher = Arc::new(EngineDispatcher::new(
+            repository.clone(),
+            direct_http,
+            aria2,
+        ));
+        let manager = QueueManager::new(
+            repository.clone(),
+            dispatcher,
+            QueueConfig {
+                max_active_downloads: 1,
+                global_connection_limit: 1,
+            },
+        )
+        .await?;
+
+        let root = std::env::temp_dir().join(format!("fetchx-queue-http-{}", DownloadId::new()));
+        tokio::fs::create_dir_all(&root).await?;
+        let failed_destination = root.join("failed.bin");
+        let successful_destination = root.join("successful.bin");
+        let failed = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(format!("http://{address}/failed"), EngineKind::DirectHttp)?,
+            FileName::new("failed.bin")?,
+            failed_destination.clone(),
+            Timestamp::now()?,
+        );
+        let successful = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(
+                format!("http://{address}/successful"),
+                EngineKind::DirectHttp,
+            )?,
+            FileName::new("successful.bin")?,
+            successful_destination.clone(),
+            Timestamp::now()?,
+        );
+        let failed_id = failed.id();
+        let successful_id = successful.id();
+        inject_next_write_failure(failed_id, std::io::ErrorKind::StorageFull);
+        manager.enqueue(failed).await?;
+        manager.enqueue(successful).await?;
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let failed_item = repository.get(failed_id).await?;
+                let successful_item = repository.get(successful_id).await?;
+                if failed_item
+                    .as_ref()
+                    .is_some_and(|item| item.status() == DownloadStatus::Failed)
+                    && successful_item
+                        .as_ref()
+                        .is_some_and(|item| item.status() == DownloadStatus::Completed)
+                {
+                    break Ok::<_, fetchx_storage::StorageError>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+
+        let snapshot = manager.snapshot().await?;
+        assert!(snapshot.active.is_empty());
+        assert!(snapshot.queued.is_empty());
+        assert_eq!(
+            repository
+                .get(failed_id)
+                .await?
+                .ok_or("missing failed item")?
+                .status(),
+            DownloadStatus::Failed
+        );
+        assert_eq!(
+            repository
+                .get(successful_id)
+                .await?
+                .ok_or("missing successful item")?
+                .status(),
+            DownloadStatus::Completed
+        );
+        assert!(!failed_destination.exists());
+        let completed = tokio::fs::read(&successful_destination).await?;
+        assert_eq!(Sha256::digest(completed), expected_hash);
+        assert!(failed_destination.with_extension("bin.part").exists());
+
+        manager.shutdown().await?;
+        server.await??;
+        tokio::fs::remove_dir_all(root).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    #[tokio::test]
+    async fn cancellation_during_retry_backoff_releases_queue_and_continues()
+    -> Result<(), Box<dyn Error>> {
+        let (_database, repository, manager) = direct_http_queue().await?;
+        let (base_url, retry_started, _active_retry_started, _release, server) =
+            start_retry_fixture().await?;
+        let root = std::env::temp_dir().join(format!("fetchx-queue-cancel-{}", DownloadId::new()));
+        tokio::fs::create_dir_all(&root).await?;
+        let cancelled_destination = root.join("cancelled.bin");
+        let successful_destination = root.join("successful.bin");
+        let cancelled = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(format!("{base_url}/a"), EngineKind::DirectHttp)?,
+            FileName::new("cancelled.bin")?,
+            cancelled_destination.clone(),
+            Timestamp::now()?,
+        );
+        let successful = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(format!("{base_url}/b"), EngineKind::DirectHttp)?,
+            FileName::new("successful.bin")?,
+            successful_destination.clone(),
+            Timestamp::now()?,
+        );
+        let cancelled_id = cancelled.id();
+        let successful_id = successful.id();
+        manager.enqueue(cancelled).await?;
+        manager.enqueue(successful).await?;
+        retry_started.await?;
+
+        manager.cancel(cancelled_id).await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let cancelled_item = repository.get(cancelled_id).await?;
+                let successful_item = repository.get(successful_id).await?;
+                if cancelled_item
+                    .as_ref()
+                    .is_some_and(|item| item.status() == DownloadStatus::Cancelled)
+                    && successful_item
+                        .as_ref()
+                        .is_some_and(|item| item.status() == DownloadStatus::Completed)
+                {
+                    break Ok::<_, fetchx_storage::StorageError>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let snapshot = manager.snapshot().await?;
+        assert!(snapshot.active.is_empty());
+        assert!(snapshot.queued.is_empty());
+        assert!(!cancelled_destination.exists());
+        assert_eq!(
+            tokio::fs::read(&successful_destination).await?,
+            b"successful queue item"
+        );
+        assert_eq!(
+            repository
+                .get(cancelled_id)
+                .await?
+                .ok_or("missing cancelled item")?
+                .status(),
+            DownloadStatus::Cancelled
+        );
+        manager.shutdown().await?;
+        server.abort();
+        let _ = server.await;
+        tokio::fs::remove_dir_all(root).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    #[tokio::test]
+    async fn cancellation_during_active_retry_releases_queue_and_continues()
+    -> Result<(), Box<dyn Error>> {
+        let (_database, repository, manager) = direct_http_queue().await?;
+        let (base_url, retry_started, active_retry_started, release, server) =
+            start_retry_fixture().await?;
+        let root =
+            std::env::temp_dir().join(format!("fetchx-queue-active-cancel-{}", DownloadId::new()));
+        tokio::fs::create_dir_all(&root).await?;
+        let cancelled_destination = root.join("cancelled.bin");
+        let successful_destination = root.join("successful.bin");
+        let cancelled = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(format!("{base_url}/a"), EngineKind::DirectHttp)?,
+            FileName::new("cancelled.bin")?,
+            cancelled_destination.clone(),
+            Timestamp::now()?,
+        );
+        let successful = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(format!("{base_url}/b"), EngineKind::DirectHttp)?,
+            FileName::new("successful.bin")?,
+            successful_destination.clone(),
+            Timestamp::now()?,
+        );
+        let cancelled_id = cancelled.id();
+        let successful_id = successful.id();
+        manager.enqueue(cancelled).await?;
+        manager.enqueue(successful).await?;
+        retry_started.await?;
+        active_retry_started.await?;
+
+        manager.cancel(cancelled_id).await?;
+        let _ = release.send(());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let cancelled_item = repository.get(cancelled_id).await?;
+                let successful_item = repository.get(successful_id).await?;
+                if cancelled_item
+                    .as_ref()
+                    .is_some_and(|item| item.status() == DownloadStatus::Cancelled)
+                    && successful_item
+                        .as_ref()
+                        .is_some_and(|item| item.status() == DownloadStatus::Completed)
+                {
+                    break Ok::<_, fetchx_storage::StorageError>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let snapshot = manager.snapshot().await?;
+        assert!(snapshot.active.is_empty());
+        assert!(snapshot.queued.is_empty());
+        assert!(!cancelled_destination.exists());
+        assert_eq!(
+            tokio::fs::read(&successful_destination).await?,
+            b"successful queue item"
+        );
+        assert_eq!(
+            repository
+                .get(cancelled_id)
+                .await?
+                .ok_or("missing cancelled item")?
+                .status(),
+            DownloadStatus::Cancelled
+        );
+        manager.shutdown().await?;
+        server.abort();
+        let _ = server.await;
+        tokio::fs::remove_dir_all(root).await?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn pause_resume_and_cancel_follow_queue_lifecycle()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -3123,6 +3582,62 @@ mod tests {
         })
         .await??;
         assert_eq!(failed.status(), DownloadStatus::Failed);
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn filesystem_worker_failures_release_slots_and_queue_continues()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let engine = Arc::new(FilesystemFailureEngine {
+            repository: repository.clone(),
+            calls: AtomicUsize::new(0),
+        });
+        let manager = QueueManager::new(
+            repository.clone(),
+            engine.clone(),
+            QueueConfig {
+                max_active_downloads: 1,
+                global_connection_limit: 1,
+            },
+        )
+        .await?;
+        let downloads = [item()?, item()?, item()?, item()?];
+        let ids = downloads.each_ref().map(DownloadItem::id);
+        for download in downloads {
+            manager.enqueue(download).await?;
+        }
+
+        let drained = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let snapshot = manager.snapshot().await?;
+                if snapshot.active.is_empty()
+                    && snapshot.queued.is_empty()
+                    && engine.calls.load(Ordering::SeqCst) == ids.len()
+                {
+                    break Ok::<_, QueueError>(snapshot);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await??;
+        assert!(drained.active.is_empty());
+        assert!(drained.queued.is_empty());
+
+        for (index, id) in ids.iter().enumerate() {
+            let download = repository.get(*id).await?.ok_or("missing queued item")?;
+            let expected = if index % 2 == 0 {
+                DownloadStatus::Failed
+            } else {
+                DownloadStatus::Completed
+            };
+            assert_eq!(download.status(), expected);
+            if expected == DownloadStatus::Failed {
+                assert!(download.error().is_some());
+            }
+        }
         manager.shutdown().await?;
         Ok(())
     }

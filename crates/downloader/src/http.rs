@@ -12,8 +12,8 @@ use std::{
 
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
-    TimestampError,
+    DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId, DownloadItem,
+    DownloadProgress, DownloadStatus, EngineKind, Timestamp, TimestampError, global_diagnostics,
 };
 use fetchx_storage::DownloadRepository;
 use reqwest::{
@@ -41,6 +41,29 @@ use crate::{BandwidthControl, DownloadEngine, DownloadEngineError};
 
 const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
 const MAX_SEGMENT_ATTEMPTS: u8 = 4;
+
+#[cfg(any(test, feature = "phase30-queue-fault-injection"))]
+static INJECTED_WRITE_FAILURES: std::sync::Mutex<Vec<(String, std::io::ErrorKind)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(any(test, feature = "phase30-queue-fault-injection"))]
+pub fn inject_next_write_failure(id: DownloadId, kind: std::io::ErrorKind) {
+    INJECTED_WRITE_FAILURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((id.to_string(), kind));
+}
+
+#[cfg(any(test, feature = "phase30-queue-fault-injection"))]
+fn take_injected_write_failure(id: DownloadId) -> Option<std::io::ErrorKind> {
+    let mut failures = INJECTED_WRITE_FAILURES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let index = failures
+        .iter()
+        .position(|(download_id, _)| download_id == &id.to_string())?;
+    Some(failures.remove(index).1)
+}
 
 fn measure_speed(bytes: u64, elapsed: Duration) -> Option<u64> {
     let elapsed_nanos = elapsed.as_nanos();
@@ -338,7 +361,13 @@ where
 
         info!(download_id = %id, "starting HTTP download");
         let mut response = self
-            .send_request(url.clone(), range_start, resume_validator.clone(), control)
+            .send_request(
+                id,
+                url.clone(),
+                range_start,
+                resume_validator.clone(),
+                control,
+            )
             .await?;
         let initial_validator = response_validator(&response);
         let segmentation_enabled = (2..=32).contains(&self.config.segment_count)
@@ -406,7 +435,9 @@ where
                         .ok_or(DownloadEngineError::NotFound(id))?;
                     current_status = item.status();
                     expected_updated_at = item.updated_at();
-                    response = self.send_request(url.clone(), None, None, control).await?;
+                    response = self
+                        .send_request(id, url.clone(), None, None, control)
+                        .await?;
                 }
             }
         }
@@ -428,7 +459,9 @@ where
             // A matching length does not prove that a stale partial belongs to the
             // current representation, so restart instead of publishing it.
             drop(response);
-            response = self.send_request(url.clone(), None, None, control).await?;
+            response = self
+                .send_request(id, url.clone(), None, None, control)
+                .await?;
             reset_before_download = true;
         } else if range_start.is_some() && response.status() == StatusCode::OK {
             reset_before_download = true;
@@ -581,6 +614,7 @@ where
 
     async fn send_request(
         &self,
+        id: DownloadId,
         url: Url,
         range_start: Option<u64>,
         if_range: Option<String>,
@@ -622,9 +656,42 @@ where
                                 retry_after,
                                 started_at.elapsed(),
                             ) {
+                                Self::record_retry_diagnostic(
+                                    id,
+                                    "retry_started",
+                                    "HTTP_TRANSIENT_STATUS",
+                                    DiagnosticLevel::Warn,
+                                );
+                                warn!(
+                                    download_id = %id,
+                                    engine = "direct_http",
+                                    attempt = failed_attempts.saturating_add(1),
+                                    max_attempts = RetryPolicy::HTTP.max_attempts,
+                                    classification = "transient",
+                                    reason = "http_status",
+                                    http_status = response.status().as_u16(),
+                                    delay_ms = delay.as_millis(),
+                                    "retrying HTTP request"
+                                );
                                 drop(response);
                                 wait_for_retry(delay, control).await?;
                             } else {
+                                Self::record_retry_diagnostic(
+                                    id,
+                                    "retry_exhausted",
+                                    "HTTP_TRANSIENT_STATUS",
+                                    DiagnosticLevel::Error,
+                                );
+                                warn!(
+                                    download_id = %id,
+                                    engine = "direct_http",
+                                    attempt = failed_attempts,
+                                    max_attempts = RetryPolicy::HTTP.max_attempts,
+                                    classification = "transient",
+                                    reason = "http_status",
+                                    http_status = response.status().as_u16(),
+                                    "HTTP retry policy exhausted"
+                                );
                                 return Ok(response);
                             }
                         }
@@ -640,8 +707,41 @@ where
                                 None,
                                 started_at.elapsed(),
                             ) {
+                                let classification = Self::classify_transient_request(&error);
+                                Self::record_retry_diagnostic(
+                                    id,
+                                    "retry_started",
+                                    "HTTP_TRANSIENT_REQUEST",
+                                    DiagnosticLevel::Warn,
+                                );
+                                warn!(
+                                    download_id = %id,
+                                    engine = "direct_http",
+                                    attempt = failed_attempts.saturating_add(1),
+                                    max_attempts = RetryPolicy::HTTP.max_attempts,
+                                    classification,
+                                    reason = "request_error",
+                                    delay_ms = delay.as_millis(),
+                                    "retrying HTTP request"
+                                );
                                 wait_for_retry(delay, control).await?;
                             } else {
+                                let classification = Self::classify_transient_request(&error);
+                                Self::record_retry_diagnostic(
+                                    id,
+                                    "retry_exhausted",
+                                    "HTTP_TRANSIENT_REQUEST",
+                                    DiagnosticLevel::Error,
+                                );
+                                warn!(
+                                    download_id = %id,
+                                    engine = "direct_http",
+                                    attempt = failed_attempts,
+                                    max_attempts = RetryPolicy::HTTP.max_attempts,
+                                    classification,
+                                    reason = "request_error",
+                                    "HTTP retry policy exhausted"
+                                );
                                 return Err(DownloadEngineError::Request(error));
                             }
                         }
@@ -650,6 +750,31 @@ where
                 }
             }
         }
+    }
+
+    fn classify_transient_request(error: &reqwest::Error) -> &'static str {
+        if error.is_timeout() {
+            "transient_timeout"
+        } else if error.is_connect() {
+            "transient_connection"
+        } else if error.is_body() {
+            "transient_body"
+        } else {
+            "transient_request"
+        }
+    }
+
+    fn record_retry_diagnostic(
+        id: DownloadId,
+        event: &str,
+        error_code: &str,
+        level: DiagnosticLevel,
+    ) {
+        global_diagnostics().record(
+            DiagnosticEvent::new(DiagnosticComponent::Downloader, event, level)
+                .with_download_id(id.to_string())
+                .with_error_code(error_code),
+        );
     }
 
     async fn send_redirect_chain(
@@ -732,12 +857,12 @@ where
             .map_err(DownloadEngineError::ClientConfiguration)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "phase30-queue-fault-injection"))]
     fn allow_loopback_benchmark_target(&self) -> bool {
         true
     }
 
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "phase30-queue-fault-injection")))]
     fn allow_loopback_benchmark_target(&self) -> bool {
         cfg!(feature = "phase28-benchmark-local-http")
     }
@@ -1276,6 +1401,13 @@ where
                         control.pause.clone(),
                     )
                     .await?;
+                #[cfg(any(test, feature = "phase30-queue-fault-injection"))]
+                if let Some(kind) = take_injected_write_failure(id) {
+                    return Err(DownloadEngineError::Io(std::io::Error::new(
+                        kind,
+                        "injected test write failure",
+                    )));
+                }
                 file.write_all(&chunk)
                     .await
                     .map_err(DownloadEngineError::Io)?;
