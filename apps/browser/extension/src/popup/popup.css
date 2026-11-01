@@ -176,45 +176,87 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────
-   NAVIGATION TABS  — Motrix style: under-line indicator, generous height
+   NAVIGATION TABS  — cross-browser guaranteed consistent tabs
+   Strategy: inset box-shadow for the active indicator.
+   No pseudo-elements, no z-index fights, no positioning tricks.
+   Works identically in Chrome, Firefox, Safari, Edge.
 ───────────────────────────────────────────────────────────────── */
 .tab-nav {
   display: flex;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   padding: 0 12px;
-  gap: 0;
   flex-shrink: 0;
+  /* overflow:hidden so nothing bleeds outside */
+  overflow: hidden;
+}
+
+/* Kill Firefox's extra inner padding on <button> */
+.tab-btn::-moz-focus-inner {
+  border: 0;
+  padding: 0;
 }
 
 .tab-btn {
-  position: relative;
+  /* === Box model — explicit, leaves nothing to browser defaults === */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 1;
   height: 38px;
+  min-width: 0;
+  padding: 0 8px;
+  margin: 0;
+  box-sizing: border-box;
+
+  /* === Appearance reset for all browsers === */
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
   background: transparent;
   border: none;
-  color: var(--text-muted);
+  border-radius: 0;
+  outline: none;
+
+  /* === Active indicator via inset box-shadow on bottom edge ===
+     box-shadow: inset 0 -Npx = shadow from inside, pushed to bottom.
+     This is 100% consistent: same rendering engine, no stacking
+     context or overflow clipping issues across any browser. */
+  box-shadow: inset 0 -2px 0 transparent;
+  transition: color var(--t-fast), box-shadow var(--t-mid);
+
+  /* === Typography — all explicit so no browser default leaks === */
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
+  line-height: 38px;      /* matches height — centres text without flex quirks */
   letter-spacing: 0.01em;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--text-muted);
+
   cursor: pointer;
-  transition: color var(--t-fast);
-  padding: 0 4px;
+  user-select: none;
+  -webkit-user-select: none;
 }
-.tab-btn::after {
-  content: '';
-  position: absolute;
-  bottom: -1px; left: 20%; right: 20%;
-  height: 2px;
-  border-radius: var(--r-full) var(--r-full) 0 0;
-  background: var(--accent);
-  opacity: 0;
-  transform: scaleX(0.6);
-  transition: opacity var(--t-mid), transform var(--t-mid);
+
+.tab-btn:hover {
+  color: var(--text-sub);
 }
-.tab-btn:hover { color: var(--text-sub); }
-.tab-btn.tab-active { color: var(--accent); }
-.tab-btn.tab-active::after { opacity: 1; transform: scaleX(1); }
+
+.tab-btn.tab-active {
+  color: var(--accent);
+  /* The 2px inset shadow IS the underline — zero CSS tricks */
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* Keyboard focus ring — keep it tidy */
+.tab-btn:focus { outline: none; }
+.tab-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  border-radius: 3px;
+}
 
 /* ─────────────────────────────────────────────────────────────────
    TAB PANELS
