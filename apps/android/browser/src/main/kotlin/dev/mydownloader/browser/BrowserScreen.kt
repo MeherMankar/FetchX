@@ -89,6 +89,10 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -306,6 +310,16 @@ fun BrowserScreen(
         topBar = {
             if (!uiState.compactMode) {
                 Column {
+                    if (!isUrlBarExpanded && uiState.tabs.size > 1) {
+                        BrowserTabStrip(
+                            tabs = uiState.tabs,
+                            activeTabId = uiState.activeTabId,
+                            spaceAccentColor = spaceAccentColor,
+                            onSelectTab = { viewModel.selectTab(it) },
+                            onCloseTab = { viewModel.closeTab(it) },
+                            onNewTab = { viewModel.newTabInCurrentSpace() },
+                        )
+                    }
 
                 Surface(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f).let {
@@ -2475,9 +2489,11 @@ private fun TabGridSheet(
     onOpenBrowserMenu: () -> Unit,
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
+    var showSearchField by rememberSaveable { mutableStateOf(false) }
     var isGridView by rememberSaveable { mutableStateOf(true) }
     var filterSpaceId by rememberSaveable { mutableStateOf<String?>(null) }
     var showCloseAllConfirm by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     val visibleTabs = remember(tabs, searchQuery, filterSpaceId) {
         tabs.filter { tab ->
@@ -2489,10 +2505,10 @@ private fun TabGridSheet(
         }
     }
 
-    val backgroundColor = Color(0xFF0C1017)
-    val cardBg = Color(0xFF161C26)
-    val cardBorder = Color(0xFF263040)
-    val previewSurfaceColor = Color(0xFF0E131B)
+    val backgroundColor = Color(0xFF0A0E17)
+    val cardBg = Color(0xFF141923)
+    val cardBorder = Color(0xFF232D3F)
+    val previewSurfaceColor = Color(0xFF0D121B)
     val primaryTextColor = Color(0xFFF1F5F9)
     val secondaryTextColor = Color(0xFF94A3B8)
 
@@ -2512,24 +2528,25 @@ private fun TabGridSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = 14.dp),
                 ) {
-                    // ── Header Bar ──────────────────────────────────────────
+                    // ── Modern Browser Tab Switcher App Bar ─────────────────────
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 12.dp, bottom = 12.dp),
+                            .padding(top = 10.dp, bottom = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
+                        // Title & Tab count pill
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Text(
                                 text = "Tabs",
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
                                 color = primaryTextColor,
                             )
                             Surface(
@@ -2537,105 +2554,159 @@ private fun TabGridSheet(
                                 color = spaceAccentColor.copy(alpha = 0.16f),
                             ) {
                                 Text(
-                                    text = "${tabs.size} open",
+                                    text = "${tabs.size}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = spaceAccentColor,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                                 )
                             }
                         }
 
+                        // Action Buttons: Search, Add Tab, Grid/List toggle, Menu, Done
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
+                            // Search toggle
+                            IconButton(
+                                onClick = { showSearchField = !showSearchField },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "Search tabs",
+                                    tint = if (showSearchField || searchQuery.isNotEmpty()) spaceAccentColor else secondaryTextColor,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+
+                            // Quick '+' New Tab
+                            IconButton(
+                                onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "New tab",
+                                    tint = primaryTextColor,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                            }
+
                             // Layout toggle (Grid vs List)
                             IconButton(
                                 onClick = { isGridView = !isGridView },
-                                modifier = Modifier.size(38.dp),
+                                modifier = Modifier.size(36.dp),
                             ) {
                                 Icon(
                                     if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
                                     contentDescription = if (isGridView) "List view" else "Grid view",
                                     tint = secondaryTextColor,
-                                    modifier = Modifier.size(20.dp),
+                                    modifier = Modifier.size(19.dp),
                                 )
                             }
 
-                            // Close all tabs button
-                            if (visibleTabs.isNotEmpty()) {
-                                TextButton(
-                                    onClick = { showCloseAllConfirm = true },
-                                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-                                        contentColor = Color(0xFFF87171),
-                                    ),
+                            // Overflow menu (Close all tabs, etc.)
+                            Box {
+                                IconButton(
+                                    onClick = { showMenu = true },
+                                    modifier = Modifier.size(36.dp),
                                 ) {
-                                    Text("Close all", style = MaterialTheme.typography.labelMedium)
+                                    Icon(
+                                        Icons.Default.MoreVert,
+                                        contentDescription = "Tab options",
+                                        tint = secondaryTextColor,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showMenu,
+                                    onDismissRequest = { showMenu = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("New tab") },
+                                        leadingIcon = { Icon(Icons.Default.Add, null) },
+                                        onClick = {
+                                            showMenu = false
+                                            onNewTab(filterSpaceId ?: selectedProfileId)
+                                        },
+                                    )
+                                    if (visibleTabs.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text("Close all tabs", color = Color(0xFFF87171)) },
+                                            leadingIcon = { Icon(Icons.Default.Close, null, tint = Color(0xFFF87171)) },
+                                            onClick = {
+                                                showMenu = false
+                                                showCloseAllConfirm = true
+                                            },
+                                        )
+                                    }
                                 }
                             }
 
-                            // Done button to return
-                            IconButton(
+                            // Done button (Chrome / Firefox style)
+                            TextButton(
                                 onClick = onDismiss,
-                                modifier = Modifier.size(38.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp),
                             ) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Done",
-                                    tint = primaryTextColor,
-                                    modifier = Modifier.size(22.dp),
+                                Text(
+                                    text = "Done",
+                                    fontWeight = FontWeight.Bold,
+                                    color = spaceAccentColor,
                                 )
                             }
                         }
                     }
 
-                    // ── Search Tabs Input ───────────────────────────────────
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        singleLine = true,
-                        placeholder = { Text("Search your tabs", color = secondaryTextColor) },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null, tint = secondaryTextColor)
-                        },
-                        trailingIcon = if (searchQuery.isNotEmpty()) {
-                            {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear search", tint = secondaryTextColor)
+                    // ── Search Tabs Input (Collapsible) ─────────────────────
+                    if (showSearchField || searchQuery.isNotEmpty()) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 10.dp),
+                            singleLine = true,
+                            placeholder = { Text("Search your tabs", color = secondaryTextColor) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null, tint = secondaryTextColor)
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = {
+                                    searchQuery = ""
+                                    showSearchField = false
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close search", tint = secondaryTextColor)
                                 }
-                            }
-                        } else null,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color(0xFF171D27),
-                            unfocusedContainerColor = Color(0xFF171D27),
-                            focusedBorderColor = spaceAccentColor.copy(alpha = 0.5f),
-                            unfocusedBorderColor = cardBorder.copy(alpha = 0.6f),
-                            focusedTextColor = primaryTextColor,
-                            unfocusedTextColor = primaryTextColor,
-                        ),
-                    )
+                            },
+                            shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = Color(0xFF141923),
+                                unfocusedContainerColor = Color(0xFF141923),
+                                focusedBorderColor = spaceAccentColor.copy(alpha = 0.6f),
+                                unfocusedBorderColor = cardBorder.copy(alpha = 0.6f),
+                                focusedTextColor = primaryTextColor,
+                                unfocusedTextColor = primaryTextColor,
+                            ),
+                        )
+                    }
 
                     // ── Space / Profile Filter Chips ────────────────────────
                     if (profiles.isNotEmpty()) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 12.dp)
+                                .padding(bottom = 10.dp)
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            // "All" filter chip
                             val isAllSelected = filterSpaceId == null
                             Surface(
                                 onClick = { filterSpaceId = null },
                                 shape = CircleShape,
-                                color = if (isAllSelected) spaceAccentColor.copy(alpha = 0.2f) else Color(0xFF171D27),
+                                color = if (isAllSelected) spaceAccentColor.copy(alpha = 0.2f) else Color(0xFF141923),
                                 border = BorderStroke(
                                     1.dp,
                                     if (isAllSelected) spaceAccentColor else cardBorder.copy(alpha = 0.6f),
@@ -2645,12 +2716,11 @@ private fun TabGridSheet(
                                     text = "All spaces (${tabs.size})",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = if (isAllSelected) spaceAccentColor else secondaryTextColor,
-                                    fontWeight = if (isAllSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
+                                    fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Normal,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                 )
                             }
 
-                            // Per-profile filter chips
                             profiles.forEach { profile ->
                                 val isSelected = filterSpaceId == profile.id
                                 val profileColor = try {
@@ -2662,7 +2732,7 @@ private fun TabGridSheet(
                                 Surface(
                                     onClick = { filterSpaceId = profile.id },
                                     shape = CircleShape,
-                                    color = if (isSelected) profileColor.copy(alpha = 0.2f) else Color(0xFF171D27),
+                                    color = if (isSelected) profileColor.copy(alpha = 0.2f) else Color(0xFF141923),
                                     border = BorderStroke(
                                         1.dp,
                                         if (isSelected) profileColor else cardBorder.copy(alpha = 0.6f),
@@ -2682,7 +2752,7 @@ private fun TabGridSheet(
                                             text = "${profile.name} ($count)",
                                             style = MaterialTheme.typography.labelMedium,
                                             color = if (isSelected) profileColor else secondaryTextColor,
-                                            fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                         )
                                     }
                                 }
@@ -2706,21 +2776,21 @@ private fun TabGridSheet(
                                 Surface(
                                     shape = CircleShape,
                                     color = spaceAccentColor.copy(alpha = 0.12f),
-                                    modifier = Modifier.size(72.dp),
+                                    modifier = Modifier.size(68.dp),
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             Icons.Default.Language,
                                             contentDescription = null,
                                             tint = spaceAccentColor,
-                                            modifier = Modifier.size(36.dp),
+                                            modifier = Modifier.size(34.dp),
                                         )
                                     }
                                 }
                                 Text(
-                                    text = if (searchQuery.isNotBlank()) "No tabs match your search" else "No open tabs here",
+                                    text = if (searchQuery.isNotBlank()) "No tabs match your search" else "No open tabs",
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    fontWeight = FontWeight.SemiBold,
                                     color = primaryTextColor,
                                 )
                                 Text(
@@ -2734,24 +2804,24 @@ private fun TabGridSheet(
                                     color = spaceAccentColor,
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     ) {
                                         Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                        Text("Open new tab", color = Color.White, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                        Text("Open new tab", color = Color.White, fontWeight = FontWeight.SemiBold)
                                     }
                                 }
                             }
                         }
                     } else {
-                        // ── Tab Cards Grid / List ───────────────────────────
+                        // ── Tab Cards Grid / List (Modern Browser Cards) ────
                         LazyVerticalGrid(
                             columns = if (isGridView) GridCells.Fixed(2) else GridCells.Fixed(1),
                             modifier = Modifier.weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
-                            contentPadding = PaddingValues(bottom = 96.dp),
+                            contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
                         ) {
                             gridItems(visibleTabs, key = { it.id }) { tab ->
                                 val isActive = tab.id == activeTabId
@@ -2794,7 +2864,7 @@ private fun TabGridSheet(
                                     backgroundContent = {
                                         Surface(
                                             color = Color(0xFF7F1D1D),
-                                            shape = RoundedCornerShape(18.dp),
+                                            shape = RoundedCornerShape(16.dp),
                                             modifier = Modifier.fillMaxSize(),
                                         ) {
                                             Box(
@@ -2812,130 +2882,128 @@ private fun TabGridSheet(
                                             else Modifier.height(130.dp),
                                         ),
                                 ) {
+                                    // ── Standard Browser Card Structure ────
                                     Surface(
                                         onClick = { onSelect(tab.id) },
-                                        shape = RoundedCornerShape(18.dp),
-                                        color = if (isActive) cardBg else cardBg,
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = cardBg,
                                         border = BorderStroke(
-                                            width = if (isActive) 2.dp else 1.dp,
-                                            color = if (isActive) spaceAccentColor else cardBorder.copy(alpha = 0.8f),
+                                            width = if (isActive) 2.5.dp else 1.dp,
+                                            color = if (isActive) spaceAccentColor else cardBorder.copy(alpha = 0.7f),
                                         ),
-                                        shadowElevation = if (isActive) 6.dp else 1.dp,
+                                        shadowElevation = if (isActive) 8.dp else 2.dp,
                                         modifier = Modifier.fillMaxSize(),
                                     ) {
                                         Column(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .background(
-                                                    if (isActive) {
-                                                        androidx.compose.ui.graphics.Brush.verticalGradient(
-                                                            listOf(
-                                                                spaceAccentColor.copy(alpha = 0.16f),
-                                                                Color(0xFF131720),
-                                                            ),
-                                                        )
-                                                    } else {
-                                                        androidx.compose.ui.graphics.SolidColor(cardBg)
-                                                    },
-                                                )
-                                                .padding(10.dp),
+                                            modifier = Modifier.fillMaxSize(),
                                         ) {
-                                            // Tab Card Header
+                                            // Card Window Title Bar (Favicon + Title + Close '✕')
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier.padding(bottom = 6.dp),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(
+                                                        if (isActive) spaceAccentColor.copy(alpha = 0.14f)
+                                                        else Color(0xFF1B222F)
+                                                    )
+                                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                             ) {
-                                                Surface(
-                                                    shape = CircleShape,
-                                                    color = if (isActive) spaceAccentColor else tabSpaceColor.copy(alpha = 0.25f),
-                                                    modifier = Modifier.size(24.dp),
-                                                ) {
-                                                    Box(contentAlignment = Alignment.Center) {
-                                                        Text(
-                                                            text = tabHost.firstOrNull()?.uppercase() ?: "N",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                                            color = if (isActive) Color.White else tabSpaceColor,
-                                                        )
-                                                    }
-                                                }
+                                                Icon(
+                                                    imageVector = Icons.Default.Language,
+                                                    contentDescription = null,
+                                                    tint = if (isActive) spaceAccentColor else secondaryTextColor,
+                                                    modifier = Modifier.size(15.dp),
+                                                )
 
                                                 Text(
-                                                    text = tabHost,
+                                                    text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
                                                     style = MaterialTheme.typography.labelMedium,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.SemiBold,
                                                     color = primaryTextColor,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier
-                                                        .weight(1f)
-                                                        .padding(horizontal = 6.dp),
+                                                    modifier = Modifier.weight(1f),
                                                 )
-
-                                                if (isActive) {
-                                                    Surface(
-                                                        shape = CircleShape,
-                                                        color = spaceAccentColor.copy(alpha = 0.22f),
-                                                        modifier = Modifier.padding(end = 4.dp),
-                                                    ) {
-                                                        Text(
-                                                            text = "ACTIVE",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = spaceAccentColor,
-                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                        )
-                                                    }
-                                                }
 
                                                 IconButton(
                                                     onClick = { onClose(tab.id) },
-                                                    modifier = Modifier.size(26.dp),
+                                                    modifier = Modifier.size(22.dp),
                                                 ) {
                                                     Icon(
                                                         Icons.Default.Close,
                                                         contentDescription = "Close tab",
                                                         tint = secondaryTextColor,
-                                                        modifier = Modifier.size(16.dp),
+                                                        modifier = Modifier.size(14.dp),
                                                     )
                                                 }
                                             }
 
-                                            // Tab Preview Box
-                                            Surface(
+                                            // Card Webpage Viewport Preview (realistic browser window mockup)
+                                            Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
-                                                    .weight(1f),
-                                                shape = RoundedCornerShape(12.dp),
-                                                color = previewSurfaceColor,
-                                                border = BorderStroke(1.dp, Color(0xFF1E2533)),
+                                                    .weight(1f)
+                                                    .background(previewSurfaceColor)
+                                                    .padding(8.dp),
                                             ) {
                                                 Column(
-                                                    modifier = Modifier
-                                                        .fillMaxSize()
-                                                        .padding(10.dp),
+                                                    modifier = Modifier.fillMaxSize(),
                                                     verticalArrangement = Arrangement.SpaceBetween,
                                                 ) {
-                                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                        Text(
-                                                            text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                                                            color = primaryTextColor,
-                                                            maxLines = if (isGridView) 3 else 1,
-                                                            overflow = TextOverflow.Ellipsis,
+                                                    // Mini URL address capsule at top of preview
+                                                    Surface(
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = Color(0xFF161C26).copy(alpha = 0.85f),
+                                                        border = BorderStroke(0.5.dp, Color(0xFF263040)),
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Lock,
+                                                                contentDescription = null,
+                                                                tint = Color(0xFF34A853),
+                                                                modifier = Modifier.size(10.dp),
+                                                            )
+                                                            Text(
+                                                                text = tabHost,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                fontSize = androidx.compose.ui.unit.TextUnit(10f, androidx.compose.ui.unit.TextUnitType.Sp),
+                                                                color = secondaryTextColor,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                            )
+                                                        }
+                                                    }
+
+                                                    // Center mock content watermark
+                                                    Column(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Default.Language,
+                                                            contentDescription = null,
+                                                            tint = secondaryTextColor.copy(alpha = 0.15f),
+                                                            modifier = Modifier.size(28.dp),
                                                         )
                                                         Text(
-                                                            text = tab.url.takeUnless { it == "about:blank" || it.isBlank() }
-                                                                .orEmpty()
-                                                                .ifBlank { "New tab page" },
+                                                            text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
                                                             style = MaterialTheme.typography.bodySmall,
-                                                            color = secondaryTextColor,
-                                                            maxLines = 1,
+                                                            color = secondaryTextColor.copy(alpha = 0.45f),
+                                                            maxLines = 2,
+                                                            textAlign = TextAlign.Center,
                                                             overflow = TextOverflow.Ellipsis,
+                                                            modifier = Modifier.padding(horizontal = 8.dp),
                                                         )
                                                     }
 
+                                                    // Bottom progress or space indicator
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
                                                         verticalAlignment = Alignment.CenterVertically,
@@ -2943,30 +3011,21 @@ private fun TabGridSheet(
                                                     ) {
                                                         if (tab.isLoading) {
                                                             val progress = (tab.progress / 100f).coerceIn(0f, 1f)
-                                                            if (progress > 0.05f) {
-                                                                LinearProgressIndicator(
-                                                                    progress = { progress },
-                                                                    modifier = Modifier
-                                                                        .width(60.dp)
-                                                                        .height(3.dp),
-                                                                    color = spaceAccentColor,
-                                                                )
-                                                            } else {
-                                                                LinearProgressIndicator(
-                                                                    modifier = Modifier
-                                                                        .width(60.dp)
-                                                                        .height(3.dp),
-                                                                    color = spaceAccentColor,
-                                                                )
-                                                            }
+                                                            LinearProgressIndicator(
+                                                                progress = { if (progress > 0.05f) progress else 0.5f },
+                                                                modifier = Modifier
+                                                                    .width(50.dp)
+                                                                    .height(3.dp),
+                                                                color = spaceAccentColor,
+                                                            )
                                                         } else {
-                                                            Spacer(modifier = Modifier.width(1.dp))
+                                                            Spacer(Modifier.width(1.dp))
                                                         }
 
                                                         if (tabSpace != null) {
                                                             Row(
                                                                 verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                                horizontalArrangement = Arrangement.spacedBy(3.dp),
                                                             ) {
                                                                 Box(
                                                                     modifier = Modifier
@@ -2976,6 +3035,7 @@ private fun TabGridSheet(
                                                                 Text(
                                                                     text = tabSpace.name,
                                                                     style = MaterialTheme.typography.labelSmall,
+                                                                    fontSize = androidx.compose.ui.unit.TextUnit(9f, androidx.compose.ui.unit.TextUnitType.Sp),
                                                                     color = secondaryTextColor,
                                                                 )
                                                             }
@@ -2991,18 +3051,18 @@ private fun TabGridSheet(
                     }
                 }
 
-                // ── Floating Action Bar (New Tab & Menu) ───────────────────
+                // ── Sleek Floating Action Pill (Bottom Center) ──────────────
                 Surface(
                     shape = CircleShape,
-                    color = Color(0xFF1E2636),
-                    shadowElevation = 10.dp,
-                    border = BorderStroke(1.dp, Color(0xFF333E52)),
+                    color = Color(0xFF1B2230),
+                    shadowElevation = 12.dp,
+                    border = BorderStroke(1.dp, Color(0xFF2C384C)),
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 20.dp),
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -3011,25 +3071,24 @@ private fun TabGridSheet(
                             shape = CircleShape,
                             color = spaceAccentColor,
                             contentColor = Color.White,
-                            modifier = Modifier.padding(horizontal = 4.dp),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Text(
                                     text = "New Tab",
                                     style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    fontWeight = FontWeight.Bold,
                                 )
                             }
                         }
 
                         IconButton(
                             onClick = onOpenBrowserMenu,
-                            modifier = Modifier.size(40.dp),
+                            modifier = Modifier.size(38.dp),
                         ) {
                             Icon(
                                 Icons.Default.MoreVert,
@@ -3070,6 +3129,113 @@ private fun TabGridSheet(
         )
     }
 }
+
+// ── Horizontal Desktop/Tablet-Style Tab Strip ──────────────────────────────
+@Composable
+private fun BrowserTabStrip(
+    tabs: List<TabState>,
+    activeTabId: String?,
+    spaceAccentColor: Color,
+    onSelectTab: (String) -> Unit,
+    onCloseTab: (String) -> Unit,
+    onNewTab: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = Color(0xFF0F141C),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            tabs.forEach { tab ->
+                val isActive = tab.id == activeTabId
+                val tabHost = remember(tab.url) {
+                    try {
+                        java.net.URI(tab.url).host?.removePrefix("www.").orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }.ifBlank {
+                        tab.url.takeUnless { it == "about:blank" || it.isBlank() }
+                            ?.removePrefix("https://")
+                            ?.removePrefix("http://")
+                            ?.substringBefore("/")
+                            .orEmpty()
+                            .ifBlank { "New tab" }
+                    }
+                }
+
+                Surface(
+                    onClick = { onSelectTab(tab.id) },
+                    shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
+                    color = if (isActive) Color(0xFF1E2636) else Color(0xFF141923),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (isActive) spaceAccentColor.copy(alpha = 0.6f) else Color(0xFF263040).copy(alpha = 0.5f),
+                    ),
+                    modifier = Modifier
+                        .widthIn(min = 120.dp, max = 180.dp)
+                        .height(34.dp),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Language,
+                            contentDescription = null,
+                            tint = if (isActive) spaceAccentColor else Color(0xFF94A3B8),
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isActive) Color(0xFFF1F5F9) else Color(0xFF94A3B8),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(
+                            onClick = { onCloseTab(tab.id) },
+                            modifier = Modifier.size(20.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close tab",
+                                tint = Color(0xFF94A3B8),
+                                modifier = Modifier.size(12.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            // '+' New Tab button
+            IconButton(
+                onClick = onNewTab,
+                modifier = Modifier.size(30.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "New Tab",
+                    tint = Color(0xFF94A3B8),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+
 
 
 @Composable
