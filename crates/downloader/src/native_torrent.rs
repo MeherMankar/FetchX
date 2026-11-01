@@ -19,7 +19,7 @@ use librqbit::{
     AddTorrent, AddTorrentOptions, ListenerOptions, ManagedTorrent, Session, SessionOptions,
     TorrentStatsState,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tracing::{debug, info, warn};
 
 use crate::{DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine};
@@ -133,15 +133,7 @@ where
     /// A missing handle means the torrent is not being seeded by this session,
     /// which is expected after an app restart because session persistence is disabled.
     pub async fn stop_seeding(&self, id: DownloadId) -> Result<(), DownloadEngineError> {
-        let handle = self.handles.lock().await.get(&id).cloned();
-        if let Some(handle) = handle {
-            self.session
-                .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
-                .await
-                .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?;
-            self.handles.lock().await.remove(&id);
-        }
-        Ok(())
+        self.remove_managed_torrent(id).await
     }
 
     /// Returns the underlying librqbit session for shutdown / telemetry.
@@ -190,75 +182,30 @@ where
         let mut ticker = tokio::time::interval(PROGRESS_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
-        let mut paused_in_librqbit = false;
         let mut cancel_watch = control.cancellation.clone();
 
         loop {
+            let stats = handle.stats();
+            if stats.finished {
+                self.persist_progress(id, &stats).await?;
+                info!(download_id = %id, "NativeTorrentEngine: torrent download complete");
+                return Ok(());
+            }
+
             tokio::select! {
                 _ = ticker.tick() => {}
                 _ = cancel_watch.changed() => {
                     if *cancel_watch.borrow() {
-                        let _ = self.session.pause(handle).await.map_err(|e| {
-                            warn!("NativeTorrentEngine: pause on cancellation failed: {e}");
-                        });
                         return Err(DownloadEngineError::Cancelled);
                     }
                 }
             }
 
-            // Handle pause/resume signalling.
-            let want_pause = *control.pause.borrow();
-            if want_pause && !paused_in_librqbit {
-                let _ = self
-                    .session
-                    .pause(handle)
-                    .await
-                    .map_err(|e| warn!("NativeTorrentEngine: pause failed: {e}"));
-                paused_in_librqbit = true;
-                let sm = fetchx_core::DownloadStateMachine::new(self.repository.clone());
-                let _ = sm.transition(id, DownloadStatus::Paused).await;
-                continue;
-            } else if !want_pause && paused_in_librqbit {
-                let _ = self
-                    .session
-                    .unpause(handle)
-                    .await
-                    .map_err(|e| warn!("NativeTorrentEngine: unpause failed: {e}"));
-                paused_in_librqbit = false;
-                let sm = fetchx_core::DownloadStateMachine::new(self.repository.clone());
-                let _ = sm.transition(id, DownloadStatus::Downloading).await;
+            if *control.pause.borrow() {
+                return Err(DownloadEngineError::Paused);
             }
 
-            if paused_in_librqbit {
-                continue;
-            }
-
-            let stats = handle.stats();
-
-            // Mirror progress into the repository.
-            if stats.total_bytes > 0 {
-                if let Ok(ts) = fetchx_models::Timestamp::now() {
-                    let progress = fetchx_models::DownloadProgress::new(
-                        stats.progress_bytes,
-                        Some(stats.total_bytes),
-                        stats.live.as_ref().map(|l| l.download_speed.as_bytes()),
-                        None,
-                    );
-                    if let Ok(progress) = progress {
-                        if let Ok(Some(mut item)) = self.repository.get(id).await {
-                            if item.set_progress_at(progress, ts).is_ok() {
-                                let _ = self.repository.update(&item).await;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Check completion.
-            if stats.finished {
-                info!(download_id = %id, "NativeTorrentEngine: torrent download complete");
-                return Ok(());
-            }
+            self.persist_progress(id, &stats).await?;
 
             // Check librqbit error state.
             if matches!(stats.state, TorrentStatsState::Error) {
@@ -268,6 +215,169 @@ where
                 return Err(DownloadEngineError::NativeTorrent(msg));
             }
         }
+    }
+
+    async fn persist_progress(
+        &self,
+        id: DownloadId,
+        stats: &librqbit::TorrentStats,
+    ) -> Result<(), DownloadEngineError> {
+        if stats.total_bytes == 0 {
+            return Ok(());
+        }
+        let Some(mut item) = self.repository.get(id).await? else {
+            return Err(DownloadEngineError::NotFound(id));
+        };
+        if item.status() != DownloadStatus::Downloading {
+            return Ok(());
+        }
+
+        let expected_updated_at = item.updated_at();
+        let updated_at = fetchx_models::Timestamp::now()?.max(expected_updated_at);
+        let progress = fetchx_models::DownloadProgress::new(
+            stats.progress_bytes,
+            Some(stats.total_bytes),
+            stats
+                .live
+                .as_ref()
+                .map(|live| live.download_speed.as_bytes()),
+            None,
+        )?;
+        item.set_progress_at(progress, updated_at)?;
+        self.repository
+            .update_if_status_and_timestamp_current(
+                &item,
+                DownloadStatus::Downloading,
+                expected_updated_at,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn remove_managed_torrent(&self, id: DownloadId) -> Result<(), DownloadEngineError> {
+        let handle = self.handles.lock().await.get(&id).cloned();
+        if let Some(handle) = handle {
+            if let Err(error) = self
+                .session
+                .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
+                .await
+            {
+                if let Err(pause_error) = self.session.pause(&handle).await {
+                    warn!(
+                        download_id = %id,
+                        error = %pause_error,
+                        "NativeTorrentEngine: torrent cleanup fallback pause failed"
+                    );
+                }
+                return Err(DownloadEngineError::NativeTorrent(error.to_string()));
+            }
+            self.handles.lock().await.remove(&id);
+        }
+        Ok(())
+    }
+
+    async fn run_torrent(
+        &self,
+        id: DownloadId,
+        item: DownloadItem,
+        control: ManagedDownloadControl,
+    ) -> Result<(), DownloadEngineError> {
+        let source_url = item.source().url().to_owned();
+        let destination = item.destination().to_path_buf();
+        let is_magnet = source_url.starts_with("magnet:");
+        let state_machine = fetchx_core::DownloadStateMachine::new(self.repository.clone());
+
+        state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        if is_magnet {
+            state_machine
+                .transition(id, DownloadStatus::MetadataAcquiring)
+                .await?;
+        }
+
+        let add_source = if is_magnet {
+            AddTorrent::from_url(source_url.as_str())
+        } else if source_url.starts_with("torrent+file:") {
+            let file_path = item
+                .source()
+                .torrent_file_path()
+                .ok_or(DownloadEngineError::InvalidUrl)?;
+            let torrent_bytes = tokio::fs::read(file_path)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            AddTorrent::from_bytes(torrent_bytes)
+        } else {
+            return Err(DownloadEngineError::UnsupportedScheme);
+        };
+
+        let rate_bps: Option<NonZeroU32> = control
+            .bandwidth
+            .per_download
+            .as_ref()
+            .map(|limit| limit.bytes_per_second())
+            .and_then(|bps| NonZeroU32::new(bps.min(u64::from(u32::MAX)) as u32));
+        let add_opts = AddTorrentOptions {
+            overwrite: true,
+            output_folder: Some(destination.to_string_lossy().into_owned()),
+            ratelimits: LimitsConfig {
+                download_bps: rate_bps,
+                upload_bps: None,
+            },
+            peer_limit: Some(*control.connection_limit.borrow()),
+            ..AddTorrentOptions::default()
+        };
+
+        let mut cancellation = control.cancellation.clone();
+        let mut pause = control.pause.clone();
+        let response = tokio::select! {
+            response = self.session.add_torrent(add_source, Some(add_opts)) => {
+                response.map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?
+            }
+            () = wait_for_signal(&mut cancellation) => {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            () = wait_for_signal(&mut pause) => {
+                return Err(DownloadEngineError::Paused);
+            }
+        };
+
+        let handle: Arc<ManagedTorrent> = response.into_handle().ok_or_else(|| {
+            DownloadEngineError::NativeTorrent(
+                "torrent add returned a list-only response unexpectedly".to_owned(),
+            )
+        })?;
+        self.handles.lock().await.insert(id, Arc::clone(&handle));
+
+        if is_magnet {
+            debug!(download_id = %id, "NativeTorrentEngine: awaiting magnet metadata");
+            let mut cancellation = control.cancellation.clone();
+            let mut pause = control.pause.clone();
+            tokio::select! {
+                result = handle.wait_until_initialized() => {
+                    result.map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?;
+                }
+                () = wait_for_signal(&mut cancellation) => {
+                    return Err(DownloadEngineError::Cancelled);
+                }
+                () = wait_for_signal(&mut pause) => {
+                    return Err(DownloadEngineError::Paused);
+                }
+            }
+            debug!(download_id = %id, "NativeTorrentEngine: magnet metadata acquired");
+        }
+
+        state_machine
+            .transition(id, DownloadStatus::Downloading)
+            .await?;
+        self.drive_to_completion(id, &handle, control).await?;
+        state_machine
+            .transition(id, DownloadStatus::Completed)
+            .await?;
+        state_machine
+            .transition(id, DownloadStatus::Seeding)
+            .await?;
+        Ok(())
     }
 }
 
@@ -319,123 +429,44 @@ where
             return Err(DownloadEngineError::EngineMismatch);
         }
 
-        let source_url = item.source().url().to_owned();
-        let destination = item.destination().to_path_buf();
-
-        // Map per-download bandwidth limit from BandwidthControl into librqbit's rate limiter.
-        let rate_bps: Option<NonZeroU32> = control
-            .bandwidth
-            .per_download
-            .as_ref()
-            .map(|l| l.bytes_per_second())
-            .and_then(|bps| NonZeroU32::new(bps.min(u64::from(u32::MAX)) as u32));
-
-        let add_opts = AddTorrentOptions {
-            overwrite: true,
-            output_folder: Some(destination.to_string_lossy().into_owned()),
-            ratelimits: LimitsConfig {
-                download_bps: rate_bps,
-                upload_bps: None,
-            },
-            peer_limit: Some(*control.connection_limit.borrow()),
-            ..AddTorrentOptions::default()
-        };
-
-        // Transition to Preparing.
-        fetchx_core::DownloadStateMachine::new(self.repository.clone())
-            .transition(id, DownloadStatus::Preparing)
-            .await?;
-
-        let is_magnet = source_url.starts_with("magnet:");
-        let add_source = if is_magnet {
-            AddTorrent::from_url(source_url.as_str())
-        } else if source_url.starts_with("torrent+file:") {
-            let file_path = item
-                .source()
-                .torrent_file_path()
-                .ok_or(DownloadEngineError::InvalidUrl)?;
-            let torrent_bytes = tokio::fs::read(&file_path)
-                .await
-                .map_err(DownloadEngineError::Io)?;
-            AddTorrent::from_bytes(torrent_bytes)
-        } else {
-            return Err(DownloadEngineError::UnsupportedScheme);
-        };
-
-        // Submit the torrent to librqbit.
-        let response = self
-            .session
-            .add_torrent(add_source, Some(add_opts))
-            .await
-            .map_err(|e| DownloadEngineError::NativeTorrent(e.to_string()))?;
-
-        let handle: Arc<ManagedTorrent> = match response.into_handle() {
-            Some(h) => h,
-            None => {
-                return Err(DownloadEngineError::NativeTorrent(
-                    "torrent add returned a list-only response unexpectedly".to_owned(),
-                ));
-            }
-        };
-
-        // Register for pause/cancel routing.
-        self.handles.lock().await.insert(id, Arc::clone(&handle));
-
-        // For magnets: wait for metadata before transitioning to Downloading.
-        if is_magnet {
-            fetchx_core::DownloadStateMachine::new(self.repository.clone())
-                .transition(id, DownloadStatus::MetadataAcquiring)
-                .await?;
-            debug!(download_id = %id, "NativeTorrentEngine: awaiting magnet metadata");
-            handle
-                .wait_until_initialized()
-                .await
-                .map_err(|e| DownloadEngineError::NativeTorrent(e.to_string()))?;
-            debug!(download_id = %id, "NativeTorrentEngine: magnet metadata acquired");
-        }
-
-        // Transition to Downloading.
-        fetchx_core::DownloadStateMachine::new(self.repository.clone())
-            .transition(id, DownloadStatus::Downloading)
-            .await?;
-
-        let result = self.drive_to_completion(id, &handle, control).await;
-
-        match result {
-            Ok(()) => {
-                fetchx_core::DownloadStateMachine::new(self.repository.clone())
-                    .transition(id, DownloadStatus::Seeding)
-                    .await?;
-                let completed = self
+        match self.run_torrent(id, item, control).await {
+            Ok(()) => self
+                .repository
+                .get(id)
+                .await?
+                .ok_or(DownloadEngineError::NotFound(id)),
+            Err(error @ (DownloadEngineError::Cancelled | DownloadEngineError::Paused)) => {
+                self.remove_managed_torrent(id).await?;
+                let status = if error.is_cancelled() {
+                    DownloadStatus::Cancelled
+                } else {
+                    DownloadStatus::Paused
+                };
+                let state_machine = fetchx_core::DownloadStateMachine::new(self.repository.clone());
+                let current = self
                     .repository
                     .get(id)
                     .await?
                     .ok_or(DownloadEngineError::NotFound(id))?;
-                Ok(completed)
-            }
-            Err(DownloadEngineError::Cancelled) => {
-                self.handles.lock().await.remove(&id);
-                let _ = fetchx_core::DownloadStateMachine::new(self.repository.clone())
-                    .transition(id, DownloadStatus::Cancelled)
-                    .await;
-                Err(DownloadEngineError::Cancelled)
-            }
-            Err(other) => {
-                self.handles.lock().await.remove(&id);
-                // Persist the failure record.
-                let _ = fetchx_core::DownloadStateMachine::new(self.repository.clone())
-                    .transition(id, DownloadStatus::Failed)
-                    .await;
-                if let Ok(error_record) = other.persisted_error() {
-                    if let Ok(Some(mut item)) = self.repository.get(id).await {
-                        let ts = fetchx_models::Timestamp::now()
-                            .unwrap_or_else(|_| fetchx_models::Timestamp::from_unix_millis(0));
-                        if item.set_error_at(Some(error_record), ts).is_ok() {
-                            let _ = self.repository.update(&item).await;
-                        }
-                    }
+                if current.status() != status {
+                    state_machine.transition(id, status).await?;
                 }
-                Err(other)
+                Err(error)
+            }
+            Err(error) => {
+                self.remove_managed_torrent(id).await?;
+                let state_machine = fetchx_core::DownloadStateMachine::new(self.repository.clone());
+                let failure = error.persisted_error()?;
+                if let Err(state) = state_machine
+                    .transition_with_error(id, DownloadStatus::Failed, failure)
+                    .await
+                {
+                    return Err(DownloadEngineError::FailurePersistence {
+                        operation: Box::new(error),
+                        state,
+                    });
+                }
+                Err(error)
             }
         }
     }
@@ -449,15 +480,17 @@ where
         &self,
         id: DownloadId,
     ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
-        async move {
-            let handles = self.handles.lock().await;
-            if let Some(handle) = handles.get(&id) {
-                let _ =
-                    self.session.pause(handle).await.map_err(|e| {
-                        warn!("NativeTorrentEngine: cancel_inactive pause failed: {e}")
-                    });
-            }
-            Ok(())
+        async move { self.remove_managed_torrent(id).await }
+    }
+}
+
+async fn wait_for_signal(receiver: &mut watch::Receiver<bool>) {
+    loop {
+        if *receiver.borrow() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            std::future::pending::<()>().await;
         }
     }
 }

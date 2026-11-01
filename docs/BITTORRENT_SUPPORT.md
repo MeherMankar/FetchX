@@ -1,65 +1,61 @@
-# BitTorrent and magnet support status
+# BitTorrent and magnet support
 
-The current implementation is a limited Phase 20S foundation, not a complete
-torrent client. Torrent networking remains delegated to the shared aria2
-process; there is no Kotlin or React torrent engine.
+FetchX supports magnet links and local `.torrent` files through two engine
+paths: aria2 when configured, and the native `librqbit` engine on platforms
+where aria2 is unavailable (including the Android configuration).
 
-## Implemented
+## Shared torrent handling
 
-- `DownloadSource` validates magnet URIs for the aria2 engine, requires exactly
-  one valid `urn:btih` hash, bounds URI and tracker counts, and rejects tracker
-  schemes other than HTTP, HTTPS, and UDP.
-- Shared Rust metainfo parsing accepts canonical BitTorrent v1 `.torrent`
-  files, computes the v1 info hash from the original encoded `info` dictionary,
-  and exposes the name, total size, files, piece length/count, and trackers.
-- Metainfo parsing rejects malformed bencode, oversized inputs/file lists,
-  inconsistent piece metadata, unsafe path segments, duplicate/case-conflicting
-  paths, and file/directory path conflicts. Windows device names and path
-  separators are rejected before aria2 receives the metainfo.
-- Shared Rust selection state supports selecting individual files, all/none,
-  and directory-prefix groups, with selected count and byte totals.
-- CoreServices validates and queues local `.torrent` files. CLI, desktop/Tauri,
-  and Android bridge entry points route those requests to this shared method.
-- The shared aria2 RPC adapter submits magnet URIs as `aria2.addUri` jobs,
-  applies the configured native download rate, disallows overwrite/renaming,
-  and currently limits each torrent to one peer to keep connection accounting
-  conservative.
-- Local metainfo files are submitted through `aria2.addTorrent` with the same
-  conservative peer/rate/output options. The file is revalidated immediately
-  before submission.
-- Completed magnet output is checked as a directory tree. Symlinks and special
-  files are rejected, and regular-file lengths must agree with aria2's final
-  byte counts.
-- The CLI `add` command accepts `--magnet URI` or a positional local
-  `.torrent` path, defaults both to aria2, and accepts `--destination` as a
-  torrent directory (rather than an output file).
-- Desktop add and Android add paths accept magnet URIs and route them through
-  the shared aria2 adapter and queue. Both also accept a local `.torrent` path
-  and route it to CoreServices; Android exposes the operation through UniFFI.
+- `DownloadSource` validates magnet URIs, requires one valid `urn:btih` hash,
+  bounds URI and tracker counts, and accepts only HTTP, HTTPS, and UDP trackers.
+- Shared metainfo parsing accepts canonical BitTorrent v1 files, computes the
+  info hash from the original encoded `info` dictionary, and exposes the name,
+  size, file list, piece information, and trackers.
+- Metainfo validation rejects malformed bencode, oversized inputs/file lists,
+  inconsistent piece metadata, unsafe path segments, duplicate/conflicting
+  paths, and Windows device names before an engine receives the metainfo.
+- Torrent file selection is not persisted or sent as an engine selection
+  option; torrents currently download all files.
 
-## Not implemented or not validated
+## Native engine lifecycle
 
-- The selection object is not persisted on `DownloadItem` and is not passed as
-  aria2's `select-file` option. aria2 therefore downloads all files; UI file
-  selection and per-file priorities remain unimplemented.
-- Metadata acquisition state, tracker status, peer/seed/leecher counts, upload
-  rate, share ratio, and seeding lifecycle are not exposed.
-- Dynamic per-torrent peer allocation. The fixed one-peer ceiling is
-  deliberately conservative and does not claim Turbo behavior.
-- A metadata timeout or a separate metadata queue state. Metadata acquisition
-  currently shares the ordinary aria2 queued/active lifecycle.
-- Durable aria2 GID/task persistence and safe recovery across process restart.
-  Same-process pause/resume uses the retained GID; torrent restart recovery is
-  not validated.
-- End-to-end testing with an aria2 binary, a controlled local BitTorrent swarm,
-  or an Android device torrent transfer. The Android bridge requires an
-  available aria2 executable; no transfer has been reported without one.
-- A headless/server listener or dedicated CLI file-selection controls. The
-  host-independent CoreServices API is available, but queue lifecycle,
-  recovery, telemetry, and selection behavior lack dedicated headless tests.
+- Native torrent transfers are handled by one `librqbit::Session` per engine
+  instance and remain behind `EngineKind::NativeTorrent`.
+- Magnet downloads persist `Preparing`, `MetadataAcquiring`, and `Downloading`
+  transitions. Cancellation and pause signals interrupt metadata acquisition.
+- Successful native transfers persist `Downloading` → `Completed` → `Seeding`.
+  Progress checkpoints are conditional on both the status and the prior
+  timestamp, preventing a stale checkpoint from overwriting a lifecycle
+  transition or newer progress.
+- Pausing removes the torrent from the active session with payload deletion
+  disabled, allowing the queue worker and its resources to be released. Resume
+  requeues the item and adds it to the session again.
+- Cancellation and failure also remove the session entry without deleting
+  downloaded data. Cleanup failures are returned rather than treated as
+  successful cancellation.
+- Stop Seeding removes the in-session torrent with payload deletion disabled.
+  CoreServices persists the terminal `Stopped` state. No ratio- or time-based
+  seeding policy is currently implemented.
+- Restart recovery is FetchX-managed; librqbit session persistence is disabled.
+  Interrupted active states are requeued, and completed files are revalidated
+  by librqbit when the torrent is added again.
 
-Metainfo path traversal checks now run before aria2 submission. However, aria2
-is an external writer and a hostile local process could race filesystem
-replacement after validation; the current implementation does not provide
-OS-level sandboxing or prove confinement against that race. Do not mark Phase
-20S complete based only on parser and submission tests.
+## aria2 engine lifecycle
+
+- Magnets and local metainfo files can be submitted through the shared aria2
+  RPC adapter with conservative peer and rate limits.
+- Durable aria2 GID reconciliation and torrent-specific restart behavior remain
+  limited; do not infer runtime recovery from parser or queue tests.
+
+## Validation status and limitations
+
+- Automated native-engine tests exercise pause → resume → cancel using a
+  local private synthetic torrent without a seeder, and verify that session
+  entries are removed.
+- A separate native-engine test verifies completion of an already-present,
+  hash-valid synthetic payload, persisted 100% progress, transition to
+  seeding, and Stop Seeding while preserving the payload. This does not prove
+  that a torrent payload was transferred from a peer.
+- End-to-end transfer from a controlled torrent seeder and Android-device
+  lifecycle validation must be reported separately and only after they are
+  actually observed.

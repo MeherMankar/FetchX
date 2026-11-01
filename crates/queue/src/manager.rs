@@ -672,6 +672,7 @@ where
                             id,
                             result,
                             &repository,
+                            engine.as_ref(),
                             &state_machine,
                             &mut entries,
                             &mut deferred,
@@ -1161,7 +1162,12 @@ where
                     match item.status() {
                         DownloadStatus::Cancelled => Ok(()),
                         DownloadStatus::Queued | DownloadStatus::Paused => {
-                            if item.status() == DownloadStatus::Paused {
+                            if matches!(
+                                item.status(),
+                                DownloadStatus::Paused
+                                    | DownloadStatus::MetadataAcquiring
+                                    | DownloadStatus::Seeding
+                            ) {
                                 engine.cancel_inactive(id).await?;
                             }
                             let cancelled = state_machine
@@ -1209,7 +1215,9 @@ where
                     DownloadStatus::Queued
                         | DownloadStatus::Preparing
                         | DownloadStatus::Downloading
+                        | DownloadStatus::MetadataAcquiring
                         | DownloadStatus::Paused
+                        | DownloadStatus::Seeding
                 ) {
                     state_machine
                         .transition(id, DownloadStatus::Cancelled)
@@ -1354,10 +1362,11 @@ fn stop_workers_for_shutdown<E>(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn finish_worker<R>(
+async fn finish_worker<R, E>(
     id: DownloadId,
     result: Result<DownloadItem, DownloadEngineError>,
     repository: &R,
+    engine: &E,
     state_machine: &DownloadStateMachine<R>,
     entries: &mut HashMap<DownloadId, Entry>,
     deferred: &mut HashSet<DownloadId>,
@@ -1366,6 +1375,7 @@ async fn finish_worker<R>(
 ) -> Result<(), QueueError>
 where
     R: DownloadRepository,
+    E: ManagedDownloadEngine,
 {
     let Some(worker) = active.remove(&id) else {
         return Ok(());
@@ -1388,7 +1398,9 @@ where
     if worker.shutdown_requeue && matches!(&result, Err(DownloadEngineError::Cancelled)) {
         if matches!(
             current.status(),
-            DownloadStatus::Preparing | DownloadStatus::Downloading
+            DownloadStatus::Preparing
+                | DownloadStatus::Downloading
+                | DownloadStatus::MetadataAcquiring
         ) {
             current = state_machine
                 .transition(id, DownloadStatus::Cancelled)
@@ -1404,29 +1416,24 @@ where
 
     if matches!(
         current.status(),
-        DownloadStatus::Preparing | DownloadStatus::Downloading
+        DownloadStatus::Preparing | DownloadStatus::Downloading | DownloadStatus::MetadataAcquiring
     ) {
-        let target = if worker.cancelling || matches!(&result, Err(DownloadEngineError::Cancelled))
-        {
-            Some(DownloadStatus::Cancelled)
-        } else if worker.pausing || matches!(&result, Err(DownloadEngineError::Paused)) {
-            Some(DownloadStatus::Paused)
-        } else {
-            Some(DownloadStatus::Failed)
+        let target = match &result {
+            Err(DownloadEngineError::Cancelled) => DownloadStatus::Cancelled,
+            Err(DownloadEngineError::Paused) => DownloadStatus::Paused,
+            _ => DownloadStatus::Failed,
         };
-        if let Some(target) = target {
-            if target == DownloadStatus::Failed {
-                let diagnostic = DownloadError::new(
-                    DownloadErrorCode::Internal,
-                    "The download worker stopped before reaching a terminal state.",
-                )
-                .map_err(|error| QueueError::StateMachine(StateMachineError::DomainError(error)))?;
-                current = state_machine
-                    .transition_with_error(id, target, diagnostic)
-                    .await?;
-            } else {
-                current = state_machine.transition(id, target).await?;
-            }
+        if target == DownloadStatus::Failed {
+            let diagnostic = DownloadError::new(
+                DownloadErrorCode::Internal,
+                "The download worker stopped before reaching a terminal state.",
+            )
+            .map_err(|error| QueueError::StateMachine(StateMachineError::DomainError(error)))?;
+            current = state_machine
+                .transition_with_error(id, target, diagnostic)
+                .await?;
+        } else {
+            current = state_machine.transition(id, target).await?;
         }
     } else if current.status() == DownloadStatus::Queued
         && result.is_err()
@@ -1479,6 +1486,30 @@ where
             entry.sequence = sequence;
         }
     }
+    if worker.removing
+        && matches!(
+            current.status(),
+            DownloadStatus::Paused | DownloadStatus::Seeding
+        )
+    {
+        if let Err(error) = engine.cancel_inactive(id).await {
+            let mut waiters = worker.remove_waiters.into_iter();
+            if let Some(waiter) = waiters.next() {
+                let _ = waiter.send(Err(QueueError::Engine(error)));
+            }
+            for waiter in waiters {
+                let _ = waiter.send(Err(QueueError::InvalidStatus {
+                    id,
+                    action: "remove",
+                    status: current.status(),
+                }));
+            }
+            return Ok(());
+        }
+        current = state_machine
+            .transition(id, DownloadStatus::Cancelled)
+            .await?;
+    }
     if let Some(entry) = entries.get_mut(&id) {
         entry.item = current.clone();
     }
@@ -1508,6 +1539,25 @@ where
         let _ = waiter.send(response);
     }
     if worker.removing {
+        if let Err(error) = result {
+            if !matches!(
+                &error,
+                DownloadEngineError::Cancelled | DownloadEngineError::Paused
+            ) {
+                let mut waiters = worker.remove_waiters.into_iter();
+                if let Some(waiter) = waiters.next() {
+                    let _ = waiter.send(Err(QueueError::Engine(error)));
+                }
+                for waiter in waiters {
+                    let _ = waiter.send(Err(QueueError::InvalidStatus {
+                        id,
+                        action: "remove",
+                        status: current.status(),
+                    }));
+                }
+                return Ok(());
+            }
+        }
         let deleted = repository.delete(id).await?;
         entries.remove(&id);
         deferred.remove(&id);
@@ -1555,7 +1605,7 @@ where
     };
     if matches!(
         item.status(),
-        DownloadStatus::Preparing | DownloadStatus::Downloading
+        DownloadStatus::Preparing | DownloadStatus::Downloading | DownloadStatus::MetadataAcquiring
     ) {
         if worker.cancelling {
             item = state_machine

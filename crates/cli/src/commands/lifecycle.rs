@@ -101,12 +101,6 @@ pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
         return exit::ENGINE_UNAVAILABLE;
     }
 
-    // Remove old record, re-enqueue with new ID.
-    if let Err(e) = svc.queue().remove_download(id).await {
-        output::print_error(json, &format!("could not remove old record: {e}"));
-        return exit::GENERAL_ERROR;
-    }
-
     let canonical_url = match validate_http_source_url(item.source().url()) {
         Ok(u) => u,
         Err(e) => {
@@ -150,6 +144,13 @@ pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
         }
     };
     let new_item = DownloadItem::new(new_id, source, filename, destination, created_at);
+
+    // Validate and construct the replacement before deleting the failed record.
+    if let Err(e) = svc.queue().remove_download(id).await {
+        output::print_error(json, &format!("could not remove old record: {e}"));
+        return exit::GENERAL_ERROR;
+    }
+
     if let Err(e) = svc.queue().enqueue(new_item).await {
         output::print_error(json, &format!("could not re-enqueue: {e}"));
         return exit::GENERAL_ERROR;

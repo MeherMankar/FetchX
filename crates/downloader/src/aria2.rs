@@ -2209,7 +2209,10 @@ where
             let Some(item) = self.repository.get(id).await? else {
                 return Err(DownloadEngineError::NotFound(id));
             };
-            if item.status() != DownloadStatus::Paused {
+            if !matches!(
+                item.status(),
+                DownloadStatus::Paused | DownloadStatus::Seeding
+            ) {
                 return Ok(());
             }
             let Some(entry) = self.gids.lock().await.remove(&id) else {
