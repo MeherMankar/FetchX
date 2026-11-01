@@ -14,35 +14,35 @@ import type { BrowserTarget, ExtensionSettings } from "../background/service-wor
 
 // ──DOM refs ──────────────────────────────────────────────────────────────
 
-const statusBadge  = q<HTMLElement>("#status-badge");
-const statusText   = q<HTMLElement>("#status-text");
-const urlInput     = q<HTMLInputElement>("#url-input");
-const useTabBtn    = q<HTMLButtonElement>("#use-tab-btn");
-const submitBtn    = q<HTMLButtonElement>("#submit-btn");
-const btnText      = q<HTMLElement>("#btn-text");
-const resultBanner = q<HTMLElement>("#result-banner");
-const taskList     = q<HTMLElement>("#task-list");
-const refreshBtn   = q<HTMLButtonElement>("#refresh-tasks-btn");
-const scanBtn      = q<HTMLButtonElement>("#scan-btn");
-const scanEmpty    = q<HTMLElement>("#scan-empty");
-const resourceList = q<HTMLElement>("#resource-list");
-const resActions   = q<HTMLElement>("#resource-actions");
-const selectedCount = q<HTMLElement>("#selected-count");
-const dlSelectedBtn = q<HTMLButtonElement>("#download-selected-btn");
-const settingsBtn  = q<HTMLButtonElement>("#settings-btn");
-const settingsPanel = q<HTMLElement>("#settings-panel");
-const settingsClose = q<HTMLButtonElement>("#settings-close-btn");
-const settingsSave = q<HTMLButtonElement>("#settings-save-btn");
+const statusBadge    = q<HTMLElement>("#status-badge");
+const statusText     = q<HTMLElement>("#status-text");
+const urlInput       = q<HTMLInputElement>("#url-input");
+const useTabBtn      = q<HTMLButtonElement>("#use-tab-btn");
+const submitBtn      = q<HTMLButtonElement>("#submit-btn");
+const btnText        = q<HTMLElement>("#btn-text");
+const resultBanner   = q<HTMLElement>("#result-banner");
+const taskList       = q<HTMLElement>("#task-list");
+const refreshBtn     = q<HTMLButtonElement>("#refresh-tasks-btn");
+const scanBtn        = q<HTMLButtonElement>("#scan-btn");
+const scanEmpty      = q<HTMLElement>("#scan-empty");
+const resourceList   = q<HTMLElement>("#resource-list");
+const resActions     = q<HTMLElement>("#resource-actions");
+const selectedCount  = q<HTMLElement>("#selected-count");
+const dlSelectedBtn  = q<HTMLButtonElement>("#download-selected-btn");
+const settingsBtn    = q<HTMLButtonElement>("#settings-btn");
+const settingsPanel  = q<HTMLElement>("#settings-panel");
+const settingsClose  = q<HTMLButtonElement>("#settings-close-btn");
+const settingsSave   = q<HTMLButtonElement>("#settings-save-btn");
 const setAutoIntercept = q<HTMLInputElement>("#set-auto-intercept");
-const setMinSize   = q<HTMLInputElement>("#set-min-size");
-const setNotif     = q<HTMLInputElement>("#set-notifications");
-const targetSelect = q<HTMLSelectElement>("#target-select");
-const targetList   = q<HTMLElement>("#target-list");
-const targetName   = q<HTMLInputElement>("#target-name");
+const setMinSize     = q<HTMLInputElement>("#set-min-size");
+const setNotif       = q<HTMLInputElement>("#set-notifications");
+const targetSelect   = q<HTMLSelectElement>("#target-select");
+const targetList     = q<HTMLElement>("#target-list");
+const targetName     = q<HTMLInputElement>("#target-name");
 const targetEndpoint = q<HTMLInputElement>("#target-endpoint");
-const targetToken  = q<HTMLInputElement>("#target-token");
-const targetAddBtn = q<HTMLButtonElement>("#target-add-btn");
-const targetResult = q<HTMLElement>("#target-result");
+const targetToken    = q<HTMLInputElement>("#target-token");
+const targetAddBtn   = q<HTMLButtonElement>("#target-add-btn");
+const targetResult   = q<HTMLElement>("#target-result");
 
 function q<T extends Element>(sel: string): T {
   return document.querySelector<T>(sel)!;
@@ -52,9 +52,13 @@ function q<T extends Element>(sel: string): T {
 
 document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("tab-active"));
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      b.classList.remove("tab-active");
+      b.setAttribute("aria-selected", "false");
+    });
     document.querySelectorAll<HTMLElement>(".tab-panel").forEach((p) => p.classList.add("hidden"));
     btn.classList.add("tab-active");
+    btn.setAttribute("aria-selected", "true");
     const panel = document.getElementById(`tab-${btn.dataset.tab}`);
     panel?.classList.remove("hidden");
     if (btn.dataset.tab === "tasks") void loadTasks();
@@ -64,7 +68,7 @@ document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
 // ──Status ────────────────────────────────────────────────────────────────
 
 function setStatus(state: "checking" | "connected" | "disconnected", label?: string) {
-  statusBadge.className = `status-badge status-${state}`;
+  statusBadge.className = `status-chip status-${state}`;
   statusText.textContent = label ?? { checking: "Checking…", connected: "Connected", disconnected: "Not running" }[state];
 }
 
@@ -72,10 +76,10 @@ function setStatus(state: "checking" | "connected" | "disconnected", label?: str
 
 function showResult(kind: "success" | "error", msg: string) {
   resultBanner.textContent = msg;
-  resultBanner.className = `result-banner ${kind}`;
+  resultBanner.className = `banner ${kind}`;
 }
 function clearResult() {
-  resultBanner.className = "result-banner hidden";
+  resultBanner.className = "banner hidden";
   resultBanner.textContent = "";
 }
 
@@ -136,9 +140,15 @@ async function submit() {
 
 // ──Tasks tab ─────────────────────────────────────────────────────────────
 
-const STATUS_ICON: Record<string, string> = {
-  downloading: "↓", completed: "✓", failed: "✗",
-  queued: "…", preparing: "↓", paused: "‖", cancelled: "×",
+// Map status → pill class + icon
+const STATUS_META: Record<string, { cls: string; icon: string }> = {
+  downloading: { cls: "pill-dl",    icon: "↓" },
+  completed:   { cls: "pill-done",  icon: "✓" },
+  failed:      { cls: "pill-fail",  icon: "✗" },
+  queued:      { cls: "pill-queue", icon: "…" },
+  preparing:   { cls: "pill-queue", icon: "↓" },
+  paused:      { cls: "pill-pause", icon: "‖" },
+  cancelled:   { cls: "pill-cancel",icon: "×" },
 };
 
 function fmtBytes(b: number): string {
@@ -153,22 +163,38 @@ function fmtSpeed(b: number | null): string {
   return `${fmtBytes(b)}/s`;
 }
 
-interface DL { id:string;filename:string;url:string;status:string;downloaded_bytes:number;total_bytes:number|null;percentage_basis_points:number|null;speed_bytes_per_second:number|null; }
+interface DL {
+  id: string;
+  filename: string;
+  url: string;
+  status: string;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  percentage_basis_points: number | null;
+  speed_bytes_per_second: number | null;
+}
 
 function renderTasks(downloads: DL[]) {
-  if (!downloads.length) { taskList.innerHTML = '<p class="empty-msg">No downloads yet</p>'; return; }
+  if (!downloads.length) {
+    taskList.innerHTML = `<div class="empty-state"><span class="empty-icon">⇩</span><p>No downloads yet</p></div>`;
+    return;
+  }
   taskList.innerHTML = downloads.map((d) => {
     const pct = d.percentage_basis_points != null ? Math.round(d.percentage_basis_points / 100) : null;
-    const icon = STATUS_ICON[d.status] ?? "↓";
+    const meta = d.status;
+    const { cls, icon } = STATUS_META[d.status] ?? { cls: "pill-queue", icon: "↓" };
     const speed = fmtSpeed(d.speed_bytes_per_second);
-    const meta = [fmtBytes(d.downloaded_bytes), pct != null ? `${pct}%` : "", speed].filter(Boolean).join(" · ");
+    const sizeInfo = [fmtBytes(d.downloaded_bytes), pct != null ? `${pct}%` : "", speed].filter(Boolean).join(" · ");
     const bar = pct != null && d.status === "downloading"
-      ? `<div class="task-progress-bar"><div class="task-progress-fill" style="width:${pct}%"></div></div>` : "";
-    return `<div class="task-item">
-      <div class="task-icon st-${d.status}">${icon}</div>
-      <div class="task-info">
+      ? `<div class="task-progress"><div class="task-progress-fill" style="width:${pct}%"></div></div>` : "";
+    return `<div class="task-card">
+      <div class="task-status-pill ${cls}">${icon}</div>
+      <div class="task-body">
         <div class="task-name" title="${esc(d.filename)}">${esc(d.filename)}</div>
-        <div class="task-meta"><span>${d.status}</span><span>${meta}</span></div>
+        <div class="task-meta-row">
+          <span class="task-state-tag">${meta}</span>
+          <span>${sizeInfo}</span>
+        </div>
         ${bar}
       </div>
     </div>`;
@@ -176,11 +202,13 @@ function renderTasks(downloads: DL[]) {
 }
 
 async function loadTasks() {
-  taskList.innerHTML = '<p class="empty-msg">Loading…</p>';
+  taskList.innerHTML = `<div class="empty-state"><span class="empty-icon">⋯</span><p>Loading…</p></div>`;
   try {
     const tasks = await sendRuntimeMessage<DL[]>({ type: "get_tasks" });
     renderTasks(Array.isArray(tasks) ? tasks : []);
-  } catch { taskList.innerHTML = '<p class="empty-msg">Could not load tasks</p>'; }
+  } catch {
+    taskList.innerHTML = `<div class="empty-state"><span class="empty-icon">✗</span><p>Could not load tasks</p></div>`;
+  }
 }
 
 refreshBtn.addEventListener("click", () => {
@@ -195,10 +223,10 @@ let currentResources: Resource[] = [];
 let currentFilter = "all";
 const selectedUrls = new Set<string>();
 
-document.querySelectorAll<HTMLButtonElement>(".filter-btn").forEach((btn) => {
+document.querySelectorAll<HTMLButtonElement>(".filter-pill").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("filter-active"));
-    btn.classList.add("filter-active");
+    document.querySelectorAll(".filter-pill").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
     currentFilter = btn.dataset.filter ?? "all";
     renderResources();
   });
@@ -207,7 +235,7 @@ document.querySelectorAll<HTMLButtonElement>(".filter-btn").forEach((btn) => {
 scanBtn.addEventListener("click", () => void scanPage());
 
 async function scanPage() {
-  scanBtn.textContent = "Scanning…";
+  scanBtn.querySelector("span:last-child")!.textContent = "Scanning…";
   scanBtn.disabled = true;
   try {
     const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
@@ -219,9 +247,9 @@ async function scanPage() {
     resourceList.classList.remove("hidden");
     renderResources();
   } catch {
-    scanBtn.textContent = "🔍 Scan this page";
+    scanBtn.querySelector("span:last-child")!.textContent = "Scan this page";
     scanBtn.disabled = false;
-    scanEmpty.innerHTML = '<p style="font-size:12px;color:var(--text-dim);text-align:center">Could not scan this page.<br>Reload the page and try again.</p>';
+    scanEmpty.innerHTML = `<p>Could not scan this page.<br>Reload the page and try again.</p>`;
   }
 }
 
@@ -231,17 +259,17 @@ function renderResources() {
     : currentResources.filter((r) => r.type === currentFilter);
 
   if (!filtered.length) {
-    resourceList.innerHTML = `<p class="empty-msg">No ${currentFilter === "all" ? "" : currentFilter + " "}resources found</p>`;
+    resourceList.innerHTML = `<div class="empty-state"><span class="empty-icon">◯</span><p>No ${currentFilter === "all" ? "" : currentFilter + " "}resources found</p></div>`;
     updateSelectionUI();
     return;
   }
 
   resourceList.innerHTML = filtered.map((r) => {
     const checked = selectedUrls.has(r.url) ? "checked" : "";
-    const sel = selectedUrls.has(r.url) ? " selected" : "";
-    return `<label class="resource-item${sel}" data-url="${esc(r.url)}">
+    const sel = selectedUrls.has(r.url) ? " sel" : "";
+    return `<label class="resource-row${sel}" data-url="${esc(r.url)}">
       <input type="checkbox" ${checked} data-url="${esc(r.url)}" />
-      <span class="resource-type-badge badge-${r.type}">${r.type}</span>
+      <span class="type-badge tb-${r.type}">${r.type}</span>
       <span class="resource-name" title="${esc(r.url)}">${esc(r.label)}</span>
     </label>`;
   }).join("");
@@ -250,8 +278,8 @@ function renderResources() {
     cb.addEventListener("change", () => {
       const url = cb.dataset.url!;
       cb.checked ? selectedUrls.add(url) : selectedUrls.delete(url);
-      const row = cb.closest(".resource-item");
-      row?.classList.toggle("selected", cb.checked);
+      const row = cb.closest(".resource-row");
+      row?.classList.toggle("sel", cb.checked);
       updateSelectionUI();
     });
   });
@@ -271,7 +299,7 @@ dlSelectedBtn.addEventListener("click", () => void downloadSelected());
 async function downloadSelected() {
   if (!selectedUrls.size) return;
   dlSelectedBtn.disabled = true;
-  dlSelectedBtn.textContent = "Sending…";
+  dlSelectedBtn.querySelector("span:last-child")!.textContent = "Sending…";
   try {
     const result = await sendRuntimeMessage<{ added: number; failed: number }>({
       type: "add_batch",
@@ -282,12 +310,10 @@ async function downloadSelected() {
     const msg = result.failed === 0
       ? `✓ ${result.added} download${result.added > 1 ? "s" : ""} added`
       : `${result.added} added, ${result.failed} failed`;
-    // Show brief feedback in the Add tab result
     showResult(result.failed === 0 ? "success" : "error", msg);
-    // Switch to tasks tab
     document.querySelector<HTMLButtonElement>('[data-tab="tasks"]')?.click();
   } finally {
-    dlSelectedBtn.textContent = "↓ Download selected";
+    dlSelectedBtn.querySelector("span:last-child")!.textContent = "Download selected";
     updateSelectionUI();
   }
 }
@@ -348,12 +374,13 @@ async function loadTargets() {
   targetList.replaceChildren();
   for (const target of remoteTargets) {
     const row = document.createElement("div");
-    row.className = "target-row";
+    row.className = "target-card";
     const label = document.createElement("span");
+    label.className = "target-name-ep";
     label.textContent = `${target.name} · ${target.endpoint}`;
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "target-remove";
+    remove.className = "btn-remove";
     remove.textContent = "Remove";
     remove.addEventListener("click", () => void removeTarget(target));
     row.append(label, remove);
@@ -522,7 +549,7 @@ function isBrowserTarget(
 
 function showTargetResult(kind: "success" | "error", message: string) {
   targetResult.textContent = message;
-  targetResult.className = `result-banner ${kind}`;
+  targetResult.className = `banner ${kind}`;
 }
 
 // ──Helpers ───────────────────────────────────────────────────────────────

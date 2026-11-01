@@ -9,37 +9,39 @@
   <body>
     <div class="popup-root">
 
-      <!-- Header -->
+      <!-- ── Header ───────────────────────────────────────────── -->
       <header class="popup-header">
         <div class="popup-logo">
-          <div class="logo-icon">
-            <img src="icons/icon32.png" alt="" width="14" height="14" />
+          <div class="logo-tile">
+            <img src="icons/icon32.png" alt="" width="15" height="15" />
           </div>
           <span class="popup-title">FetchX</span>
         </div>
-        <div class="header-right">
-          <div id="status-badge" class="status-badge status-checking">
+        <div class="header-actions">
+          <div id="status-badge" class="status-chip status-checking">
             <span class="status-dot"></span>
             <span id="status-text">Checking…</span>
           </div>
-          <button id="settings-btn" class="icon-btn-sm" title="Settings" aria-label="Settings">⚙</button>
+          <button id="settings-btn" class="btn-ghost" title="Settings" aria-label="Settings">⚙</button>
         </div>
       </header>
 
-      <!-- Tab bar -->
-      <nav class="tab-bar" role="tablist">
+      <!-- ── Tab navigation ────────────────────────────────────── -->
+      <nav class="tab-nav" role="tablist">
         <button class="tab-btn tab-active" data-tab="add"       role="tab" aria-selected="true">Add</button>
         <button class="tab-btn"            data-tab="tasks"     role="tab" aria-selected="false">Tasks</button>
         <button class="tab-btn"            data-tab="resources" role="tab" aria-selected="false">Resources</button>
       </nav>
 
-      <!-- TAB: Add -->
+      <!-- ── TAB: Add ──────────────────────────────────────────── -->
       <div id="tab-add" class="tab-panel">
-        <label class="target-picker" for="target-select">
-          <span>Send to</span>
-          <select id="target-select"></select>
-        </label>
-        <div class="input-group">
+
+        <div class="target-row">
+          <span class="target-label">Send to</span>
+          <select id="target-select" class="target-select"></select>
+        </div>
+
+        <div class="url-group">
           <input
             id="url-input"
             class="url-input"
@@ -48,96 +50,127 @@
             autocomplete="off"
             spellcheck="false"
           />
-          <button id="use-tab-btn" class="icon-btn" title="Use current tab URL" aria-label="Use current tab URL">⇥</button>
+          <button id="use-tab-btn" class="btn-tab-url" title="Use current tab URL" aria-label="Use current tab URL">⇥</button>
         </div>
-        <button id="submit-btn" class="submit-btn" type="button" disabled>
-          <span class="btn-icon">↓</span>
+
+        <button id="submit-btn" class="btn-primary" type="button" disabled>
+          <span class="btn-icon-lead">↓</span>
           <span id="btn-text">Download with FetchX</span>
         </button>
-        <div id="result-banner" class="result-banner hidden" role="alert"></div>
+
+        <div id="result-banner" class="banner hidden" role="alert"></div>
       </div>
 
-      <!-- TAB: Tasks -->
+      <!-- ── TAB: Tasks ─────────────────────────────────────────── -->
       <div id="tab-tasks" class="tab-panel hidden">
-        <div class="panel-toolbar">
-          <span class="panel-label">Recent downloads</span>
-          <button id="refresh-tasks-btn" class="text-btn">↺ Refresh</button>
+        <div class="section-toolbar">
+          <span class="section-label">Recent downloads</span>
+          <button id="refresh-tasks-btn" class="btn-text">↺ Refresh</button>
         </div>
         <div id="task-list" class="task-list">
-          <p class="empty-msg">No downloads yet</p>
+          <div class="empty-state">
+            <span class="empty-icon">⇩</span>
+            <p>No downloads yet</p>
+          </div>
         </div>
       </div>
 
-      <!-- TAB: Resources -->
+      <!-- ── TAB: Resources ────────────────────────────────────── -->
       <div id="tab-resources" class="tab-panel hidden">
-        <div class="panel-toolbar">
-          <span class="panel-label">Page resources</span>
-          <div class="filter-group">
-            <button class="filter-btn filter-active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="video">Video</button>
-            <button class="filter-btn" data-filter="audio">Audio</button>
-            <button class="filter-btn" data-filter="image">Image</button>
-            <button class="filter-btn" data-filter="file">File</button>
+        <div class="section-toolbar">
+          <span class="section-label">Page resources</span>
+          <div class="filter-strip">
+            <button class="filter-pill active" data-filter="all">All</button>
+            <button class="filter-pill" data-filter="video">Video</button>
+            <button class="filter-pill" data-filter="audio">Audio</button>
+            <button class="filter-pill" data-filter="image">Image</button>
+            <button class="filter-pill" data-filter="file">File</button>
           </div>
         </div>
-        <div id="scan-empty" class="scan-prompt">
-          <button id="scan-btn" class="submit-btn">
-            <span>🔍 Scan this page</span>
+
+        <div id="scan-empty" class="scan-area">
+          <button id="scan-btn" class="btn-primary">
+            <span class="btn-icon-lead">🔍</span>
+            <span>Scan this page</span>
           </button>
         </div>
+
         <div id="resource-list" class="resource-list hidden"></div>
-        <div id="resource-actions" class="resource-actions hidden">
-          <span id="selected-count" class="selected-count">0 selected</span>
-          <button id="download-selected-btn" class="submit-btn submit-btn-sm" disabled>↓ Download selected</button>
+
+        <div id="resource-actions" class="resource-footer hidden">
+          <span id="selected-count" class="sel-count">0 selected</span>
+          <button id="download-selected-btn" class="btn-primary btn-primary-sm" disabled>
+            <span class="btn-icon-lead">↓</span>
+            <span>Download selected</span>
+          </button>
         </div>
       </div>
 
-      <!-- Settings panel (overlay) -->
-      <div id="settings-panel" class="settings-panel hidden">
-        <div class="settings-header">
-          <span class="settings-title">Settings</span>
-          <button id="settings-close-btn" class="icon-btn-sm">✕</button>
-        </div>
-        <div class="settings-body">
-          <section class="target-settings">
-            <h2>FetchX targets</h2>
-            <div id="target-list" class="target-list"></div>
-            <label class="setting-row">
-              <span class="setting-label">Target name</span>
-              <input id="target-name" type="text" maxlength="64" autocomplete="off" />
-            </label>
-            <label class="setting-row">
-              <span class="setting-label">HTTPS server URL</span>
-              <input id="target-endpoint" type="url" autocomplete="url" placeholder="https://fetchx.example.com" />
-            </label>
-            <label class="setting-row">
-              <span class="setting-label">Bearer token</span>
-              <input id="target-token" type="password" autocomplete="new-password" />
-            </label>
-            <button id="target-add-btn" class="submit-btn submit-btn-sm" type="button">Save remote target</button>
-            <div id="target-result" class="result-banner hidden" role="status"></div>
-          </section>
+      <!-- ── Settings overlay ──────────────────────────────────── -->
+      <div id="settings-panel" class="settings-overlay hidden">
+        <div class="settings-sheet">
 
-          <label class="setting-row">
-            <span class="setting-label">Auto-intercept downloads</span>
-            <input id="set-auto-intercept" type="checkbox" class="toggle" />
-          </label>
-          <label class="setting-row">
-            <span class="setting-label">Minimum file size (MB)</span>
-            <input id="set-min-size" type="number" min="0" max="10240" class="num-input" />
-          </label>
-          <label class="setting-row">
-            <span class="setting-label">Show notifications</span>
-            <input id="set-notifications" type="checkbox" class="toggle" />
-          </label>
+          <div class="settings-head">
+            <span class="settings-title">Settings</span>
+            <button id="settings-close-btn" class="btn-ghost">✕</button>
+          </div>
 
-          <div class="settings-save-row">
-            <button id="settings-save-btn" class="submit-btn submit-btn-sm">Save</button>
+          <div class="settings-body">
+
+            <!-- Targets section -->
+            <div class="settings-section">
+              <div class="settings-section-title">FetchX Targets</div>
+              <div class="settings-inner">
+                <div id="target-list" class="target-cards"></div>
+
+                <div class="form-row">
+                  <span class="form-label-sm">Name</span>
+                  <input id="target-name" type="text" class="field" maxlength="64" autocomplete="off" placeholder="Home server" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label-sm">HTTPS URL</span>
+                  <input id="target-endpoint" type="url" class="field" autocomplete="url" placeholder="https://fetchx.example.com" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label-sm">Bearer token</span>
+                  <input id="target-token" type="password" class="field" autocomplete="new-password" />
+                </div>
+
+                <button id="target-add-btn" class="btn-primary btn-primary-sm" type="button">
+                  Save remote target
+                </button>
+                <div id="target-result" class="banner hidden" role="status"></div>
+              </div>
+            </div>
+
+            <!-- Behaviour section -->
+            <div class="settings-section">
+              <div class="settings-section-title">Behaviour</div>
+              <div class="settings-inner">
+                <div class="form-row">
+                  <span class="form-label">Auto-intercept downloads</span>
+                  <input id="set-auto-intercept" type="checkbox" class="toggle" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">Minimum file size (MB)</span>
+                  <input id="set-min-size" type="number" min="0" max="10240" class="field-num" />
+                </div>
+                <div class="form-row">
+                  <span class="form-label">Show notifications</span>
+                  <input id="set-notifications" type="checkbox" class="toggle" />
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-footer">
+              <button id="settings-save-btn" class="btn-primary btn-primary-sm">Save</button>
+            </div>
+
           </div>
         </div>
       </div>
 
-    </div>
+    </div><!-- /.popup-root -->
     <script src="dist/popup.js"></script>
   </body>
 </html>
