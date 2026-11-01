@@ -181,6 +181,8 @@ class TabManager(
 
     fun reload() { activeSession()?.reload() }
 
+    fun stopLoading() { activeSession()?.stop() }
+
     // ──History API ────────────────────────────────────────────────────────
 
     /** Returns history entries for the active tab, newest first. */

@@ -374,6 +374,7 @@ class BrowserViewModel internal constructor(
     fun goBack(): Boolean = tabManager?.goBack() == true
     fun goForward(): Boolean = tabManager?.goForward() == true
     fun reload() { tabManager?.reload() }
+    fun stopLoading() { tabManager?.stopLoading() }
 
     // ──History ────────────────────────────────────────────────────────────
 

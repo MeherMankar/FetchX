@@ -47,9 +47,10 @@ Evidence:
 ### Known behavior gaps
 
 The existing audit found no proven implementation for share, find in page, desktop site,
-real Gecko tab thumbnails, or a dedicated private-tab model. The current loading X is
-visually presented as “Stop loading” but currently calls the reload path. These are
-separate implementation decisions and must not be silently implied by a visual redesign.
+real Gecko tab thumbnails, or a dedicated private-tab model. The loading action calls
+GeckoView's `GeckoSession.stop()` while a page is loading, while reload remains the idle
+action. Security presentation is limited to URL-scheme and internal-page indicators;
+certificate inspection is not part of this UI scope.
 
 ## 3. Research References
 
@@ -736,4 +737,3 @@ existing navigation behavior.
   the implementation phase.
 - No recommendation in this document is a claim that a missing FetchX feature is already
   implemented.
-

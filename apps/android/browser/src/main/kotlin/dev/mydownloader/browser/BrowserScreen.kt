@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
@@ -427,6 +428,7 @@ fun BrowserScreen(
                         val url = uiState.activeTab?.url.orEmpty()
                         val isBlank = url == "about:blank" || url.isBlank()
                         val isHttps = url.startsWith("https://")
+                        val isInternalPage = url.startsWith("about:")
                         val displayAddress = if (isBlank) {
                             "Search or type URL"
                         } else {
@@ -447,8 +449,11 @@ fun BrowserScreen(
                             // Site security / tracker icon
                             IconButton(
                                 onClick = {
-                                    if (!isBlank) viewModel.openTrackerDetails()
-                                    else viewModel.openSearchEngineSelector()
+                                    when {
+                                        isBlank -> viewModel.openSearchEngineSelector()
+                                        isInternalPage -> Unit
+                                        else -> viewModel.openTrackerDetails()
+                                    }
                                 },
                                 modifier = Modifier.size(36.dp),
                             ) {
@@ -456,6 +461,13 @@ fun BrowserScreen(
                                     SearchEngineIcon(
                                         engine = uiState.selectedSearchEngine,
                                         size = 20.dp,
+                                    )
+                                } else if (isInternalPage) {
+                                    Icon(
+                                        Icons.Default.Info,
+                                        contentDescription = "Internal page",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp),
                                     )
                                 } else if (isHttps) {
                                     Icon(
@@ -537,7 +549,9 @@ fun BrowserScreen(
                             // Reload / Stop button
                             val isLoading = activeTab?.isLoading == true
                             IconButton(
-                                onClick = { viewModel.reload() },
+                                onClick = {
+                                    if (isLoading) viewModel.stopLoading() else viewModel.reload()
+                                },
                                 modifier = Modifier.size(36.dp),
                             ) {
                                 if (isLoading) {
