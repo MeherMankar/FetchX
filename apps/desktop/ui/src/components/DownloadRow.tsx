@@ -68,6 +68,7 @@ export const DownloadRow = memo(function DownloadRow({
   return (
     <article
       className={`download-card${selected ? " download-card--selected" : ""}${checked ? " download-card--checked" : ""}`}
+      data-status={download.status}
       aria-selected={selected}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -114,7 +115,7 @@ export const DownloadRow = memo(function DownloadRow({
         <p className="download-url" title={download.url}>{download.url}</p>
 
         <progress
-          className="progress-track"
+          className={`progress-track${isActive(download.status) ? " progress-track--active" : ""}`}
           aria-label={`Progress: ${formatPercent(pct)}`}
           value={pct === null ? 0 : pct / 100}
           max={100}

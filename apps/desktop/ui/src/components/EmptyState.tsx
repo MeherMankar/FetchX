@@ -6,7 +6,9 @@ interface EmptyStateProps {
 export function EmptyState({ title, subtitle }: EmptyStateProps) {
   return (
     <div className="empty-state" role="status">
-      <img src="/fetchx-logo.png" className="empty-logo" alt="" aria-hidden="true" width={64} height={64} />
+      <div className="empty-logo-wrap">
+        <img src="/fetchx-logo.png" className="empty-logo" alt="" aria-hidden="true" />
+      </div>
       <strong>{title}</strong>
       {subtitle && <span>{subtitle}</span>}
     </div>
