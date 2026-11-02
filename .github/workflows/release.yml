@@ -86,6 +86,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free disk space on runner
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android/sdk/ndk/25*
+          sudo rm -rf /usr/local/lib/android/sdk/ndk/26*
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -106,7 +119,7 @@ jobs:
       - name: Install Rust + Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
@@ -127,13 +140,9 @@ jobs:
             build --release \
             -p fetchx-android-bridge
 
-      - name: Build Rust .so for x86_64
-        run: |
-          cargo ndk \
-            -t x86_64 \
-            -o apps/android/bridge/src/main/jniLibs \
-            build --release \
-            -p fetchx-android-bridge
+      - name: Free Android Rust build artifacts
+        run: cargo clean --target aarch64-linux-android
+
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -164,7 +173,7 @@ jobs:
       - name: Build release APK
         run: |
           cd apps/android
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease -PciArm64Only=true
         env:
           ORG_GRADLE_PROJECT_appVersion: ${{ env.APP_VERSION }}
           ORG_GRADLE_PROJECT_appVersionCode: ${{ env.APP_VERSION_CODE }}

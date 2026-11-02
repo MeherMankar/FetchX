@@ -34,10 +34,11 @@ android {
         versionCode = appVersionCode
         versionName = appVersion
         ndk {
-            abiFilters += if (ciArm64Only) {
-                listOf("arm64-v8a")
+            abiFilters.clear()
+            if (ciArm64Only) {
+                abiFilters.add("arm64-v8a")
             } else {
-                listOf("arm64-v8a", "x86_64")
+                abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
             }
         }
     }
@@ -95,6 +96,18 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += "**/libfetchx_ffmpeg.so"
+            excludes += listOf(
+                "**/lib/armeabi-v7a/**",
+                "**/lib/x86/**",
+                "lib/armeabi-v7a/**",
+                "lib/x86/**"
+            )
+            if (ciArm64Only) {
+                excludes += listOf(
+                    "**/lib/x86_64/**",
+                    "lib/x86_64/**"
+                )
+            }
         }
     }
 }

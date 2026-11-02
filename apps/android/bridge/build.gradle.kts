@@ -49,6 +49,8 @@ val generateUniFfiKotlinBindings = tasks.register<GenerateUniFfiKotlinBindings>(
     )
 }
 
+val ciArm64Only = providers.gradleProperty("ciArm64Only").orNull == "true"
+
 android {
     namespace = "dev.fetchx.bridge"
     compileSdk {
@@ -61,7 +63,11 @@ android {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += if (ciArm64Only) {
+                listOf("arm64-v8a")
+            } else {
+                listOf("arm64-v8a", "x86_64")
+            }
         }
     }
 
