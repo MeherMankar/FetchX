@@ -87,40 +87,57 @@ pub struct AppPaths {
     pub bundled_engines_dir: std::path::PathBuf,
 }
 
+pub fn fallback_app_data_dir() -> std::path::PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("com.fetchx.desktop"))
+        .or_else(|| {
+            std::env::var_os("APPDATA")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("com.fetchx.desktop"))
+        })
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".fetchx"))
+        })
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".fetchx"))
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("com.fetchx.desktop"))
+}
+
+pub fn fallback_downloads_dir(app_data_dir: &std::path::Path) -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("Downloads"))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("Downloads"))
+        })
+        .unwrap_or_else(|| app_data_dir.join("downloads"))
+}
+
+pub fn fallback_bundled_engines_dir(app_data_dir: &std::path::Path) -> std::path::PathBuf {
+    std::env::current_exe()
+        .map(|p| p.parent().map(|d| d.join("engines")).unwrap_or_else(|| p.join("engines")))
+        .or_else(|_| std::env::current_dir().map(|d| d.join("engines")))
+        .unwrap_or_else(|_| app_data_dir.join("engines"))
+}
+
 pub fn resolve_app_paths(app: &tauri::App) -> AppPaths {
     // 1. App data directory:
     // On Windows, FOLDERID_RoamingAppData can fail or be unconfigured on some setups.
     // Standard Windows desktop apps store local data in %LOCALAPPDATA% (FOLDERID_LocalAppData).
-    // Fall back progressively: LocalAppData -> AppData -> LOCALAPPDATA env -> APPDATA env -> USERPROFILE -> HOME -> TEMP.
+    // Fall back progressively: LocalAppData -> AppData -> fallback_app_data_dir().
     let app_data_dir = app
         .path()
         .app_local_data_dir()
         .or_else(|_| app.path().app_data_dir())
-        .or_else(|_| {
-            std::env::var_os("LOCALAPPDATA")
-                .map(std::path::PathBuf::from)
-                .map(|p| p.join("com.fetchx.desktop"))
-                .ok_or(tauri::Error::UnknownPath)
-        })
-        .or_else(|_| {
-            std::env::var_os("APPDATA")
-                .map(std::path::PathBuf::from)
-                .map(|p| p.join("com.fetchx.desktop"))
-                .ok_or(tauri::Error::UnknownPath)
-        })
-        .or_else(|_| {
-            std::env::var_os("USERPROFILE")
-                .map(std::path::PathBuf::from)
-                .map(|p| p.join(".fetchx"))
-                .ok_or(tauri::Error::UnknownPath)
-        })
-        .or_else(|_| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .map(|p| p.join(".fetchx"))
-                .ok_or(tauri::Error::UnknownPath)
-        })
-        .unwrap_or_else(|_| std::env::temp_dir().join("com.fetchx.desktop"));
+        .unwrap_or_else(|_| fallback_app_data_dir());
 
     if let Err(error) = std::fs::create_dir_all(&app_data_dir) {
         tracing::warn!(path = %app_data_dir.display(), %error, "could not create app data directory");
@@ -131,19 +148,7 @@ pub fn resolve_app_paths(app: &tauri::App) -> AppPaths {
     let downloads_dir = app
         .path()
         .download_dir()
-        .or_else(|_| {
-            std::env::var_os("USERPROFILE")
-                .map(std::path::PathBuf::from)
-                .map(|p| p.join("Downloads"))
-                .ok_or(tauri::Error::UnknownPath)
-        })
-        .or_else(|_| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .map(|p| p.join("Downloads"))
-                .ok_or(tauri::Error::UnknownPath)
-        })
-        .unwrap_or_else(|_| app_data_dir.join("downloads"));
+        .unwrap_or_else(|_| fallback_downloads_dir(&app_data_dir));
 
     if let Err(error) = std::fs::create_dir_all(&downloads_dir) {
         tracing::warn!(path = %downloads_dir.display(), %error, "could not create downloads directory");
@@ -155,12 +160,7 @@ pub fn resolve_app_paths(app: &tauri::App) -> AppPaths {
         .path()
         .resource_dir()
         .map(|p| p.join("engines"))
-        .or_else(|_| {
-            std::env::current_exe()
-                .map(|p| p.parent().map(|d| d.join("engines")).unwrap_or_else(|| p.join("engines")))
-                .or_else(|_| std::env::current_dir().map(|d| d.join("engines")))
-        })
-        .unwrap_or_else(|_| app_data_dir.join("engines"));
+        .unwrap_or_else(|_| fallback_bundled_engines_dir(&app_data_dir));
 
     AppPaths {
         app_data_dir,
@@ -311,6 +311,19 @@ mod tests {
     use tempfile::tempdir;
 
     use super::AppState;
+
+    #[test]
+    fn fallback_paths_resolve_without_panicking() {
+        let app_data = super::fallback_app_data_dir();
+        assert!(!app_data.as_os_str().is_empty());
+        assert!(app_data.to_string_lossy().contains("fetchx"));
+
+        let downloads = super::fallback_downloads_dir(&app_data);
+        assert!(!downloads.as_os_str().is_empty());
+
+        let engines = super::fallback_bundled_engines_dir(&app_data);
+        assert!(!engines.as_os_str().is_empty());
+    }
 
     #[tokio::test]
     async fn desktop_state_initializes_through_core_services()
