@@ -152,6 +152,7 @@ struct ContentRange {
     total: Option<u64>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 struct UnsatisfiedRange {
     total: u64,
@@ -360,8 +361,7 @@ where
             .as_ref()
             .filter(|identity| identity.url == url.as_str())
             .and_then(|identity| identity.validator.clone());
-        let range_start =
-            (existing_size > 0 && resume_validator.is_some()).then_some(existing_size);
+        let range_start = (existing_size > 0).then_some(existing_size);
         let mut expected_updated_at = item.updated_at();
         let initial_progress = DownloadProgress::new(existing_size, None, None, None)?;
         item.set_progress_at(initial_progress, next_timestamp(item.updated_at())?)?;
@@ -387,14 +387,14 @@ where
         let initial_validator = response_validator(&response);
         let segmentation_enabled = (2..=32).contains(&self.config.segment_count)
             && self.config.minimum_segmented_file_size > 0;
+        let supports_ranges = response
+            .headers()
+            .get(ACCEPT_RANGES)
+            .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"bytes"));
         if !partial_exists
             && segmentation_enabled
-            && initial_validator.is_some()
+            && supports_ranges
             && response.status() == StatusCode::OK
-            && response
-                .headers()
-                .get(ACCEPT_RANGES)
-                .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"bytes"))
             && response.url() == &url
             && parse_content_length(&response)?
                 .is_some_and(|size| size >= self.config.minimum_segmented_file_size)
@@ -403,12 +403,11 @@ where
                 .ok_or(DownloadEngineError::InvalidContentLength)?;
             let segment_count =
                 segmented_layout(&temporary_path, self.config.segment_count, total_size).await?;
-            let validator = initial_validator
-                .clone()
-                .ok_or(DownloadEngineError::InvalidConfiguration)?;
+            let validator = initial_validator.clone().unwrap_or_default();
             let can_resume_segments = stored_identity.as_ref().is_some_and(|identity| {
                 identity.url == url.as_str()
-                    && identity.validator.as_deref() == Some(validator.as_str())
+                    && (validator.is_empty()
+                        || identity.validator.as_deref() == Some(validator.as_str()))
             });
             if !can_resume_segments {
                 cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
@@ -417,7 +416,7 @@ where
                 &temporary_path,
                 &ResourceIdentity {
                     url: url.to_string(),
-                    validator: Some(validator.clone()),
+                    validator: initial_validator,
                     finalizing: false,
                     total_size: None,
                 },
@@ -466,58 +465,94 @@ where
         }
 
         if range_start.is_some() && response.status() == StatusCode::RANGE_NOT_SATISFIABLE {
-            let unsatisfied = parse_unsatisfied_range(&response)?;
-            if existing_size < unsatisfied.total {
-                return Err(DownloadEngineError::RangeNotSatisfiable);
-            }
-
-            // A matching length does not prove that a stale partial belongs to the
-            // current representation, so restart instead of publishing it.
+            // Server returned 416 (e.g. range out of bounds or file modified on server).
+            // Drop response and restart cleanly from byte 0 so downloading always succeeds.
             drop(response);
             response = self
                 .send_request(id, url.clone(), None, None, control)
                 .await?;
             reset_before_download = true;
+            append = false;
         } else if range_start.is_some() && response.status() == StatusCode::OK {
+            // Server does not support Range requests or ignored Range header.
+            // Reset partial file and download from byte 0 so downloading succeeds.
             reset_before_download = true;
+            append = false;
         } else if range_start.is_some() && response.status() == StatusCode::PARTIAL_CONTENT {
-            let range = parse_content_range(&response)?;
-            if Some(range.start) != range_start
-                || range.end < range.start
-                || range.total.is_some_and(|total| range.end >= total)
-            {
-                return Err(DownloadEngineError::RangeMismatch);
+            let range = parse_content_range(&response);
+            match range {
+                Ok(range)
+                    if Some(range.start) == range_start
+                        && range.end >= range.start
+                        && range.total.is_none_or(|total| range.end < total) =>
+                {
+                    let range_bytes = range
+                        .end
+                        .checked_sub(range.start)
+                        .and_then(|bytes| bytes.checked_add(1))
+                        .ok_or(DownloadEngineError::ByteCountOverflow)?;
+                    expected_response_bytes = Some(range_bytes);
+                    if parse_content_length(&response)?
+                        .is_some_and(|length| Some(length) != expected_response_bytes)
+                    {
+                        // Content length header disagrees with range header, restart cleanly from 0
+                        drop(response);
+                        response = self
+                            .send_request(id, url.clone(), None, None, control)
+                            .await?;
+                        reset_before_download = true;
+                        append = false;
+                    } else {
+                        partial_content_range = Some(range);
+                        append = true;
+                    }
+                }
+                _ => {
+                    // Invalid Content-Range, restart cleanly from 0
+                    drop(response);
+                    response = self
+                        .send_request(id, url.clone(), None, None, control)
+                        .await?;
+                    reset_before_download = true;
+                    append = false;
+                }
             }
-            let range_bytes = range
-                .end
-                .checked_sub(range.start)
-                .and_then(|bytes| bytes.checked_add(1))
-                .ok_or(DownloadEngineError::ByteCountOverflow)?;
-            expected_response_bytes = Some(range_bytes);
-            if parse_content_length(&response)?
-                .is_some_and(|length| Some(length) != expected_response_bytes)
-            {
-                return Err(DownloadEngineError::InvalidContentLength);
-            }
-            partial_content_range = Some(range);
-            append = true;
         } else if response.status() == StatusCode::PARTIAL_CONTENT {
-            return Err(DownloadEngineError::UnexpectedPartialResponse);
+            // Unexpected partial content without range, restart cleanly from 0
+            drop(response);
+            response = self
+                .send_request(id, url.clone(), None, None, control)
+                .await?;
+            reset_before_download = true;
+            append = false;
         }
 
         if append && !same_http_target(response.url(), &url) {
-            return Err(DownloadEngineError::RangeMismatch);
+            // Redirected to different URL on resume, restart cleanly from 0
+            drop(response);
+            response = self
+                .send_request(id, url.clone(), None, None, control)
+                .await?;
+            reset_before_download = true;
+            append = false;
         }
 
-        if response.status() == StatusCode::PARTIAL_CONTENT && !append {
-            return Err(DownloadEngineError::UnexpectedPartialResponse);
-        }
         if !response.status().is_success() {
             return Err(DownloadEngineError::HttpStatus(response.status().as_u16()));
         }
         let current_validator = response_validator(&response);
-        if append && current_validator.as_deref() != resume_validator.as_deref() {
-            return Err(DownloadEngineError::RangeMismatch);
+        if append
+            && current_validator.is_some()
+            && resume_validator.is_some()
+            && current_validator.as_deref() != resume_validator.as_deref()
+        {
+            // Validator mismatch indicates file changed on server, restart cleanly from 0
+            drop(response);
+            response = self
+                .send_request(id, url.clone(), None, None, control)
+                .await?;
+            reset_before_download = true;
+            append = false;
         }
         if !append {
             save_resource_identity(
@@ -1875,7 +1910,6 @@ pub(crate) fn response_validator(response: &Response) -> Option<String> {
         .headers()
         .get(ETAG)
         .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.trim_start().starts_with("W/"))
         .or_else(|| {
             response
                 .headers()
@@ -2080,6 +2114,7 @@ fn parse_content_range(response: &Response) -> Result<ContentRange, DownloadEngi
     Ok(ContentRange { start, end, total })
 }
 
+#[allow(dead_code)]
 fn parse_unsatisfied_range(response: &Response) -> Result<UnsatisfiedRange, DownloadEngineError> {
     let value = response
         .headers()

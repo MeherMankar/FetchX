@@ -200,11 +200,11 @@ pub(super) async fn download_segment(
             .checked_add(segment.current)
             .ok_or_else(|| segment_error(segment))?;
         let range_value = format!("bytes={range_start}-{}", segment.end);
-        let request = client
-            .get(requested_url.clone())
-            .header(RANGE, range_value)
-            .header(IF_RANGE, validator)
-            .send();
+        let mut request_builder = client.get(requested_url.clone()).header(RANGE, range_value);
+        if !validator.is_empty() {
+            request_builder = request_builder.header(IF_RANGE, validator);
+        }
+        let request = request_builder.send();
         let response = tokio::select! {
             changed = cancellation.changed() => {
                 if changed.is_err() || is_cancelled(cancellation) {
@@ -285,7 +285,10 @@ pub(super) async fn download_segment(
         if !same_http_target(response.url(), requested_url) {
             return Ok(SegmentResult::Fallback);
         }
-        if response_validator(&response).as_deref() != Some(validator) {
+        if let Some(resp_val) = response_validator(&response)
+            && !validator.is_empty()
+            && resp_val != validator
+        {
             return Ok(SegmentResult::Fallback);
         }
         let Some((response_start, response_end, response_total)) = parse_content_range(&response)

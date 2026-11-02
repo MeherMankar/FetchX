@@ -258,6 +258,20 @@ impl AppState {
     }
 
     async fn resume(&self, id: DownloadId) -> Result<DownloadDto, IpcError> {
+        let item = self
+            .repository
+            .get(id)
+            .await
+            .map_err(|_| IpcError::internal())?
+            .ok_or_else(IpcError::not_found)?;
+
+        if matches!(
+            item.status(),
+            DownloadStatus::Failed | DownloadStatus::Cancelled | DownloadStatus::Stopped
+        ) {
+            return self.retry(id).await;
+        }
+
         self.queue.resume(id).await.map_err(IpcError::from_queue)?;
         self.get(id).await
     }
