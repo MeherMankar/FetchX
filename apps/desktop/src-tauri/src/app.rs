@@ -123,7 +123,11 @@ pub fn fallback_downloads_dir(app_data_dir: &std::path::Path) -> std::path::Path
 
 pub fn fallback_bundled_engines_dir(app_data_dir: &std::path::Path) -> std::path::PathBuf {
     std::env::current_exe()
-        .map(|p| p.parent().map(|d| d.join("engines")).unwrap_or_else(|| p.join("engines")))
+        .map(|p| {
+            p.parent()
+                .map(|d| d.join("engines"))
+                .unwrap_or_else(|| p.join("engines"))
+        })
         .or_else(|_| std::env::current_dir().map(|d| d.join("engines")))
         .unwrap_or_else(|_| app_data_dir.join("engines"))
 }
@@ -214,8 +218,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(|app| {
             let paths = resolve_app_paths(app);
             let database_path = paths.app_data_dir.join("fetchx.db");
-            let helper_manager =
-                HelperManager::new(paths.app_data_dir.join("bin"), paths.bundled_engines_dir.clone());
+            let helper_manager = HelperManager::new(
+                paths.app_data_dir.join("bin"),
+                paths.bundled_engines_dir.clone(),
+            );
             let state = tauri::async_runtime::block_on(AppState::initialize(
                 database_path,
                 paths.downloads_dir,
