@@ -44,7 +44,7 @@ class TabManager(
     var onVideoDetected: ((DetectedVideo) -> Unit)? = null
 
     /** Callback invoked when a direct download / external file response is received from GeckoView. */
-    var onDownloadRequested: ((url: String, filename: String?) -> Unit)? = null
+    var onDownloadRequested: ((url: String, filename: String?, mimeType: String?, contentLength: Long?) -> Unit)? = null
 
     /** Callback invoked when an external app URI scheme (mailto:, tel:, intent:, etc.) is requested. */
     var onExternalUriRequested: ((String) -> Unit)? = null
@@ -308,7 +308,13 @@ class TabManager(
                 val contentType = response.headers["content-type"] ?: response.headers["Content-Type"]
                 val filename = URLUtil.guessFileName(response.uri, disposition, contentType)
                     .takeIf { it.isNotBlank() }
-                onDownloadRequested?.invoke(response.uri, filename)
+                val metadata = browserDownloadMetadata(response.headers)
+                onDownloadRequested?.invoke(
+                    response.uri,
+                    filename,
+                    metadata.mimeType,
+                    metadata.contentLength,
+                )
             }
         }
 

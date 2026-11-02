@@ -156,18 +156,20 @@ class BridgeDownloadRepository(
         service.dispatchBrowserRpc(requestJson)
     }
 
-    suspend fun addBrowserDownload(url: String, filename: String): String =
+    suspend fun addBrowserDownload(url: String, filename: String?): String =
         withContext(Dispatchers.IO) {
             val requestId = UUID.randomUUID().toString()
             val response = dispatchBrowserDownloadRequest(
                 requestId = requestId,
                 url = url,
                 filename = filename,
-                includeFilename = true,
+                includeFilename = filename != null,
             )
             val error = response.optJSONObject("error")
             val errorCode = error?.optInt("code")
-            val compatibleResponse = if (errorCode == -32600 || errorCode == -32602) {
+            val compatibleResponse = if (
+                filename != null && (errorCode == -32600 || errorCode == -32602)
+            ) {
                 dispatchBrowserDownloadRequest(
                     requestId = requestId,
                     url = url,
@@ -196,11 +198,11 @@ class BridgeDownloadRepository(
     private suspend fun dispatchBrowserDownloadRequest(
         requestId: String,
         url: String,
-        filename: String,
+        filename: String?,
         includeFilename: Boolean,
     ): JSONObject {
         val params = JSONObject().put("url", url)
-        if (includeFilename) params.put("filename", filename)
+        if (includeFilename) filename?.let { params.put("filename", it) }
         val request = JSONObject()
             .put("jsonrpc", "2.0")
             .put("id", requestId)

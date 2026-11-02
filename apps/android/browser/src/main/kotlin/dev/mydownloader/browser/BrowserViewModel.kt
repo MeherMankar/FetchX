@@ -133,6 +133,8 @@ data class BrowserUiState(
 data class PendingDownload(
     val url: String,
     val filename: String? = null,
+    val mimeType: String? = null,
+    val contentLength: Long? = null,
 )
 
 
@@ -198,9 +200,16 @@ class BrowserViewModel internal constructor(
             newTm.onStateChanged = ::rebuildState
             newTm.onNavigationStateChanged = ::updateNavigationState
             newTm.onVideoDetected = ::onVideoDetected
-            newTm.onDownloadRequested = { url, filename ->
+            newTm.onDownloadRequested = { url, filename, mimeType, contentLength ->
                 _uiState.update {
-                    it.copy(pendingDownloads = it.pendingDownloads + PendingDownload(url, filename))
+                    it.copy(
+                        pendingDownloads = it.pendingDownloads + PendingDownload(
+                            url = url,
+                            filename = filename,
+                            mimeType = mimeType,
+                            contentLength = contentLength,
+                        ),
+                    )
                 }
             }
             newTm.onExternalUriRequested = ::openExternalUri

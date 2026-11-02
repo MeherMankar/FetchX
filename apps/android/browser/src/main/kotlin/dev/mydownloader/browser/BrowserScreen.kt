@@ -90,6 +90,8 @@ import androidx.compose.material.icons.filled.Update
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Workspaces
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -101,6 +103,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -125,6 +128,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -147,8 +151,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.fetchx.core.download.DownloadItem
+import dev.fetchx.core.download.DownloadState
 import androidx.lifecycle.viewmodel.compose.viewModel as composeViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import java.text.SimpleDateFormat
@@ -175,7 +183,9 @@ fun BrowserScreen(
     onOpenStorage: () -> Unit = {},
     onNavigateToDownloads: () -> Unit = {},
     onDownloadCurrentPage: (url: String, title: String) -> Unit = { _, _ -> },
-    onInterceptBrowserDownload: (url: String, filename: String) -> Unit = { _, _ -> },
+    onInterceptBrowserDownload: suspend (url: String, filename: String?) -> Unit = { _, _ -> },
+    ongoingDownloadCount: Int = 0,
+    downloads: List<DownloadItem> = emptyList(),
     onPlayVideo: (String) -> Unit = {},
     browserVersionName: String = "unknown",
     initialNavigateUrl: String? = null,
@@ -183,6 +193,7 @@ fun BrowserScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val activeTab = uiState.activeTab
     val extensionPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -711,6 +722,7 @@ fun BrowserScreen(
                 BrowserBottomBar(
                     canGoBack = activeTab?.canGoBack == true,
                     tabCount = uiState.tabs.size,
+                    ongoingDownloadCount = ongoingDownloadCount,
                     onBack = { viewModel.goBack() },
                     onHome = {
                     viewModel.navigate("about:blank")
@@ -954,12 +966,39 @@ fun BrowserScreen(
             if (uiState.showEssentials) {
                 EssentialsPage(
                     recentEntries = uiState.essentials,
+                    ongoingDownloadCount = ongoingDownloadCount,
                     onOpenTabs = { viewModel.openTabOverview() },
                     onNavigateRecent = { viewModel.navigateToEssential(it) },
                     onOpenBookmarks = { viewModel.openBookmarks() },
                     onOpenHistory = { viewModel.openHistory() },
                     onOpenDownloads = onNavigateToDownloads,
                     modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            downloads.firstOrNull { item ->
+                item.state is DownloadState.Active ||
+                    item.state is DownloadState.Queued ||
+                    item.state is DownloadState.MetadataAcquiring ||
+                    item.state is DownloadState.Recovering ||
+                    item.state is DownloadState.Seeding
+            }?.let { item ->
+                BrowserDownloadStatus(
+                    item = item,
+                    onClick = onNavigateToDownloads,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(
+                            horizontal = 16.dp,
+                            vertical = 12.dp,
+                        )
+                        .padding(
+                            bottom = if (uiState.showVideoDownloadBar && uiState.detectedVideos.isNotEmpty()) {
+                                88.dp
+                            } else {
+                                0.dp
+                            },
+                        ),
                 )
             }
 
@@ -1207,34 +1246,98 @@ fun BrowserScreen(
     }
 
     uiState.pendingDownloads.firstOrNull()?.let { download ->
-        AlertDialog(
+        ModalBottomSheet(
             onDismissRequest = viewModel::clearPendingDownload,
-            title = { Text("Download with FetchX?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(download.filename ?: "Download")
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Download with FetchX?", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = download.filename?.takeIf(String::isNotBlank) ?: "Unknown filename",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                browserDownloadMetadataLabel(
+                    filename = download.filename,
+                    mimeType = download.mimeType,
+                    contentLength = download.contentLength,
+                )?.let { metadata ->
                     Text(
-                        "GeckoView cannot handle this response. If you cancel, the browser cannot continue it.",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = metadata,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onInterceptBrowserDownload(download.url, download.filename ?: "download")
-                        viewModel.clearPendingDownload()
-                    },
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Download")
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            "Save to",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "FetchX app storage",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = viewModel::clearPendingDownload) {
-                    Text("Cancel")
+                Text(
+                    "If you cancel, the browser cannot continue this response.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = viewModel::clearPendingDownload) {
+                        Text("Cancel")
+                    }
+                    TextButton(
+                        onClick = {
+                            viewModel.clearPendingDownload()
+                            coroutineScope.launch {
+                                try {
+                                    onInterceptBrowserDownload(download.url, download.filename)
+                                    val result = magnetSnackbarHostState.showSnackbar(
+                                        message = "Download started",
+                                        actionLabel = "Downloads",
+                                        duration = SnackbarDuration.Short,
+                                    )
+                                    if (result == SnackbarResult.ActionPerformed) {
+                                        onNavigateToDownloads()
+                                    }
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (error: Exception) {
+                                    magnetSnackbarHostState.showSnackbar(
+                                        message = error.message ?: "Could not start download",
+                                        duration = SnackbarDuration.Long,
+                                    )
+                                }
+                            }
+                        },
+                    ) {
+                        Text("Download")
+                    }
                 }
-            },
-        )
+            }
+        }
     }
 
     // â”€â”€ Dialogs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1482,6 +1585,7 @@ private fun FetchxRemotePopupDialog(
 @Composable
 private fun EssentialsPage(
     recentEntries: List<Essential>,
+    ongoingDownloadCount: Int,
     onOpenTabs: () -> Unit,
     onNavigateRecent: (String) -> Unit,
     onOpenBookmarks: () -> Unit,
@@ -1562,6 +1666,14 @@ private fun EssentialsPage(
                     "Downloads",
                     onOpenDownloads,
                     Modifier.weight(1f),
+                    badgeText = ongoingDownloadCount.takeIf { it > 0 }?.let {
+                        if (it > 99) "99+" else it.toString()
+                    },
+                    contentDescription = if (ongoingDownloadCount > 0) {
+                        "Downloads, $ongoingDownloadCount in progress"
+                    } else {
+                        "Downloads"
+                    },
                 )
                 EssentialsAction(
                     Icons.Default.GridView,
@@ -1629,6 +1741,8 @@ private fun EssentialsAction(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    badgeText: String? = null,
+    contentDescription: String = label,
 ) {
     Surface(
         onClick = onClick,
@@ -1641,12 +1755,20 @@ private fun EssentialsAction(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.fillMaxSize(),
         ) {
-            Icon(
-                icon,
-                contentDescription = label,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
+            BadgedBox(
+                badge = {
+                    if (badgeText != null) {
+                        Badge { Text(badgeText) }
+                    }
+                },
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = contentDescription,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Text(
                 text = label,
@@ -1658,11 +1780,103 @@ private fun EssentialsAction(
     }
 }
 
+@Composable
+private fun BrowserDownloadStatus(
+    item: DownloadItem,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val state = item.state
+    val progress = when (state) {
+        is DownloadState.Active -> state.totalBytes
+            ?.takeIf { it > 0L }
+            ?.let { (state.downloadedBytes.toFloat() / it).coerceIn(0f, 1f) }
+        else -> null
+    }
+    val status = when (state) {
+        is DownloadState.Active -> "Downloading"
+        is DownloadState.Queued -> "Queued"
+        is DownloadState.MetadataAcquiring -> "Preparing torrent"
+        is DownloadState.Recovering -> "Recovering download"
+        is DownloadState.Seeding -> "Seeding"
+        else -> return
+    }
+    val detail = when (state) {
+        is DownloadState.Active -> {
+            val total = state.totalBytes
+            if (total != null && total > 0L) {
+                "${progress?.let { (it * 100).toInt() } ?: 0}% · ${formatDownloadSize(state.downloadedBytes)} / ${formatDownloadSize(total)}"
+            } else {
+                "${formatDownloadSize(state.downloadedBytes)} downloaded"
+            }
+        }
+        is DownloadState.Seeding -> state.totalBytes?.let { formatDownloadSize(it) }
+        else -> null
+    }
+
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 4.dp,
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = "Download status",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.fileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = buildString {
+                            append(status)
+                            detail?.let { append(" · ").append(it) }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    text = "Downloads",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (state is DownloadState.Active) {
+                if (progress != null) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun BrowserBottomBar(
     canGoBack: Boolean,
     tabCount: Int,
+    ongoingDownloadCount: Int,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onDownloads: () -> Unit,
@@ -1742,12 +1956,26 @@ private fun BrowserBottomBar(
                 onClick = onDownloads,
                 modifier = Modifier.size(48.dp),
             ) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = "Downloads",
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(20.dp),
-                )
+                BadgedBox(
+                    badge = {
+                        if (ongoingDownloadCount > 0) {
+                            Badge {
+                                Text(if (ongoingDownloadCount > 99) "99+" else ongoingDownloadCount.toString())
+                            }
+                        }
+                    },
+                ) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = if (ongoingDownloadCount > 0) {
+                            "Downloads, $ongoingDownloadCount in progress"
+                        } else {
+                            "Downloads"
+                        },
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
 
             // 5. 3-dot Menu

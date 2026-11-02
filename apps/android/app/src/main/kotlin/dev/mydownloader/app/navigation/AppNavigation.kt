@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import android.net.Uri
@@ -99,6 +100,17 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     val repo = BridgeInitializer.repositoryOrNull()
     val bridgeAvailable = repo != null
     val repository = repo ?: NoOpDownloadRepository()
+    val downloads by repository.observeDownloads().collectAsStateWithLifecycle(initialValue = emptyList())
+    val ongoingDownloadCount = downloads.count { item ->
+        when (item.state) {
+            is dev.fetchx.core.download.DownloadState.Active,
+            is dev.fetchx.core.download.DownloadState.Queued,
+            is dev.fetchx.core.download.DownloadState.MetadataAcquiring,
+            is dev.fetchx.core.download.DownloadState.Recovering,
+            is dev.fetchx.core.download.DownloadState.Seeding -> true
+            else -> false
+        }
+    }
     val vmFactory = remember(repository, bridgeAvailable) {
         DownloadsViewModel.Factory(repository, bridgeAvailable)
     }
@@ -191,6 +203,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 DownloadsScreen(
                     viewModel = viewModel(factory = vmFactory),
                     downloadsDir = downloadsDir,
+                    onBrowseWeb = { navigateToBrowser(navController) },
                     onOpenTorrentDetail = { id ->
                         navController.navigate(Screen.TorrentDetail.route(id))
                     },
@@ -292,36 +305,11 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                         },
                         onInterceptBrowserDownload = { url, filename ->
                             val browserRepo = repo
-                            if (browserRepo == null) {
-                                Toast.makeText(
-                                    context,
-                                    "FetchX is unavailable; this browser response cannot be resumed.",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            } else {
-                                coroutineScope.launch {
-                                    try {
-                                        browserRepo.addBrowserDownload(url, filename)
-                                        Toast.makeText(
-                                            context,
-                                            "Download added to FetchX",
-                                            Toast.LENGTH_SHORT,
-                                        ).show()
-                                        navController.navigate(Screen.Downloads.route) {
-                                            launchSingleTop = true
-                                        }
-                                    } catch (cancelled: CancellationException) {
-                                        throw cancelled
-                                    } catch (error: Exception) {
-                                        Toast.makeText(
-                                            context,
-                                            error.message ?: "Could not add browser download",
-                                            Toast.LENGTH_LONG,
-                                        ).show()
-                                    }
-                                }
-                            }
+                                ?: throw IllegalStateException("FetchX download service is unavailable.")
+                            browserRepo.addBrowserDownload(url, filename)
                         },
+                        ongoingDownloadCount = ongoingDownloadCount,
+                        downloads = downloads,
                         onPlayVideo = { url ->
                             val scheme = try {
                                 android.net.Uri.parse(url).scheme?.lowercase()

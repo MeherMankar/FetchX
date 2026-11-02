@@ -59,6 +59,7 @@ private val TABS = listOf("All", "Active", "Queued", "Completed", "Failed", "Can
 fun DownloadsScreen(
     viewModel: DownloadsViewModel,
     downloadsDir: String = "",
+    onBrowseWeb: () -> Unit = {},
     onPlayFile: (String) -> Unit = {},
     onOpenTorrentDetail: (String) -> Unit = {},
 ) {
@@ -187,14 +188,19 @@ fun DownloadsScreen(
                                 }
                             }
                             Text(
-                                text = "No downloads yet",
+                                text = "Nothing here yet",
+                                style = MaterialTheme.typography.titleMedium,
+                                textAlign = TextAlign.Center,
+                            )
+                            Text(
+                                text = "Downloads you start while browsing will appear here.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
                             Spacer(modifier = Modifier.height(12.dp))
-                            Button(onClick = { showAddDialog = true }) {
-                                Text("Add Download")
+                            Button(onClick = onBrowseWeb) {
+                                Text("Browse the web")
                             }
                         }
                     }
