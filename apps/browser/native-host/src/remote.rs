@@ -12,6 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 
+#[cfg(windows)]
 const CREDENTIAL_SERVICE: &str = "dev.fetchx.browser.targets";
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
