@@ -1,15 +1,18 @@
-# FetchX Native Messaging Host — Firefox Installation Script (Windows)
-#
-# Firefox uses a different registry path and extension-ID allowlist than
-# Chrome/Edge. Its manifest is separate so installing either browser cannot
-# overwrite the other's allowed-extension list.
+# FetchX Native Messaging Host & Extension — Firefox & Gecko Installation Script (Windows)
 #
 # Usage:
 #   .\install-firefox-windows.ps1 [-Uninstall]
 #
-# The Firefox extension ID is fixed as "FetchX@FetchX.app"
-# (set in manifest-firefox/manifest.json).
-# No need to pass it as a parameter.
+# Registers the Native Messaging Host and External Extension into the Windows Registry
+# for Mozilla Firefox, LibreWolf, Waterfox, and Floorp:
+#   HKCU\Software\Mozilla\NativeMessagingHosts\com.fetchx.native_host
+#   HKCU\Software\Mozilla\Firefox\Extensions ("FetchX@FetchX.app" = path)
+#   HKCU\Software\LibreWolf\NativeMessagingHosts\com.fetchx.native_host
+#   HKCU\Software\LibreWolf\Extensions ("FetchX@FetchX.app" = path)
+#   HKCU\Software\Waterfox\NativeMessagingHosts\com.fetchx.native_host
+#   HKCU\Software\Waterfox\Extensions ("FetchX@FetchX.app" = path)
+#   HKCU\Software\Floorp\NativeMessagingHosts\com.fetchx.native_host
+#   HKCU\Software\Floorp\Extensions ("FetchX@FetchX.app" = path)
 
 param([switch]$Uninstall)
 
@@ -20,14 +23,26 @@ $ManifestPath = "$ManifestDir\$HostName.firefox.json"
 
 $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot    = (Resolve-Path (Join-Path $ScriptDir "..\..\..\..")).Path
-$HostBinary  = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 
-# Firefox uses HKCU\Software\Mozilla\NativeMessagingHosts
-$FirefoxKey  = "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName"
+$HostBinaryRelease = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
+$HostBinaryDebug   = Join-Path $RepoRoot "target\debug\fetchx-native-host.exe"
+$HostBinary = if (Test-Path $HostBinaryRelease) { $HostBinaryRelease } else { $HostBinaryDebug }
+
+$ExtensionDir = Join-Path $RepoRoot "apps\browser\extension\dist-firefox"
+
+$GeckoBrowsers = @(
+    @{ Name = "Mozilla Firefox"; NativeKey = "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName"; ExtKey = "HKCU:\Software\Mozilla\Firefox\Extensions" },
+    @{ Name = "LibreWolf";       NativeKey = "HKCU:\Software\LibreWolf\NativeMessagingHosts\$HostName"; ExtKey = "HKCU:\Software\LibreWolf\Extensions" },
+    @{ Name = "Waterfox";        NativeKey = "HKCU:\Software\Waterfox\NativeMessagingHosts\$HostName"; ExtKey = "HKCU:\Software\Waterfox\Extensions" },
+    @{ Name = "Floorp";          NativeKey = "HKCU:\Software\Floorp\NativeMessagingHosts\$HostName"; ExtKey = "HKCU:\Software\Floorp\Extensions" }
+)
 
 if ($Uninstall) {
-  Write-Host "Uninstalling Firefox native messaging host..."
-  Remove-Item -Path $FirefoxKey -ErrorAction SilentlyContinue
+  Write-Host "Uninstalling Firefox & Gecko native messaging hosts and extensions..."
+  foreach ($G in $GeckoBrowsers) {
+    Remove-Item -Path $G.NativeKey -Recurse -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $G.ExtKey -Name $ExtensionId -ErrorAction SilentlyContinue
+  }
   Remove-Item -Path $ManifestPath -ErrorAction SilentlyContinue
   Write-Host "Done."
   exit 0
@@ -35,7 +50,7 @@ if ($Uninstall) {
 
 if (-not (Test-Path $HostBinary)) {
   Write-Error "Native host binary not found at: $HostBinary"
-  Write-Error "Build it first: cargo build --release -p fetchx-native-host"
+  Write-Error "Build it first: cargo build -p fetchx-native-host"
   exit 1
 }
 
@@ -46,17 +61,24 @@ $Manifest = @{
   description     = "FetchX native messaging host"
   path            = $HostBinary
   type            = "stdio"
-  # Firefox uses the extension ID (e.g. "FetchX@FetchX.app")
-  # not the chrome-extension:// origin format
   allowed_extensions = @($ExtensionId)
 } | ConvertTo-Json -Depth 3
 
 Set-Content -Path $ManifestPath -Value $Manifest -Encoding UTF8
 Write-Host "Wrote manifest to: $ManifestPath"
 
-New-Item -Path $FirefoxKey -Force | Out-Null
-Set-ItemProperty -Path $FirefoxKey -Name "(Default)" -Value $ManifestPath
-Write-Host "Registered Firefox native messaging host: $FirefoxKey"
-Write-Host "The Firefox manifest is separate from the Chrome/Edge manifest."
+# Register Native Messaging Hosts and External Extensions
+foreach ($G in $GeckoBrowsers) {
+  New-Item -Path $G.NativeKey -Force | Out-Null
+  Set-ItemProperty -Path $G.NativeKey -Name "(Default)" -Value $ManifestPath
+
+  if (Test-Path $ExtensionDir) {
+    New-Item -Path $G.ExtKey -Force | Out-Null
+    Set-ItemProperty -Path $G.ExtKey -Name $ExtensionId -Value $ExtensionDir
+  }
+  Write-Host "Registered $($G.Name)"
+}
+
 Write-Host ""
-Write-Host "Restart Firefox for changes to take effect."
+Write-Host "Installation complete for Firefox, LibreWolf, Waterfox, and Floorp."
+Write-Host "Restart your browser(s) for changes to take effect."

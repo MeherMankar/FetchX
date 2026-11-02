@@ -16,7 +16,7 @@ use fetchx_scheduler::{ScheduleError, Scheduler};
 use fetchx_storage::{Database, DownloadRepository, TorrentMetadataRepository};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
@@ -1296,6 +1296,53 @@ fn filename_for_url(url: &Url) -> String {
 fn is_single_normal_component(value: &str) -> bool {
     let mut components = Path::new(value).components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+#[tauri::command]
+pub async fn register_browser_extensions(
+    app: AppHandle,
+) -> Result<crate::browser_extension_installer::ExtensionInstallSummary, String> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| crate::app::fallback_app_data_dir());
+    let bundled_engines_dir = app
+        .path()
+        .resource_dir()
+        .map(|p| p.join("engines"))
+        .unwrap_or_else(|_| crate::app::fallback_bundled_engines_dir(&app_data_dir));
+
+    tokio::task::spawn_blocking(move || {
+        crate::browser_extension_installer::ensure_registered(&app_data_dir, &bundled_engines_dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_browser_extension_status(
+    app: AppHandle,
+) -> Result<crate::browser_extension_installer::ExtensionInstallStatus, String> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| crate::app::fallback_app_data_dir());
+    let bundled_engines_dir = app
+        .path()
+        .resource_dir()
+        .map(|p| p.join("engines"))
+        .unwrap_or_else(|_| crate::app::fallback_bundled_engines_dir(&app_data_dir));
+
+    tokio::task::spawn_blocking(move || {
+        crate::browser_extension_installer::get_extension_status(
+            &app_data_dir,
+            &bundled_engines_dir,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+pub mod browser_extension_installer;
 mod browser_ipc;
 mod commands;
 mod engine_commands;

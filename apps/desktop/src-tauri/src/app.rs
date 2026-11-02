@@ -214,6 +214,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             helper_manager::get_helper_status,
             helper_manager::install_helper,
             helper_manager::cancel_helper_install,
+            commands::register_browser_extensions,
+            commands::get_browser_extension_status,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);
@@ -225,7 +227,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let state = tauri::async_runtime::block_on(AppState::initialize(
                 database_path,
                 paths.downloads_dir,
-                paths.bundled_engines_dir,
+                paths.bundled_engines_dir.clone(),
             ))?;
             if !app.manage(helper_manager) {
                 return Err("desktop helper manager was already initialized".into());
@@ -253,6 +255,31 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Err(e) => {
                             tracing::warn!(%e, "browser IPC server failed to start");
+                        }
+                    }
+                });
+            }
+
+            // Auto-install and register browser extensions and native messaging host
+            // into Chrome, Edge, Brave, and Firefox on startup.
+            {
+                let app_data_dir = paths.app_data_dir.clone();
+                let bundled_engines_dir = paths.bundled_engines_dir.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    match crate::browser_extension_installer::ensure_registered(
+                        &app_data_dir,
+                        &bundled_engines_dir,
+                    ) {
+                        Ok(summary) => {
+                            tracing::info!(
+                                success = summary.success,
+                                chromium_dir = %summary.chromium_extension_dir,
+                                firefox_dir = %summary.firefox_extension_dir,
+                                "browser extension auto-registration completed"
+                            );
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "browser extension auto-registration failed");
                         }
                     }
                 });

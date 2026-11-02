@@ -1,21 +1,15 @@
-# FetchX Native Messaging Host — Windows Installation Script
-#
-# Run this script after:
-#   1. Building the native host:  cargo build --release -p fetchx-native-host
-#   2. Loading the unpacked extension in Chrome to get your extension ID.
+# FetchX Native Messaging Host & Extension — Windows Installation Script
 #
 # Usage:
-#   .\install-windows.ps1 -ExtensionId "abcdefghijklmnopabcdefghijklmnop" [-Uninstall]
+#   .\install-windows.ps1 [-ExtensionId "iemejekblepcfhklcadedfdmgnhjifio"] [-Uninstall]
 #
-# The script writes the native messaging host manifest to the Windows Registry
-# key that Chrome/Edge reads:
-#   HKCU\Software\Google\Chrome\NativeMessagingHosts\com.fetchx.native_host
-#   HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.fetchx.native_host
+# Registers the Native Messaging Host and External Extension into the Windows Registry
+# for all available Chromium browsers:
+#   Google Chrome, Chrome Beta/Dev/Canary, Microsoft Edge, Edge Beta/Dev/Canary,
+#   Brave Browser, Brave Beta/Nightly, Vivaldi, Opera, Opera GX, Arc, Yandex, Thorium, Chromium.
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$ExtensionId,
-
+    [string]$ExtensionId = "iemejekblepcfhklcadedfdmgnhjifio",
     [switch]$Uninstall
 )
 
@@ -23,18 +17,45 @@ $HostName = "com.fetchx.native_host"
 $ManifestDir = "$env:APPDATA\fetchx\native-host"
 $ManifestPath = "$ManifestDir\$HostName.json"
 
-# Derive the native host binary path relative to this script.
+# Derive paths relative to this script.
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..\..")).Path
-$HostBinary = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 
-$ChromeKey = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
-$EdgeKey   = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName"
+$HostBinaryRelease = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
+$HostBinaryDebug   = Join-Path $RepoRoot "target\debug\fetchx-native-host.exe"
+$HostBinary = if (Test-Path $HostBinaryRelease) { $HostBinaryRelease } else { $HostBinaryDebug }
+
+$ExtensionDir = Join-Path $RepoRoot "apps\browser\extension\dist-chromium"
+
+$BrowserKeys = @(
+    "Google\Chrome",
+    "Google\Chrome Beta",
+    "Google\Chrome Dev",
+    "Google\Chrome SxS",
+    "Chromium",
+    "Microsoft\Edge",
+    "Microsoft\Edge Beta",
+    "Microsoft\Edge Dev",
+    "Microsoft\Edge Canary",
+    "BraveSoftware\Brave-Browser",
+    "BraveSoftware\Brave-Browser-Beta",
+    "BraveSoftware\Brave-Browser-Nightly",
+    "Vivaldi",
+    "Opera Software\Opera Stable",
+    "Opera Software\Opera GX Stable",
+    "Opera Software\Opera Next",
+    "Opera Software\Opera Developer",
+    "The Browser Company\Arc",
+    "Yandex\YandexBrowser",
+    "Thorium"
+)
 
 if ($Uninstall) {
-    Write-Host "Uninstalling native messaging host..."
-    Remove-Item -Path $ChromeKey -ErrorAction SilentlyContinue
-    Remove-Item -Path $EdgeKey   -ErrorAction SilentlyContinue
+    Write-Host "Uninstalling FetchX Native Messaging Host and Extension registrations..."
+    foreach ($B in $BrowserKeys) {
+        Remove-Item -Path "HKCU:\Software\$B\NativeMessagingHosts\$HostName" -Recurse -ErrorAction SilentlyContinue
+        Remove-Item -Path "HKCU:\Software\$B\Extensions\$ExtensionId" -Recurse -ErrorAction SilentlyContinue
+    }
     Remove-Item -Path $ManifestPath -ErrorAction SilentlyContinue
     Write-Host "Done."
     exit 0
@@ -43,7 +64,7 @@ if ($Uninstall) {
 # Validate inputs.
 if (-not (Test-Path $HostBinary)) {
     Write-Error "Native host binary not found at: $HostBinary"
-    Write-Error "Build it first: cargo build --release -p fetchx-native-host"
+    Write-Error "Build it first: cargo build -p fetchx-native-host"
     exit 1
 }
 
@@ -63,15 +84,25 @@ $Manifest = @{
 } | ConvertTo-Json -Depth 3
 
 Set-Content -Path $ManifestPath -Value $Manifest -Encoding UTF8
-Write-Host "Wrote manifest to: $ManifestPath"
+Write-Host "Wrote native messaging host manifest to: $ManifestPath"
 
-# Register in the Windows Registry for Chrome and Edge.
-foreach ($Key in @($ChromeKey, $EdgeKey)) {
-    New-Item -Path $Key -Force | Out-Null
-    Set-ItemProperty -Path $Key -Name "(Default)" -Value $ManifestPath
-    Write-Host "Registered: $Key"
+# Register Native Messaging Hosts and External Extensions
+foreach ($B in $BrowserKeys) {
+    $NativeKey = "HKCU:\Software\$B\NativeMessagingHosts\$HostName"
+    $ExtKey    = "HKCU:\Software\$B\Extensions\$ExtensionId"
+
+    New-Item -Path $NativeKey -Force | Out-Null
+    Set-ItemProperty -Path $NativeKey -Name "(Default)" -Value $ManifestPath
+
+    if (Test-Path $ExtensionDir) {
+        New-Item -Path $ExtKey -Force | Out-Null
+        Set-ItemProperty -Path $ExtKey -Name "path" -Value $ExtensionDir
+        Set-ItemProperty -Path $ExtKey -Name "version" -Value "0.2.0"
+    }
+
+    Write-Host "Registered browser: $B"
 }
 
 Write-Host ""
-Write-Host "Installation complete."
-Write-Host "Restart Chrome/Edge for changes to take effect."
+Write-Host "Installation complete for all available Chromium browsers."
+Write-Host "Restart your browser(s) for changes to take effect."
