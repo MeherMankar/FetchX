@@ -953,20 +953,12 @@ fun BrowserScreen(
             // ── Essentials / new-tab page (Feature 3) ─────────────────────────
             if (uiState.showEssentials) {
                 EssentialsPage(
-                    essentials = uiState.essentials,
-                    spaceAccentColor = spaceAccentColor,
-                    profileName = uiState.selectedProfile?.name ?: "Default",
-                    blockedCount = uiState.activeTabBlockedRequests,
-                    onNavigate = { viewModel.navigateToEssential(it) },
-                    onSearchTap = {
-                        isUrlBarExpanded = true
-                        viewModel.onUrlInputChanged("")
-                    },
+                    recentEntries = uiState.essentials,
+                    onOpenTabs = { viewModel.openTabOverview() },
+                    onNavigateRecent = { viewModel.navigateToEssential(it) },
                     onOpenBookmarks = { viewModel.openBookmarks() },
                     onOpenHistory = { viewModel.openHistory() },
                     onOpenDownloads = onNavigateToDownloads,
-                    onOpenTrackerDetails = { viewModel.openTrackerDetails() },
-                    onOpenSpaces = { viewModel.openSpaceSwitcher() },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -1487,33 +1479,16 @@ private fun FetchxRemotePopupDialog(
     }
 }
 
-private val DEFAULT_TOP_SITES = listOf(
-    Essential("preset-google", "Google", "https://www.google.com", "G", "#4285F4"),
-    Essential("preset-yt", "YouTube", "https://www.youtube.com", "Y", "#EA4335"),
-    Essential("preset-wiki", "Wikipedia", "https://www.wikipedia.org", "W", "#333333"),
-    Essential("preset-github", "GitHub", "https://github.com", "G", "#24292E"),
-    Essential("preset-reddit", "Reddit", "https://www.reddit.com", "R", "#FF4500"),
-    Essential("preset-duck", "DuckDuckGo", "https://duckduckgo.com", "D", "#DE5833"),
-)
-
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EssentialsPage(
-    essentials: List<Essential>,
-    spaceAccentColor: Color,
-    profileName: String,
-    blockedCount: Long,
-    onNavigate: (String) -> Unit,
-    onSearchTap: () -> Unit,
+    recentEntries: List<Essential>,
+    onOpenTabs: () -> Unit,
+    onNavigateRecent: (String) -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenDownloads: () -> Unit,
-    onOpenTrackerDetails: () -> Unit,
-    onOpenSpaces: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val displaySites = essentials.ifEmpty { DEFAULT_TOP_SITES }
-
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -1524,25 +1499,24 @@ private fun EssentialsPage(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+            horizontalAlignment = Alignment.Start,
         ) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // ── Fenix Brand Header ─────────────────────────────────────────
             Row(
+                modifier = Modifier.align(Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
             ) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = spaceAccentColor,
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.size(32.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Default.Language,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.size(18.dp),
                         )
                     }
@@ -1550,182 +1524,99 @@ private fun EssentialsPage(
                 Spacer(Modifier.width(10.dp))
                 Text(
                     text = "FetchX",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = (-0.3).sp,
-                    ),
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onBackground,
                 )
             }
 
-            Spacer(Modifier.height(20.dp))
-
-            // ── Fenix Search Bar Capsule ───────────────────────────────────
-            Surface(
-                onClick = onSearchTap,
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                ) {
-                    Icon(
-                        Icons.Default.Search,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = "Search or enter address",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Browse • Download • Manage",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Search or enter an address above to get started.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+                textAlign = TextAlign.Center,
+            )
 
             Spacer(Modifier.height(28.dp))
 
-            // ── Shortcuts Header (Fenix Style) ─────────────────────────────
+            Text(
+                text = "Quick access",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                EssentialsAction(
+                    Icons.Default.Download,
+                    "Downloads",
+                    onOpenDownloads,
+                    Modifier.weight(1f),
+                )
+                EssentialsAction(
+                    Icons.Default.GridView,
+                    "Tabs",
+                    onOpenTabs,
+                    Modifier.weight(1f),
+                )
+                EssentialsAction(
+                    Icons.Default.Bookmarks,
+                    "Bookmarks",
+                    onOpenBookmarks,
+                    Modifier.weight(1f),
+                )
+                EssentialsAction(
+                    Icons.Default.History,
+                    "History",
+                    onOpenHistory,
+                    Modifier.weight(1f),
+                )
+            }
+
+            if (recentEntries.isNotEmpty()) {
+                Spacer(Modifier.height(28.dp))
                 Text(
-                    text = "Shortcuts",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                    ),
+                    text = "Frequently visited",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onBackground,
                 )
-                Surface(
-                    onClick = onOpenSpaces,
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                ) {
-                    Text(
-                        text = profileName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // ── Fenix Circular Shortcuts Grid ──────────────────────────────
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 220.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                userScrollEnabled = false,
-            ) {
-                gridItems(displaySites.take(8), key = { it.id }) { item ->
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
+                Spacer(Modifier.height(8.dp))
+                recentEntries.take(4).forEach { entry ->
+                    Surface(
+                        onClick = { onNavigateRecent(entry.url) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
                         modifier = Modifier
-                            .clickable { onNavigate(item.url) }
-                            .padding(vertical = 2.dp),
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                            modifier = Modifier.size(50.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = item.initial,
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                    ),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
+                        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                            Text(
+                                text = entry.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = entry.url,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = item.title,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
                     }
-                }
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            // ── Jump Back In / Library Quick Strip (Fenix Style) ───────────
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    QuickActionChip(
-                        icon = Icons.Default.Bookmarks,
-                        label = "Bookmarks",
-                        onClick = onOpenBookmarks,
-                    )
-                    QuickActionChip(
-                        icon = Icons.Default.History,
-                        label = "History",
-                        onClick = onOpenHistory,
-                    )
-                    QuickActionChip(
-                        icon = Icons.Default.Download,
-                        label = "Downloads",
-                        onClick = onOpenDownloads,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // ── Enhanced Tracking Protection Status Pill ───────────────────
-            Surface(
-                onClick = onOpenTrackerDetails,
-                shape = RoundedCornerShape(16.dp),
-                color = Color.Transparent,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                ) {
-                    Icon(
-                        Icons.Default.Shield,
-                        contentDescription = null,
-                        tint = if (blockedCount > 0) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = if (blockedCount > 0) "$blockedCount trackers blocked"
-                               else "Enhanced tracking protection active",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
         }
@@ -1733,27 +1624,37 @@ private fun EssentialsPage(
 }
 
 @Composable
-private fun QuickActionChip(
+private fun EssentialsAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable(onClick = onClick),
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = modifier.height(76.dp),
     ) {
-        Icon(
-            icon,
-            contentDescription = label,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
     }
 }
 
