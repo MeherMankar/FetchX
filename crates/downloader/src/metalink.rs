@@ -248,13 +248,12 @@ where
             };
 
             // Ensure parent directory exists for multi-file case.
-            if multi_file {
-                if let Some(parent) = final_path.parent() {
-                    if let Err(e) = fs::create_dir_all(parent).await {
-                        let _ = fs::remove_dir_all(&temp_dir).await;
-                        return Err(DownloadEngineError::Io(e));
-                    }
-                }
+            if multi_file
+                && let Some(parent) = final_path.parent()
+                && let Err(e) = fs::create_dir_all(parent).await
+            {
+                let _ = fs::remove_dir_all(&temp_dir).await;
+                return Err(DownloadEngineError::Io(e));
             }
 
             let result = self
@@ -736,31 +735,28 @@ fn parse_v3_files(root: roxmltree::Node<'_, '_>) -> Result<Vec<MetalinkFile>, Do
                 "verification" => {
                     // v3 hashes: <verification><hash type="sha-256">…</hash></verification>
                     for hash_node in child.children().filter(|n| n.is_element()) {
-                        if hash_node.tag_name().name() == "hash" {
-                            if let (Some(alg), Some(text)) =
+                        if hash_node.tag_name().name() == "hash"
+                            && let (Some(alg), Some(text)) =
                                 (hash_node.attribute("type"), hash_node.text())
-                            {
-                                hashes.push((
-                                    alg.to_ascii_lowercase(),
-                                    text.trim().to_ascii_lowercase(),
-                                ));
-                            }
+                        {
+                            hashes
+                                .push((alg.to_ascii_lowercase(), text.trim().to_ascii_lowercase()));
                         }
                     }
                 }
                 "resources" => {
                     // v3 mirrors: <resources><url priority="1">…</url></resources>
                     for url_node in child.children().filter(|n| n.is_element()) {
-                        if url_node.tag_name().name() == "url" {
-                            if let Some(text) = url_node.text() {
-                                let url = text.trim().to_owned();
-                                if !url.is_empty() {
-                                    let priority = url_node
-                                        .attribute("priority")
-                                        .and_then(|p| p.parse::<i32>().ok())
-                                        .unwrap_or(999);
-                                    mirrors.push(MetalinkMirror { url, priority });
-                                }
+                        if url_node.tag_name().name() == "url"
+                            && let Some(text) = url_node.text()
+                        {
+                            let url = text.trim().to_owned();
+                            if !url.is_empty() {
+                                let priority = url_node
+                                    .attribute("priority")
+                                    .and_then(|p| p.parse::<i32>().ok())
+                                    .unwrap_or(999);
+                                mirrors.push(MetalinkMirror { url, priority });
                             }
                         }
                     }

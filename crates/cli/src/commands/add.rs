@@ -262,20 +262,20 @@ fn resolve_engine(
         };
     }
     // Auto-detect from URL scheme when no explicit --engine flag is given.
-    if engine.is_none() {
-        if let Some(u) = url {
-            if u.starts_with("ftp://") {
-                return Ok(EngineKind::Ftp);
-            }
-            if u.starts_with("ftps://") {
-                return Ok(EngineKind::Ftps);
-            }
-            // Auto-detect .metalink and .meta4 file extensions (case-insensitive).
-            let lower = u.to_ascii_lowercase();
-            let path_part = lower.split('?').next().unwrap_or(&lower);
-            if path_part.ends_with(".metalink") || path_part.ends_with(".meta4") {
-                return Ok(EngineKind::Metalink);
-            }
+    if engine.is_none()
+        && let Some(u) = url
+    {
+        if u.starts_with("ftp://") {
+            return Ok(EngineKind::Ftp);
+        }
+        if u.starts_with("ftps://") {
+            return Ok(EngineKind::Ftps);
+        }
+        // Auto-detect .metalink and .meta4 file extensions (case-insensitive).
+        let lower = u.to_ascii_lowercase();
+        let path_part = lower.split('?').next().unwrap_or(&lower);
+        if path_part.ends_with(".metalink") || path_part.ends_with(".meta4") {
+            return Ok(EngineKind::Metalink);
         }
     }
     parse_engine(engine)

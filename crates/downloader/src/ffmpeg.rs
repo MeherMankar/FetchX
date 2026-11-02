@@ -756,14 +756,14 @@ async fn discover_executable(name: &str) -> Option<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     let mut directories = Vec::new();
 
-    if cfg!(windows) {
-        if let Some(app_data) = std::env::var_os("APPDATA") {
-            directories.push(
-                PathBuf::from(app_data)
-                    .join("com.fetchx.desktop")
-                    .join("bin"),
-            );
-        }
+    if cfg!(windows)
+        && let Some(app_data) = std::env::var_os("APPDATA")
+    {
+        directories.push(
+            PathBuf::from(app_data)
+                .join("com.fetchx.desktop")
+                .join("bin"),
+        );
     }
 
     if let Some(path) = std::env::var_os("PATH") {

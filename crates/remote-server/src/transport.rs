@@ -571,11 +571,11 @@ async fn websocket(
     let origin = headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok());
-    if let Some(origin) = origin {
-        if !origin_allowed(&state.config, origin) {
-            drop(permit);
-            return forbidden_origin_response();
-        }
+    if let Some(origin) = origin
+        && !origin_allowed(&state.config, origin)
+    {
+        drop(permit);
+        return forbidden_origin_response();
     }
     let session = if let Some(ticket) = query.ticket.as_deref() {
         let credential_verifier = match state.websocket_tickets.consume(ticket) {

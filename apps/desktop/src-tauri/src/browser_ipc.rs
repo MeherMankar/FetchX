@@ -109,10 +109,10 @@ impl BrowserIpcServer {
 
     /// Removes the state file.  Called during application shutdown.
     pub async fn shutdown(&self) {
-        if let Err(e) = tokio::fs::remove_file(&self.state_file).await {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                warn!(%e, "could not remove browser IPC state file");
-            }
+        if let Err(e) = tokio::fs::remove_file(&self.state_file).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(%e, "could not remove browser IPC state file");
         }
         info!("browser IPC server shut down");
     }

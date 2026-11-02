@@ -75,6 +75,12 @@ impl PluginSecurityService {
     }
 }
 
+impl Default for PluginSecurityService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Inner state that lives only while the service is running ──────────────
 
 struct ServiceInner {

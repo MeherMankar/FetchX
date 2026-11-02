@@ -18,13 +18,13 @@ impl DownloadProgress {
         speed_bytes_per_second: Option<u64>,
         estimated_remaining_seconds: Option<u64>,
     ) -> Result<Self, DownloadProgressError> {
-        if let Some(total_bytes) = total_bytes {
-            if downloaded_bytes > total_bytes {
-                return Err(DownloadProgressError::DownloadedExceedsTotal {
-                    downloaded_bytes,
-                    total_bytes,
-                });
-            }
+        if let Some(total_bytes) = total_bytes
+            && downloaded_bytes > total_bytes
+        {
+            return Err(DownloadProgressError::DownloadedExceedsTotal {
+                downloaded_bytes,
+                total_bytes,
+            });
         }
 
         Ok(Self {

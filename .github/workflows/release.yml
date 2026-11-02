@@ -114,6 +114,9 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
+          # Android builds use two native targets and do not benefit from
+          # restoring or saving their large intermediate target directory.
+          cache-target: false
           workspaces: ". -> target"
 
       - name: Build Rust .so for arm64-v8a

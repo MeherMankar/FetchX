@@ -300,10 +300,10 @@ impl Aria2Client {
                 options["max-upload-limit"] = json!(rate.to_string());
             }
         }
-        if let Some(indexes) = select_file {
-            if let Some(select_str) = aria2_select_file(indexes)? {
-                options["select-file"] = json!(select_str);
-            }
+        if let Some(indexes) = select_file
+            && let Some(select_str) = aria2_select_file(indexes)?
+        {
+            options["select-file"] = json!(select_str);
         }
         if metadata_only {
             if !uri.starts_with("magnet:") {
@@ -411,10 +411,10 @@ impl Aria2Client {
             }
             options["max-upload-limit"] = json!(rate.to_string());
         }
-        if let Some(indexes) = select_file {
-            if let Some(select_str) = aria2_select_file(indexes)? {
-                options["select-file"] = json!(select_str);
-            }
+        if let Some(indexes) = select_file
+            && let Some(select_str) = aria2_select_file(indexes)?
+        {
+            options["select-file"] = json!(select_str);
         }
         let result: String = match self
             .call("aria2.addTorrent", vec![json!(encoded), json!([]), options])
@@ -1243,15 +1243,14 @@ where
             .clone()
             .ok_or(DownloadEngineError::Aria2ReconciliationRequired)?;
 
-        if metadata.metadata_state == "pending" {
-            if let Some(torrent) = read_magnet_metainfo(&metainfo_path, &metadata.info_hash).await?
-            {
-                metadata.torrent_name = torrent.name.clone();
-                metadata.torrent_metadata = Some(torrent);
-                metadata.metadata_state = "ready".to_owned();
-                metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
-                repository.update_torrent_metadata(&metadata).await?;
-            }
+        if metadata.metadata_state == "pending"
+            && let Some(torrent) = read_magnet_metainfo(&metainfo_path, &metadata.info_hash).await?
+        {
+            metadata.torrent_name = torrent.name.clone();
+            metadata.torrent_metadata = Some(torrent);
+            metadata.metadata_state = "ready".to_owned();
+            metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+            repository.update_torrent_metadata(&metadata).await?;
         }
 
         if metadata.metadata_state == "pending" {
@@ -1960,13 +1959,13 @@ where
                 )
                 .await?
         };
-        if item.source().is_magnet() || item.source().is_torrent_file() {
-            if let Err(error) = self.persist_torrent_gid(id, Some(&gid)).await {
-                if let Err(remove_error) = client.remove(&gid).await {
-                    warn!(download_id = %id, gid = %gid.as_str(), %remove_error, "could not remove aria2 task after GID persistence failure");
-                }
-                return Err(error);
+        if (item.source().is_magnet() || item.source().is_torrent_file())
+            && let Err(error) = self.persist_torrent_gid(id, Some(&gid)).await
+        {
+            if let Err(remove_error) = client.remove(&gid).await {
+                warn!(download_id = %id, gid = %gid.as_str(), %remove_error, "could not remove aria2 task after GID persistence failure");
             }
+            return Err(error);
         }
         self.gids.lock().await.insert(
             id,

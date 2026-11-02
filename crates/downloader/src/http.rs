@@ -1026,11 +1026,10 @@ where
                 }
                 _ = progress_timer.tick(), if stop_reason.is_none() => {
                     let current_bytes = downloaded.load(Ordering::Acquire);
-                    if current_bytes.saturating_sub(last_persisted_bytes)
+                    if (current_bytes.saturating_sub(last_persisted_bytes)
                         >= self.config.progress_bytes_interval
-                        || last_persisted_at.elapsed() >= self.config.progress_time_interval
-                    {
-                        if let Err(error) = self.persist_segment_progress(
+                        || last_persisted_at.elapsed() >= self.config.progress_time_interval)
+                        && let Err(error) = self.persist_segment_progress(
                             &mut item,
                             &mut expected_updated_at,
                             status,
@@ -1042,7 +1041,6 @@ where
                             stop_reason = Some(SegmentedStop::Failure(error));
                             let _ = stop_sender.send(true);
                         }
-                    }
                 }
                 _ = adaptive_timer.tick(), if stop_reason.is_none() => {
                     let now = Instant::now();
@@ -1445,13 +1443,13 @@ where
                 }
             }
 
-            if let Some(expected) = total_bytes {
-                if downloaded_bytes != expected {
-                    return Err(DownloadEngineError::IncompleteResponse {
-                        expected,
-                        actual: downloaded_bytes,
-                    });
-                }
+            if let Some(expected) = total_bytes
+                && downloaded_bytes != expected
+            {
+                return Err(DownloadEngineError::IncompleteResponse {
+                    expected,
+                    actual: downloaded_bytes,
+                });
             }
             if let Some(expected) = expected_response_bytes
                 && response_bytes != expected

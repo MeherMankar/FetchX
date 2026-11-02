@@ -1539,24 +1539,24 @@ where
         let _ = waiter.send(response);
     }
     if worker.removing {
-        if let Err(error) = result {
-            if !matches!(
+        if let Err(error) = result
+            && !matches!(
                 &error,
                 DownloadEngineError::Cancelled | DownloadEngineError::Paused
-            ) {
-                let mut waiters = worker.remove_waiters.into_iter();
-                if let Some(waiter) = waiters.next() {
-                    let _ = waiter.send(Err(QueueError::Engine(error)));
-                }
-                for waiter in waiters {
-                    let _ = waiter.send(Err(QueueError::InvalidStatus {
-                        id,
-                        action: "remove",
-                        status: current.status(),
-                    }));
-                }
-                return Ok(());
+            )
+        {
+            let mut waiters = worker.remove_waiters.into_iter();
+            if let Some(waiter) = waiters.next() {
+                let _ = waiter.send(Err(QueueError::Engine(error)));
             }
+            for waiter in waiters {
+                let _ = waiter.send(Err(QueueError::InvalidStatus {
+                    id,
+                    action: "remove",
+                    status: current.status(),
+                }));
+            }
+            return Ok(());
         }
         let deleted = repository.delete(id).await?;
         entries.remove(&id);

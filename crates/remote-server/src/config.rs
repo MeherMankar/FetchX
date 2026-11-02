@@ -70,12 +70,11 @@ impl ServerConfig {
         if self.event_backlog == 0 || self.event_backlog > MAX_EVENT_BACKLOG {
             return Err(ServerConfigError::EventBacklog);
         }
-        if let Some(tls) = &self.tls {
-            if tls.certificate_path.as_os_str().is_empty()
-                || tls.private_key_path.as_os_str().is_empty()
-            {
-                return Err(ServerConfigError::TlsConfiguration);
-            }
+        if let Some(tls) = &self.tls
+            && (tls.certificate_path.as_os_str().is_empty()
+                || tls.private_key_path.as_os_str().is_empty())
+        {
+            return Err(ServerConfigError::TlsConfiguration);
         }
         if self
             .allowed_origins

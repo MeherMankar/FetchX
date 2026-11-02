@@ -101,6 +101,10 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          # The Android target is explicitly cleaned below before Gradle runs.
+          # Caching it only inflates the runner cache and post-job cleanup.
+          cache-target: false
 
       - name: Build Rust .so (arm64-v8a debug)
         run: |

@@ -467,10 +467,10 @@ impl Aria2Supervisor {
             return Ok(());
         };
 
-        if let Some(client) = client {
-            if let Err(error) = client.shutdown().await {
-                warn!(error = %error, "aria2 graceful RPC shutdown failed; forcing process termination");
-            }
+        if let Some(client) = client
+            && let Err(error) = client.shutdown().await
+        {
+            warn!(error = %error, "aria2 graceful RPC shutdown failed; forcing process termination");
         }
         let mut child = process.lock().await;
         let mut forced_termination_failed = false;
