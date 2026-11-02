@@ -94,6 +94,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.ui.text.font.FontWeight
@@ -2701,7 +2702,6 @@ private fun TabGridSheet(
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var showSearchField by rememberSaveable { mutableStateOf(false) }
-    var isGridView by rememberSaveable { mutableStateOf(true) }
     var filterSpaceId by rememberSaveable { mutableStateOf<String?>(null) }
     var showCloseAllConfirm by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -2716,12 +2716,12 @@ private fun TabGridSheet(
         }
     }
 
-    val backgroundColor = Color(0xFF0A0E17)
-    val cardBg = Color(0xFF141923)
-    val cardBorder = Color(0xFF383741)
-    val previewSurfaceColor = Color(0xFF0D121B)
-    val primaryTextColor = Color(0xFFFBFBFE)
-    val secondaryTextColor = Color(0xFF93929D)
+    val backgroundColor = MaterialTheme.colorScheme.background
+    val cardBg = MaterialTheme.colorScheme.surfaceContainer
+    val cardBorder = MaterialTheme.colorScheme.outlineVariant
+    val previewSurfaceColor = MaterialTheme.colorScheme.surfaceContainerLow
+    val primaryTextColor = MaterialTheme.colorScheme.onSurface
+    val secondaryTextColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -2774,7 +2774,7 @@ private fun TabGridSheet(
                             }
                         }
 
-                        // Action Buttons: Search, Add Tab, Grid/List toggle, Menu, Done
+                        // Keep the workspace actions limited to search, new tab, and options.
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -2805,19 +2805,6 @@ private fun TabGridSheet(
                                 )
                             }
 
-                            // Layout toggle (Grid vs List)
-                            IconButton(
-                                onClick = { isGridView = !isGridView },
-                                modifier = Modifier.size(36.dp),
-                            ) {
-                                Icon(
-                                    if (isGridView) Icons.AutoMirrored.Filled.List else Icons.Default.GridView,
-                                    contentDescription = if (isGridView) "List view" else "Grid view",
-                                    tint = secondaryTextColor,
-                                    modifier = Modifier.size(19.dp),
-                                )
-                            }
-
                             // Overflow menu (Close all tabs, etc.)
                             Box {
                                 IconButton(
@@ -2845,8 +2832,8 @@ private fun TabGridSheet(
                                     )
                                     if (visibleTabs.isNotEmpty()) {
                                         DropdownMenuItem(
-                                            text = { Text("Close all tabs", color = Color(0xFFF87171)) },
-                                            leadingIcon = { Icon(Icons.Default.Close, null, tint = Color(0xFFF87171)) },
+                                            text = { Text("Close all tabs", color = MaterialTheme.colorScheme.error) },
+                                            leadingIcon = { Icon(Icons.Default.Close, null, tint = MaterialTheme.colorScheme.error) },
                                             onClick = {
                                                 showMenu = false
                                                 showCloseAllConfirm = true
@@ -2893,8 +2880,8 @@ private fun TabGridSheet(
                             },
                             shape = RoundedCornerShape(14.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color(0xFF141923),
-                                unfocusedContainerColor = Color(0xFF141923),
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                                 focusedBorderColor = spaceAccentColor.copy(alpha = 0.6f),
                                 unfocusedBorderColor = cardBorder.copy(alpha = 0.6f),
                                 focusedTextColor = primaryTextColor,
@@ -2917,7 +2904,11 @@ private fun TabGridSheet(
                             Surface(
                                 onClick = { filterSpaceId = null },
                                 shape = CircleShape,
-                                color = if (isAllSelected) spaceAccentColor.copy(alpha = 0.2f) else Color(0xFF141923),
+                                color = if (isAllSelected) {
+                                    spaceAccentColor.copy(alpha = 0.2f)
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainer
+                                },
                                 border = BorderStroke(
                                     1.dp,
                                     if (isAllSelected) spaceAccentColor else cardBorder.copy(alpha = 0.6f),
@@ -2943,7 +2934,11 @@ private fun TabGridSheet(
                                 Surface(
                                     onClick = { filterSpaceId = profile.id },
                                     shape = CircleShape,
-                                    color = if (isSelected) profileColor.copy(alpha = 0.2f) else Color(0xFF141923),
+                                    color = if (isSelected) {
+                                        profileColor.copy(alpha = 0.2f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainer
+                                    },
                                     border = BorderStroke(
                                         1.dp,
                                         if (isSelected) profileColor else cardBorder.copy(alpha = 0.6f),
@@ -3019,8 +3014,8 @@ private fun TabGridSheet(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     ) {
-                                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                        Text("Open new tab", color = Color.White, fontWeight = FontWeight.SemiBold)
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Text("Open new tab", fontWeight = FontWeight.SemiBold)
                                     }
                                 }
                             }
@@ -3028,7 +3023,7 @@ private fun TabGridSheet(
                     } else {
                         // ── Tab Cards Grid / List (Modern Browser Cards) ────
                         LazyVerticalGrid(
-                            columns = if (isGridView) GridCells.Fixed(2) else GridCells.Fixed(1),
+                            columns = GridCells.Fixed(1),
                             modifier = Modifier.weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3074,7 +3069,7 @@ private fun TabGridSheet(
                                     state = dismissState,
                                     backgroundContent = {
                                         Surface(
-                                            color = Color(0xFF7F1D1D),
+                                            color = MaterialTheme.colorScheme.errorContainer,
                                             shape = RoundedCornerShape(16.dp),
                                             modifier = Modifier.fillMaxSize(),
                                         ) {
@@ -3082,16 +3077,17 @@ private fun TabGridSheet(
                                                 contentAlignment = Alignment.CenterEnd,
                                                 modifier = Modifier.padding(end = 20.dp),
                                             ) {
-                                                Icon(Icons.Default.Close, "Close tab", tint = Color.White)
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    "Close tab",
+                                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                                )
                                             }
                                         }
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .then(
-                                            if (isGridView) Modifier.aspectRatio(0.78f)
-                                            else Modifier.height(130.dp),
-                                        ),
+                                        .height(96.dp),
                                 ) {
                                     // ── Standard Browser Card Structure ────
                                     Surface(
@@ -3115,7 +3111,7 @@ private fun TabGridSheet(
                                                     .fillMaxWidth()
                                                     .background(
                                                         if (isActive) spaceAccentColor.copy(alpha = 0.14f)
-                                                        else Color(0xFF1B222F)
+                                                        else MaterialTheme.colorScheme.surfaceContainerHigh
                                                     )
                                                     .padding(horizontal = 10.dp, vertical = 7.dp),
                                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -3150,107 +3146,84 @@ private fun TabGridSheet(
                                                 }
                                             }
 
-                                            // Card Webpage Viewport Preview (realistic browser window mockup)
+                                            // Keep the card compact and metadata-only until real tab thumbnails exist.
                                             Box(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .weight(1f)
                                                     .background(previewSurfaceColor)
-                                                    .padding(8.dp),
+                                                    .padding(horizontal = 12.dp),
                                             ) {
-                                                Column(
+                                                Row(
                                                     modifier = Modifier.fillMaxSize(),
-                                                    verticalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                                                 ) {
-                                                    // Mini URL address capsule at top of preview
                                                     Surface(
-                                                        shape = RoundedCornerShape(6.dp),
-                                                        color = Color(0xFF161C26).copy(alpha = 0.85f),
-                                                        border = BorderStroke(0.5.dp, Color(0xFF263040)),
-                                                        modifier = Modifier.fillMaxWidth(),
+                                                        shape = CircleShape,
+                                                        color = tabSpaceColor.copy(alpha = 0.16f),
+                                                        modifier = Modifier.size(32.dp),
                                                     ) {
-                                                        Row(
-                                                            verticalAlignment = Alignment.CenterVertically,
-                                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                                        ) {
+                                                        Box(contentAlignment = Alignment.Center) {
                                                             Icon(
-                                                                Icons.Default.Lock,
+                                                                Icons.Default.Language,
                                                                 contentDescription = null,
-                                                                tint = Color(0xFF34A853),
-                                                                modifier = Modifier.size(10.dp),
-                                                            )
-                                                            Text(
-                                                                text = tabHost,
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                fontSize = androidx.compose.ui.unit.TextUnit(10f, androidx.compose.ui.unit.TextUnitType.Sp),
-                                                                color = secondaryTextColor,
-                                                                maxLines = 1,
-                                                                overflow = TextOverflow.Ellipsis,
+                                                                tint = tabSpaceColor,
+                                                                modifier = Modifier.size(18.dp),
                                                             )
                                                         }
                                                     }
-
-                                                    // Center mock content watermark
-                                                    Column(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                                                    ) {
-                                                        Icon(
-                                                            Icons.Default.Language,
-                                                            contentDescription = null,
-                                                            tint = secondaryTextColor.copy(alpha = 0.15f),
-                                                            modifier = Modifier.size(28.dp),
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = tabHost,
+                                                            style = MaterialTheme.typography.bodyMedium,
+                                                            color = primaryTextColor,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
                                                         )
                                                         Text(
-                                                            text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = secondaryTextColor.copy(alpha = 0.45f),
-                                                            maxLines = 2,
-                                                            textAlign = TextAlign.Center,
+                                                            text = tab.url,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = secondaryTextColor,
+                                                            maxLines = 1,
                                                             overflow = TextOverflow.Ellipsis,
-                                                            modifier = Modifier.padding(horizontal = 8.dp),
                                                         )
-                                                    }
-
-                                                    // Bottom progress or space indicator
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                                    ) {
                                                         if (tab.isLoading) {
-                                                            val progress = (tab.progress / 100f).coerceIn(0f, 1f)
                                                             LinearProgressIndicator(
-                                                                progress = { if (progress > 0.05f) progress else 0.5f },
+                                                                progress = { (tab.progress / 100f).coerceIn(0f, 1f) },
                                                                 modifier = Modifier
-                                                                    .width(50.dp)
-                                                                    .height(3.dp),
+                                                                    .fillMaxWidth()
+                                                                    .padding(top = 5.dp)
+                                                                    .height(2.dp),
                                                                 color = spaceAccentColor,
                                                             )
-                                                        } else {
-                                                            Spacer(Modifier.width(1.dp))
                                                         }
+                                                    }
+                                                }
+                                            }
 
-                                                        if (tabSpace != null) {
-                                                            Row(
-                                                                verticalAlignment = Alignment.CenterVertically,
-                                                                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                                                            ) {
-                                                                Box(
-                                                                    modifier = Modifier
-                                                                        .size(6.dp)
-                                                                        .background(tabSpaceColor, CircleShape),
-                                                                )
-                                                                Text(
-                                                                    text = tabSpace.name,
-                                                                    style = MaterialTheme.typography.labelSmall,
-                                                                    fontSize = androidx.compose.ui.unit.TextUnit(9f, androidx.compose.ui.unit.TextUnitType.Sp),
-                                                                    color = secondaryTextColor,
-                                                                )
-                                                            }
-                                                        }
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.End,
+                                            ) {
+                                                if (tabSpace != null) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(6.dp)
+                                                                .background(tabSpaceColor, CircleShape),
+                                                        )
+                                                        Text(
+                                                            text = tabSpace.name,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = secondaryTextColor,
+                                                        )
                                                     }
                                                 }
                                             }
@@ -3262,51 +3235,21 @@ private fun TabGridSheet(
                     }
                 }
 
-                // ── Sleek Floating Action Pill (Bottom Center) ──────────────
-                Surface(
-                    shape = CircleShape,
-                    color = Color(0xFF1B2230),
-                    shadowElevation = 12.dp,
-                    border = BorderStroke(1.dp, Color(0xFF2C384C)),
+                Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 20.dp),
+                        .padding(bottom = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Surface(
-                            onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
-                            shape = CircleShape,
-                            color = spaceAccentColor,
-                            contentColor = Color.White,
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Text(
-                                    text = "New Tab",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-
-                        IconButton(
-                            onClick = onOpenBrowserMenu,
-                            modifier = Modifier.size(38.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.MoreVert,
-                                contentDescription = "Browser menu",
-                                tint = primaryTextColor,
-                            )
-                        }
+                    ExtendedFloatingActionButton(
+                        onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
+                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        text = { Text("New tab") },
+                        containerColor = spaceAccentColor,
+                    )
+                    IconButton(onClick = onOpenBrowserMenu) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Browser menu")
                     }
                 }
             }
