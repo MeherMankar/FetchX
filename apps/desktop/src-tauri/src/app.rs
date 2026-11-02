@@ -80,11 +80,99 @@ fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub app_data_dir: std::path::PathBuf,
+    pub downloads_dir: std::path::PathBuf,
+    pub bundled_engines_dir: std::path::PathBuf,
+}
+
+pub fn resolve_app_paths(app: &tauri::App) -> AppPaths {
+    // 1. App data directory:
+    // On Windows, FOLDERID_RoamingAppData can fail or be unconfigured on some setups.
+    // Standard Windows desktop apps store local data in %LOCALAPPDATA% (FOLDERID_LocalAppData).
+    // Fall back progressively: LocalAppData -> AppData -> LOCALAPPDATA env -> APPDATA env -> USERPROFILE -> HOME -> TEMP.
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .or_else(|_| {
+            std::env::var_os("LOCALAPPDATA")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("com.fetchx.desktop"))
+                .ok_or(tauri::Error::UnknownPath)
+        })
+        .or_else(|_| {
+            std::env::var_os("APPDATA")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("com.fetchx.desktop"))
+                .ok_or(tauri::Error::UnknownPath)
+        })
+        .or_else(|_| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".fetchx"))
+                .ok_or(tauri::Error::UnknownPath)
+        })
+        .or_else(|_| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".fetchx"))
+                .ok_or(tauri::Error::UnknownPath)
+        })
+        .unwrap_or_else(|_| std::env::temp_dir().join("com.fetchx.desktop"));
+
+    if let Err(error) = std::fs::create_dir_all(&app_data_dir) {
+        tracing::warn!(path = %app_data_dir.display(), %error, "could not create app data directory");
+    }
+
+    // 2. Downloads directory:
+    // Prefer Tauri's download_dir(), falling back to USERPROFILE/Downloads, HOME/Downloads, or app_data_dir/downloads.
+    let downloads_dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("Downloads"))
+                .ok_or(tauri::Error::UnknownPath)
+        })
+        .or_else(|_| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join("Downloads"))
+                .ok_or(tauri::Error::UnknownPath)
+        })
+        .unwrap_or_else(|_| app_data_dir.join("downloads"));
+
+    if let Err(error) = std::fs::create_dir_all(&downloads_dir) {
+        tracing::warn!(path = %downloads_dir.display(), %error, "could not create downloads directory");
+    }
+
+    // 3. Bundled engines directory:
+    // Prefer resource_dir()/engines, falling back to current_exe()/../engines, current_dir()/engines, or app_data_dir/engines.
+    let bundled_engines_dir = app
+        .path()
+        .resource_dir()
+        .map(|p| p.join("engines"))
+        .or_else(|_| {
+            std::env::current_exe()
+                .map(|p| p.parent().map(|d| d.join("engines")).unwrap_or_else(|| p.join("engines")))
+                .or_else(|_| std::env::current_dir().map(|d| d.join("engines")))
+        })
+        .unwrap_or_else(|_| app_data_dir.join("engines"));
+
+    AppPaths {
+        app_data_dir,
+        downloads_dir,
+        bundled_engines_dir,
+    }
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
-        .try_init()
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
+        .try_init();
 
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -124,16 +212,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             helper_manager::cancel_helper_install,
         ])
         .setup(|app| {
-            let app_data_dir = app.path().app_data_dir()?;
-            let downloads_dir = app.path().download_dir()?;
-            let bundled_engines_dir = app.path().resource_dir()?.join("engines");
-            let database_path = app_data_dir.join("fetchx.db");
+            let paths = resolve_app_paths(app);
+            let database_path = paths.app_data_dir.join("fetchx.db");
             let helper_manager =
-                HelperManager::new(app_data_dir.join("bin"), bundled_engines_dir.clone());
+                HelperManager::new(paths.app_data_dir.join("bin"), paths.bundled_engines_dir.clone());
             let state = tauri::async_runtime::block_on(AppState::initialize(
                 database_path,
-                downloads_dir,
-                bundled_engines_dir,
+                paths.downloads_dir,
+                paths.bundled_engines_dir,
             ))?;
             if !app.manage(helper_manager) {
                 return Err("desktop helper manager was already initialized".into());
@@ -149,7 +235,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Failures are non-fatal: the desktop remains fully usable.
             {
                 let app_handle = app.handle().clone();
-                let data_dir = app_data_dir.clone();
+                let data_dir = paths.app_data_dir.clone();
                 tauri::async_runtime::spawn(async move {
                     let app_state = app_handle.state::<AppState>();
                     match BrowserIpcServer::start(&app_state, data_dir, env!("CARGO_PKG_VERSION"))

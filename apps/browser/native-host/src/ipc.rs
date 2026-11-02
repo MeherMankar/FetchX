@@ -45,12 +45,27 @@ pub enum StateFileError {
 pub fn state_file_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        // Tauri writes app data to %APPDATA% (Roaming) on Windows.
-        std::env::var_os("APPDATA").map(|base| {
+        let local = std::env::var_os("LOCALAPPDATA").map(|base| {
             PathBuf::from(base)
                 .join("com.fetchx.desktop")
                 .join("browser-ipc.json")
-        })
+        });
+        if let Some(ref path) = local {
+            if path.exists() {
+                return local;
+            }
+        }
+        let roaming = std::env::var_os("APPDATA").map(|base| {
+            PathBuf::from(base)
+                .join("com.fetchx.desktop")
+                .join("browser-ipc.json")
+        });
+        if let Some(ref path) = roaming {
+            if path.exists() {
+                return roaming;
+            }
+        }
+        local.or(roaming)
     }
     #[cfg(not(target_os = "windows"))]
     {
