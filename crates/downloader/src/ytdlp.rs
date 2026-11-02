@@ -1587,6 +1587,9 @@ impl YtDlpProcessRunner for TokioYtDlpRunner {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .kill_on_drop(true);
+            // Suppress the console window that would otherwise flash on Windows.
+            #[cfg(windows)]
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
             let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
             let result = timeout(command_timeout, async {
                 let stdout = child.stdout.take().ok_or(YtDlpError::InvalidVersion)?;
@@ -1632,6 +1635,9 @@ impl YtDlpProcessRunner for TokioYtDlpRunner {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .kill_on_drop(true);
+            // Suppress the console window that would otherwise flash on Windows.
+            #[cfg(windows)]
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
             let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
             let stdout = child.stdout.take().ok_or(YtDlpError::ProcessRunner)?;
             let stderr = child.stderr.take().ok_or(YtDlpError::ProcessRunner)?;
@@ -1685,6 +1691,9 @@ impl YtDlpProcessRunner for TokioYtDlpRunner {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .kill_on_drop(true);
+            // Suppress the console window that would otherwise flash on Windows.
+            #[cfg(windows)]
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
             let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
             let result = timeout(command_timeout, async {
                 let stdout = child.stdout.take().ok_or(YtDlpError::ProcessRunner)?;

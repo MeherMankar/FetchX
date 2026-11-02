@@ -1186,6 +1186,9 @@ async fn run_child(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    // Suppress the console window that would otherwise flash on Windows.
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let mut child = command.spawn().map_err(|_| FfmpegError::ProcessStart)?;
     let input_writer = match (input, child.stdin.take()) {
         (Some(mut input), Some(mut stdin)) => Some(tokio::spawn(async move {

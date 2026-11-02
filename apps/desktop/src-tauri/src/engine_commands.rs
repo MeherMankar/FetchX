@@ -406,11 +406,12 @@ pub async fn test_aria2_config(
 
     // Run `aria2c --version` with structured arguments.
     // Hard timeout of 5 seconds to avoid hanging.
-    let output = tokio::time::timeout(
-        Duration::from_secs(5),
-        Command::new(&executable).arg("--version").output(),
-    )
-    .await;
+    let mut aria2_cmd = Command::new(&executable);
+    aria2_cmd.arg("--version");
+    // Suppress the console window that would otherwise flash on Windows.
+    #[cfg(windows)]
+    aria2_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = tokio::time::timeout(Duration::from_secs(5), aria2_cmd.output()).await;
 
     match output {
         Ok(Ok(out)) if out.status.success() => {
@@ -482,11 +483,12 @@ pub async fn test_ytdlp_config(
     };
 
     // Run `yt-dlp --version` with structured arguments.
-    let output = tokio::time::timeout(
-        Duration::from_secs(5),
-        Command::new(&executable).arg("--version").output(),
-    )
-    .await;
+    let mut ytdlp_cmd = Command::new(&executable);
+    ytdlp_cmd.arg("--version");
+    // Suppress the console window that would otherwise flash on Windows.
+    #[cfg(windows)]
+    ytdlp_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let output = tokio::time::timeout(Duration::from_secs(5), ytdlp_cmd.output()).await;
 
     match output {
         Ok(Ok(out)) if out.status.success() => {

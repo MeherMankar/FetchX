@@ -76,6 +76,21 @@ fn measure_speed(bytes: u64, elapsed: Duration) -> Option<u64> {
     Some(bytes_per_second.min(u128::from(u64::MAX)) as u64)
 }
 
+/// Smooths `sample` into `previous` using an exponential moving average
+/// with alpha = 0.3 (heavier weight on history, stable display).
+/// Returns `None` only when there is no previous reading.
+fn smooth_speed(previous: Option<u64>, sample: u64) -> u64 {
+    match previous {
+        None => sample,
+        Some(prev) => {
+            // EMA: new = 0.3 * sample + 0.7 * prev
+            let smoothed =
+                u128::from(sample).saturating_mul(3) + u128::from(prev).saturating_mul(7);
+            u64::try_from(smoothed / 10).unwrap_or(u64::MAX)
+        }
+    }
+}
+
 fn estimate_remaining(total_bytes: u64, downloaded_bytes: u64, speed: Option<u64>) -> Option<u64> {
     let speed = speed.filter(|speed| *speed > 0)?;
     Some(total_bytes.saturating_sub(downloaded_bytes) / speed)
@@ -1332,6 +1347,7 @@ where
             let mut response_bytes = 0_u64;
             let mut last_persisted_bytes = downloaded_bytes;
             let mut last_persisted_at = Instant::now();
+            let mut smoothed_speed: Option<u64> = None;
 
             loop {
                 let next_chunk = loop {
@@ -1412,10 +1428,16 @@ where
                 downloaded_bytes = next_downloaded;
                 response_bytes = next_response_bytes;
                 let now = Instant::now();
-                let speed = measure_speed(
+                // Compute instantaneous speed and smooth it with EMA (alpha=0.3)
+                // to prevent the displayed speed from jumping erratically.
+                let raw_speed = measure_speed(
                     downloaded_bytes.saturating_sub(last_persisted_bytes),
                     now.duration_since(last_persisted_at),
                 );
+                if let Some(raw) = raw_speed {
+                    smoothed_speed = Some(smooth_speed(smoothed_speed, raw));
+                }
+                let speed = smoothed_speed;
                 item.set_progress_at(
                     DownloadProgress::new(
                         downloaded_bytes,
@@ -2435,5 +2457,28 @@ mod tests {
             "8.8.8.8".parse().expect("public IPv4"),
             false
         ));
+    }
+
+    #[test]
+    fn smooth_speed_stabilizes_bursty_rates() {
+        use super::smooth_speed;
+
+        // First sample has no history, uses sample directly.
+        assert_eq!(smooth_speed(None, 5_000_000), 5_000_000);
+
+        // A sudden micro-interval 16KB blip does not crash the speed to 16KB.
+        let smoothed = smooth_speed(Some(5_000_000), 16_000);
+        // 0.3 * 16_000 + 0.7 * 5_000_000 = 4_800 + 3_500_000 = 3_504_800
+        assert_eq!(smoothed, 3_504_800);
+
+        // Another blip still maintains a smooth, gradual transition.
+        let second = smooth_speed(Some(smoothed), 16_000);
+        // 0.3 * 16_000 + 0.7 * 3_504_800 = 4_800 + 2_453_360 = 2_458_160
+        assert_eq!(second, 2_458_160);
+
+        // Burst back up to 5MB smoothly recovers.
+        let recovered = smooth_speed(Some(second), 5_000_000);
+        // 0.3 * 5_000_000 + 0.7 * 2_458_160 = 1_500_000 + 1_720_712 = 3_220_712
+        assert_eq!(recovered, 3_220_712);
     }
 }

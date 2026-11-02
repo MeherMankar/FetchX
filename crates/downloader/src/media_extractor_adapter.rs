@@ -203,6 +203,9 @@ impl ProcessRunner for YtDlpProcessRunnerAdapter {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .kill_on_drop(true);
+            // Suppress the console window that would otherwise flash on Windows.
+            #[cfg(windows)]
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
             let mut child = command
                 .spawn()

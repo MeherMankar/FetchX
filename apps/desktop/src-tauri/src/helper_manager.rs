@@ -938,11 +938,17 @@ fn validate_pe_architecture(path: &Path) -> Result<&'static str, String> {
     }
 }
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 async fn detect_version(helper: HelperId, executable: &Path) -> Result<String, String> {
     let args = version_arguments(helper);
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
     let output = timeout(
         VERSION_TIMEOUT,
-        Command::new(executable)
+        command
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

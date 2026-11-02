@@ -1430,11 +1430,12 @@ async fn init_aria2(
 }
 
 async fn detect_aria2_version(executable: &std::path::Path) -> String {
-    let result = tokio::time::timeout(
-        Duration::from_secs(5),
-        Command::new(executable).arg("--version").output(),
-    )
-    .await;
+    let mut command = Command::new(executable);
+    command.arg("--version");
+    // Suppress the console window that would otherwise flash on Windows.
+    #[cfg(windows)]
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let result = tokio::time::timeout(Duration::from_secs(5), command.output()).await;
     match result {
         Ok(Ok(out)) if out.status.success() => String::from_utf8_lossy(&out.stdout)
             .lines()
