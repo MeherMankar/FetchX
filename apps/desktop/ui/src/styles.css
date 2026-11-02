@@ -102,21 +102,16 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 14px 14px;
+  padding:  18px 14px 16px;
   border-bottom: 1px solid rgba(255 255 255 / 8%);
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  font-size: 20px;
-  font-weight: 700;
-  color: white;
-  background: var(--color-accent);
-  border-radius: var(--radius-sm);
+.brand-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
   flex-shrink: 0;
+  filter: drop-shadow(0 1px 3px rgba(0 0 0 / 35%));
 }
 
 .brand-name {
@@ -670,15 +665,13 @@ a {
   font-size: 13px;
 }
 
-.empty-icon {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  font-size: 20px;
-  background: var(--color-surface-2);
+.empty-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  opacity: 0.55;
   margin-bottom: 4px;
+  filter: drop-shadow(0 2px 6px rgba(0 0 0 / 20%));
 }
 
 /* ============================================================

@@ -31,7 +31,7 @@ export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
   return (
     <nav className="sidebar" aria-label="Download categories">
       <div className="sidebar-brand" aria-hidden="true">
-        <span className="brand-mark">↓</span>
+        <img src="/fetchx-logo.png" className="brand-logo" alt="FetchX" width={36} height={36} />
         <span className="brand-name">FetchX</span>
       </div>
 
@@ -63,7 +63,7 @@ export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
           onClick={() => onSelect("settings")}
           aria-current={active === "settings" ? "page" : undefined}
         >
-          <span className="nav-label">⚙ Settings</span>
+          <span className="nav-label">&#9881; Settings</span>
         </button>
       </div>
     </nav>

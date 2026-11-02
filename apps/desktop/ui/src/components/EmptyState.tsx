@@ -1,13 +1,12 @@
 interface EmptyStateProps {
-  icon?: string;
   title: string;
   subtitle?: string;
 }
 
-export function EmptyState({ icon = "↓", title, subtitle }: EmptyStateProps) {
+export function EmptyState({ title, subtitle }: EmptyStateProps) {
   return (
     <div className="empty-state" role="status">
-      <span className="empty-icon" aria-hidden="true">{icon}</span>
+      <img src="/fetchx-logo.png" className="empty-logo" alt="" aria-hidden="true" width={64} height={64} />
       <strong>{title}</strong>
       {subtitle && <span>{subtitle}</span>}
     </div>

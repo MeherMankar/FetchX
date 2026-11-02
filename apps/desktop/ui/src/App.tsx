@@ -611,7 +611,7 @@ export function App() {
               </div>
             ) : sorted.length === 0 ? (
               search ? (
-                <EmptyState icon="🔍" title="No results" subtitle={`Nothing matches "${search}".`} />
+                <EmptyState title="No results" subtitle={`Nothing matches "${search}".`} />
               ) : (
                 <EmptyState
                   title={EMPTY_MESSAGES[navSection].title}

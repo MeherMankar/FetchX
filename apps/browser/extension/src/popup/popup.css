@@ -80,6 +80,20 @@ body {
   position: relative;
 }
 
+/* Subtle brand watermark in popup body */
+.popup-root::before {
+  content: "";
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  width: 72px;
+  height: 72px;
+  background: url("../icons/icon128.png") center / contain no-repeat;
+  opacity: 0.04;
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* ─────────────────────────────────────────────────────────────────
    HEADER
 ───────────────────────────────────────────────────────────────── */
@@ -99,20 +113,21 @@ body {
   gap: 8px;
 }
 
-/* Motrix-style icon tile: rounded square, solid accent fill */
+/* FetchX logo � transparent, no background tile */
 .logo-tile {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r-sm);
-  background: var(--accent);
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  /* No solid background � show logo on transparent dark header */
 }
 .logo-tile img {
-  width: 15px;
-  height: 15px;
-  filter: brightness(0) invert(1);
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 4px rgba(0,0,0,0.5));
+  /* No invert filter � the icon already has proper colors */
 }
 
 .popup-title {
