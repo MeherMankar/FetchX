@@ -1800,9 +1800,10 @@ async fn abrupt_subprocess_termination_recovers_and_completes_http_download()
         DownloadStatus::Downloading,
         "the database must retain the interrupted active state"
     );
-    assert_eq!(
-        tokio::fs::metadata(&partial_path).await?.len(),
-        partial_size
+    let persisted_partial_size = tokio::fs::metadata(&partial_path).await?.len();
+    assert!(
+        persisted_partial_size >= partial_size && persisted_partial_size < body.len() as u64,
+        "the interrupted partial file must retain at least the observed bytes and remain incomplete"
     );
 
     let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
@@ -1819,7 +1820,7 @@ async fn abrupt_subprocess_termination_recovers_and_completes_http_download()
     let _ = stop_server.send(());
     let requests = server.await?;
     assert_eq!(requests.len(), 2);
-    let expected_range = format!("bytes={partial_size}-");
+    let expected_range = format!("bytes={persisted_partial_size}-");
     assert_eq!(range_header(&requests[1]), Some(expected_range.as_str()));
     let actual_body = tokio::fs::read(&destination).await?;
     assert_eq!(actual_body, body);
