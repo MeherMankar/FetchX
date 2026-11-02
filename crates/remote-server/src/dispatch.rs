@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use fetchx_core_services::{CoreServices, CoreServicesError};
-use fetchx_downloader::validate_http_source_url;
+use fetchx_downloader::{save_initial_context_headers, validate_http_source_url};
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, EngineKind, FileName, Timestamp,
 };
@@ -9,9 +9,9 @@ use fetchx_queue::QueueError;
 use fetchx_remote_protocol::{
     CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_GET, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
     DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY,
-    DOWNLOAD_SET_SPEED_LIMIT, JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo,
-    RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess, SYSTEM_WEBSOCKET_TICKET,
-    ValidatedRequest,
+    DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams, JSON_RPC_VERSION, PROTOCOL_VERSION,
+    ProtocolError, ProtocolInfo, RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess,
+    SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use serde_json::{Value, json};
@@ -122,14 +122,7 @@ pub(crate) async fn dispatch(
                     .await
                     .map_err(map_core_error)?
             } else {
-                create_http_download(
-                    services,
-                    &params.url,
-                    params.filename.as_deref(),
-                    params.engine,
-                    priority,
-                )
-                .await?
+                create_http_download(services, &params, priority).await?
             };
             json!({ "id": id })
         }
@@ -250,34 +243,50 @@ pub(crate) fn safe_download_event(item: &DownloadItem, revision: u64) -> Value {
 
 async fn create_http_download(
     services: &CoreServices,
-    raw_url: &str,
-    suggested_filename: Option<&str>,
-    requested_engine: Option<EngineKind>,
+    params: &DownloadCreateParams,
     priority: DownloadPriority,
 ) -> Result<DownloadId, RpcError> {
-    if requested_engine.is_some_and(|engine| engine != EngineKind::DirectHttp) {
+    if params
+        .engine
+        .is_some_and(|engine| engine != EngineKind::DirectHttp)
+    {
         return Err(RpcError::new(
             RpcErrorCode::UnsupportedOperation,
             "only direct_http is supported for remote HTTP downloads",
         ));
     }
-    let validated_url = validate_http_source_url(raw_url)
+    let validated_url = validate_http_source_url(&params.url)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
     let url = url::Url::parse(&validated_url)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
     let filename = safe_filename(
-        suggested_filename
+        params
+            .filename
+            .as_deref()
             .filter(|filename| !filename.trim().is_empty())
             .or_else(|| url.path_segments().and_then(Iterator::last)),
     );
     let id = DownloadId::new();
-    let source = DownloadSource::new(validated_url, EngineKind::DirectHttp)
+    let source = DownloadSource::new(validated_url.clone(), EngineKind::DirectHttp)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
     let filename = FileName::new(filename)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid filename"))?;
     let destination: PathBuf = services
         .downloads_dir()
         .join(format!("{id}-{}", filename.as_str()));
+    let mut context_headers = Vec::new();
+    if let Some(ref r) = params.referer {
+        context_headers.push(("Referer".to_string(), r.clone()));
+    }
+    if let Some(ref ua) = params.user_agent {
+        context_headers.push(("User-Agent".to_string(), ua.clone()));
+    }
+    if let Some(ref c) = params.cookies {
+        context_headers.push(("Cookie".to_string(), c.clone()));
+    }
+    if !context_headers.is_empty() {
+        let _ = save_initial_context_headers(&destination, &validated_url, context_headers).await;
+    }
     let created_at = Timestamp::now()
         .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?;
     let mut item = DownloadItem::new(id, source, filename, destination, created_at);

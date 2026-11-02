@@ -129,6 +129,7 @@ mod tests {
                     filename: None,
                     engine: None,
                     priority: None,
+                    ..Default::default()
                 }),
                 Permission::DownloadsCreate,
             ),

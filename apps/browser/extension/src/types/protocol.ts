@@ -14,6 +14,9 @@ export interface AddDownloadRequest {
   type: "add_download";
   url: string;
   request_id?: string;
+  referer?: string;
+  user_agent?: string;
+  cookies?: string;
 }
 
 export interface PingRequest {

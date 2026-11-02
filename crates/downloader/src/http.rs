@@ -133,6 +133,7 @@ struct SegmentedContext {
     total_size: u64,
     segment_count: usize,
     validator: String,
+    extra_headers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -143,6 +144,10 @@ struct ResourceIdentity {
     finalizing: bool,
     #[serde(default)]
     total_size: Option<u64>,
+    /// Optional context headers supplied by the browser extension.
+    /// Stored so that they survive a pause/resume cycle.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    extra_headers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -254,6 +259,55 @@ where
         result
     }
 
+    /// Like [`download`] but carries browser-supplied context headers
+    /// (`Referer`, `User-Agent`, `Cookie`) that are written into the `.meta`
+    /// sidecar before the first request so they survive pause/resume.
+    ///
+    /// `extra_headers` is a list of `(name, value)` pairs. Only the headers
+    /// `Referer`, `User-Agent`, and `Cookie` are forwarded; any other names are
+    /// silently ignored for security.
+    pub async fn download_with_context(
+        &self,
+        id: DownloadId,
+        cancellation: watch::Receiver<bool>,
+        extra_headers: Vec<(String, String)>,
+    ) -> Result<DownloadItem, DownloadEngineError> {
+        // Sanitise: only safe, whitelisted header names are forwarded.
+        let safe_headers: Vec<(String, String)> = extra_headers
+            .into_iter()
+            .filter(|(name, value)| {
+                let lower = name.to_ascii_lowercase();
+                matches!(lower.as_str(), "referer" | "user-agent" | "cookie")
+                    && !value.is_empty()
+                    && value.bytes().all(|b| b >= 0x20 && b != 0x7F)
+                    && value.len() <= 8192
+            })
+            .take(3) // at most one of each of the three allowed headers
+            .collect();
+        if !safe_headers.is_empty() {
+            // Persist them now so they survive a resume.  The temporary path is
+            // not yet known here — we write a stub sidecar that `download_prepared`
+            // will merge when it writes the full `ResourceIdentity`.
+            self.persist_context_headers(id, safe_headers).await?;
+        }
+        self.download(id, cancellation).await
+    }
+
+    /// Writes browser context headers into the per-download context store so they
+    /// are available when `download_prepared` constructs the `ResourceIdentity`.
+    async fn persist_context_headers(
+        &self,
+        id: DownloadId,
+        headers: Vec<(String, String)>,
+    ) -> Result<(), DownloadEngineError> {
+        let item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        save_initial_context_headers(item.destination(), item.source().url(), headers).await
+    }
+
     async fn download_controlled(
         &self,
         id: DownloadId,
@@ -361,6 +415,11 @@ where
             .as_ref()
             .filter(|identity| identity.url == url.as_str())
             .and_then(|identity| identity.validator.clone());
+        // Preserve any browser context headers that were stored before this run.
+        let extra_headers: Vec<(String, String)> = stored_identity
+            .as_ref()
+            .map(|id| id.extra_headers.clone())
+            .unwrap_or_default();
         let range_start = (existing_size > 0).then_some(existing_size);
         let mut expected_updated_at = item.updated_at();
         let initial_progress = DownloadProgress::new(existing_size, None, None, None)?;
@@ -382,6 +441,7 @@ where
                 range_start,
                 resume_validator.clone(),
                 control,
+                &extra_headers,
             )
             .await?;
         let initial_validator = response_validator(&response);
@@ -419,6 +479,7 @@ where
                     validator: initial_validator,
                     finalizing: false,
                     total_size: None,
+                    extra_headers: extra_headers.clone(),
                 },
             )
             .await?;
@@ -434,6 +495,7 @@ where
                         total_size,
                         segment_count,
                         validator,
+                        extra_headers: extra_headers.clone(),
                     },
                     control,
                 )
@@ -450,7 +512,7 @@ where
                     current_status = item.status();
                     expected_updated_at = item.updated_at();
                     response = self
-                        .send_request(id, url.clone(), None, None, control)
+                        .send_request(id, url.clone(), None, None, control, &extra_headers)
                         .await?;
                 }
             }
@@ -469,7 +531,7 @@ where
             // Drop response and restart cleanly from byte 0 so downloading always succeeds.
             drop(response);
             response = self
-                .send_request(id, url.clone(), None, None, control)
+                .send_request(id, url.clone(), None, None, control, &extra_headers)
                 .await?;
             reset_before_download = true;
             append = false;
@@ -498,7 +560,7 @@ where
                         // Content length header disagrees with range header, restart cleanly from 0
                         drop(response);
                         response = self
-                            .send_request(id, url.clone(), None, None, control)
+                            .send_request(id, url.clone(), None, None, control, &extra_headers)
                             .await?;
                         reset_before_download = true;
                         append = false;
@@ -511,7 +573,7 @@ where
                     // Invalid Content-Range, restart cleanly from 0
                     drop(response);
                     response = self
-                        .send_request(id, url.clone(), None, None, control)
+                        .send_request(id, url.clone(), None, None, control, &extra_headers)
                         .await?;
                     reset_before_download = true;
                     append = false;
@@ -521,7 +583,7 @@ where
             // Unexpected partial content without range, restart cleanly from 0
             drop(response);
             response = self
-                .send_request(id, url.clone(), None, None, control)
+                .send_request(id, url.clone(), None, None, control, &extra_headers)
                 .await?;
             reset_before_download = true;
             append = false;
@@ -531,7 +593,7 @@ where
             // Redirected to different URL on resume, restart cleanly from 0
             drop(response);
             response = self
-                .send_request(id, url.clone(), None, None, control)
+                .send_request(id, url.clone(), None, None, control, &extra_headers)
                 .await?;
             reset_before_download = true;
             append = false;
@@ -549,7 +611,7 @@ where
             // Validator mismatch indicates file changed on server, restart cleanly from 0
             drop(response);
             response = self
-                .send_request(id, url.clone(), None, None, control)
+                .send_request(id, url.clone(), None, None, control, &extra_headers)
                 .await?;
             reset_before_download = true;
             append = false;
@@ -562,6 +624,7 @@ where
                     validator: current_validator,
                     finalizing: false,
                     total_size: None,
+                    extra_headers: extra_headers.clone(),
                 },
             )
             .await?;
@@ -669,6 +732,7 @@ where
         range_start: Option<u64>,
         if_range: Option<String>,
         control: &mut ManagedDownloadControl,
+        extra_headers: &[(String, String)],
     ) -> Result<Response, DownloadEngineError> {
         let started_at = Instant::now();
         let mut failed_attempts = 0_u8;
@@ -692,7 +756,7 @@ where
                     }
                 }
                 response = async {
-                    self.send_redirect_chain(&url, range_start, if_range.as_deref())
+                    self.send_redirect_chain(&url, range_start, if_range.as_deref(), extra_headers)
                         .await
                 } => {
                     match response {
@@ -832,6 +896,7 @@ where
         initial_url: &Url,
         range_start: Option<u64>,
         if_range: Option<&str>,
+        extra_headers: &[(String, String)],
     ) -> Result<Response, DownloadEngineError> {
         let mut url = initial_url.clone();
         for redirect_count in 0..=10 {
@@ -843,6 +908,24 @@ where
                 request = request.header(RANGE, format!("bytes={start}-"));
                 if let Some(validator) = if_range {
                     request = request.header(IF_RANGE, validator);
+                }
+            }
+            // Inject browser context headers.
+            // Cookies are only forwarded when the current URL shares the same
+            // origin (scheme + host + port) as the original download URL.
+            let same_origin = url.origin() == initial_url.origin();
+            for (name, value) in extra_headers {
+                let lower = name.to_ascii_lowercase();
+                if lower == "cookie" && !same_origin {
+                    // Never leak session cookies to cross-origin redirects.
+                    continue;
+                }
+                if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                    && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value.as_str())
+                {
+                    // user-agent is already set on the client; override it on
+                    // the individual request so per-download UA takes precedence.
+                    request = request.header(header_name, header_value);
                 }
             }
             let response = request.send().await.map_err(DownloadEngineError::Request)?;
@@ -931,6 +1014,7 @@ where
             total_size,
             segment_count,
             validator,
+            extra_headers,
         } = context;
         let temporary_path = temporary_path(item.destination());
         let segment_client = self
@@ -998,6 +1082,7 @@ where
             &stop_receiver,
             &control.bandwidth,
             &downloaded,
+            &extra_headers,
         );
         let remaining_segments = segments
             .iter()
@@ -1071,6 +1156,7 @@ where
                             &stop_receiver,
                             &control.bandwidth,
                             &downloaded,
+                            &extra_headers,
                         );
                     }
                 }
@@ -1144,6 +1230,7 @@ where
                         &stop_receiver,
                         &control.bandwidth,
                         &downloaded,
+                        &extra_headers,
                     );
                     report_resource_demand(
                         control,
@@ -1233,6 +1320,7 @@ where
                             &stop_receiver,
                             &control.bandwidth,
                             &downloaded,
+                            &extra_headers,
                         );
                         report_resource_demand(
                             control,
@@ -1686,7 +1774,9 @@ fn spawn_segment_workers(
     stop: &watch::Receiver<bool>,
     bandwidth: &BandwidthControl,
     downloaded: &Arc<AtomicU64>,
+    extra_headers: &[(String, String)],
 ) {
+    let headers_vec = extra_headers.to_vec();
     while tasks.len() < target_concurrency {
         let Some(index) = pending.pop_front() else {
             break;
@@ -1699,6 +1789,7 @@ fn spawn_segment_workers(
         let mut stop = stop.clone();
         let bandwidth = bandwidth.clone();
         let downloaded = Arc::clone(downloaded);
+        let segment_headers = headers_vec.clone();
         tasks.spawn(async move {
             let result = segments::download_segment(
                 &mut segment,
@@ -1710,6 +1801,7 @@ fn spawn_segment_workers(
                 &mut stop,
                 &bandwidth,
                 &downloaded,
+                &segment_headers,
             )
             .await;
             (index, segment, result)
@@ -1965,6 +2057,48 @@ async fn save_resource_identity(
     file.flush().await.map_err(DownloadEngineError::Io)?;
     file.sync_all().await.map_err(DownloadEngineError::Io)?;
     Ok(())
+}
+
+/// Saves initial browser context headers (e.g. Referer, User-Agent, Cookie)
+/// to the download's `.meta` sidecar before the transfer starts so they
+/// are immediately available to the engine and survive retries/resumes.
+pub async fn save_initial_context_headers(
+    destination: &Path,
+    url: &str,
+    headers: Vec<(String, String)>,
+) -> Result<(), DownloadEngineError> {
+    let safe_headers: Vec<(String, String)> = headers
+        .into_iter()
+        .filter(|(name, value)| {
+            let lower = name.to_ascii_lowercase();
+            matches!(lower.as_str(), "referer" | "user-agent" | "cookie")
+                && !value.is_empty()
+                && value.bytes().all(|b| b >= 0x20 && b != 0x7F)
+                && value.len() <= 8192
+        })
+        .take(3)
+        .collect();
+
+    if safe_headers.is_empty() {
+        return Ok(());
+    }
+
+    let temp = temporary_path(destination);
+    let existing = load_resource_identity(&temp).await?;
+    let identity = match existing {
+        Some(mut id_meta) => {
+            id_meta.extra_headers = safe_headers;
+            id_meta
+        }
+        None => ResourceIdentity {
+            url: url.to_owned(),
+            validator: None,
+            finalizing: false,
+            total_size: None,
+            extra_headers: safe_headers,
+        },
+    };
+    save_resource_identity(&temp, &identity).await
 }
 
 async fn mark_resource_finalizing(

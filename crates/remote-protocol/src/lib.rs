@@ -151,7 +151,7 @@ pub enum RemoteCommand {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DownloadCreateParams {
     pub url: String,
@@ -161,6 +161,12 @@ pub struct DownloadCreateParams {
     pub engine: Option<EngineKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<DownloadPriority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cookies: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

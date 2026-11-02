@@ -137,10 +137,11 @@ browserApi.runtime.onInstalled.addListener(() => {
   });
 });
 
-browserApi.contextMenus.onClicked.addListener((info, _tab) => {
+browserApi.contextMenus.onClicked.addListener(async (info, tab) => {
   const url = info.linkUrl ?? info.pageUrl;
   if (!url) return;
-  void handleAddDownload(url).then((result) => {
+  const context = await captureDownloadContext(url, info.pageUrl ?? tab?.url);
+  void handleAddDownload(url, context).then((result) => {
     const settings = getSettings();
     void settings.then((s) => {
       if (!s.showNotifications) return;
@@ -166,11 +167,39 @@ browserApi.downloads.onCreated.addListener((item) => {
   });
 });
 
+interface DownloadContext {
+  referer?: string;
+  userAgent?: string;
+  cookies?: string;
+}
+
+async function captureDownloadContext(url: string, referrer?: string): Promise<DownloadContext> {
+  let cookies: string | undefined;
+  try {
+    const cookieApi = (browserApi as unknown as { cookies?: { getAll: (details: { url: string }) => Promise<Array<{ name: string; value: string }>> } }).cookies;
+    if (cookieApi && typeof cookieApi.getAll === "function") {
+      const found = await cookieApi.getAll({ url });
+      if (Array.isArray(found) && found.length > 0) {
+        cookies = found.map((c) => `${c.name}=${c.value}`).join("; ");
+      }
+    }
+  } catch {
+    // Ignore cookie retrieval failures
+  }
+
+  return {
+    referer: referrer || undefined,
+    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+    cookies,
+  };
+}
+
 interface BrowserDownloadItem {
   id: number;
   url: string;
   filename: string;
   fileSize: number;
+  referrer?: string;
 }
 
 async function interceptBrowserDownload(item: BrowserDownloadItem): Promise<void> {
@@ -190,6 +219,8 @@ async function interceptBrowserDownload(item: BrowserDownloadItem): Promise<void
 
     if (!await claimBrowserDownloadEvent(item.id)) return;
 
+    const context = await captureDownloadContext(item.url, item.referrer);
+
     const result = await handoffBrowserDownload(item.id, {
       pause: (downloadId) => browserApi.downloads.pause(downloadId),
       resume: (downloadId) => browserApi.downloads.resume(downloadId),
@@ -198,7 +229,7 @@ async function interceptBrowserDownload(item: BrowserDownloadItem): Promise<void
           search: async (downloadId) => browserApi.downloads.search({ id: downloadId }),
           addChangedListener: (listener) => browserApi.downloads.onChanged.addListener(listener),
           removeChangedListener: (listener) => browserApi.downloads.onChanged.removeListener(listener),
-        }, submitBrowserDownload),
+        }, (url, filename) => submitBrowserDownload(url, filename, context)),
     });
     const displayName = filenameFromBrowserPath(item.filename) ?? hostname;
 
@@ -310,7 +341,7 @@ browserApi.runtime.onMessage.addListener(
 // Core download submission
 // ────────────────────────────────────────────────────────────
 
-async function handleAddDownload(url: string): Promise<BrowserResponse> {
+async function handleAddDownload(url: string, context?: DownloadContext): Promise<BrowserResponse> {
   if (!isHttpUrl(url)) {
     return err("unsupported_scheme", "Only HTTP and HTTPS URLs are accepted.");
   }
@@ -318,7 +349,7 @@ async function handleAddDownload(url: string): Promise<BrowserResponse> {
     return err("credentials_in_url", "URLs containing credentials are not accepted.");
   }
 
-  const submission = await submitBrowserDownload(url);
+  const submission = await submitBrowserDownload(url, undefined, context);
   if (submission.kind === "accepted") {
     void refreshTasks();
     return {
@@ -336,6 +367,7 @@ async function handleAddDownload(url: string): Promise<BrowserResponse> {
 async function submitBrowserDownload(
   url: string,
   filename?: string,
+  context?: DownloadContext,
 ): Promise<DownloadSubmission> {
   if (!isHttpUrl(url)) {
     return { kind: "rejected", message: "Only HTTP and HTTPS URLs are accepted." };
@@ -351,11 +383,17 @@ async function submitBrowserDownload(
     return { kind: "rejected", message: "The selected FetchX target could not be loaded." };
   }
 
+  const params: Record<string, unknown> = { url };
+  if (filename) params.filename = filename;
+  if (context?.referer) params.referer = context.referer;
+  if (context?.userAgent) params.user_agent = context.userAgent;
+  if (context?.cookies) params.cookies = context.cookies;
+
   const rpcRequest: RpcRequest = {
     jsonrpc: "2.0",
     id: crypto.randomUUID(),
     method: "download.create",
-    params: filename ? { url, filename } : { url },
+    params,
   };
 
   try {
@@ -383,7 +421,7 @@ async function submitBrowserDownload(
       };
     }
     if (
-      filename
+      (filename || context?.referer || context?.cookies)
       && isRpcError(rpcResponse)
       && (rpcResponse.error.code === -32600 || rpcResponse.error.code === -32602)
     ) {

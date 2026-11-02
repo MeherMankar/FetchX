@@ -135,6 +135,7 @@ pub(super) async fn download_segment(
     stop: &mut watch::Receiver<bool>,
     bandwidth: &BandwidthControl,
     global_downloaded: &AtomicU64,
+    extra_headers: &[(String, String)],
 ) -> Result<SegmentResult, DownloadEngineError> {
     if segment.state == SegmentState::Complete {
         return Ok(SegmentResult::Complete);
@@ -203,6 +204,13 @@ pub(super) async fn download_segment(
         let mut request_builder = client.get(requested_url.clone()).header(RANGE, range_value);
         if !validator.is_empty() {
             request_builder = request_builder.header(IF_RANGE, validator);
+        }
+        for (name, value) in extra_headers {
+            if let Ok(header_name) = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                && let Ok(header_value) = reqwest::header::HeaderValue::from_str(value.as_str())
+            {
+                request_builder = request_builder.header(header_name, header_value);
+            }
         }
         let request = request_builder.send();
         let response = tokio::select! {

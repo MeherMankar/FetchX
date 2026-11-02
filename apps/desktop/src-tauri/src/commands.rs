@@ -182,13 +182,31 @@ impl AppState {
         };
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
         let id = DownloadId::new();
-        let source = DownloadSource::new(canonical_url, engine_kind)
+        let source = DownloadSource::new(canonical_url.clone(), engine_kind)
             .and_then(|source| match format_id {
                 Some(format_id) => source.with_yt_dlp_format(format_id),
                 None => Ok(source),
             })
             .map_err(|_| IpcError::invalid_request())?;
         let destination = self.downloads_dir.join(filename.as_str());
+        let mut context_headers = Vec::new();
+        if let Some(ref referer) = request.referer {
+            context_headers.push(("Referer".to_string(), referer.clone()));
+        }
+        if let Some(ref ua) = request.user_agent {
+            context_headers.push(("User-Agent".to_string(), ua.clone()));
+        }
+        if let Some(ref cookies) = request.cookies {
+            context_headers.push(("Cookie".to_string(), cookies.clone()));
+        }
+        if !context_headers.is_empty() {
+            let _ = fetchx_downloader::save_initial_context_headers(
+                &destination,
+                &canonical_url,
+                context_headers,
+            )
+            .await;
+        }
         let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
         let item = DownloadItem::new(id, source, filename, destination, created_at);
 
@@ -465,7 +483,7 @@ impl AppState {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddDownloadRequest {
     pub url: String,
@@ -473,6 +491,15 @@ pub struct AddDownloadRequest {
     /// The backend validates availability; the frontend cannot bypass this check.
     #[serde(default)]
     pub engine_kind: Option<EngineKind>,
+    /// Referer URL captured by the browser extension (forwarded as `Referer` header).
+    #[serde(default)]
+    pub referer: Option<String>,
+    /// Browser User-Agent string captured by the extension.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// Raw `Cookie` header value captured by the extension.
+    #[serde(default)]
+    pub cookies: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -789,6 +816,7 @@ pub async fn add_media_download(
             AddDownloadRequest {
                 url,
                 engine_kind: Some(EngineKind::YtDlp),
+                ..Default::default()
             },
             format_id,
             extension,
@@ -1462,6 +1490,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/file.zip".to_owned(),
+                ..Default::default()
             })
             .await?;
         wait_for_status(
@@ -1486,6 +1515,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/control.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         wait_for_status(
@@ -1523,6 +1553,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/delete.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         let id = DownloadId::parse(&download.id)?;
@@ -1622,6 +1653,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/priority.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         assert_eq!(download.priority, DownloadPriority::Normal);
@@ -1661,6 +1693,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/scheduled.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         let id = DownloadId::parse(&download.id)?;
@@ -1706,6 +1739,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/nosched.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         let id = DownloadId::parse(&download.id)?;
@@ -1728,6 +1762,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/snap.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         wait_for_status(
@@ -1752,6 +1787,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/retry.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         let id = DownloadId::parse(&download.id)?;
@@ -1787,6 +1823,7 @@ mod tests {
             .add(AddDownloadRequest {
                 engine_kind: None,
                 url: "https://example.test/activeretry.bin".to_owned(),
+                ..Default::default()
             })
             .await?;
         let id = DownloadId::parse(&download.id)?;
@@ -1866,6 +1903,7 @@ mod tests {
             .add(AddDownloadRequest {
                 url: "https://example.test/engine-default.zip".to_owned(),
                 engine_kind: None,
+                ..Default::default()
             })
             .await?;
         assert_eq!(download.engine, fetchx_models::EngineKind::DirectHttp);
@@ -1880,6 +1918,7 @@ mod tests {
             .add(AddDownloadRequest {
                 url: "https://example.test/explicit-http.zip".to_owned(),
                 engine_kind: Some(fetchx_models::EngineKind::DirectHttp),
+                ..Default::default()
             })
             .await?;
         assert_eq!(download.engine, fetchx_models::EngineKind::DirectHttp);
@@ -1895,6 +1934,7 @@ mod tests {
             .add(AddDownloadRequest {
                 url: "https://example.test/aria2-attempt.zip".to_owned(),
                 engine_kind: Some(fetchx_models::EngineKind::Aria2),
+                ..Default::default()
             })
             .await;
         // Must be Conflict — not silently accepted as DirectHttp.
@@ -1915,6 +1955,7 @@ mod tests {
             .add(AddDownloadRequest {
                 url: "https://example.test/ytdlp-attempt.zip".to_owned(),
                 engine_kind: Some(fetchx_models::EngineKind::YtDlp),
+                ..Default::default()
             })
             .await;
         assert_eq!(
@@ -1934,6 +1975,7 @@ mod tests {
             .add(AddDownloadRequest {
                 url: "https://example.test/retry-engine.zip".to_owned(),
                 engine_kind: None, // → DirectHttp
+                ..Default::default()
             })
             .await?;
         let id = DownloadId::parse(&download.id)?;

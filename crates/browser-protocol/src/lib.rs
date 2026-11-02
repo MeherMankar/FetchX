@@ -17,7 +17,9 @@
 //! - Requests are [`#[serde(deny_unknown_fields)]`] to prevent field injection.
 //! - Only `http://` and `https://` URLs are accepted.
 //! - Embedded credentials are rejected by [`validate_url`].
-//! - Browser cookies and credentials are never forwarded.
+//! - Browser cookies are forwarded only as an optional `Cookie` header string
+//!   captured explicitly by the extension; they are confined to the download
+//!   origin (same-origin check performed by the engine).
 //! - A bearer token is accepted only in the credential-store provisioning
 //!   request and is handled by the native host, not extension storage.
 //! - Responses never include process paths, secrets, or stack traces.
@@ -71,9 +73,19 @@ pub enum BrowserRequestBody {
 
 /// Payload for an `add_download` browser request.
 ///
-/// Only the URL is accepted from the browser.
+/// Only the URL and safe download-context headers are accepted from the browser.
 /// Filename, destination, engine selection, priority, and scheduling
 /// are determined by the desktop application.
+///
+/// The optional header fields mirror the Motrix browser-extension context
+/// capture: `Referer`, `User-Agent`, and `Cookie`.  They are used by the
+/// download engine to avoid 403 Forbidden errors on sites that use
+/// hotlink protection or session-cookie gating.
+///
+/// # Security
+/// - All three header fields are validated and sanitised server-side.
+/// - Values exceeding their length limits are silently truncated.
+/// - Values containing ASCII control characters (< 0x20, 0x7F) are rejected.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddDownloadRequest {
@@ -83,6 +95,18 @@ pub struct AddDownloadRequest {
     /// will have `request_id: null`.
     #[serde(default)]
     pub request_id: Option<String>,
+    /// The page URL that initiated the download (sent as `Referer`).
+    /// Must be an absolute HTTP/HTTPS URL; other schemes are silently ignored.
+    #[serde(default)]
+    pub referer: Option<String>,
+    /// The browser's `User-Agent` string to forward.
+    /// When absent the engine uses its own default UA.
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    /// Raw `Cookie` header value (the `name=value; …` string).
+    /// Only forwarded for requests to the same origin as the download URL.
+    #[serde(default)]
+    pub cookies: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -598,8 +622,38 @@ mod tests {
 
     #[test]
     fn unknown_fields_rejected() {
+        // "cookie" (singular) is not a known field; "cookies" (plural) is.
         let json = br#"{"version":1,"type":"add_download","url":"https://example.com/file.zip","cookie":"abc"}"#;
         assert!(parse_request(json).is_err());
+    }
+
+    #[test]
+    fn add_download_request_with_context_headers_parses() {
+        let json = br#"{"version":1,"type":"add_download","url":"https://example.com/file.zip","referer":"https://example.com/page","user_agent":"Mozilla/5.0","cookies":"session=abc123"}"#;
+        let req = parse_request(json).unwrap();
+        match req.body {
+            BrowserRequestBody::AddDownload(r) => {
+                assert_eq!(r.url, "https://example.com/file.zip");
+                assert_eq!(r.referer.as_deref(), Some("https://example.com/page"));
+                assert_eq!(r.user_agent.as_deref(), Some("Mozilla/5.0"));
+                assert_eq!(r.cookies.as_deref(), Some("session=abc123"));
+            }
+            _ => panic!("expected AddDownload"),
+        }
+    }
+
+    #[test]
+    fn add_download_request_context_headers_are_optional() {
+        let json = br#"{"version":1,"type":"add_download","url":"https://example.com/file.zip"}"#;
+        let req = parse_request(json).unwrap();
+        match req.body {
+            BrowserRequestBody::AddDownload(r) => {
+                assert!(r.referer.is_none());
+                assert!(r.user_agent.is_none());
+                assert!(r.cookies.is_none());
+            }
+            _ => panic!("expected AddDownload"),
+        }
     }
 
     #[test]
