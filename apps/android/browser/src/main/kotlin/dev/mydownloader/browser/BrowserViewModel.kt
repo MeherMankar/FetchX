@@ -116,7 +116,6 @@ data class BrowserUiState(
     val showEssentials: Boolean = false,
     val essentials: List<Essential> = emptyList(),
     val showThemePicker: Boolean = false,
-    val themeSeedColor: Long = 0xFF4F8EF7L,
     val compactMode: Boolean = false,
     val detectedVideos: List<DetectedVideo> = emptyList(),
     val showVideoDownloadBar: Boolean = false,
@@ -498,9 +497,6 @@ class BrowserViewModel internal constructor(
     // Theme color picker
     fun openThemePicker() { _uiState.update { it.copy(showThemePicker = true) } }
     fun closeThemePicker() { _uiState.update { it.copy(showThemePicker = false) } }
-    fun setThemeSeedColor(colorLong: Long) {
-        _uiState.update { it.copy(themeSeedColor = colorLong, showThemePicker = false) }
-    }
 
     // Compact mode
     fun toggleCompactMode() { _uiState.update { it.copy(compactMode = !it.compactMode) } }

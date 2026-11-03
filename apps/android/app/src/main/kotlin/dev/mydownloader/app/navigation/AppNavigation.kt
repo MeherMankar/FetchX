@@ -49,6 +49,10 @@ import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
 import java.io.File
 
+private const val BROWSER_DATA_PREFERENCES_FILE = "fetchx_browser_data"
+private const val BROWSER_THEME_SEED_KEY = "browser_theme_seed"
+private const val DEFAULT_BROWSER_THEME_SEED = 0xFF4F8EF7L
+
 /**
  * Root NavHost for the FetchX application.
  *
@@ -58,6 +62,13 @@ import java.io.File
 @Composable
 fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null), pendingDownloadId: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null)) {
     val navController = rememberNavController()
+    val context = LocalContext.current
+    val browserDataPreferences = remember(context) {
+        context.getSharedPreferences(
+            BROWSER_DATA_PREFERENCES_FILE,
+            android.content.Context.MODE_PRIVATE,
+        )
+    }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     var selectedBrowserItem by remember { mutableStateOf("home") }
@@ -90,11 +101,16 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
         pendingOpenDownloadId = newDownloadId // hand off to local state for LaunchedEffect
     }
 
-    // Browser theme seed — updated by BrowserScreen when user picks a color
-    var browserThemeSeed by remember { mutableLongStateOf(0xFF4F8EF7L) }
+    var browserThemeSeed by remember(browserDataPreferences) {
+        mutableLongStateOf(
+            browserDataPreferences.getLong(
+                BROWSER_THEME_SEED_KEY,
+                DEFAULT_BROWSER_THEME_SEED,
+            ),
+        )
+    }
     val seedColor = remember(browserThemeSeed) { Color(browserThemeSeed) }
 
-    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
     val repo = BridgeInitializer.repositoryOrNull()
@@ -249,6 +265,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
             composable(Screen.Browser.route) {
                 FetchXTheme(seedColor = seedColor) {
                     BrowserScreen(
+                        themeSeedColor = browserThemeSeed,
                         homeRequest = homeRequest,
                         searchRequest = searchRequest,
                         tabsRequest = tabsRequest,
@@ -334,7 +351,12 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                                 ).show()
                             }
                         },
-                        onThemeColorChange = { newSeed -> browserThemeSeed = newSeed },
+                        onThemeColorChange = { newSeed ->
+                            browserThemeSeed = newSeed
+                            browserDataPreferences.edit()
+                                .putLong(BROWSER_THEME_SEED_KEY, newSeed)
+                                .apply()
+                        },
                     )
                 }
             }

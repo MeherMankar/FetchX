@@ -141,6 +141,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -168,6 +172,7 @@ import java.util.Date
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun BrowserScreen(
+    themeSeedColor: Long = 0xFF4F8EF7L,
     onThemeColorChange: (Long) -> Unit = {},
     homeRequest: Long = 0L,
     searchRequest: Long = 0L,
@@ -1424,9 +1429,48 @@ fun BrowserScreen(
 
     if (uiState.showBrowserSettings) {
         BrowserSettingsDialog(
+            searchEngine = uiState.selectedSearchEngine,
             searchSuggestionsEnabled = uiState.browserSuggestionsEnabled,
+            profileName = uiState.selectedProfile?.name ?: "Default",
+            versionName = browserVersionName,
             onSearchSuggestionsChanged = viewModel::setBrowserSuggestionsEnabled,
             onDismiss = viewModel::closeBrowserSettings,
+            onOpenSearchEngine = {
+                viewModel.closeBrowserSettings()
+                viewModel.openSearchEngineSelector()
+            },
+            onOpenThemePicker = {
+                viewModel.closeBrowserSettings()
+                viewModel.openThemePicker()
+            },
+            onOpenPrivacy = {
+                viewModel.closeBrowserSettings()
+                viewModel.openPrivacySettings()
+            },
+            onOpenTrackingProtection = {
+                viewModel.closeBrowserSettings()
+                viewModel.openTrackerDetails()
+            },
+            onOpenHistory = {
+                viewModel.closeBrowserSettings()
+                viewModel.openHistory()
+            },
+            onOpenTabs = {
+                viewModel.closeBrowserSettings()
+                viewModel.openTabOverview()
+            },
+            onOpenSpaces = {
+                viewModel.closeBrowserSettings()
+                viewModel.openSpaceSwitcher()
+            },
+            onOpenDownloads = {
+                viewModel.closeBrowserSettings()
+                onNavigateToDownloads()
+            },
+            onOpenUpdates = {
+                viewModel.closeBrowserSettings()
+                showBrowserUpdates = true
+            },
         )
     }
 
@@ -1454,9 +1498,9 @@ fun BrowserScreen(
     // ── Theme picker (Feature 4) ────────────────────────────────────────────
     if (uiState.showThemePicker) {
         ThemePickerDialog(
-            currentSeed = uiState.themeSeedColor,
+            currentSeed = themeSeedColor,
             onApply = { seed ->
-                viewModel.setThemeSeedColor(seed)
+                viewModel.closeThemePicker()
                 onThemeColorChange(seed)
             },
             onDismiss = { viewModel.closeThemePicker() },
@@ -2001,8 +2045,9 @@ private fun BrowserMenuSheet(
         onDismissRequest = onDismiss,
         dragHandle = null,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-        containerColor = Color(0xFF1C1B22),
-        scrimColor = Color.Black.copy(alpha = 0.5f),
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f),
     ) {
         Column(
             modifier = Modifier
@@ -2026,31 +2071,31 @@ private fun BrowserMenuSheet(
                     ) {}
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        "Browser Menu",
+                        "FetchX",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                         ),
-                        color = Color(0xFFFBFBFE),
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 Surface(
                     onClick = onDismiss,
                     shape = CircleShape,
-                    color = Color(0xFF383741),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.size(30.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(Icons.Default.Close, contentDescription = "Close menu",
-                            tint = Color(0xFF93929D), modifier = Modifier.size(16.dp))
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                     }
                 }
             }
 
             // Quick Actions Grid (labeled icon buttons)
             Surface(
-                color = Color(0xFF2B2A33),
+                color = MaterialTheme.colorScheme.surfaceContainer,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color(0xFF383741)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
@@ -2079,23 +2124,23 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (activeTab?.canGoBack == true) Color(0xFF383741)
-                                   else Color(0xFF0F1520),
+                            color = if (activeTab?.canGoBack == true) MaterialTheme.colorScheme.surfaceVariant
+                                   else MaterialTheme.colorScheme.surface,
                             modifier = Modifier.size(42.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
                                     contentDescription = "Back",
-                                    tint = if (activeTab?.canGoBack == true) Color(0xFFDCDCE5)
-                                           else Color(0xFF334155),
+                                    tint = if (activeTab?.canGoBack == true) MaterialTheme.colorScheme.onSurface
+                                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text("Back", style = MaterialTheme.typography.labelSmall,
-                            color = if (activeTab?.canGoBack == true) Color(0xFF93929D) else Color(0xFF334155))
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Forward
                     Column(
@@ -2107,23 +2152,23 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (activeTab?.canGoForward == true) Color(0xFF383741)
-                                   else Color(0xFF0F1520),
+                            color = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.surfaceVariant
+                                   else MaterialTheme.colorScheme.surface,
                             modifier = Modifier.size(42.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowForward,
                                     contentDescription = "Forward",
-                                    tint = if (activeTab?.canGoForward == true) Color(0xFFDCDCE5)
-                                           else Color(0xFF334155),
+                                    tint = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.onSurface
+                                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text("Forward", style = MaterialTheme.typography.labelSmall,
-                            color = if (activeTab?.canGoForward == true) Color(0xFF93929D) else Color(0xFF334155))
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Reload
                     Column(
@@ -2132,16 +2177,17 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF383741),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.size(42.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Reload",
-                                    tint = Color(0xFFDCDCE5), modifier = Modifier.size(20.dp))
+                                    tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
                             }
                         }
                         Spacer(Modifier.height(4.dp))
-                        Text("Reload", style = MaterialTheme.typography.labelSmall, color = Color(0xFF93929D))
+                        Text("Reload", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Bookmark
                     Column(
@@ -2153,17 +2199,19 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (isBookmarked) spaceAccentColor.copy(alpha = 0.15f)
-                                   else if (canBookmark) Color(0xFF383741) else Color(0xFF0F1520),
-                            border = if (isBookmarked) BorderStroke(1.dp, spaceAccentColor.copy(alpha = 0.4f)) else null,
+                            color = if (isBookmarked) MaterialTheme.colorScheme.primaryContainer
+                                   else if (canBookmark) MaterialTheme.colorScheme.surfaceVariant
+                                   else MaterialTheme.colorScheme.surface,
+                            border = if (isBookmarked) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
                             modifier = Modifier.size(42.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     if (isBookmarked) Icons.Default.Star else Icons.Default.StarOutline,
                                     contentDescription = if (isBookmarked) "Remove bookmark" else "Bookmark",
-                                    tint = if (isBookmarked) spaceAccentColor
-                                           else if (canBookmark) Color(0xFFDCDCE5) else Color(0xFF334155),
+                                    tint = if (isBookmarked) MaterialTheme.colorScheme.onPrimaryContainer
+                                           else if (canBookmark) MaterialTheme.colorScheme.onSurface
+                                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
@@ -2171,8 +2219,8 @@ private fun BrowserMenuSheet(
                         Spacer(Modifier.height(4.dp))
                         Text(if (isBookmarked) "Saved" else "Save",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (isBookmarked) spaceAccentColor
-                                   else if (canBookmark) Color(0xFF93929D) else Color(0xFF334155))
+                            color = if (isBookmarked) MaterialTheme.colorScheme.primary
+                                   else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Download
                     Column(
@@ -2184,24 +2232,25 @@ private fun BrowserMenuSheet(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = if (canDownload) Color(0xFF4F8EF7).copy(alpha = 0.12f)
-                                   else Color(0xFF0F1520),
-                            border = if (canDownload) BorderStroke(1.dp, Color(0xFF4F8EF7).copy(alpha = 0.3f)) else null,
+                            color = if (canDownload) MaterialTheme.colorScheme.primaryContainer
+                                   else MaterialTheme.colorScheme.surface,
+                            border = if (canDownload) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
                             modifier = Modifier.size(42.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     Icons.Default.Download,
                                     contentDescription = "Download",
-                                    tint = if (canDownload) Color(0xFF4F8EF7)
-                                           else Color(0xFF334155),
+                                    tint = if (canDownload) MaterialTheme.colorScheme.onPrimaryContainer
+                                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text("Grab", style = MaterialTheme.typography.labelSmall,
-                            color = if (canDownload) Color(0xFF4F8EF7) else Color(0xFF334155))
+                            color = if (canDownload) MaterialTheme.colorScheme.primary
+                                   else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -2215,19 +2264,19 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF93929D),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Add,
                 title = "New Tab",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onNewTab,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.GridView,
                 title = "Tabs Overview",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 badgeText = "${uiState.tabs.size} open",
                 onClick = onOpenTabs,
             )
@@ -2235,9 +2284,9 @@ private fun BrowserMenuSheet(
                 BrowserMenuItemRow(
                     icon = Icons.Default.AutoStories,
                     title = if (uiState.readerModeActive) "Turn Off Reader Mode" else "Reader Mode",
-                    iconTint = Color(0xFFDCDCE5),
+                    iconTint = MaterialTheme.colorScheme.onSurface,
                     badgeText = if (uiState.readerModeActive) "Active" else null,
-                    badgeColor = Color(0xFFA78BFA).copy(alpha = 0.18f),
+                    badgeColor = MaterialTheme.colorScheme.tertiaryContainer,
                     onClick = onToggleReaderMode,
                 )
             }
@@ -2251,21 +2300,21 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF93929D),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Shield,
                 title = "Tracking Protection",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 badgeText = "${uiState.activeTabBlockedRequests} blocked",
-                badgeColor = Color(0xFF22C55E).copy(alpha = 0.15f),
+                badgeColor = MaterialTheme.colorScheme.tertiaryContainer,
                 onClick = onOpenTrackerDetails,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Security,
                 title = "Privacy & Security",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onOpenPrivacySettings,
             )
 
@@ -2278,27 +2327,27 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF93929D),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+            )
+            BrowserMenuItemRow(
+                icon = Icons.Default.Download,
+                title = "Downloads",
+                iconTint = MaterialTheme.colorScheme.onSurface,
+                onClick = onOpenDownloads,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Bookmarks,
                 title = "Bookmarks",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 badgeText = if (uiState.bookmarks.isNotEmpty()) "${uiState.bookmarks.size}" else null,
                 onClick = onOpenBookmarks,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.History,
                 title = "History",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onOpenHistory,
-            )
-            BrowserMenuItemRow(
-                icon = Icons.Default.Download,
-                title = "Downloads",
-                iconTint = Color(0xFFDCDCE5),
-                onClick = onOpenDownloads,
             )
 
             Spacer(Modifier.height(8.dp))
@@ -2310,20 +2359,20 @@ private fun BrowserMenuSheet(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
                 ),
-                color = Color(0xFF93929D),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Extension,
                 title = "FetchX Remote",
                 subtitle = "Connect or add a download",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onOpenFetchxRemote,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Extension,
                 title = "Extensions",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 badgeText = if (uiState.extensionManagerState.extensions.isNotEmpty())
                     "${uiState.extensionManagerState.extensions.size}" else null,
                 onClick = onOpenExtensions,
@@ -2332,37 +2381,37 @@ private fun BrowserMenuSheet(
                 icon = Icons.Default.Workspaces,
                 title = "Spaces & Profiles",
                 subtitle = uiState.selectedProfile?.name ?: "Default",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onOpenSpaces,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Palette,
                 title = "Theme & Appearance",
-                iconTint = Color(0xFFDCDCE5),
+                iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onOpenThemePicker,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Fullscreen,
                 title = "Compact Mode",
-                iconTint = Color(0xFF93929D),
+                iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onToggleCompactMode,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Settings,
-                title = "Browser Settings",
-                iconTint = Color(0xFF93929D),
+                title = "Settings",
+                iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onOpenSettings,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Storage,
                 title = "Storage Usage",
-                iconTint = Color(0xFF93929D),
+                iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onOpenStorage,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Update,
                 title = "Check for Updates",
-                iconTint = Color(0xFF93929D),
+                iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onOpenUpdates,
             )
         }
@@ -2376,25 +2425,27 @@ private fun BrowserMenuItemRow(
     subtitle: String? = null,
     badgeText: String? = null,
     badgeColor: Color? = null,
-    iconTint: Color = Color(0xFF93929D),
+    iconTint: Color? = null,
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val resolvedIconTint = iconTint ?: MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
         onClick = onClick,
         enabled = enabled,
-        color = Color.Transparent,
+        color = MaterialTheme.colorScheme.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 10.dp),
+                .heightIn(min = 56.dp)
+                .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
-                color = iconTint.copy(alpha = 0.12f),
+                color = resolvedIconTint.copy(alpha = 0.12f),
                 modifier = Modifier.size(36.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
@@ -2402,8 +2453,8 @@ private fun BrowserMenuItemRow(
                         icon,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
-                        tint = if (enabled) iconTint
-                               else iconTint.copy(alpha = 0.4f),
+                        tint = if (enabled) resolvedIconTint
+                               else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                     )
                 }
             }
@@ -2414,28 +2465,28 @@ private fun BrowserMenuItemRow(
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontWeight = FontWeight.Medium,
                     ),
-                    color = if (enabled) Color(0xFFFBFBFE)
-                           else Color(0xFF475569),
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface
+                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                 )
                 if (!subtitle.isNullOrBlank()) {
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF93929D),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             if (!badgeText.isNullOrBlank()) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
-                    color = badgeColor ?: Color(0xFF383741),
+                    color = badgeColor ?: MaterialTheme.colorScheme.surfaceVariant,
                 ) {
                     Text(
                         text = badgeText,
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Medium,
                         ),
-                        color = Color(0xFFDCDCE5),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                     )
                 }
@@ -2585,7 +2636,13 @@ private fun ThemePickerDialog(
                             border = if (isActive)
                                 androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.onBackground)
                             else null,
-                            modifier = Modifier.size(36.dp).padding(2.dp),
+                            modifier = Modifier
+                                .size(36.dp)
+                                .padding(2.dp)
+                                .semantics {
+                                    contentDescription = name
+                                    selected = isActive
+                                },
                         ) {}
                     }
                 }
@@ -3832,48 +3889,134 @@ private fun ProfileSwitcherDialog(
 
 @Composable
 private fun BrowserSettingsDialog(
+    searchEngine: SearchEngine,
     searchSuggestionsEnabled: Boolean,
+    profileName: String,
+    versionName: String,
     onSearchSuggestionsChanged: (Boolean) -> Unit,
     onDismiss: () -> Unit,
+    onOpenSearchEngine: () -> Unit,
+    onOpenThemePicker: () -> Unit,
+    onOpenPrivacy: () -> Unit,
+    onOpenTrackingProtection: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenTabs: () -> Unit,
+    onOpenSpaces: () -> Unit,
+    onOpenDownloads: () -> Unit,
+    onOpenUpdates: () -> Unit,
 ) {
-    var compactTabs by remember { mutableStateOf(false) }
-    var openLinksInBackground by remember { mutableStateOf(true) }
-
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("Browser settings") },
-        text = {
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp, vertical = 24.dp)
+                .widthIn(max = 640.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ) {
             Column(
                 modifier = Modifier
-                    .heightIn(max = 360.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing),
             ) {
-                Text(
-                    text = "General",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                SettingToggleRow(
-                    title = "Search suggestions",
-                    checked = searchSuggestionsEnabled,
-                    onCheckedChange = onSearchSuggestionsChanged,
-                )
-                SettingToggleRow(
-                    title = "Compact tab strip",
-                    checked = compactTabs,
-                    onCheckedChange = { compactTabs = it },
-                )
-                SettingToggleRow(
-                    title = "Open links in background",
-                    checked = openLinksInBackground,
-                    onCheckedChange = { openLinksInBackground = it },
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 24.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Settings",
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close settings")
+                    }
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    SettingsSection("Appearance") {
+                        SettingsActionRow(
+                            title = "Theme & appearance",
+                            subtitle = "Follows Android light/dark mode; choose accent color",
+                            onClick = onOpenThemePicker,
+                        )
+                    }
+                    SettingsSection("Browser") {
+                        SettingsActionRow(
+                            title = "Search engine",
+                            subtitle = searchEngine.displayName,
+                            onClick = onOpenSearchEngine,
+                        )
+                        SettingToggleRow(
+                            title = "Search suggestions",
+                            checked = searchSuggestionsEnabled,
+                            onCheckedChange = onSearchSuggestionsChanged,
+                        )
+                        SettingsActionRow(
+                            title = "Downloads",
+                            subtitle = "View downloads",
+                            onClick = onOpenDownloads,
+                        )
+                    }
+                    SettingsSection("Privacy & Security") {
+                        SettingsActionRow(
+                            title = "Tracking protection",
+                            subtitle = "View protection for this site",
+                            onClick = onOpenTrackingProtection,
+                        )
+                        SettingsActionRow(
+                            title = "Privacy controls",
+                            subtitle = "Browser-wide protections and HTTPS-only mode",
+                            onClick = onOpenPrivacy,
+                        )
+                        SettingsActionRow(
+                            title = "Clear browsing history",
+                            subtitle = "Review and clear history",
+                            onClick = onOpenHistory,
+                        )
+                    }
+                    SettingsSection("Tabs") {
+                        SettingsActionRow(
+                            title = "Tab overview",
+                            subtitle = "Switch or close tabs",
+                            onClick = onOpenTabs,
+                        )
+                        SettingsActionRow(
+                            title = "Spaces & profiles",
+                            subtitle = "Current profile: $profileName",
+                            onClick = onOpenSpaces,
+                        )
+                    }
+                    SettingsSection("About") {
+                        SettingsActionRow(
+                            title = "FetchX",
+                            subtitle = "Version $versionName · Check for updates",
+                            onClick = onOpenUpdates,
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                ) {
+                    Text("Done")
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
-        },
-    )
+        }
+    }
 }
 
 @Composable
@@ -3911,14 +4054,67 @@ private fun SettingToggleRow(
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = title,
             modifier = Modifier.weight(1f),
         )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics {
+                contentDescription = title
+                stateDescription = if (checked) "On" else "Off"
+            },
+        )
+    }
+}
+
+@Composable
+private fun SettingsSection(
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        content()
+    }
+}
+
+@Composable
+private fun SettingsActionRow(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
