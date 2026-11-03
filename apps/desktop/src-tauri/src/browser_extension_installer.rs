@@ -623,10 +623,10 @@ fn query_reg_key_exists(_full_key: &str) -> bool {
     false
 }
 
-fn is_browser_detected(target: &BrowserTarget) -> bool {
+fn is_browser_detected(_target: &BrowserTarget) -> bool {
     #[cfg(windows)]
     {
-        for reg in target.detect_reg_keys {
+        for reg in _target.detect_reg_keys {
             if query_reg_key_exists(&format!("HKCU\\{reg}"))
                 || query_reg_key_exists(&format!("HKLM\\{reg}"))
             {
@@ -638,7 +638,7 @@ fn is_browser_detected(target: &BrowserTarget) -> bool {
         let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
         let program_files_x86 = std::env::var_os("ProgramFiles(x86)").map(PathBuf::from);
 
-        for rel in target.detect_paths {
+        for rel in _target.detect_paths {
             if let Some(ref base) = local_app_data
                 && base.join(rel).exists()
             {

@@ -226,6 +226,12 @@ jobs:
         run: npm ci
         working-directory: apps/desktop/ui
 
+      - name: Build browser extension
+        run: |
+          npm ci
+          npm run build
+        working-directory: apps/browser/extension
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
@@ -304,6 +310,12 @@ jobs:
         run: npm ci
         working-directory: apps/desktop/ui
 
+      - name: Build browser extension
+        run: |
+          npm ci
+          npm run build
+        working-directory: apps/browser/extension
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
@@ -364,6 +376,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/desktop/ui
+
+      - name: Build browser extension
+        run: |
+          npm ci
+          npm run build
+        working-directory: apps/browser/extension
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked

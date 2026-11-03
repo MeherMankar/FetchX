@@ -33,6 +33,13 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Build browser extension (Windows CI includes fetchx-desktop)
+        if: runner.os == 'Windows'
+        run: |
+          npm ci
+          npm run build
+        working-directory: apps/browser/extension
+
       - name: cargo fmt check
         run: cargo fmt --all -- --check
 
