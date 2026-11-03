@@ -506,6 +506,7 @@ mod tests {
                 filename: None,
                 engine: None,
                 priority: None,
+                ..Default::default()
             })
         );
         Ok(())
@@ -528,6 +529,7 @@ mod tests {
                 filename: Some("suggested-name.bin".to_owned()),
                 engine: None,
                 priority: None,
+                ..Default::default()
             })
         );
         Ok(())

@@ -3,12 +3,17 @@
 use clap::{Args, Parser, Subcommand};
 use std::{net::IpAddr, path::PathBuf};
 
+pub const APP_VERSION: &str = match option_env!("FETCHX_APP_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
 /// FetchX — a fast, extensible download manager.
 #[derive(Parser, Debug)]
 #[command(
     name = "fetchx",
-    version  = env!("CARGO_PKG_VERSION"),
-    about    = "FetchX command-line interface",
+    version = APP_VERSION,
+    about = "FetchX command-line interface",
     long_about = None,
 )]
 pub struct Cli {

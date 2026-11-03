@@ -86,7 +86,9 @@ export function Toolbar({
 
       {appVersion && (
         <span className="toolbar-version" aria-label={`App version ${appVersion}`}>
-          v{appVersion}
+          {appVersion.startsWith("v") || appVersion.startsWith("alpha") || appVersion.startsWith("beta")
+            ? appVersion
+            : `v${appVersion}`}
         </span>
       )}
     </header>

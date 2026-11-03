@@ -741,11 +741,16 @@ pub struct DeleteDownloadResponse {
     pub removed: bool,
 }
 
+pub const APP_VERSION: &str = match option_env!("FETCHX_APP_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
 #[tauri::command]
 pub fn get_app_info() -> AppInfo {
     AppInfo {
         name: "FetchX",
-        version: env!("CARGO_PKG_VERSION"),
+        version: APP_VERSION,
         ipc_version: 1,
     }
 }

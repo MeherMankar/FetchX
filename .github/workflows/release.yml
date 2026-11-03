@@ -41,6 +41,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  APP_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+  APP_VERSION_CODE: ${{ github.run_number }}
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────────
@@ -85,6 +87,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
 
       - name: Free disk space on runner
         run: |
@@ -201,6 +206,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -228,6 +236,8 @@ jobs:
       - name: Build Tauri app (Windows .exe + .msi)
         run: cargo tauri build
         working-directory: apps/desktop/src-tauri
+        env:
+          FETCHX_APP_VERSION: ${{ env.FETCHX_APP_VERSION || env.APP_VERSION }}
 
       - name: Upload Windows installer .exe
         uses: actions/upload-artifact@v4
@@ -256,6 +266,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
 
       - name: Install system dependencies
         run: |
@@ -301,6 +314,8 @@ jobs:
       - name: Build Tauri app (Linux .deb + AppImage)
         run: cargo tauri build
         working-directory: apps/desktop/src-tauri
+        env:
+          FETCHX_APP_VERSION: ${{ env.FETCHX_APP_VERSION || env.APP_VERSION }}
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
@@ -330,6 +345,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -358,6 +376,7 @@ jobs:
         run: cargo tauri build
         working-directory: apps/desktop/src-tauri
         env:
+          FETCHX_APP_VERSION: ${{ env.FETCHX_APP_VERSION || env.APP_VERSION }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -385,6 +404,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -393,6 +415,8 @@ jobs:
 
       - name: Build CLI
         run: cargo build --release -p fetchx
+        env:
+          FETCHX_APP_VERSION: ${{ env.FETCHX_APP_VERSION || env.APP_VERSION }}
 
       - name: Upload CLI binary
         uses: actions/upload-artifact@v4
@@ -411,6 +435,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -419,6 +446,8 @@ jobs:
 
       - name: Build CLI
         run: cargo build --release -p fetchx
+        env:
+          FETCHX_APP_VERSION: ${{ env.FETCHX_APP_VERSION || env.APP_VERSION }}
 
       - name: Upload CLI binary
         uses: actions/upload-artifact@v4
@@ -437,6 +466,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set release version
+        run: python scripts/set-version.py "${{ env.APP_VERSION }}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -445,6 +477,8 @@ jobs:
 
       - name: Build CLI
         run: cargo build --release -p fetchx
+        env:
+          FETCHX_APP_VERSION: ${{ env.FETCHX_APP_VERSION || env.APP_VERSION }}
 
       - name: Upload CLI binary
         uses: actions/upload-artifact@v4

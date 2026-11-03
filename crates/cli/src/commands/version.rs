@@ -1,7 +1,8 @@
+use crate::args::APP_VERSION;
 use crate::output;
 
 pub fn run(json: bool) {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = APP_VERSION;
     if json {
         output::print_json_ok(&serde_json::json!({
             "ok": true,
