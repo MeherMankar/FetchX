@@ -224,7 +224,7 @@ async fn start_retry_control_server(
         if let Some(request) = read_request(&mut first).await {
             requests_for_server.lock().await.push(request);
         }
-        let response = b"HTTP/1.1 503 Retry\r\nContent-Length: 0\r\nRetry-After: 30\r\nConnection: close\r\n\r\n";
+        let response = b"HTTP/1.1 503 Retry\r\nContent-Length: 0\r\nRetry-After: 5\r\nConnection: close\r\n\r\n";
         if first.write_all(response).await.is_err() || first.flush().await.is_err() {
             return;
         }

@@ -175,7 +175,9 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: apps/desktop/ui/package-lock.json
+          cache-dependency-path: |
+            apps/browser/extension/package-lock.json
+            apps/desktop/ui/package-lock.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -186,6 +188,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/desktop/ui
+
+      - name: Build browser extension
+        run: |
+          npm ci
+          npm run build
+        working-directory: apps/browser/extension
 
       - name: cargo check (desktop)
         run: cargo check -p fetchx-desktop
