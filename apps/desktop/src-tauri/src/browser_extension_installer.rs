@@ -295,7 +295,9 @@ struct BrowserTarget {
     native_host_key: &'static str,
     extension_key: &'static str,
     is_chromium: bool,
+    #[allow(dead_code)]
     detect_paths: &'static [&'static str],
+    #[allow(dead_code)]
     detect_reg_keys: &'static [&'static str],
 }
 
@@ -616,11 +618,6 @@ fn query_reg_key_exists(full_key: &str) -> bool {
         Ok(out) => out.status.success(),
         Err(_) => false,
     }
-}
-
-#[cfg(not(windows))]
-fn query_reg_key_exists(_full_key: &str) -> bool {
-    false
 }
 
 fn is_browser_detected(_target: &BrowserTarget) -> bool {
