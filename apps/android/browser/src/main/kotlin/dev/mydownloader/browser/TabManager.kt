@@ -3,9 +3,11 @@ package dev.fetchx.browser
 import android.os.Build
 import android.util.Log
 import android.webkit.URLUtil
+import androidx.annotation.OptIn
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.ExperimentalGeckoViewApi
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.AllowOrDeny
 import java.util.UUID
@@ -33,6 +35,7 @@ class TabManager(
     private val loadedTabIds = mutableSetOf<String>()
     private val historyStore = HistoryStore()
     private val bypassControllers = mutableMapOf<String, CloudflareBypassController>()
+    private val pendingPermissionResults = OneShotPermissionDecisions()
 
     /** Callback to notify observers of state changes. */
     var onStateChanged: (() -> Unit)? = null
@@ -51,6 +54,12 @@ class TabManager(
 
     /** Callback invoked when a magnet: URI is intercepted; takes priority over [onExternalUriRequested]. */
     var onMagnetRequested: ((String) -> Unit)? = null
+
+    /** Callback invoked for GeckoView content/media permission requests. */
+    var onSitePermissionRequested: ((origin: String, permission: String, detail: String?, resolve: (Boolean) -> Unit) -> Unit)? = null
+
+    /** Callback invoked when GeckoView requires Android runtime permissions. */
+    var onAndroidPermissionsRequested: ((permissions: Array<out String>, resolve: (Boolean) -> Unit) -> Unit)? = null
 
     // ──Public API ─────────────────────────────────────────────────────────
 
@@ -255,6 +264,60 @@ class TabManager(
         onStateChanged?.invoke()
     }
 
+    private fun requestSitePermissionThenAndroid(
+        origin: String,
+        categories: List<String>,
+        detail: String?,
+        complete: (Boolean) -> Unit,
+    ) {
+        val androidPermissions = when {
+            categories.all { it in setOf("camera", "microphone", "location") } ->
+                androidPermissionsForCategories(categories)
+            categories.all {
+                it in setOf(
+                    "notifications",
+                    "persistent storage",
+                    "virtual reality features",
+                    "silent media autoplay",
+                    "media autoplay with sound",
+                    "protected media playback",
+                    "permission to bypass tracking protection",
+                    "third-party storage access",
+                    "local device access",
+                    "local network access",
+                )
+            } -> emptyList()
+            else -> null
+        }
+        if (androidPermissions == null) {
+            complete(false)
+            return
+        }
+        val siteRequest = onSitePermissionRequested
+        if (siteRequest == null) {
+            complete(false)
+            return
+        }
+        siteRequest(
+            displayPermissionOrigin(origin),
+            categories.joinToString(" and "),
+            detail,
+        ) { allowed ->
+            if (!allowed) {
+                complete(false)
+            } else if (androidPermissions.isEmpty()) {
+                complete(true)
+            } else {
+                val androidRequest = onAndroidPermissionsRequested
+                if (androidRequest == null) {
+                    complete(false)
+                } else {
+                    androidRequest(androidPermissions.toTypedArray(), complete)
+                }
+            }
+        }
+    }
+
     /**
      * If [uri] is a bare domain (no www. prefix), returns the same URL with www. added.
      * Returns null if the URL already has www., has a subdomain, or isn't a simple https domain.
@@ -276,6 +339,7 @@ class TabManager(
         }
     }
 
+    @OptIn(markerClass = [ExperimentalGeckoViewApi::class])
     private fun buildSession(tabId: String): GeckoSession {
         val s = GeckoSession()
         val cfController = CloudflareBypassController()
@@ -298,6 +362,168 @@ class TabManager(
                     antiTrackingCategory = event.antiTrackingCategory,
                     requestUri = event.uri,
                 )
+            }
+        }
+
+        s.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                permission: GeckoSession.PermissionDelegate.ContentPermission,
+            ): GeckoResult<Int> {
+                if (permission.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW ||
+                    permission.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                ) {
+                    if (permission.value == GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW &&
+                        permission.permission == GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION
+                    ) {
+                        pendingPermissionResults.remember(permission.uri, listOf("location"), allowed = true)
+                    }
+                    return GeckoResult.fromValue(permission.value)
+                }
+                if (!shouldPromptForContentPermission(permission.permission, permission.value)) {
+                    Log.w(TAG, "Rejecting unknown content permission value=${permission.value} type=${permission.permission}")
+                    return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                }
+                val description = sitePermissionDescription(permission.permission)
+                    ?: return GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                val result = GeckoResult<Int>()
+                val categories = listOf(description.first)
+                val priorDecision = pendingPermissionResults.consume(permission.uri, categories)
+                if (priorDecision != null) {
+                    result.complete(
+                        if (priorDecision) {
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                        } else {
+                            GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                        },
+                    )
+                    return result
+                }
+                permission.notifyShown()
+                if (description.first == "location") {
+                    val siteRequest = onSitePermissionRequested
+                    if (siteRequest == null) {
+                        result.complete(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                    } else {
+                        siteRequest(
+                            displayPermissionOrigin(permission.uri),
+                            description.first,
+                            description.second,
+                        ) { allowed ->
+                            pendingPermissionResults.remember(permission.uri, categories, allowed)
+                            result.complete(
+                                if (allowed) {
+                                    GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                                } else {
+                                    GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                                },
+                            )
+                        }
+                    }
+                } else {
+                    requestSitePermissionThenAndroid(
+                        origin = permission.uri,
+                        categories = categories,
+                        detail = description.second,
+                    ) { allowed ->
+                        result.complete(
+                            if (allowed) {
+                                GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                            } else {
+                                GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                            },
+                        )
+                    }
+                }
+                return result
+            }
+
+            override fun onMediaPermissionRequest(
+                session: GeckoSession,
+                uri: String,
+                video: Array<GeckoSession.PermissionDelegate.MediaSource>?,
+                audio: Array<GeckoSession.PermissionDelegate.MediaSource>?,
+                callback: GeckoSession.PermissionDelegate.MediaCallback,
+            ) {
+                val videoSource = video?.firstOrNull {
+                    it.source == GeckoSession.PermissionDelegate.MediaSource.SOURCE_CAMERA
+                }
+                val audioSource = audio?.firstOrNull {
+                    it.source == GeckoSession.PermissionDelegate.MediaSource.SOURCE_MICROPHONE
+                }
+                val videoRequested = !video.isNullOrEmpty()
+                val audioRequested = !audio.isNullOrEmpty()
+                if ((videoRequested && videoSource == null) || (audioRequested && audioSource == null) ||
+                    (!videoRequested && !audioRequested)
+                ) {
+                    callback.reject()
+                    return
+                }
+
+                val requested = buildList {
+                    if (videoSource != null) add("camera")
+                    if (audioSource != null) add("microphone")
+                }
+                val priorDecision = pendingPermissionResults.consume(uri, requested)
+                if (priorDecision != null) {
+                    if (priorDecision) {
+                        callback.grant(videoSource, audioSource)
+                    } else {
+                        callback.reject()
+                    }
+                    return
+                }
+                val details = listOfNotNull(videoSource?.name, audioSource?.name)
+                    .distinct()
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString()
+                    ?.let { "Available device: $it" }
+                requestSitePermissionThenAndroid(uri, requested, details) { allowed ->
+                    if (allowed) {
+                        callback.grant(videoSource, audioSource)
+                    } else {
+                        callback.reject()
+                    }
+                }
+            }
+
+            override fun onAndroidPermissionsRequest(
+                session: GeckoSession,
+                permissions: Array<out String>?,
+                callback: GeckoSession.PermissionDelegate.Callback,
+            ) {
+                val requested = permissions.orEmpty()
+                val categories = androidPermissionCategories(requested)
+                if (categories == null) {
+                    Log.w(TAG, "Rejecting unsupported Android permission set")
+                    callback.reject()
+                    return
+                }
+                val currentUrl = store.findTab(tabId)?.url.orEmpty()
+                if (categories == listOf("location")) {
+                    val siteDecision = pendingPermissionResults.consume(currentUrl, categories)
+                    if (siteDecision != true) {
+                        callback.reject()
+                        return
+                    }
+                    val androidRequest = onAndroidPermissionsRequested
+                    if (androidRequest == null) {
+                        callback.reject()
+                    } else {
+                        androidRequest(requested) { granted ->
+                            if (granted) callback.grant() else callback.reject()
+                        }
+                    }
+                    return
+                }
+                requestSitePermissionThenAndroid(
+                    origin = currentUrl,
+                    categories = categories,
+                    detail = null,
+                ) { granted ->
+                    pendingPermissionResults.remember(currentUrl, categories, granted)
+                    if (granted) callback.grant() else callback.reject()
+                }
             }
         }
 

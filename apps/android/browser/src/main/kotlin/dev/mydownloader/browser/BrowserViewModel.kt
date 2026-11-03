@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -26,6 +27,8 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import java.io.IOException
 import java.lang.ref.WeakReference
+import java.util.ArrayDeque
+import java.util.UUID
 import kotlin.coroutines.coroutineContext
 
 private const val TAG = "BrowserViewModel"
@@ -80,6 +83,8 @@ data class BrowserUiState(
     val trackerBlockingEnabled: Boolean = true,
     val activeTabBlockedRequests: Long = 0,
     val activeTabBlockedHosts: List<String> = emptyList(),
+    val sitePermissionPrompt: SitePermissionPrompt? = null,
+    val androidRuntimePermissionRequests: List<AndroidRuntimePermissionRequest> = emptyList(),
     val showPrivacySettings: Boolean = false,
     val privacySettings: PrivacySettings = PrivacySettings(),
     val showExtensions: Boolean = false,
@@ -137,6 +142,16 @@ data class PendingDownload(
     val contentLength: Long? = null,
 )
 
+private data class PendingSitePermission(
+    val prompt: SitePermissionPrompt,
+    val resolve: (Boolean) -> Unit,
+)
+
+private data class PendingAndroidRuntimePermission(
+    val request: AndroidRuntimePermissionRequest,
+    val requestedPermissions: List<String>,
+    val resolve: (Boolean) -> Unit,
+)
 
 class BrowserViewModel internal constructor(
     internal val bookmarkController: BookmarkController = BookmarkController(),
@@ -161,6 +176,9 @@ class BrowserViewModel internal constructor(
     private var extensionStateListener: (() -> Unit)? = null
     private val firefoxAddonsCatalog = FirefoxAddonsCatalog()
     private var firefoxAddonsSearchGeneration = 0
+    private val permissionLock = Any()
+    private val sitePermissionQueue = ArrayDeque<PendingSitePermission>()
+    private val androidPermissionQueue = ArrayDeque<PendingAndroidRuntimePermission>()
 
     init {
         trackerBlockingController.onStateChanged = ::syncTrackerBlockingState
@@ -212,6 +230,8 @@ class BrowserViewModel internal constructor(
             }
             newTm.onExternalUriRequested = ::openExternalUri
             newTm.onMagnetRequested = ::onMagnetRequested
+            newTm.onSitePermissionRequested = ::enqueueSitePermission
+            newTm.onAndroidPermissionsRequested = ::requestAndroidRuntimePermissions
             val restoredTabs = loadSavedTabs()
             val restoredActiveId = loadSavedActiveTabId()
             newTm.restoreHistory(loadSavedHistory())
@@ -682,6 +702,86 @@ class BrowserViewModel internal constructor(
 
     fun openTrackerDetails() {
         _uiState.update { it.copy(showTrackerDetails = true) }
+    }
+
+    internal fun enqueueSitePermission(
+        origin: String,
+        permission: String,
+        detail: String?,
+        resolve: (Boolean) -> Unit,
+    ) {
+        val prompt = SitePermissionPrompt(
+            id = UUID.randomUUID().toString(),
+            origin = origin,
+            permission = permission,
+            detail = detail,
+        )
+        synchronized(permissionLock) {
+            sitePermissionQueue.addLast(PendingSitePermission(prompt, resolve))
+            if (sitePermissionQueue.size == 1) {
+                _uiState.update { it.copy(sitePermissionPrompt = prompt) }
+            }
+        }
+    }
+
+    fun resolveSitePermissionPrompt(promptId: String, allowed: Boolean) {
+        val pending: PendingSitePermission
+        val nextPrompt: SitePermissionPrompt?
+        synchronized(permissionLock) {
+            val active = sitePermissionQueue.firstOrNull() ?: return
+            if (active.prompt.id != promptId) return
+            pending = sitePermissionQueue.removeFirst()
+            nextPrompt = sitePermissionQueue.firstOrNull()?.prompt
+            _uiState.update { it.copy(sitePermissionPrompt = nextPrompt) }
+        }
+        pending.resolve(allowed)
+    }
+
+    private fun requestAndroidRuntimePermissions(
+        permissions: Array<out String>,
+        resolve: (Boolean) -> Unit,
+    ) {
+        val requested = permissions.distinct()
+        val context = applicationContext
+        if (context == null || requested.isEmpty() || requested.any { !isSupportedAndroidRuntimePermission(it) }) {
+            resolve(false)
+            return
+        }
+        val missing = requested.filter {
+            context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) {
+            resolve(true)
+            return
+        }
+
+        synchronized(permissionLock) {
+            val request = AndroidRuntimePermissionRequest(
+                id = UUID.randomUUID().toString(),
+                permissions = missing,
+            )
+            androidPermissionQueue.addLast(PendingAndroidRuntimePermission(request, requested, resolve))
+            _uiState.update {
+                it.copy(androidRuntimePermissionRequests = androidPermissionQueue.map { pending -> pending.request })
+            }
+        }
+    }
+
+    fun resolveNextAndroidRuntimePermissionRequest(results: Map<String, Boolean>) {
+        val pending: PendingAndroidRuntimePermission
+        val nextRequests: List<AndroidRuntimePermissionRequest>
+        val context = applicationContext
+        synchronized(permissionLock) {
+            pending = androidPermissionQueue.pollFirst() ?: return
+            nextRequests = androidPermissionQueue.map { it.request }
+            _uiState.update { it.copy(androidRuntimePermissionRequests = nextRequests) }
+        }
+        val granted = context != null &&
+            areAndroidRuntimePermissionsGranted(pending.requestedPermissions) { permission ->
+                results[permission] == true ||
+                    context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+            }
+        pending.resolve(granted)
     }
 
     fun closeTrackerDetails() {
@@ -1321,6 +1421,22 @@ class BrowserViewModel internal constructor(
 
     override fun onCleared() {
         super.onCleared()
+        val outstandingSitePermissions: List<PendingSitePermission>
+        val outstandingAndroidPermissions: List<PendingAndroidRuntimePermission>
+        synchronized(permissionLock) {
+            outstandingSitePermissions = sitePermissionQueue.toList()
+            outstandingAndroidPermissions = androidPermissionQueue.toList()
+            sitePermissionQueue.clear()
+            androidPermissionQueue.clear()
+            _uiState.update {
+                it.copy(
+                    sitePermissionPrompt = null,
+                    androidRuntimePermissionRequests = emptyList(),
+                )
+            }
+        }
+        outstandingSitePermissions.forEach { it.resolve(false) }
+        outstandingAndroidPermissions.forEach { it.resolve(false) }
         searchSuggestionJob?.cancel()
         searchSuggestionJob = null
         mediaFormatJob?.cancel()

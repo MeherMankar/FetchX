@@ -196,6 +196,17 @@ fun BrowserScreen(
     val extensionPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(viewModel::installExtension) }
+    val androidPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { results ->
+        viewModel.resolveNextAndroidRuntimePermissionRequest(results)
+    }
+    val androidPermissionRequest = uiState.androidRuntimePermissionRequests.firstOrNull()
+    LaunchedEffect(androidPermissionRequest?.id) {
+        androidPermissionRequest?.let { request ->
+            androidPermissionLauncher.launch(request.permissions.toTypedArray())
+        }
+    }
     val urlFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var isUrlBarExpanded by rememberSaveable { mutableStateOf(false) }
@@ -1368,6 +1379,13 @@ fun BrowserScreen(
             blockedHosts = uiState.activeTabBlockedHosts,
             onTrackerProtectionChange = viewModel::setTrackerBlockingEnabled,
             onDismiss = viewModel::closeTrackerDetails,
+        )
+    }
+
+    uiState.sitePermissionPrompt?.let { prompt ->
+        SitePermissionPromptDialog(
+            prompt = prompt,
+            onResolve = { allowed -> viewModel.resolveSitePermissionPrompt(prompt.id, allowed) },
         )
     }
 

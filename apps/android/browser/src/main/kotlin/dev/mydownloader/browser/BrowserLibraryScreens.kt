@@ -520,7 +520,7 @@ internal fun SitePrivacyDialog(
     val connectionStatus = siteConnectionStatus(url)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Site privacy") },
+        title = { Text("Site security & privacy") },
         text = {
             Column(
                 modifier = Modifier
@@ -563,6 +563,15 @@ internal fun SitePrivacyDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Column {
+                    Text("Website permission requests", style = MaterialTheme.typography.labelMedium)
+                    Text("Prompt before access", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Supported requests are sent to GeckoView after your choice. Saved site decisions cannot be edited here.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("Tracking protection", style = MaterialTheme.typography.labelMedium)
@@ -598,6 +607,35 @@ internal fun SitePrivacyDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+@Composable
+internal fun SitePermissionPromptDialog(
+    prompt: SitePermissionPrompt,
+    onResolve: (Boolean) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { onResolve(false) },
+        title = { Text("Allow website permission?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${prompt.origin} wants permission to use ${prompt.permission}.")
+                prompt.detail?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onResolve(true) }) { Text("Allow") }
+        },
+        dismissButton = {
+            TextButton(onClick = { onResolve(false) }) { Text("Don't allow") }
         },
     )
 }
