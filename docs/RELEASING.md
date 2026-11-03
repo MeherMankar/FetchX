@@ -22,6 +22,9 @@ Tag-triggered releases use the tag name as the Android APK's displayed
 version. Cargo and Tauri package versions remain defined by their manifests.
 Local Android builds default to `0.0.0-dev` unless an `appVersion` Gradle
 property is supplied.
+For Windows prerelease builds, the workflow adds the numeric GitHub Actions run
+number as Tauri version build metadata so WiX can create the MSI. This does not
+change the app's displayed release version.
 
 ## Optional signing secrets
 

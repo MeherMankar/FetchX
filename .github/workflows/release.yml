@@ -209,6 +209,21 @@ jobs:
       - name: Set release version
         run: python scripts/set-version.py "${{ env.APP_VERSION }}"
 
+      - name: Set numeric MSI build metadata
+        shell: pwsh
+        run: |
+          $configPath = "apps/desktop/src-tauri/tauri.conf.json"
+          $config = Get-Content $configPath -Raw | ConvertFrom-Json
+          $version = [string]$config.version
+          if ($version -match '^[0-9]+\.[0-9]+\.[0-9]+(?:-|[+])') {
+            $runNumber = [int]$env:GITHUB_RUN_NUMBER
+            if ($runNumber -lt 1 -or $runNumber -gt 65535) {
+              throw "MSI build metadata must be between 1 and 65535; got $runNumber"
+            }
+            $config.version = "$($version -replace '\+.*$', '')+$runNumber"
+            $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+          }
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
