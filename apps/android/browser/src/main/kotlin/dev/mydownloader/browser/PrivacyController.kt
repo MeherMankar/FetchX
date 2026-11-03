@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoRuntimeSettings
+import java.net.URI
+import java.util.Locale
 
 data class PrivacySettings(
     val adBlockingEnabled: Boolean = true,
@@ -13,6 +15,21 @@ data class PrivacySettings(
     val thirdPartyCookieIsolationEnabled: Boolean = false, // off by default — breaks many sites
     val httpsOnlyEnabled: Boolean = false,
 )
+
+internal enum class SiteConnectionStatus {
+    HTTPS,
+    HTTP,
+    UNKNOWN,
+}
+
+internal fun siteConnectionStatus(url: String): SiteConnectionStatus {
+    val scheme = runCatching { URI(url).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+    return when (scheme) {
+        "https" -> SiteConnectionStatus.HTTPS
+        "http" -> SiteConnectionStatus.HTTP
+        else -> SiteConnectionStatus.UNKNOWN
+    }
+}
 
 class PrivacyController(initialSettings: PrivacySettings = PrivacySettings()) {
     private val lock = Any()

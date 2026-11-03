@@ -180,9 +180,7 @@ class BrowserViewModel internal constructor(
         loadSearchSettings(view.context.applicationContext)
         loadSavedPrivacySettings()
         val savedBookmarks = loadSavedBookmarks()
-        if (savedBookmarks.isNotEmpty()) {
-            bookmarkController.loadBookmarks(savedBookmarks)
-        }
+        bookmarkController.loadBookmarks(savedBookmarks)
         val manager = extensionManager ?: GeckoRuntimeHolder.getExtensionManager(runtime).also {
             extensionManager = it
         }
@@ -238,7 +236,7 @@ class BrowserViewModel internal constructor(
         }
         val tabs = tm.allTabStates()
         val activeUrl = tabs.find { it.id == activeId }?.url ?: "about:blank"
-        val historyEntries = tm.historyForActiveTab()
+        val historyEntries = tm.allHistory()
         bookmarkController.refreshForUrl(activeUrl)
         val bState = bookmarkController.state.value
         val trackerState = trackerBlockingController.state.value
@@ -397,7 +395,11 @@ class BrowserViewModel internal constructor(
 
     fun clearHistory() {
         tabManager?.clearAllHistory()
-        _uiState.update { it.copy(historyEntries = emptyList(), showHistory = false) }
+        _uiState.update { it.copy(historyEntries = emptyList()) }
+    }
+
+    fun removeHistoryEntry(id: String) {
+        tabManager?.removeHistoryEntry(id)
     }
 
     fun navigateToHistoryEntry(url: String) {
@@ -909,6 +911,7 @@ class BrowserViewModel internal constructor(
                 isCurrentPageBookmarked = bState.isCurrentPageBookmarked,
             )
         }
+        saveBookmarks(bState.bookmarks)
     }
 
     private fun syncTrackerBlockingState() {

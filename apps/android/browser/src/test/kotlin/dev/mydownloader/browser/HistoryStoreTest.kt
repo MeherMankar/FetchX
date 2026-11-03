@@ -2,6 +2,7 @@ package dev.fetchx.browser
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -135,5 +136,17 @@ class HistoryStoreTest {
 
         assertEquals("https://newer.example", store.allEntries().first().url)
         assertEquals(2, store.totalCount())
+    }
+
+    @Test fun `removeEntry removes selected entry from tab and global history`() {
+        val store = HistoryStore()
+        store.recordNavigation("t1", "https://first.example", 100L)
+        store.recordNavigation("t1", "https://second.example", 200L)
+        val selected = store.allEntries().first()
+
+        assertTrue(store.removeEntry(selected.id))
+        assertEquals(listOf("https://first.example"), store.entriesForTab("t1").map { it.url })
+        assertEquals(listOf("https://first.example"), store.allEntries().map { it.url })
+        assertFalse(store.removeEntry(selected.id))
     }
 }

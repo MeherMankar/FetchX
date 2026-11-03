@@ -182,4 +182,12 @@ class PrivacyControllerTest {
 
         assertEquals(existingTabConfiguration, newTabConfiguration)
     }
+
+    @Test
+    fun `site connection status reflects only the URL scheme`() {
+        assertEquals(SiteConnectionStatus.HTTPS, siteConnectionStatus("https://example.com"))
+        assertEquals(SiteConnectionStatus.HTTP, siteConnectionStatus("http://example.com"))
+        assertEquals(SiteConnectionStatus.UNKNOWN, siteConnectionStatus("about:blank"))
+        assertEquals(SiteConnectionStatus.UNKNOWN, siteConnectionStatus("not a URL"))
+    }
 }

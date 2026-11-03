@@ -204,6 +204,13 @@ class TabManager(
         onStateChanged?.invoke()
     }
 
+    /** Removes a saved history entry across the per-tab and global snapshots. */
+    fun removeHistoryEntry(id: String): Boolean {
+        val removed = historyStore.removeEntry(id)
+        if (removed) onStateChanged?.invoke()
+        return removed
+    }
+
     /** Clears history for the active tab only and notifies observers. */
     fun clearTabHistory() {
         val activeId = store.activeTabId() ?: return

@@ -69,6 +69,15 @@ class HistoryStore(private val maxEntries: Int = 200) {
         _globalHistory.addAll(entries.sortedByDescending { it.timestampMs }.take(maxEntries * 2))
     }
 
+    /** Removes one saved history entry from the per-tab and global snapshots. */
+    fun removeEntry(id: String): Boolean {
+        var removed = _globalHistory.removeAll { it.id == id }
+        _history.values.forEach { entries ->
+            if (entries.removeAll { it.id == id }) removed = true
+        }
+        return removed
+    }
+
     /** Clears history for [tabId] only. */
     fun clearTab(tabId: String) {
         _history.remove(tabId)

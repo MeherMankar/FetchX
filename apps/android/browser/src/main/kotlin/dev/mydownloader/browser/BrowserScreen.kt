@@ -159,9 +159,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
-import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.Locale
 
 /**
  * Full-screen browser powered by GeckoView, with multi-tab support and history.
@@ -1343,76 +1341,32 @@ fun BrowserScreen(
     // â”€â”€ Dialogs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     if (uiState.showHistory) {
-        var historyQuery by remember { mutableStateOf("") }
-        val filteredHistory = uiState.historyEntries.filter {
-            historyQuery.isBlank() || it.url.contains(historyQuery, ignoreCase = true) ||
-                (it.title ?: "").contains(historyQuery, ignoreCase = true)
-        }
-        AlertDialog(
-            onDismissRequest = { viewModel.closeHistory() },
-            title = { Text("History") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = historyQuery,
-                        onValueChange = { historyQuery = it },
-                        singleLine = true,
-                        placeholder = { Text("Search history") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (filteredHistory.isEmpty()) {
-                        Text("No history yet.", style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(top = 12.dp))
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
-                            verticalArrangement = Arrangement.spacedBy(0.dp),
-                        ) {
-                            items(filteredHistory, key = { it.id }) { entry ->
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { viewModel.navigateToHistoryEntry(entry.url) }
-                                        .padding(vertical = 8.dp, horizontal = 4.dp),
-                                ) {
-                                    Text(entry.title ?: entry.url, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(entry.url, style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(formatHistoryTimestamp(entry.timestampMs),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                HorizontalDivider()
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.clearHistory() }) { Text("Clear") }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.closeHistory() }) { Text("Close") }
-            },
+        BrowserHistoryScreen(
+            entries = uiState.historyEntries,
+            onDismiss = viewModel::closeHistory,
+            onOpen = viewModel::navigateToHistoryEntry,
+            onDelete = viewModel::removeHistoryEntry,
+            onClear = viewModel::clearHistory,
         )
     }
 
     if (uiState.showBookmarks) {
-        BookmarksDialog(
+        BrowserBookmarksScreen(
             bookmarks = uiState.bookmarks,
-            onDismiss = { viewModel.closeBookmarks() },
-            onOpen = { url -> viewModel.navigateToBookmark(url) },
-            onDelete = { id -> viewModel.removeBookmark(id) },
+            onDismiss = viewModel::closeBookmarks,
+            onOpen = viewModel::navigateToBookmark,
+            onEdit = viewModel::updateBookmark,
+            onDelete = viewModel::removeBookmark,
         )
     }
 
     if (uiState.showTrackerDetails) {
-        TrackerBlockingDialog(
-            enabled = uiState.trackerBlockingEnabled,
+        SitePrivacyDialog(
+            url = uiState.activeTab?.url.orEmpty(),
+            trackerProtectionEnabled = uiState.trackerBlockingEnabled,
             blockedRequests = uiState.activeTabBlockedRequests,
             blockedHosts = uiState.activeTabBlockedHosts,
-            onEnabledChange = viewModel::setTrackerBlockingEnabled,
+            onTrackerProtectionChange = viewModel::setTrackerBlockingEnabled,
             onDismiss = viewModel::closeTrackerDetails,
         )
     }
@@ -4037,133 +3991,6 @@ private fun PrivacySwitchRow(
     }
 }
 
-@Composable
-private fun TrackerBlockingDialog(
-    enabled: Boolean,
-    blockedRequests: Long,
-    blockedHosts: List<String>,
-    onEnabledChange: (Boolean) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Tracker blocking") },
-        text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (enabled) "Enabled" else "Disabled",
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(checked = enabled, onCheckedChange = onEnabledChange)
-                }
-                Text("Blocked requests in this tab: $blockedRequests")
-                if (blockedHosts.isNotEmpty()) {
-                    Text(
-                        text = "Blocked hosts",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-                    )
-                    LazyColumn {
-                        items(blockedHosts) { host ->
-                            Text(
-                                text = host,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(vertical = 2.dp),
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
-        },
-    )
-}
-
-@Composable
-private fun BookmarksDialog(
-    bookmarks: List<Bookmark>,
-    onDismiss: () -> Unit,
-    onOpen: (String) -> Unit,
-    onDelete: (String) -> Unit,
-) {
-    var bookmarkQuery by remember { mutableStateOf("") }
-    val filteredBookmarks = bookmarks.filter {
-        bookmarkQuery.isBlank() || it.title.contains(bookmarkQuery, ignoreCase = true) ||
-            it.url.contains(bookmarkQuery, ignoreCase = true)
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Bookmarks") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = bookmarkQuery,
-                    onValueChange = { bookmarkQuery = it },
-                    singleLine = true,
-                    placeholder = { Text("Search bookmarks") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (filteredBookmarks.isEmpty()) {
-                    Text(
-                        text = "No bookmarks yet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 320.dp),
-                    ) {
-                        items(filteredBookmarks, key = { it.id }) { bookmark ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onOpen(bookmark.url) }
-                                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = bookmark.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    Text(
-                                        text = bookmark.url,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                IconButton(onClick = { onDelete(bookmark.id) }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Delete bookmark",
-                                    )
-                                }
-                            }
-                            HorizontalDivider()
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        },
-    )
-}
-
 /** Returns true for URLs that point directly to a media file and can be
  * downloaded without yt-dlp format extraction.
  */
@@ -4257,9 +4084,4 @@ private fun VideoDownloadBanner(
             }
         }
     }
-}
-
-private fun formatHistoryTimestamp(epochMs: Long): String {
-    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-    return sdf.format(Date(epochMs))
 }
