@@ -37,6 +37,13 @@ repository secrets to produce a signed APK:
 For macOS distribution outside development, configure Apple signing and
 notarization secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`.
+`APPLE_CERTIFICATE` must be the base64-encoded contents of an exported
+PKCS#12 (`.p12`) certificate that includes its private key. For example, on
+macOS, copy the encoded value with
+`base64 -i certificate.p12 | tr -d '\n' | pbcopy` and paste it into the
+secret. `APPLE_CERTIFICATE_PASSWORD` must match the password used when
+exporting that `.p12` file. A raw `.p12` file, a certificate without its
+private key, or a mismatched password will fail during macOS bundle signing.
 Windows installers are currently unsigned.
 
 Review and publish the generated draft release only after verifying its
