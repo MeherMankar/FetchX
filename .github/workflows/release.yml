@@ -247,6 +247,9 @@ jobs:
           npm run build
         working-directory: apps/browser/extension
 
+      - name: Build native messaging host
+        run: cargo build --release -p fetchx-native-host
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
@@ -331,6 +334,9 @@ jobs:
           npm run build
         working-directory: apps/browser/extension
 
+      - name: Build native messaging host
+        run: cargo build --release -p fetchx-native-host
+
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked
 
@@ -397,6 +403,9 @@ jobs:
           npm ci
           npm run build
         working-directory: apps/browser/extension
+
+      - name: Build native messaging host
+        run: cargo build --release -p fetchx-native-host
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --locked

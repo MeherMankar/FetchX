@@ -62,24 +62,28 @@ Build output goes to `dist-chromium/` and `dist-firefox/`.
 
 ## Loading as an unpacked extension (development)
 
-1. Open `chrome://extensions/` in Chrome (or `edge://extensions/` in Edge).
+1. In FetchX Settings → Browser extensions, click **Open install page** next to Chrome or Edge.
 2. Enable **Developer mode** (top right).
 3. Click **Load unpacked**.
-4. Select the `apps/browser/extension/` directory (the one containing `manifest.json`).
-5. Note the extension ID shown on the card — you will need it when installing the native host.
+4. Select the Chromium extension folder shown in FetchX Settings.
+5. Restart the browser after the native host is registered.
 
 ## Loading in Firefox (development)
 
-1. Build the extension with `npm run build`.
-2. Open `about:debugging#/runtime/this-firefox`.
-3. Click **Load Temporary Add-on** and select `dist-firefox/manifest.json`.
-4. Build the native host with `cargo build --release -p fetchx-native-host`.
-5. From `apps/browser/native-host/manifest`, run
-   `.\install-firefox-windows.ps1`, then restart Firefox.
+1. In FetchX Settings → Browser extensions, click **Open install page** next to Firefox.
+2. Click **Load Temporary Add-on** and select `manifest.json` from the Firefox
+   extension folder shown in FetchX Settings.
+3. Keep in mind that Firefox removes temporary add-ons when it exits. Permanent
+   installation requires a signed add-on published through Firefox Add-ons.
 
 Firefox uses the fixed extension ID `FetchX@FetchX.app` and a separate native
 host manifest/registry entry from Chrome and Edge. To remove its registration,
 run `.\install-firefox-windows.ps1 -Uninstall`.
+
+FetchX does not yet have browser-store listings. Until it is published, Chromium
+extensions must be loaded unpacked and Firefox extensions can only be loaded
+temporarily; the desktop installer does not claim that a registry entry installs
+the add-on.
 
 ## Protocol
 

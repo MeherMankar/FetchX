@@ -51,16 +51,18 @@ Windows).
 ## Installation (Windows)
 
 1. Build the release binary (above).
-2. Load the extension in Chrome/Edge as an unpacked extension to get its ID.
-3. Run the installation script:
+2. Load the extension from FetchX Settings → Browser extensions. The extension
+   uses a fixed Chromium ID, so no ID argument is needed.
+3. Run the installation script to register the native messaging host:
 
 ```powershell
 cd apps\browser\native-host\manifest
-.\install-windows.ps1 -ExtensionId "your32characterextensionidhere"
+.\install-windows.ps1
 ```
 
 This writes the native messaging host manifest to `%APPDATA%\fetchx\native-host\`
-and registers it in the Windows Registry for Chrome and Microsoft Edge.
+and registers the native host in the Windows Registry. It does not install the
+browser extension; use **Load unpacked** in the browser's extension page.
 
 To uninstall:
 
@@ -81,7 +83,10 @@ cd apps\browser\native-host\manifest
 .\install-firefox-windows.ps1
 ```
 
-Restart Firefox after installation. To uninstall the Firefox registration:
+The script registers the native host only. Use **Load Temporary Add-on** in
+Firefox and select the `manifest.json` from FetchX Settings → Browser extensions.
+Temporary add-ons are removed when Firefox exits; a permanent Firefox add-on
+must be signed. To uninstall the Firefox native-host registration:
 
 ```powershell
 .\install-firefox-windows.ps1 -Uninstall

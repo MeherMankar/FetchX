@@ -1350,6 +1350,30 @@ pub async fn get_browser_extension_status(
     .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn open_browser_extension_install_page(
+    app: AppHandle,
+    browser: String,
+) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| crate::app::fallback_app_data_dir());
+    let bundled_engines_dir = app
+        .path()
+        .resource_dir()
+        .map(|path| path.join("engines"))
+        .unwrap_or_else(|_| crate::app::fallback_bundled_engines_dir(&app_data_dir));
+
+    tokio::task::spawn_blocking(move || {
+        crate::browser_extension_installer::ensure_registered(&app_data_dir, &bundled_engines_dir)?;
+        crate::browser_extension_installer::open_browser_extension_page(&browser)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};

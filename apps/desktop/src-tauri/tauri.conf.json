@@ -27,6 +27,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "deb", "appimage", "dmg"],
+    "resources": {
+      "../../../target/release/fetchx-native-host*": "engines/"
+    },
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"

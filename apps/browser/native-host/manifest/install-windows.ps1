@@ -3,8 +3,8 @@
 # Usage:
 #   .\install-windows.ps1 [-ExtensionId "iemejekblepcfhklcadedfdmgnhjifio"] [-Uninstall]
 #
-# Registers the Native Messaging Host and External Extension into the Windows Registry
-# for all available Chromium browsers:
+# Registers the Native Messaging Host for Chromium browsers. The extension itself
+# must be loaded through the browser UI until FetchX is published in the Chrome Web Store:
 #   Google Chrome, Chrome Beta/Dev/Canary, Microsoft Edge, Edge Beta/Dev/Canary,
 #   Brave Browser, Brave Beta/Nightly, Vivaldi, Opera, Opera GX, Arc, Yandex, Thorium, Chromium.
 
@@ -24,8 +24,6 @@ $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..\..")).Path
 $HostBinaryRelease = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 $HostBinaryDebug   = Join-Path $RepoRoot "target\debug\fetchx-native-host.exe"
 $HostBinary = if (Test-Path $HostBinaryRelease) { $HostBinaryRelease } else { $HostBinaryDebug }
-
-$ExtensionDir = Join-Path $RepoRoot "apps\browser\extension\dist-chromium"
 
 $BrowserKeys = @(
     "Google\Chrome",
@@ -51,7 +49,7 @@ $BrowserKeys = @(
 )
 
 if ($Uninstall) {
-    Write-Host "Uninstalling FetchX Native Messaging Host and Extension registrations..."
+    Write-Host "Uninstalling FetchX Native Messaging Host registrations..."
     foreach ($B in $BrowserKeys) {
         Remove-Item -Path "HKCU:\Software\$B\NativeMessagingHosts\$HostName" -Recurse -ErrorAction SilentlyContinue
         Remove-Item -Path "HKCU:\Software\$B\Extensions\$ExtensionId" -Recurse -ErrorAction SilentlyContinue
@@ -86,23 +84,17 @@ $Manifest = @{
 Set-Content -Path $ManifestPath -Value $Manifest -Encoding UTF8
 Write-Host "Wrote native messaging host manifest to: $ManifestPath"
 
-# Register Native Messaging Hosts and External Extensions
+# Register native messaging hosts and remove invalid local-folder extension registrations.
 foreach ($B in $BrowserKeys) {
     $NativeKey = "HKCU:\Software\$B\NativeMessagingHosts\$HostName"
     $ExtKey    = "HKCU:\Software\$B\Extensions\$ExtensionId"
 
     New-Item -Path $NativeKey -Force | Out-Null
     Set-ItemProperty -Path $NativeKey -Name "(Default)" -Value $ManifestPath
-
-    if (Test-Path $ExtensionDir) {
-        New-Item -Path $ExtKey -Force | Out-Null
-        Set-ItemProperty -Path $ExtKey -Name "path" -Value $ExtensionDir
-        Set-ItemProperty -Path $ExtKey -Name "version" -Value "0.2.0"
-    }
+    Remove-Item -Path $ExtKey -Recurse -ErrorAction SilentlyContinue
 
     Write-Host "Registered browser: $B"
 }
 
 Write-Host ""
-Write-Host "Installation complete for all available Chromium browsers."
-Write-Host "Restart your browser(s) for changes to take effect."
+Write-Host "Native host setup complete. Load the extension from FetchX Settings > Browser extensions."

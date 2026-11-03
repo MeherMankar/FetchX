@@ -21,6 +21,25 @@ export interface AppInfo {
   ipc_version: number;
 }
 
+export interface BrowserRegistrationResult {
+  browser: string;
+  detected: boolean;
+  native_host_registered: boolean;
+  extension_registered: boolean;
+  error: string | null;
+}
+
+export interface BrowserExtensionStatus {
+  extension_id_chromium: string;
+  extension_id_firefox: string;
+  chromium_extension_path: string;
+  firefox_extension_path: string;
+  chromium_extension_installed: boolean;
+  firefox_extension_installed: boolean;
+  native_host_binary_path: string | null;
+  browsers: BrowserRegistrationResult[];
+}
+
 export interface DownloadProgress {
   downloaded_bytes: number;
   total_bytes: number | null;

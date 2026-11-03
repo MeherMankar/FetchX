@@ -1,10 +1,10 @@
-//! Browser Extension Auto-Installer & Native Messaging Host Registrar
+//! Browser Extension File Preparer & Native Messaging Host Registrar
 //!
-//! Automatically extracts the FetchX browser extension files and registers the
-//! extension and Native Messaging Host into all available Chromium and Gecko browsers
+//! Automatically extracts FetchX browser extension files and registers the
+//! Native Messaging Host for detected Chromium and Gecko browsers
 //! (Google Chrome, Microsoft Edge, Brave, Vivaldi, Opera, Opera GX, Arc, Yandex,
 //! Thorium, Chromium, Mozilla Firefox, LibreWolf, Waterfox, Floorp) upon app
-//! startup and installer setup.
+//! startup and before guided local installation.
 //!
 //! # Deterministic Extension IDs
 //! - Chromium: `iemejekblepcfhklcadedfdmgnhjifio` (derived from fixed RSA public key in `manifest.json`)
@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 pub const CHROMIUM_EXTENSION_ID: &str = "iemejekblepcfhklcadedfdmgnhjifio";
 pub const FIREFOX_EXTENSION_ID: &str = "FetchX@FetchX.app";
 pub const NATIVE_HOST_NAME: &str = "com.fetchx.native_host";
-pub const EXTENSION_VERSION: &str = "0.2.0";
-
-struct EmbeddedFile {
+pub struct EmbeddedFile {
     relative_path: &'static str,
     bytes: &'static [u8],
 }
@@ -198,6 +196,9 @@ pub fn locate_native_host_binary(
 
     // 3. In bundled engines directory
     candidates.push(bundled_engines_dir.join(binary_name));
+    if let Some(resource_dir) = bundled_engines_dir.parent() {
+        candidates.push(resource_dir.join(binary_name));
+    }
 
     // 4. In development target directories (relative to current working directory)
     if let Ok(current_dir) = std::env::current_dir() {
@@ -220,6 +221,24 @@ pub fn locate_native_host_binary(
         );
         candidates.push(
             current_dir
+                .join("..")
+                .join("..")
+                .join("target")
+                .join("debug")
+                .join(binary_name),
+        );
+        candidates.push(
+            current_dir
+                .join("..")
+                .join("..")
+                .join("..")
+                .join("target")
+                .join("release")
+                .join(binary_name),
+        );
+        candidates.push(
+            current_dir
+                .join("..")
                 .join("..")
                 .join("..")
                 .join("target")
@@ -293,9 +312,7 @@ pub fn generate_native_host_manifests(
 struct BrowserTarget {
     display_name: &'static str,
     native_host_key: &'static str,
-    extension_key: &'static str,
     is_chromium: bool,
-    #[allow(dead_code)]
     detect_paths: &'static [&'static str],
     #[allow(dead_code)]
     detect_reg_keys: &'static [&'static str],
@@ -306,7 +323,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Google Chrome",
         native_host_key: r"Software\Google\Chrome\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Google\Chrome\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Google\\Chrome\\Application\\chrome.exe"],
         detect_reg_keys: &["Software\\Google\\Chrome"],
@@ -314,7 +330,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Google Chrome Beta",
         native_host_key: r"Software\Google\Chrome Beta\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Google\Chrome Beta\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Google\\Chrome Beta\\Application\\chrome.exe"],
         detect_reg_keys: &["Software\\Google\\Chrome Beta"],
@@ -322,7 +337,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Google Chrome Dev",
         native_host_key: r"Software\Google\Chrome Dev\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Google\Chrome Dev\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Google\\Chrome Dev\\Application\\chrome.exe"],
         detect_reg_keys: &["Software\\Google\\Chrome Dev"],
@@ -330,7 +344,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Google Chrome Canary",
         native_host_key: r"Software\Google\Chrome SxS\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Google\Chrome SxS\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Google\\Chrome SxS\\Application\\chrome.exe"],
         detect_reg_keys: &["Software\\Google\\Chrome SxS"],
@@ -338,7 +351,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Chromium",
         native_host_key: r"Software\Chromium\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Chromium\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Chromium\\Application\\chrome.exe"],
         detect_reg_keys: &["Software\\Chromium"],
@@ -347,7 +359,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Microsoft Edge",
         native_host_key: r"Software\Microsoft\Edge\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Microsoft\Edge\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge\\Application\\msedge.exe"],
         detect_reg_keys: &["Software\\Microsoft\\Edge"],
@@ -355,7 +366,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Microsoft Edge Beta",
         native_host_key: r"Software\Microsoft\Edge Beta\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Microsoft\Edge Beta\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge Beta\\Application\\msedge.exe"],
         detect_reg_keys: &["Software\\Microsoft\\Edge Beta"],
@@ -363,7 +373,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Microsoft Edge Dev",
         native_host_key: r"Software\Microsoft\Edge Dev\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Microsoft\Edge Dev\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge Dev\\Application\\msedge.exe"],
         detect_reg_keys: &["Software\\Microsoft\\Edge Dev"],
@@ -372,9 +381,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         display_name: "Microsoft Edge Canary",
         native_host_key: {
             r"Software\Microsoft\Edge Canary\NativeMessagingHosts\com.fetchx.native_host"
-        },
-        extension_key: {
-            r"Software\Microsoft\Edge Canary\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
         },
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge Canary\\Application\\msedge.exe"],
@@ -386,9 +392,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: {
             r"Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.fetchx.native_host"
         },
-        extension_key: {
-            r"Software\BraveSoftware\Brave-Browser\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
-        },
         is_chromium: true,
         detect_paths: &["BraveSoftware\\Brave-Browser\\Application\\brave.exe"],
         detect_reg_keys: &["Software\\BraveSoftware\\Brave-Browser"],
@@ -397,9 +400,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         display_name: "Brave Browser Beta",
         native_host_key: {
             r"Software\BraveSoftware\Brave-Browser-Beta\NativeMessagingHosts\com.fetchx.native_host"
-        },
-        extension_key: {
-            r"Software\BraveSoftware\Brave-Browser-Beta\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
         },
         is_chromium: true,
         detect_paths: &["BraveSoftware\\Brave-Browser-Beta\\Application\\brave.exe"],
@@ -410,9 +410,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: {
             r"Software\BraveSoftware\Brave-Browser-Nightly\NativeMessagingHosts\com.fetchx.native_host"
         },
-        extension_key: {
-            r"Software\BraveSoftware\Brave-Browser-Nightly\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
-        },
         is_chromium: true,
         detect_paths: &["BraveSoftware\\Brave-Browser-Nightly\\Application\\brave.exe"],
         detect_reg_keys: &["Software\\BraveSoftware\\Brave-Browser-Nightly"],
@@ -421,7 +418,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Vivaldi",
         native_host_key: r"Software\Vivaldi\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Vivaldi\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Vivaldi\\Application\\vivaldi.exe"],
         detect_reg_keys: &["Software\\Vivaldi"],
@@ -432,9 +428,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: {
             r"Software\Opera Software\Opera Stable\NativeMessagingHosts\com.fetchx.native_host"
         },
-        extension_key: {
-            r"Software\Opera Software\Opera Stable\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
-        },
         is_chromium: true,
         detect_paths: &["Programs\\Opera\\opera.exe", "Opera\\opera.exe"],
         detect_reg_keys: &["Software\\Opera Software\\Opera Stable"],
@@ -443,9 +436,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         display_name: "Opera GX",
         native_host_key: {
             r"Software\Opera Software\Opera GX Stable\NativeMessagingHosts\com.fetchx.native_host"
-        },
-        extension_key: {
-            r"Software\Opera Software\Opera GX Stable\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
         },
         is_chromium: true,
         detect_paths: &["Programs\\Opera GX\\opera.exe", "Opera GX\\opera.exe"],
@@ -456,9 +446,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: {
             r"Software\Opera Software\Opera Next\NativeMessagingHosts\com.fetchx.native_host"
         },
-        extension_key: {
-            r"Software\Opera Software\Opera Next\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
-        },
         is_chromium: true,
         detect_paths: &["Programs\\Opera Next\\opera.exe"],
         detect_reg_keys: &["Software\\Opera Software\\Opera Next"],
@@ -467,9 +454,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         display_name: "Opera Developer",
         native_host_key: {
             r"Software\Opera Software\Opera Developer\NativeMessagingHosts\com.fetchx.native_host"
-        },
-        extension_key: {
-            r"Software\Opera Software\Opera Developer\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
         },
         is_chromium: true,
         detect_paths: &["Programs\\Opera Developer\\opera.exe"],
@@ -481,9 +465,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: {
             r"Software\The Browser Company\Arc\NativeMessagingHosts\com.fetchx.native_host"
         },
-        extension_key: {
-            r"Software\The Browser Company\Arc\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
-        },
         is_chromium: true,
         detect_paths: &["Arc\\Arc.exe"],
         detect_reg_keys: &["Software\\The Browser Company\\Arc"],
@@ -493,9 +474,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: {
             r"Software\Yandex\YandexBrowser\NativeMessagingHosts\com.fetchx.native_host"
         },
-        extension_key: {
-            r"Software\Yandex\YandexBrowser\Extensions\iemejekblepcfhklcadedfdmgnhjifio"
-        },
         is_chromium: true,
         detect_paths: &["Yandex\\YandexBrowser\\Application\\browser.exe"],
         detect_reg_keys: &["Software\\Yandex\\YandexBrowser"],
@@ -503,7 +481,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Thorium",
         native_host_key: r"Software\Thorium\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Thorium\Extensions\iemejekblepcfhklcadedfdmgnhjifio",
         is_chromium: true,
         detect_paths: &["Thorium\\Application\\thorium.exe"],
         detect_reg_keys: &["Software\\Thorium"],
@@ -512,7 +489,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Mozilla Firefox",
         native_host_key: r"Software\Mozilla\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Mozilla\Firefox\Extensions",
         is_chromium: false,
         detect_paths: &["Mozilla Firefox\\firefox.exe"],
         detect_reg_keys: &[
@@ -523,7 +499,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "LibreWolf",
         native_host_key: r"Software\LibreWolf\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\LibreWolf\Extensions",
         is_chromium: false,
         detect_paths: &["LibreWolf\\librewolf.exe"],
         detect_reg_keys: &["Software\\LibreWolf"],
@@ -531,7 +506,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Waterfox",
         native_host_key: r"Software\Waterfox\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Waterfox\Extensions",
         is_chromium: false,
         detect_paths: &["Waterfox\\waterfox.exe"],
         detect_reg_keys: &["Software\\Waterfox"],
@@ -539,7 +513,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
     BrowserTarget {
         display_name: "Floorp",
         native_host_key: r"Software\Floorp\NativeMessagingHosts\com.fetchx.native_host",
-        extension_key: r"Software\Floorp\Extensions",
         is_chromium: false,
         detect_paths: &["Floorp\\floorp.exe"],
         detect_reg_keys: &["Software\\Floorp"],
@@ -601,6 +574,64 @@ fn query_reg_value(key: &str, value_name: Option<&str>) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn delete_reg_key(key: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let full_key = format!("HKCU\\{key}");
+    if !query_reg_key_exists(&full_key) {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new("reg");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd.arg("delete").arg(&full_key).arg("/f").output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!(
+            "reg.exe failed for {full_key}: {stderr}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn delete_reg_key(_key: &str) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn delete_reg_value(key: &str, value_name: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let full_key = format!("HKCU\\{key}");
+    if !query_reg_value(key, Some(value_name)) {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new("reg");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd
+        .arg("delete")
+        .arg(&full_key)
+        .arg("/v")
+        .arg(value_name)
+        .arg("/f")
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!(
+            "reg.exe failed for {full_key}: {stderr}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn delete_reg_value(_key: &str, _value_name: &str) -> std::io::Result<()> {
+    Ok(())
+}
+
 #[cfg(not(windows))]
 fn query_reg_value(_key: &str, _value_name: Option<&str>) -> bool {
     false
@@ -620,39 +651,65 @@ fn query_reg_key_exists(full_key: &str) -> bool {
     }
 }
 
+#[cfg(windows)]
+fn browser_executable(target: &BrowserTarget) -> Option<PathBuf> {
+    let bases = [
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        std::env::var_os("ProgramFiles").map(PathBuf::from),
+        std::env::var_os("ProgramFiles(x86)").map(PathBuf::from),
+    ];
+
+    let standard_location = target
+        .detect_paths
+        .iter()
+        .flat_map(|relative_path| {
+            bases
+                .iter()
+                .flatten()
+                .map(move |base| base.join(relative_path))
+        })
+        .find(|path| path.is_file());
+    if standard_location.is_some() {
+        return standard_location;
+    }
+
+    for relative_path in target.detect_paths {
+        let executable_name = Path::new(relative_path).file_name()?.to_string_lossy();
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        for root in [
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+            "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+            "HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+        ] {
+            let key = format!("{root}\\{executable_name}");
+            let mut command = std::process::Command::new("reg");
+            command.creation_flags(CREATE_NO_WINDOW);
+            command.args(["query", &key, "/ve"]);
+            let output = command.output().ok()?;
+            if !output.status.success() {
+                continue;
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let Some(path) = stdout
+                .lines()
+                .find_map(|line| line.split_once("REG_SZ").map(|(_, value)| value.trim()))
+            else {
+                continue;
+            };
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 fn is_browser_detected(_target: &BrowserTarget) -> bool {
     #[cfg(windows)]
     {
-        for reg in _target.detect_reg_keys {
-            if query_reg_key_exists(&format!("HKCU\\{reg}"))
-                || query_reg_key_exists(&format!("HKLM\\{reg}"))
-            {
-                return true;
-            }
-        }
-
-        let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-        let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
-        let program_files_x86 = std::env::var_os("ProgramFiles(x86)").map(PathBuf::from);
-
-        for rel in _target.detect_paths {
-            if let Some(ref base) = local_app_data
-                && base.join(rel).exists()
-            {
-                return true;
-            }
-            if let Some(ref base) = program_files
-                && base.join(rel).exists()
-            {
-                return true;
-            }
-            if let Some(ref base) = program_files_x86
-                && base.join(rel).exists()
-            {
-                return true;
-            }
-        }
-        false
+        browser_executable(_target).is_some()
     }
     #[cfg(not(windows))]
     {
@@ -660,12 +717,60 @@ fn is_browser_detected(_target: &BrowserTarget) -> bool {
     }
 }
 
-/// Registers the native host and external extensions into the Windows Registry for all supported browsers.
+fn extension_settings_url(target: &BrowserTarget) -> &'static str {
+    match target.display_name {
+        "Mozilla Firefox" | "LibreWolf" | "Waterfox" | "Floorp" => {
+            "about:debugging#/runtime/this-firefox"
+        }
+        "Microsoft Edge"
+        | "Microsoft Edge Beta"
+        | "Microsoft Edge Dev"
+        | "Microsoft Edge Canary" => "edge://extensions/",
+        "Brave Browser" | "Brave Browser Beta" | "Brave Browser Nightly" => "brave://extensions/",
+        "Vivaldi" => "vivaldi://extensions/",
+        "Opera" | "Opera GX" | "Opera Next" | "Opera Developer" => "opera://extensions/",
+        _ => "chrome://extensions/",
+    }
+}
+
+/// Opens the selected browser's extension management page for local installation.
+pub fn open_browser_extension_page(browser_name: &str) -> Result<(), String> {
+    let target = BROWSER_TARGETS
+        .iter()
+        .find(|target| target.display_name == browser_name)
+        .ok_or_else(|| format!("Unsupported browser: {browser_name}"))?;
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let executable = browser_executable(target)
+            .ok_or_else(|| format!("Could not find the {browser_name} executable."))?;
+        let mut command = std::process::Command::new(executable);
+        command.arg(extension_settings_url(target));
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+            .spawn()
+            .map_err(|error| format!("Could not open {browser_name}: {error}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = target;
+        Err("Guided browser installation is currently supported on Windows.".to_owned())
+    }
+}
+
+/// Registers the native messaging host for supported browsers.
+///
+/// Windows does not permit installing a local extension directory through these
+/// registry keys. Extensions must be loaded locally by the user or distributed
+/// through the browser's official store.
 pub fn register_browser_keys(
     chromium_manifest: Option<&Path>,
     firefox_manifest: Option<&Path>,
-    chromium_ext_dir: &Path,
-    firefox_ext_dir: &Path,
 ) -> Vec<BrowserRegistrationResult> {
     let mut results = Vec::new();
 
@@ -686,42 +791,49 @@ pub fn register_browser_keys(
             firefox_manifest
         };
 
-        if let Some(manifest) = manifest_path {
-            let manifest_str = manifest.to_string_lossy().to_string();
-            match set_reg_value(target.native_host_key, None, &manifest_str) {
-                Ok(_) => result.native_host_registered = true,
-                Err(e) => {
-                    result.error = Some(format!("Native host reg failed: {e}"));
-                }
-            }
-        }
-
-        // 2. Extension registration
-        if target.is_chromium {
-            let ext_dir_str = chromium_ext_dir.to_string_lossy().to_string();
-            let p_res = set_reg_value(target.extension_key, Some("path"), &ext_dir_str);
-            let v_res = set_reg_value(target.extension_key, Some("version"), EXTENSION_VERSION);
-            if p_res.is_ok() && v_res.is_ok() {
-                result.extension_registered = true;
-            } else if result.error.is_none()
-                && let Some(e) = p_res.err().or(v_res.err())
-            {
-                result.error = Some(format!("Extension reg failed: {e}"));
-            }
-        } else {
-            let ext_dir_str = firefox_ext_dir.to_string_lossy().to_string();
-            match set_reg_value(
-                target.extension_key,
-                Some(FIREFOX_EXTENSION_ID),
-                &ext_dir_str,
-            ) {
-                Ok(_) => result.extension_registered = true,
-                Err(e) => {
-                    if result.error.is_none() {
-                        result.error = Some(format!("Firefox extension reg failed: {e}"));
+        if detected {
+            if let Some(manifest) = manifest_path {
+                let manifest_str = manifest.to_string_lossy().to_string();
+                match set_reg_value(target.native_host_key, None, &manifest_str) {
+                    Ok(_) => result.native_host_registered = true,
+                    Err(e) => {
+                        result.error = Some(format!("Native host reg failed: {e}"));
                     }
                 }
+            } else {
+                result.error = Some("Native host binary is unavailable.".to_owned());
             }
+        } else if let Err(e) = delete_reg_key(target.native_host_key) {
+            result.error = Some(format!(
+                "Stale native host registration cleanup failed: {e}"
+            ));
+        }
+
+        // Remove invalid local-folder registrations written by older FetchX versions.
+        let cleanup_result = if target.is_chromium {
+            let browser_root = target
+                .native_host_key
+                .strip_suffix("\\NativeMessagingHosts\\com.fetchx.native_host")
+                .unwrap_or("");
+            delete_reg_key(&format!(
+                "{browser_root}\\Extensions\\{CHROMIUM_EXTENSION_ID}"
+            ))
+        } else {
+            let browser_root = target
+                .native_host_key
+                .strip_suffix("\\NativeMessagingHosts\\com.fetchx.native_host")
+                .unwrap_or("");
+            let extension_registry_key = if target.display_name == "Mozilla Firefox" {
+                format!("{browser_root}\\Firefox\\Extensions")
+            } else {
+                format!("{browser_root}\\Extensions")
+            };
+            delete_reg_value(&extension_registry_key, FIREFOX_EXTENSION_ID)
+        };
+        if let Err(e) = cleanup_result {
+            result.error.get_or_insert_with(|| {
+                format!("Legacy extension registration cleanup failed: {e}")
+            });
         }
 
         results.push(result);
@@ -762,12 +874,10 @@ pub fn ensure_registered(
     let registrations = register_browser_keys(
         chromium_manifest_path.as_deref(),
         firefox_manifest_path.as_deref(),
-        &chromium_dir,
-        &firefox_dir,
     );
 
     let summary = ExtensionInstallSummary {
-        success: registrations.iter().all(|r| r.error.is_none()),
+        success: native_host_bin.is_some() && registrations.iter().all(|r| r.error.is_none()),
         chromium_extension_dir: chromium_dir.to_string_lossy().to_string(),
         firefox_extension_dir: firefox_dir.to_string_lossy().to_string(),
         native_host_binary: native_host_bin.map(|p| p.to_string_lossy().to_string()),
@@ -798,17 +908,11 @@ pub fn get_extension_status(
     for target in BROWSER_TARGETS {
         let detected = is_browser_detected(target);
         let native_host_registered = query_reg_value(target.native_host_key, None);
-        let extension_registered = if target.is_chromium {
-            query_reg_value(target.extension_key, Some("path"))
-        } else {
-            query_reg_value(target.extension_key, Some(FIREFOX_EXTENSION_ID))
-        };
-
         browsers.push(BrowserRegistrationResult {
             browser: target.display_name.to_string(),
             detected,
             native_host_registered,
-            extension_registered,
+            extension_registered: false,
             error: None,
         });
     }
@@ -914,5 +1018,28 @@ mod tests {
         assert!(names.contains(&"Mozilla Firefox"));
         assert!(names.contains(&"LibreWolf"));
         assert!(names.contains(&"Waterfox"));
+    }
+
+    #[test]
+    fn test_browser_extension_pages_match_browser_family() {
+        let chrome = BROWSER_TARGETS
+            .iter()
+            .find(|target| target.display_name == "Google Chrome")
+            .unwrap();
+        let edge = BROWSER_TARGETS
+            .iter()
+            .find(|target| target.display_name == "Microsoft Edge")
+            .unwrap();
+        let firefox = BROWSER_TARGETS
+            .iter()
+            .find(|target| target.display_name == "Mozilla Firefox")
+            .unwrap();
+
+        assert_eq!(extension_settings_url(chrome), "chrome://extensions/");
+        assert_eq!(extension_settings_url(edge), "edge://extensions/");
+        assert_eq!(
+            extension_settings_url(firefox),
+            "about:debugging#/runtime/this-firefox"
+        );
     }
 }

@@ -216,6 +216,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             helper_manager::cancel_helper_install,
             commands::register_browser_extensions,
             commands::get_browser_extension_status,
+            commands::open_browser_extension_install_page,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);
@@ -260,8 +261,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
-            // Auto-install and register browser extensions and native messaging host
-            // into Chrome, Edge, Brave, and Firefox on startup.
+            // Extract the extension files and register the native messaging host.
+            // The browser extension itself must be installed through the browser UI
+            // until FetchX is published in the browser stores.
             {
                 let app_data_dir = paths.app_data_dir.clone();
                 let bundled_engines_dir = paths.bundled_engines_dir.clone();
@@ -271,12 +273,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &bundled_engines_dir,
                     ) {
                         Ok(summary) => {
-                            tracing::info!(
-                                success = summary.success,
-                                chromium_dir = %summary.chromium_extension_dir,
-                                firefox_dir = %summary.firefox_extension_dir,
-                                "browser extension auto-registration completed"
-                            );
+                            let native_host =
+                                summary.native_host_binary.as_deref().unwrap_or("missing");
+                            if summary.success {
+                                tracing::info!(
+                                    native_host,
+                                    chromium_dir = %summary.chromium_extension_dir,
+                                    firefox_dir = %summary.firefox_extension_dir,
+                                    "browser extension files prepared and native host registered"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    native_host,
+                                    chromium_dir = %summary.chromium_extension_dir,
+                                    firefox_dir = %summary.firefox_extension_dir,
+                                    "browser extension integration is incomplete"
+                                );
+                            }
                         }
                         Err(err) => {
                             tracing::warn!(%err, "browser extension auto-registration failed");

@@ -3,8 +3,9 @@
 # Usage:
 #   .\install-firefox-windows.ps1 [-Uninstall]
 #
-# Registers the Native Messaging Host and External Extension into the Windows Registry
-# for Mozilla Firefox, LibreWolf, Waterfox, and Floorp:
+# Registers the Native Messaging Host for Mozilla Firefox, LibreWolf, Waterfox, and Floorp.
+# The extension must be loaded through the browser UI; a permanent Firefox add-on
+# also requires a signed release:
 #   HKCU\Software\Mozilla\NativeMessagingHosts\com.fetchx.native_host
 #   HKCU\Software\Mozilla\Firefox\Extensions ("FetchX@FetchX.app" = path)
 #   HKCU\Software\LibreWolf\NativeMessagingHosts\com.fetchx.native_host
@@ -28,8 +29,6 @@ $HostBinaryRelease = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
 $HostBinaryDebug   = Join-Path $RepoRoot "target\debug\fetchx-native-host.exe"
 $HostBinary = if (Test-Path $HostBinaryRelease) { $HostBinaryRelease } else { $HostBinaryDebug }
 
-$ExtensionDir = Join-Path $RepoRoot "apps\browser\extension\dist-firefox"
-
 $GeckoBrowsers = @(
     @{ Name = "Mozilla Firefox"; NativeKey = "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName"; ExtKey = "HKCU:\Software\Mozilla\Firefox\Extensions" },
     @{ Name = "LibreWolf";       NativeKey = "HKCU:\Software\LibreWolf\NativeMessagingHosts\$HostName"; ExtKey = "HKCU:\Software\LibreWolf\Extensions" },
@@ -38,7 +37,7 @@ $GeckoBrowsers = @(
 )
 
 if ($Uninstall) {
-  Write-Host "Uninstalling Firefox & Gecko native messaging hosts and extensions..."
+  Write-Host "Uninstalling Firefox & Gecko native messaging hosts..."
   foreach ($G in $GeckoBrowsers) {
     Remove-Item -Path $G.NativeKey -Recurse -ErrorAction SilentlyContinue
     Remove-ItemProperty -Path $G.ExtKey -Name $ExtensionId -ErrorAction SilentlyContinue
@@ -67,18 +66,13 @@ $Manifest = @{
 Set-Content -Path $ManifestPath -Value $Manifest -Encoding UTF8
 Write-Host "Wrote manifest to: $ManifestPath"
 
-# Register Native Messaging Hosts and External Extensions
+# Register native messaging hosts and remove invalid local-folder extension registrations.
 foreach ($G in $GeckoBrowsers) {
   New-Item -Path $G.NativeKey -Force | Out-Null
   Set-ItemProperty -Path $G.NativeKey -Name "(Default)" -Value $ManifestPath
-
-  if (Test-Path $ExtensionDir) {
-    New-Item -Path $G.ExtKey -Force | Out-Null
-    Set-ItemProperty -Path $G.ExtKey -Name $ExtensionId -Value $ExtensionDir
-  }
+  Remove-ItemProperty -Path $G.ExtKey -Name $ExtensionId -ErrorAction SilentlyContinue
   Write-Host "Registered $($G.Name)"
 }
 
 Write-Host ""
-Write-Host "Installation complete for Firefox, LibreWolf, Waterfox, and Floorp."
-Write-Host "Restart your browser(s) for changes to take effect."
+Write-Host "Native host setup complete. Load the extension from FetchX Settings > Browser extensions."

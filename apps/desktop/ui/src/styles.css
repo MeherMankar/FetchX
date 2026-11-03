@@ -809,6 +809,13 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .settings-actions { display: flex; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-light); }
 
+.settings-path { overflow-wrap: anywhere; font-size: 11px; color: var(--text-2); }
+.browser-extension-list { display: grid; gap: 8px; margin-top: 12px; }
+.browser-extension-item {
+  display: grid; grid-template-columns: minmax(140px, 1fr) minmax(120px, 1fr) auto;
+  align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border-light);
+}
+
 .settings-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .settings-section-header .settings-section-title { margin-bottom: 0; }
 

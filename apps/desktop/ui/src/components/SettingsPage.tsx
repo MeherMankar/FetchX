@@ -2,6 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import {
+  getBrowserExtensionStatus,
+  openBrowserExtensionInstallPage,
+} from "../api/browserExtensions";
+import {
   cancelHelperInstall,
   getHelperStatus,
   getEngineConfig,
@@ -13,6 +17,7 @@ import {
   testYtDlpConfig,
 } from "../api/engine";
 import type {
+  BrowserExtensionStatus,
   DiagnosticResult,
   EngineConfigDto,
   EngineInstanceStatus,
@@ -30,6 +35,120 @@ import { errorMessage } from "../lib/format";
 // ---------------------------------------------------------------------------
 // Status indicator
 // ---------------------------------------------------------------------------
+
+function BrowserExtensionSection() {
+  const [status, setStatus] = useState<BrowserExtensionStatus | null>(null);
+  const [busyBrowser, setBusyBrowser] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await getBrowserExtensionStatus());
+      setError(null);
+    } catch (cause) {
+      setError(errorMessage(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const openInstallPage = async (browser: string) => {
+    setBusyBrowser(browser);
+    setMessage(null);
+    try {
+      await openBrowserExtensionInstallPage(browser);
+      setMessage(`Opened ${browser}. Follow the local-install steps below to add FetchX.`);
+      await refresh();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusyBrowser(null);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="browser-extension-heading">
+      <div className="settings-section-header">
+        <h3 id="browser-extension-heading" className="settings-section-title">
+          Browser extensions
+        </h3>
+      </div>
+
+      <p className="settings-hint">
+        FetchX is not yet published in the browser stores, so browsers cannot
+        automatically install the extension. Open a browser below and load the
+        local extension once.
+      </p>
+
+      {error && <div className="error-banner" role="alert">{error}</div>}
+      {message && <div className="settings-notice" role="status">{message}</div>}
+
+      {status && (
+        <>
+          <div className="settings-row">
+            <span className="settings-label">Native host</span>
+            <div className="settings-control">
+              <span>
+                {status.native_host_binary_path
+                  ? `Available: ${status.native_host_binary_path}`
+                  : "Not found. Browser downloads will not reach FetchX until the native host is installed."}
+              </span>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-label">Chromium extension</span>
+            <div className="settings-control">
+              <code className="settings-path">{status.chromium_extension_path}</code>
+              <span className="settings-hint">
+                In Chrome, Edge, or another Chromium browser, enable Developer mode
+                and choose “Load unpacked”, then select this folder.
+              </span>
+            </div>
+          </div>
+
+          <div className="settings-row">
+            <span className="settings-label">Firefox extension</span>
+            <div className="settings-control">
+              <code className="settings-path">{status.firefox_extension_path}</code>
+              <span className="settings-hint">
+                In Firefox, choose “Load Temporary Add-on” and select this folder’s
+                manifest.json. Temporary add-ons are removed when Firefox exits;
+                permanent installation requires a signed add-on.
+              </span>
+            </div>
+          </div>
+
+          <div className="browser-extension-list">
+            {status.browsers.filter((browser) => browser.detected).map((browser) => (
+              <div className="browser-extension-item" key={browser.browser}>
+                <span>{browser.browser}</span>
+                <span className="settings-hint">
+                  {browser.native_host_registered ? "Native host ready" : "Native host not registered"}
+                </span>
+                <button
+                  className="button button-secondary"
+                  onClick={() => void openInstallPage(browser.browser)}
+                  disabled={busyBrowser !== null}
+                >
+                  {busyBrowser === browser.browser ? "Opening…" : "Open install page"}
+                </button>
+              </div>
+            ))}
+            {status.browsers.every((browser) => !browser.detected) && (
+              <p className="settings-hint">
+                No supported browsers were detected in standard Windows locations.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
 
 function StatusDot({
   available,
@@ -897,6 +1016,7 @@ export function SettingsPage() {
         settings. Disabling an engine does not cancel downloads already in progress.
       </div>
 
+      <BrowserExtensionSection />
       <HelperInstallPanel onConfigChanged={setCfg} />
 
       {cfg && (

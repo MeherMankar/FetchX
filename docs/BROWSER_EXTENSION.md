@@ -109,6 +109,20 @@ State file locations:
 The native host reads this file to learn the port and token.  The file is
 removed on desktop shutdown.
 
+## Installing the browser extension
+
+The desktop app extracts the Chromium and Firefox extension builds and registers
+the native messaging host. It cannot silently install a local extension folder:
+Chromium-family browsers require a store-distributed extension for external
+installation, and permanent Firefox installation requires a signed add-on.
+
+Until FetchX is published in the Chrome Web Store and Firefox Add-ons, use
+**Settings → Browser extensions** in FetchX to open a detected browser's
+extension page and follow the local-install instructions shown there. Chromium
+browsers use **Load unpacked**. Firefox's **Load Temporary Add-on** is removed
+when Firefox exits. Store-based installation can be enabled once the listings
+are published.
+
 ## Security model
 
 - The IPC server binds to `127.0.0.1` only — never `0.0.0.0`.
