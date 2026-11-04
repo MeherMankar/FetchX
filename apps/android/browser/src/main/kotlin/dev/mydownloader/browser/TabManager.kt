@@ -7,12 +7,60 @@ import androidx.annotation.OptIn
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
 import org.mozilla.geckoview.ExperimentalGeckoViewApi
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.AllowOrDeny
+import java.net.URI
+import java.net.URISyntaxException
 import java.util.UUID
 
 private const val TAG = "TabManager"
+
+enum class FindDirection {
+    FIRST,
+    NEXT,
+    PREVIOUS,
+}
+
+data class PageFindResult(
+    val found: Boolean,
+    val current: Int,
+    val total: Int,
+)
+
+internal fun isHttpOrHttpsPageUrl(url: String): Boolean {
+    val parsed = try {
+        URI(url)
+    } catch (_: URISyntaxException) {
+        return false
+    }
+    val scheme = parsed.scheme ?: return false
+    return parsed.isAbsolute &&
+        !parsed.isOpaque &&
+        (scheme.equals("http", ignoreCase = true) ||
+            scheme.equals("https", ignoreCase = true)) &&
+        !parsed.host.isNullOrBlank()
+}
+
+private fun applyDesktopSiteSettings(session: GeckoSession, enabled: Boolean) {
+    val settings = session.settings
+    settings.userAgentMode = if (enabled) {
+        GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+    } else {
+        GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+    }
+    settings.viewportMode = if (enabled) {
+        GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+    } else {
+        GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+    }
+    settings.userAgentOverride = if (enabled) {
+        null
+    } else {
+        "Mozilla/5.0 (Android ${Build.VERSION.RELEASE}; Mobile; rv:158.0) Gecko/158.0 Firefox/158.0"
+    }
+}
 
 /**
  * Manages the set of browser GeckoSessions (one per tab).
@@ -74,7 +122,7 @@ class TabManager(
         val restoredActiveId = activeId?.takeIf { saved -> savedTabs.any { it.id == saved } }
             ?: savedTabs.last().id
         for (tab in savedTabs) {
-            val session = buildSession(tab.id)
+            val session = buildSession(tab.id, tab.desktopSiteEnabled)
             session.open(runtime)
             trackerBlockingController.registerTab(tab.id)
             sessions[tab.id] = session
@@ -191,6 +239,71 @@ class TabManager(
     fun reload() { activeSession()?.reload() }
 
     fun stopLoading() { activeSession()?.stop() }
+
+    fun setDesktopSiteEnabled(tabId: String, enabled: Boolean): Boolean {
+        val tab = store.findTab(tabId) ?: return false
+        if (!isHttpOrHttpsPageUrl(tab.url)) return false
+        val session = sessions[tabId] ?: return false
+        applyDesktopSiteSettings(session, enabled)
+        if (!store.updateTab(tabId) { it.copy(desktopSiteEnabled = enabled) }) return false
+        session.reload()
+        onStateChanged?.invoke()
+        return true
+    }
+
+    fun findInPage(
+        tabId: String,
+        query: String,
+        direction: FindDirection,
+        onResult: (PageFindResult?, String?) -> Unit,
+    ) {
+        val session = sessions[tabId]
+        if (session == null) {
+            onResult(null, "The page is no longer available.")
+            return
+        }
+        if (query.isBlank()) {
+            clearFindInPage(tabId)
+            onResult(null, null)
+            return
+        }
+
+        val flags = when (direction) {
+            FindDirection.FIRST -> 0
+            FindDirection.NEXT -> GeckoSession.FINDER_FIND_FORWARD
+            FindDirection.PREVIOUS -> GeckoSession.FINDER_FIND_BACKWARDS
+        }
+        try {
+            session.finder.displayFlags = GeckoSession.FINDER_DISPLAY_HIGHLIGHT_ALL
+            session.finder.find(query, flags).accept(
+                { result ->
+                    if (sessions[tabId] === session && store.findTab(tabId) != null) {
+                        if (result == null) {
+                            onResult(null, "Find in Page returned no result.")
+                        } else {
+                            onResult(PageFindResult(result.found, result.current, result.total), null)
+                        }
+                    }
+                },
+                { error ->
+                    Log.e(TAG, "GeckoView Find in Page failed for tab $tabId", error)
+                    onResult(null, "Find in Page is unavailable.")
+                },
+            )
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Could not start GeckoView Find in Page for tab $tabId", error)
+            onResult(null, "Find in Page is unavailable.")
+        }
+    }
+
+    fun clearFindInPage(tabId: String) {
+        val session = sessions[tabId] ?: return
+        try {
+            session.finder.clear()
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Could not clear GeckoView Find in Page for tab $tabId", error)
+        }
+    }
 
     // ──History API ────────────────────────────────────────────────────────
 
@@ -340,15 +453,12 @@ class TabManager(
     }
 
     @OptIn(markerClass = [ExperimentalGeckoViewApi::class])
-    private fun buildSession(tabId: String): GeckoSession {
+    private fun buildSession(tabId: String, desktopSiteEnabled: Boolean = false): GeckoSession {
         val s = GeckoSession()
         val cfController = CloudflareBypassController()
         bypassControllers[tabId] = cfController
         s.settings.useTrackingProtection = true
-        // Match the Firefox version to the embedded GeckoView release so sites do
-        // not see an obsolete browser version or the GeckoView embedder token.
-        s.settings.userAgentOverride =
-            "Mozilla/5.0 (Android ${Build.VERSION.RELEASE}; Mobile; rv:158.0) Gecko/158.0 Firefox/158.0"
+        applyDesktopSiteSettings(s, desktopSiteEnabled)
 
         s.contentBlockingDelegate = object : org.mozilla.geckoview.ContentBlocking.Delegate {
             override fun onContentBlocked(
@@ -587,12 +697,20 @@ class TabManager(
                 Log.i(TAG, "Opening new tab from tab $tabId")
                 val currentSpaceId = store.findTab(tabId)?.spaceId ?: "default"
                 val newId = UUID.randomUUID().toString()
-                val newSession = buildSession(newId)
+                val openerTab = store.findTab(tabId)
+                val newSession = buildSession(newId, openerTab?.desktopSiteEnabled == true)
                 newSession.open(runtime)
                 trackerBlockingController.registerTab(newId)
                 sessions[newId] = newSession
                 val normalized = if (uri.isNotBlank()) normalizeUrl(uri) else "about:blank"
-                store.addTab(TabState(id = newId, url = normalized, spaceId = currentSpaceId))
+                store.addTab(
+                    TabState(
+                        id = newId,
+                        url = normalized,
+                        spaceId = currentSpaceId,
+                        desktopSiteEnabled = openerTab?.desktopSiteEnabled == true,
+                    ),
+                )
                 onStateChanged?.invoke()
                 return GeckoResult.fromValue(newSession)
             }

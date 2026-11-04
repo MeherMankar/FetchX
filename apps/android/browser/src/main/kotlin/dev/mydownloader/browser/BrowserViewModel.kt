@@ -2,6 +2,8 @@ package dev.fetchx.browser
 
 import android.content.Context
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -38,6 +40,16 @@ data class BrowserProfile(
     val name: String,
     val accent: String,
     val description: String,
+)
+
+data class FindInPageState(
+    val tabId: String,
+    val pageUrl: String,
+    val query: String = "",
+    val currentMatch: Int = 0,
+    val totalMatches: Int = 0,
+    val found: Boolean = false,
+    val error: String? = null,
 )
 
 data class SearchSuggestion(
@@ -95,8 +107,7 @@ data class BrowserUiState(
     val showTabOverview: Boolean = false,
     val showBrowserSettings: Boolean = false,
     val showProfileSwitcher: Boolean = false,
-    val readerModeAvailable: Boolean = false,
-    val readerModeActive: Boolean = false,
+    val findInPage: FindInPageState? = null,
     val profiles: List<BrowserProfile> = listOf(
         BrowserProfile("default", "Default", "#4F8EF7", "Daily browsing"),
         BrowserProfile("work", "Work", "#7C6AF2", "Productivity"),
@@ -169,6 +180,7 @@ class BrowserViewModel internal constructor(
     private var searchPreferences: SharedPreferences? = null
     private var browserDataPreferences: SharedPreferences? = null
     private var searchSuggestionJob: Job? = null
+    private var findRequestGeneration = 0
     private var mediaFormatJob: Job? = null
     private var mediaFormatGeneration = 0
     private var extensionManager: ExtensionManager? = null
@@ -255,14 +267,20 @@ class BrowserViewModel internal constructor(
         }
         val tabs = tm.allTabStates()
         val activeUrl = tabs.find { it.id == activeId }?.url ?: "about:blank"
+        val activeTabIsLoading = tabs.find { it.id == activeId }?.isLoading == true
         val historyEntries = tm.allHistory()
         bookmarkController.refreshForUrl(activeUrl)
         val bState = bookmarkController.state.value
         val trackerState = trackerBlockingController.state.value
         val trackerStats = trackerState.tabStats[activeId]
-        val readerModeActive = activeUrl.startsWith("about:reader?url=")
-        val readerModeAvailable = activeUrl.startsWith("http://") || activeUrl.startsWith("https://")
         val showEssentials = activeUrl == "about:blank" || activeUrl.isEmpty()
+        val findState = _uiState.value.findInPage
+        if (findState != null &&
+            (activeId != findState.tabId || activeUrl != findState.pageUrl || activeTabIsLoading)
+        ) {
+            findRequestGeneration += 1
+            tm.clearFindInPage(findState.tabId)
+        }
         _uiState.update {
             it.copy(
                 tabs = tabs,
@@ -274,8 +292,9 @@ class BrowserViewModel internal constructor(
                 trackerBlockingEnabled = trackerState.enabled,
                 activeTabBlockedRequests = trackerStats?.blockedRequests ?: 0,
                 activeTabBlockedHosts = trackerStats?.blockedHosts.orEmpty(),
-                readerModeActive = readerModeActive,
-                readerModeAvailable = readerModeAvailable && !readerModeActive,
+                findInPage = findState?.takeIf {
+                    activeId == it.tabId && activeUrl == it.pageUrl
+                },
                 showEssentials = showEssentials,
                 essentials = essentialsStore.mostVisited(tm.allHistory()),
             )
@@ -402,6 +421,170 @@ class BrowserViewModel internal constructor(
     fun reload() { tabManager?.reload() }
     fun stopLoading() { tabManager?.stopLoading() }
 
+    fun openFindInPage(): Boolean {
+        val tab = tabManager?.activeTabState() ?: return false
+        val previous = _uiState.value.findInPage
+        if (previous != null) tabManager?.clearFindInPage(previous.tabId)
+        findRequestGeneration += 1
+        _uiState.update {
+            it.copy(findInPage = FindInPageState(tab.id, tab.url))
+        }
+        return true
+    }
+
+    fun updateFindQuery(query: String) {
+        val findState = _uiState.value.findInPage ?: return
+        findInPage(query, FindDirection.FIRST, findState)
+    }
+
+    fun findNextMatch() {
+        val findState = _uiState.value.findInPage ?: return
+        findInPage(findState.query, FindDirection.NEXT, findState)
+    }
+
+    fun findPreviousMatch() {
+        val findState = _uiState.value.findInPage ?: return
+        findInPage(findState.query, FindDirection.PREVIOUS, findState)
+    }
+
+    fun closeFindInPage() {
+        val findState = _uiState.value.findInPage ?: return
+        findRequestGeneration += 1
+        tabManager?.clearFindInPage(findState.tabId)
+        _uiState.update { it.copy(findInPage = null) }
+    }
+
+    private fun findInPage(
+        query: String,
+        direction: FindDirection,
+        findState: FindInPageState,
+    ) {
+        if (findState.tabId != tabManager?.activeTabId()) {
+            closeFindInPage()
+            return
+        }
+        val generation = ++findRequestGeneration
+        _uiState.update {
+            val current = it.findInPage
+            if (current?.tabId != findState.tabId) it
+            else it.copy(
+                findInPage = current.copy(
+                    query = query,
+                    currentMatch = 0,
+                    totalMatches = 0,
+                    found = false,
+                    error = null,
+                ),
+            )
+        }
+        tabManager?.findInPage(findState.tabId, query, direction) { result, error ->
+            if (generation != findRequestGeneration) return@findInPage
+            _uiState.update { state ->
+                val current = state.findInPage ?: return@update state
+                if (current.tabId != findState.tabId || current.query != query) return@update state
+                state.copy(
+                    findInPage = current.copy(
+                        currentMatch = result?.current ?: 0,
+                        totalMatches = result?.total ?: 0,
+                        found = result?.found == true,
+                        error = error,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun toggleDesktopSite() {
+        val context = applicationContext ?: return
+        val tab = tabManager?.activeTabState() ?: run {
+            showBrowserActionMessage(context, "No active page.")
+            return
+        }
+        val enabled = !tab.desktopSiteEnabled
+        try {
+            if (tabManager?.setDesktopSiteEnabled(tab.id, enabled) != true) {
+                showBrowserActionMessage(context, "Desktop site is only available for web pages.")
+            }
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Could not change desktop-site mode for tab ${tab.id}", error)
+            showBrowserActionMessage(context, "Could not change desktop-site mode.")
+        }
+    }
+
+    fun shareCurrentPage() {
+        val context = applicationContext ?: return
+        val tab = tabManager?.activeTabState()
+        if (tab == null || !isHttpOrHttpsPageUrl(tab.url)) {
+            showBrowserActionMessage(context, "This page cannot be shared.")
+            return
+        }
+        val title = tab.title?.takeIf { it.isNotBlank() }
+        val text = if (title == null || title == tab.url) tab.url else "$title\n${tab.url}"
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            if (title != null) putExtra(Intent.EXTRA_TITLE, title)
+        }
+        try {
+            context.startActivity(
+                Intent.createChooser(sendIntent, "Share page")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (error: ActivityNotFoundException) {
+            Log.w(TAG, "No Android share target is available", error)
+            showBrowserActionMessage(context, "No app can share this page.")
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Could not open the Android share sheet", error)
+            showBrowserActionMessage(context, "Could not share this page.")
+        }
+    }
+
+    fun copyCurrentPageUrl() {
+        val context = applicationContext ?: return
+        val tab = tabManager?.activeTabState()
+        if (tab == null || !isHttpOrHttpsPageUrl(tab.url)) {
+            showBrowserActionMessage(context, "This page has no copyable web address.")
+            return
+        }
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        if (clipboard == null) {
+            showBrowserActionMessage(context, "Clipboard is unavailable.")
+            return
+        }
+        val label = tab.title?.takeIf { it.isNotBlank() } ?: "Page URL"
+        try {
+            clipboard.setPrimaryClip(ClipData.newPlainText(label, tab.url))
+            showBrowserActionMessage(context, "URL copied")
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Could not copy the current page URL", error)
+            showBrowserActionMessage(context, "Could not copy this page URL.")
+        }
+    }
+
+    fun openCurrentPageExternally() {
+        val context = applicationContext ?: return
+        val tab = tabManager?.activeTabState()
+        if (tab == null || !isHttpOrHttpsPageUrl(tab.url)) {
+            showBrowserActionMessage(context, "This page cannot be opened externally.")
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(tab.url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (error: ActivityNotFoundException) {
+            Log.w(TAG, "No external browser is available for ${tab.url}", error)
+            showBrowserActionMessage(context, "No external browser can open this page.")
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Could not open the page externally", error)
+            showBrowserActionMessage(context, "Could not open this page externally.")
+        }
+    }
+
+    private fun showBrowserActionMessage(context: Context, message: String) {
+        android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
     // ──History ────────────────────────────────────────────────────────────
 
     fun openHistory() {
@@ -461,23 +644,6 @@ class BrowserViewModel internal constructor(
     fun navigateToBookmark(url: String) {
         closeBookmarks()
         tabManager?.navigate(url)
-    }
-
-    fun toggleReaderMode() {
-        val session = tabManager?.activeSession() ?: return
-        val active = !_uiState.value.readerModeActive
-        _uiState.update { it.copy(readerModeActive = active) }
-        if (active) {
-            session.loadUri("about:reader?url=${_uiState.value.activeTab?.url?.let { java.net.URLEncoder.encode(it, "UTF-8") }}")
-        } else {
-            // Navigate back to the original URL from the reader URL
-            val current = _uiState.value.activeTab?.url ?: return
-            val original = if (current.startsWith("about:reader?url=")) {
-                try { java.net.URLDecoder.decode(current.removePrefix("about:reader?url="), "UTF-8") }
-                catch (_: Exception) { null }
-            } else null
-            if (original != null) session.loadUri(original)
-        }
     }
 
     // ──Zenium features ────────────────────────────────────────────────────

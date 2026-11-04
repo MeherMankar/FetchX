@@ -63,8 +63,11 @@ import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.FindInPage
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
@@ -74,12 +77,14 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NorthWest
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.OndemandVideo
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
@@ -235,6 +240,19 @@ fun BrowserScreen(
     }
     BackHandler(enabled = !isUrlBarExpanded && !uiState.showTabOverview && activeTab?.canGoBack == true) {
         viewModel.goBack()
+    }
+    BackHandler(enabled = uiState.findInPage != null) {
+        keyboardController?.hide()
+        viewModel.closeFindInPage()
+    }
+
+    val findFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(uiState.findInPage?.tabId) {
+        if (uiState.findInPage != null) {
+            delay(100)
+            findFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
     }
 
     LaunchedEffect(activeTab?.url) {
@@ -876,9 +894,27 @@ fun BrowserScreen(
                         closeMenu()
                         viewModel.openTabOverview()
                     },
-                    onToggleReaderMode = {
+                    onFindInPage = {
                         closeMenu()
-                        viewModel.toggleReaderMode()
+                        if (!viewModel.openFindInPage()) {
+                            Toast.makeText(context, "No active page to search.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onSharePage = {
+                        closeMenu()
+                        viewModel.shareCurrentPage()
+                    },
+                    onCopyUrl = {
+                        closeMenu()
+                        viewModel.copyCurrentPageUrl()
+                    },
+                    onOpenExternally = {
+                        closeMenu()
+                        viewModel.openCurrentPageExternally()
+                    },
+                    onToggleDesktopSite = {
+                        closeMenu()
+                        viewModel.toggleDesktopSite()
                     },
                     onOpenTrackerDetails = {
                         closeMenu()
@@ -951,6 +987,25 @@ fun BrowserScreen(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+
+            uiState.findInPage?.let { findState ->
+                FindInPagePanel(
+                    state = findState,
+                    focusRequester = findFocusRequester,
+                    onQueryChange = viewModel::updateFindQuery,
+                    onPrevious = viewModel::findPreviousMatch,
+                    onNext = viewModel::findNextMatch,
+                    onClear = { viewModel.updateFindQuery("") },
+                    onClose = {
+                        keyboardController?.hide()
+                        viewModel.closeFindInPage()
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = 8.dp, vertical = 8.dp)
+                        .zIndex(2f),
+                )
+            }
 
             // Floating pill to exit compact mode
             if (uiState.compactMode) {
@@ -2026,7 +2081,11 @@ private fun BrowserMenuSheet(
     onDownloadMedia: () -> Unit,
     onNewTab: () -> Unit,
     onOpenTabs: () -> Unit,
-    onToggleReaderMode: () -> Unit,
+    onFindInPage: () -> Unit,
+    onSharePage: () -> Unit,
+    onCopyUrl: () -> Unit,
+    onOpenExternally: () -> Unit,
+    onToggleDesktopSite: () -> Unit,
     onOpenTrackerDetails: () -> Unit,
     onOpenPrivacySettings: () -> Unit,
     onOpenBookmarks: () -> Unit,
@@ -2257,6 +2316,60 @@ private fun BrowserMenuSheet(
 
             Spacer(Modifier.height(12.dp))
 
+            if (activeTab != null) {
+                val canUseWebPageActions = isHttpOrHttpsPageUrl(activeTab.url)
+                Text(
+                    text = "PAGE",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.2.sp,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                )
+                BrowserMenuItemRow(
+                    icon = Icons.Default.FindInPage,
+                    title = "Find in Page",
+                    iconTint = MaterialTheme.colorScheme.onSurface,
+                    onClick = onFindInPage,
+                )
+                BrowserMenuItemRow(
+                    icon = Icons.Default.Share,
+                    title = "Share page",
+                    iconTint = MaterialTheme.colorScheme.onSurface,
+                    enabled = canUseWebPageActions,
+                    onClick = onSharePage,
+                )
+                BrowserMenuItemRow(
+                    icon = Icons.Default.ContentCopy,
+                    title = "Copy URL",
+                    iconTint = MaterialTheme.colorScheme.onSurface,
+                    enabled = canUseWebPageActions,
+                    onClick = onCopyUrl,
+                )
+                BrowserMenuItemRow(
+                    icon = Icons.Default.OpenInBrowser,
+                    title = "Open in external browser",
+                    iconTint = MaterialTheme.colorScheme.onSurface,
+                    enabled = canUseWebPageActions,
+                    onClick = onOpenExternally,
+                )
+                BrowserMenuItemRow(
+                    icon = Icons.Default.DesktopWindows,
+                    title = "Desktop site",
+                    iconTint = MaterialTheme.colorScheme.onSurface,
+                    badgeText = if (activeTab.desktopSiteEnabled) "On" else "Off",
+                    badgeColor = if (activeTab.desktopSiteEnabled) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    enabled = canUseWebPageActions,
+                    onClick = onToggleDesktopSite,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             // ── Section: Tabs & Viewing ────────────────────────────────────
             Text(
                 text = "TABS & VIEWING",
@@ -2280,17 +2393,6 @@ private fun BrowserMenuSheet(
                 badgeText = "${uiState.tabs.size} open",
                 onClick = onOpenTabs,
             )
-            if (uiState.readerModeAvailable || uiState.readerModeActive) {
-                BrowserMenuItemRow(
-                    icon = Icons.Default.AutoStories,
-                    title = if (uiState.readerModeActive) "Turn Off Reader Mode" else "Reader Mode",
-                    iconTint = MaterialTheme.colorScheme.onSurface,
-                    badgeText = if (uiState.readerModeActive) "Active" else null,
-                    badgeColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    onClick = onToggleReaderMode,
-                )
-            }
-
             Spacer(Modifier.height(8.dp))
 
             // ── Section: Privacy & Security ────────────────────────────────
@@ -2414,6 +2516,140 @@ private fun BrowserMenuSheet(
                 iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onOpenUpdates,
             )
+        }
+    }
+}
+
+@Composable
+private fun FindInPagePanel(
+    state: FindInPageState,
+    focusRequester: FocusRequester,
+    onQueryChange: (String) -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onClear: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 4.dp,
+        shadowElevation = 4.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Find in Page",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Close Find in Page",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = state.query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester),
+                    placeholder = { Text("Search this page") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { keyboardController?.hide() },
+                    ),
+                    trailingIcon = {
+                        if (state.query.isNotEmpty()) {
+                            IconButton(
+                                onClick = onClear,
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Icon(
+                                    Icons.Default.Clear,
+                                    contentDescription = "Clear search",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    },
+                )
+                if (state.query.isNotBlank()) {
+                    Text(
+                        text = if (state.error != null) "—"
+                        else "${if (state.found) state.currentMatch else 0} / ${state.totalMatches}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (state.error != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.semantics {
+                            contentDescription = state.error
+                                ?: "${if (state.found) state.currentMatch else 0} of ${state.totalMatches} matches"
+                        },
+                    )
+                }
+            }
+            state.error?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                IconButton(
+                    onClick = onPrevious,
+                    enabled = state.query.isNotBlank() && state.totalMatches > 0,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = "Previous match" },
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(
+                    onClick = onNext,
+                    enabled = state.query.isNotBlank() && state.totalMatches > 0,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .semantics { contentDescription = "Next match" },
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }

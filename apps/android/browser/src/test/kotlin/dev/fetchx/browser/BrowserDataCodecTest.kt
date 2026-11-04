@@ -12,6 +12,7 @@ class BrowserDataCodecTest {
                 url = "https://example.com/path?value=a\t\tb",
                 title = "Title\nwith newline",
                 spaceId = "research\nspace",
+                desktopSiteEnabled = true,
             ),
         )
 
@@ -52,6 +53,21 @@ class BrowserDataCodecTest {
         assertEquals(
             listOf(Bookmark("id", "https://example.com", "Example", 1L, 2L)),
             BrowserDataCodec.decodeBookmarks("id\t\thttps://example.com\t\tExample\t\t1\t\t2"),
+        )
+    }
+
+    @Test
+    fun `version one tabs remain readable with mobile mode default`() {
+        assertEquals(
+            listOf(
+                TabState(
+                    id = "tab",
+                    url = "https://example.com",
+                    title = "Title",
+                    spaceId = "default",
+                ),
+            ),
+            BrowserDataCodec.decodeTabs("v1:dGFi.aHR0cHM6Ly9leGFtcGxlLmNvbQ.VGl0bGU.ZGVmYXVsdA"),
         )
     }
 }

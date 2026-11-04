@@ -15,5 +15,5 @@ data class TabState(
     val errorText: String? = null,
     /** The Space (profile) this tab belongs to. */
     val spaceId: String = "default",
+    val desktopSiteEnabled: Boolean = false,
 )
-
