@@ -481,7 +481,14 @@ fun BrowserScreen(
                             "Search or type URL"
                         } else {
                             try {
-                                java.net.URI(url).host ?: url.removePrefix("https://").removePrefix("http://").substringBefore("/")
+                                java.net.URI(url).let { uri ->
+                                    buildString {
+                                        append(uri.host ?: url.removePrefix("https://").removePrefix("http://").substringBefore("/"))
+                                        uri.rawPath
+                                            ?.takeIf { it.isNotBlank() && it != "/" }
+                                            ?.let(::append)
+                                    }
+                                }
                             } catch (_: Exception) {
                                 url.removePrefix("https://").removePrefix("http://").substringBefore("/")
                             }
@@ -585,9 +592,9 @@ fun BrowserScreen(
                                             displayAddress,
                                             style = MaterialTheme.typography.titleSmall,
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f, fill = false),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.MiddleEllipsis,
+                                            modifier = Modifier.weight(1f),
                                         )
                                         if (uiState.activeTabBlockedRequests > 0) {
                                             Spacer(Modifier.width(6.dp))
