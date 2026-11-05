@@ -15,7 +15,7 @@ internal object BrowserDataCodec {
                     title = fields[2].ifBlank { null },
                     spaceId = fields[3],
                 )
-            }
+            }.distinctBy { it.id }
         }
         val version = if (value.startsWith("v2:")) "v2" else "v1"
         return decodeRecords(value, version).mapNotNull { fields ->
@@ -28,7 +28,7 @@ internal object BrowserDataCodec {
                 spaceId = fields[3],
                 desktopSiteEnabled = fields.getOrNull(4)?.toBooleanStrictOrNull() ?: false,
             )
-        }
+        }.distinctBy { it.id }
     }
 
     fun encodeBookmarks(bookmarks: List<Bookmark>): String = encodeRecords("v1", bookmarks.map {

@@ -36,6 +36,28 @@ class TabStoreTest {
     }
 
     @Test
+    fun `explicit space assignment preserves default tabs and existing assignments`() {
+        val store = TabStore()
+        store.addTab(makeTab("existing-default"))
+        store.addTab(makeTab("existing-work").copy(spaceId = "work"))
+        store.addTab(makeTab("new-work").copy(spaceId = "work"))
+        store.addTab(makeTab("new-default"))
+
+        assertEquals(
+            listOf("existing-default", "new-default"),
+            store.allTabsForSpace("default").map { it.id },
+        )
+        assertEquals(
+            listOf("existing-work", "new-work"),
+            store.allTabsForSpace("work").map { it.id },
+        )
+        assertEquals(
+            listOf("default", "work", "work", "default"),
+            store.allTabs().map { it.spaceId },
+        )
+    }
+
+    @Test
     fun `setActive switches active tab`() {
         val store = TabStore()
         store.addTab(makeTab("t1"))
@@ -172,5 +194,50 @@ class TabStoreTest {
         store.clear()
         assertEquals(0, store.tabCount())
         assertNull(store.activeTabId())
+    }
+
+    @Test
+    fun `sequential create select and close operations preserve the logical tab snapshot`() {
+        val store = TabStore()
+        fun assertSnapshot(ids: List<String>, activeId: String?) {
+            assertEquals(ids, store.allTabs().map { it.id })
+            assertEquals(ids.map { "https://$it.example" }, store.allTabs().map { it.url })
+            assertEquals(activeId, store.activeTabId())
+        }
+
+        store.addTab(makeTab("t1", "https://t1.example"))
+        assertSnapshot(listOf("t1"), "t1")
+
+        store.addTab(makeTab("t2", "https://t2.example"))
+        assertSnapshot(listOf("t1", "t2"), "t2")
+
+        store.addTab(makeTab("t3", "https://t3.example"))
+        assertSnapshot(listOf("t1", "t2", "t3"), "t3")
+
+        store.addTab(makeTab("t4", "https://t4.example"))
+        assertSnapshot(listOf("t1", "t2", "t3", "t4"), "t4")
+
+        assertTrue(store.setActive("t2"))
+        assertSnapshot(listOf("t1", "t2", "t3", "t4"), "t2")
+
+        store.removeTab("t4")
+        assertSnapshot(listOf("t1", "t2", "t3"), "t2")
+
+        store.removeTab("t2")
+        assertSnapshot(listOf("t1", "t3"), "t3")
+
+        store.addTab(makeTab("t5", "https://t5.example"))
+        assertSnapshot(listOf("t1", "t3", "t5"), "t5")
+        store.removeTab("t5")
+        assertSnapshot(listOf("t1", "t3"), "t3")
+    }
+
+    @Test
+    fun `restored active tab falls back to the last saved tab when missing or invalid`() {
+        val tabs = listOf(makeTab("t1"), makeTab("t2"), makeTab("t3"))
+
+        assertEquals("t3", resolveRestoredActiveTabId(tabs, null))
+        assertEquals("t3", resolveRestoredActiveTabId(tabs, "missing"))
+        assertEquals("t1", resolveRestoredActiveTabId(tabs, "t1"))
     }
 }

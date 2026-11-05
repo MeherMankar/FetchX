@@ -100,6 +100,8 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.foundation.layout.widthIn
@@ -146,7 +148,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -386,7 +390,7 @@ fun BrowserScreen(
                         ) {
                             IconButton(
                                 onClick = { isUrlBarExpanded = false },
-                                modifier = Modifier.size(40.dp),
+                                modifier = Modifier.size(48.dp),
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
                             }
@@ -438,7 +442,7 @@ fun BrowserScreen(
                                                     urlFieldValue = TextFieldValue("")
                                                     viewModel.onUrlInputChanged("")
                                                 },
-                                                modifier = Modifier.size(36.dp),
+                                                modifier = Modifier.size(48.dp),
                                             ) {
                                                 Icon(Icons.Default.Clear, "Clear text", modifier = Modifier.size(18.dp))
                                             }
@@ -448,7 +452,7 @@ fun BrowserScreen(
                                                 isUrlBarExpanded = false
                                                 onNavigate()
                                             },
-                                            modifier = Modifier.size(36.dp),
+                                            modifier = Modifier.size(48.dp),
                                         ) {
                                             Icon(
                                                 Icons.AutoMirrored.Filled.ArrowForward,
@@ -499,7 +503,18 @@ fun BrowserScreen(
                                         else -> viewModel.openTrackerDetails()
                                     }
                                 },
-                                modifier = Modifier.size(36.dp),
+                                enabled = !isInternalPage,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .semantics {
+                                        contentDescription = if (isBlank) {
+                                            "Select search engine"
+                                        } else if (isHttps) {
+                                            "Site security and privacy, secure HTTPS connection"
+                                        } else {
+                                            "Site security and privacy, not secure HTTP connection"
+                                        }
+                                    },
                             ) {
                                 if (isBlank) {
                                     SearchEngineIcon(
@@ -509,21 +524,21 @@ fun BrowserScreen(
                                 } else if (isInternalPage) {
                                     Icon(
                                         Icons.Default.Info,
-                                        contentDescription = "Internal page",
+                                        contentDescription = null,
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 } else if (isHttps) {
                                     Icon(
                                         Icons.Default.Lock,
-                                        contentDescription = "Secure HTTPS",
+                                        contentDescription = null,
                                         tint = MaterialTheme.colorScheme.tertiary,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 } else {
                                     Icon(
                                         Icons.Default.Warning,
-                                        contentDescription = "Not secure",
+                                        contentDescription = null,
                                         tint = MaterialTheme.colorScheme.error,
                                         modifier = Modifier.size(18.dp),
                                     )
@@ -543,7 +558,10 @@ fun BrowserScreen(
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(42.dp),
+                                    .heightIn(min = 48.dp)
+                                    .semantics {
+                                        contentDescription = "Address bar, $displayAddress"
+                                    },
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -567,7 +585,7 @@ fun BrowserScreen(
                                             displayAddress,
                                             style = MaterialTheme.typography.titleSmall,
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
+                                            maxLines = 2,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f, fill = false),
                                         )
@@ -596,7 +614,7 @@ fun BrowserScreen(
                                 onClick = {
                                     if (isLoading) viewModel.stopLoading() else viewModel.reload()
                                 },
-                                modifier = Modifier.size(36.dp),
+                                modifier = Modifier.size(48.dp),
                             ) {
                                 if (isLoading) {
                                     Icon(
@@ -623,7 +641,7 @@ fun BrowserScreen(
                             IconButton(
                                 onClick = { viewModel.toggleBookmark() },
                                 enabled = canBookmark,
-                                modifier = Modifier.size(36.dp),
+                                modifier = Modifier.size(48.dp),
                             ) {
                                 Icon(
                                     if (isBookmarked) Icons.Default.Star else Icons.Default.StarOutline,
@@ -698,7 +716,7 @@ fun BrowserScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable {
+                                        .clickable(role = Role.Button) {
                                             viewModel.applySuggestion(suggestion)
                                             isUrlBarExpanded = false
                                         }
@@ -731,7 +749,7 @@ fun BrowserScreen(
                                             )
                                             viewModel.onUrlInputChanged(suggestion.title)
                                         },
-                                        modifier = Modifier.size(32.dp),
+                                        modifier = Modifier.size(48.dp),
                                     ) {
                                         Icon(
                                             Icons.Default.NorthWest,
@@ -896,6 +914,9 @@ fun BrowserScreen(
                     },
                     onFindInPage = {
                         closeMenu()
+                        isUrlBarExpanded = false
+                        keyboardController?.hide()
+                        viewModel.closeTabOverview()
                         if (!viewModel.openFindInPage()) {
                             Toast.makeText(context, "No active page to search.", Toast.LENGTH_SHORT).show()
                         }
@@ -988,23 +1009,16 @@ fun BrowserScreen(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            uiState.findInPage?.let { findState ->
-                FindInPagePanel(
-                    state = findState,
-                    focusRequester = findFocusRequester,
-                    onQueryChange = viewModel::updateFindQuery,
-                    onPrevious = viewModel::findPreviousMatch,
-                    onNext = viewModel::findNextMatch,
-                    onClear = { viewModel.updateFindQuery("") },
-                    onClose = {
-                        keyboardController?.hide()
-                        viewModel.closeFindInPage()
-                    },
+            if (uiState.isRestoringTabs) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 8.dp, vertical = 8.dp)
-                        .zIndex(2f),
-                )
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                        .clickable {},
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
             }
 
             // Floating pill to exit compact mode
@@ -1017,7 +1031,7 @@ fun BrowserScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 28.dp)
-                        .size(36.dp),
+                        .size(48.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
@@ -1042,6 +1056,21 @@ fun BrowserScreen(
                     onOpenHistory = { viewModel.openHistory() },
                     onOpenDownloads = onNavigateToDownloads,
                     modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            uiState.findInPage?.let { findState ->
+                FindInPagePanel(
+                    state = findState,
+                    focusRequester = findFocusRequester,
+                    onQueryChange = viewModel::updateFindQuery,
+                    onPrevious = viewModel::findPreviousMatch,
+                    onNext = viewModel::findNextMatch,
+                    onClear = { viewModel.updateFindQuery("") },
+                    onClose = {
+                        keyboardController?.hide()
+                        viewModel.closeFindInPage()
+                    },
                 )
             }
 
@@ -1110,7 +1139,7 @@ fun BrowserScreen(
                         Spacer(Modifier.width(8.dp))
                         IconButton(
                             onClick = viewModel::dismissVideoBar,
-                            modifier = Modifier.size(32.dp),
+                            modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
                                 Icons.Default.Close,
@@ -1186,7 +1215,7 @@ fun BrowserScreen(
                                         onClick = {
                                             onPlayVideo(video.url)
                                         },
-                                        modifier = Modifier.size(36.dp),
+                                        modifier = Modifier.size(48.dp),
                                     ) {
                                         Icon(
                                             Icons.Default.PlayArrow,
@@ -1204,7 +1233,7 @@ fun BrowserScreen(
                                                 viewModel.requestMediaFormats(video)
                                             }
                                         },
-                                        modifier = Modifier.size(36.dp),
+                                        modifier = Modifier.size(48.dp),
                                     ) {
                                         Icon(
                                             Icons.Default.Download,
@@ -1472,7 +1501,7 @@ fun BrowserScreen(
             onSelect = { viewModel.selectTab(it); viewModel.closeTabOverview() },
             onClose = { viewModel.closeTab(it) },
             onCloseAll = { spaceId -> viewModel.closeAllTabs(spaceId) },
-            onNewTab = { spaceId -> viewModel.newTab(); viewModel.closeTabOverview() },
+            onNewTab = { spaceId -> viewModel.newTab(spaceId = spaceId); viewModel.closeTabOverview() },
             onDismiss = viewModel::closeTabOverview,
             onOpenBrowserMenu = {
                 viewModel.closeTabOverview()
@@ -1788,7 +1817,7 @@ private fun EssentialsPage(
                                 text = entry.title,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
@@ -1819,7 +1848,7 @@ private fun EssentialsAction(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = modifier.height(76.dp),
+        modifier = modifier.heightIn(min = 76.dp),
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -1845,7 +1874,8 @@ private fun EssentialsAction(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
+                textAlign = TextAlign.Center,
             )
         }
     }
@@ -2137,16 +2167,15 @@ private fun BrowserMenuSheet(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
-                Surface(
+                IconButton(
                     onClick = onDismiss,
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.size(30.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Close, contentDescription = "Close menu",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                    }
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Close menu",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 
@@ -2529,125 +2558,136 @@ private fun FindInPagePanel(
     onNext: () -> Unit,
     onClear: () -> Unit,
     onClose: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        tonalElevation = 4.dp,
-        shadowElevation = 4.dp,
+    Popup(
+        alignment = Alignment.TopCenter,
+        onDismissRequest = onClose,
+        properties = PopupProperties(
+            focusable = true,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+        ),
     ) {
-        Column(
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            tonalElevation = 4.dp,
+            shadowElevation = 4.dp,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Text(
-                    text = "Find in Page",
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier.size(48.dp),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Close Find in Page",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = state.query,
-                    onValueChange = onQueryChange,
-                    modifier = Modifier
-                        .weight(1f)
-                        .focusRequester(focusRequester),
-                    placeholder = { Text("Search this page") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(
-                        onSearch = { keyboardController?.hide() },
-                    ),
-                    trailingIcon = {
-                        if (state.query.isNotEmpty()) {
-                            IconButton(
-                                onClick = onClear,
-                                modifier = Modifier.size(48.dp),
-                            ) {
-                                Icon(
-                                    Icons.Default.Clear,
-                                    contentDescription = "Clear search",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    },
-                )
-                if (state.query.isNotBlank()) {
                     Text(
-                        text = if (state.error != null) "—"
-                        else "${if (state.found) state.currentMatch else 0} / ${state.totalMatches}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (state.error != null) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.semantics {
-                            contentDescription = state.error
-                                ?: "${if (state.found) state.currentMatch else 0} of ${state.totalMatches} matches"
+                        text = "Find in Page",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = onClose,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close Find in Page",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = state.query,
+                        onValueChange = onQueryChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester),
+                        placeholder = { Text("Search this page") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(
+                            onSearch = { keyboardController?.hide() },
+                        ),
+                        trailingIcon = {
+                            if (state.query.isNotEmpty()) {
+                                IconButton(
+                                    onClick = onClear,
+                                    modifier = Modifier.size(48.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Clear,
+                                        contentDescription = "Clear search",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         },
                     )
+                    if (state.query.isNotBlank()) {
+                        Text(
+                            text = if (state.error != null) "—"
+                            else "${if (state.found) state.currentMatch else 0} / ${state.totalMatches}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (state.error != null) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.semantics {
+                                contentDescription = state.error
+                                    ?: "${if (state.found) state.currentMatch else 0} of ${state.totalMatches} matches"
+                            },
+                        )
+                    }
                 }
-            }
-            state.error?.let { error ->
-                Text(
-                    text = error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                IconButton(
-                    onClick = onPrevious,
-                    enabled = state.query.isNotBlank() && state.totalMatches > 0,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = "Previous match" },
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                state.error?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                IconButton(
-                    onClick = onNext,
-                    enabled = state.query.isNotBlank() && state.totalMatches > 0,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .semantics { contentDescription = "Next match" },
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
                 ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowForward,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    IconButton(
+                        onClick = onPrevious,
+                        enabled = state.query.isNotBlank() && state.totalMatches > 0,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = "Previous match" },
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(
+                        onClick = onNext,
+                        enabled = state.query.isNotBlank() && state.totalMatches > 0,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .semantics { contentDescription = "Next match" },
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -2873,8 +2913,8 @@ private fun ThemePickerDialog(
                                 androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.onBackground)
                             else null,
                             modifier = Modifier
-                                .size(36.dp)
-                                .padding(2.dp)
+                                .size(48.dp)
+                                .padding(6.dp)
                                 .semantics {
                                     contentDescription = name
                                     selected = isActive
@@ -2902,8 +2942,8 @@ fun SearchEngineIcon(
 ) {
     Surface(
         shape = RoundedCornerShape(size * 0.28f),
-        color = Color(0xFF2B2A33),
-        border = BorderStroke(0.5.dp, Color(0xFF383741)),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -2916,7 +2956,7 @@ fun SearchEngineIcon(
                             fontSize = (size.value * 0.55f).sp,
                             lineHeight = (size.value * 0.55f).sp,
                         ),
-                        color = Color(0xFFFBFBFE),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 SearchEngine.BING -> {
@@ -2927,7 +2967,7 @@ fun SearchEngineIcon(
                             fontSize = (size.value * 0.58f).sp,
                             lineHeight = (size.value * 0.58f).sp,
                         ),
-                        color = Color(0xFFFBFBFE),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 SearchEngine.DUCKDUCKGO -> {
@@ -2938,14 +2978,14 @@ fun SearchEngineIcon(
                             fontSize = (size.value * 0.55f).sp,
                             lineHeight = (size.value * 0.55f).sp,
                         ),
-                        color = Color(0xFFFBFBFE),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 SearchEngine.BRAVE -> {
                     Icon(
                         Icons.Default.Shield,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.60f),
                     )
                 }
@@ -2953,7 +2993,7 @@ fun SearchEngineIcon(
                     Icon(
                         Icons.Default.Search,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.60f),
                     )
                 }
@@ -2961,7 +3001,7 @@ fun SearchEngineIcon(
                     Icon(
                         Icons.Default.Eco,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.60f),
                     )
                 }
@@ -2969,7 +3009,7 @@ fun SearchEngineIcon(
                     Icon(
                         Icons.Default.Star,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.60f),
                     )
                 }
@@ -2977,7 +3017,7 @@ fun SearchEngineIcon(
                     Icon(
                         Icons.Default.Explore,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.60f),
                     )
                 }
@@ -2985,7 +3025,7 @@ fun SearchEngineIcon(
                     Icon(
                         Icons.AutoMirrored.Filled.MenuBook,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.55f),
                     )
                 }
@@ -2993,7 +3033,7 @@ fun SearchEngineIcon(
                     Icon(
                         Icons.Default.PlayArrow,
                         contentDescription = engine.displayName,
-                        tint = Color(0xFFFBFBFE),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(size * 0.62f),
                     )
                 }
@@ -3081,7 +3121,7 @@ private fun SearchEngineSelectorDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TabGridSheet(
+internal fun TabGridSheet(
     tabs: List<TabState>,
     activeTabId: String?,
     profiles: List<BrowserProfile> = emptyList(),
@@ -3101,13 +3141,7 @@ private fun TabGridSheet(
     var showMenu by remember { mutableStateOf(false) }
 
     val visibleTabs = remember(tabs, searchQuery, filterSpaceId) {
-        tabs.filter { tab ->
-            val matchesSpace = filterSpaceId == null || tab.spaceId == filterSpaceId
-            val matchesQuery = searchQuery.isBlank() ||
-                tab.title.orEmpty().contains(searchQuery, ignoreCase = true) ||
-                tab.url.contains(searchQuery, ignoreCase = true)
-            matchesSpace && matchesQuery
-        }
+        filterVisibleTabs(tabs, searchQuery, filterSpaceId)
     }
 
     val backgroundColor = MaterialTheme.colorScheme.background
@@ -3176,7 +3210,7 @@ private fun TabGridSheet(
                             // Search toggle
                             IconButton(
                                 onClick = { showSearchField = !showSearchField },
-                                modifier = Modifier.size(36.dp),
+                                modifier = Modifier.size(48.dp),
                             ) {
                                 Icon(
                                     Icons.Default.Search,
@@ -3189,7 +3223,7 @@ private fun TabGridSheet(
                             // Quick '+' New Tab
                             IconButton(
                                 onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
-                                modifier = Modifier.size(36.dp),
+                                modifier = Modifier.size(48.dp),
                             ) {
                                 Icon(
                                     Icons.Default.Add,
@@ -3203,7 +3237,7 @@ private fun TabGridSheet(
                             Box {
                                 IconButton(
                                     onClick = { showMenu = true },
-                                    modifier = Modifier.size(36.dp),
+                                    modifier = Modifier.size(48.dp),
                                 ) {
                                     Icon(
                                         Icons.Default.MoreVert,
@@ -3258,6 +3292,7 @@ private fun TabGridSheet(
                             onValueChange = { searchQuery = it },
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .testTag("tab-grid-search")
                                 .padding(bottom = 10.dp),
                             singleLine = true,
                             placeholder = { Text("Search your tabs", color = secondaryTextColor) },
@@ -3297,6 +3332,7 @@ private fun TabGridSheet(
                             val isAllSelected = filterSpaceId == null
                             Surface(
                                 onClick = { filterSpaceId = null },
+                                modifier = Modifier.testTag("tab-space-filter-all"),
                                 shape = CircleShape,
                                 color = if (isAllSelected) {
                                     spaceAccentColor.copy(alpha = 0.2f)
@@ -3327,6 +3363,7 @@ private fun TabGridSheet(
                                 val count = tabs.count { it.spaceId == profile.id }
                                 Surface(
                                     onClick = { filterSpaceId = profile.id },
+                                    modifier = Modifier.testTag("tab-space-filter-${profile.id}"),
                                     shape = CircleShape,
                                     color = if (isSelected) {
                                         profileColor.copy(alpha = 0.2f)
@@ -3417,7 +3454,7 @@ private fun TabGridSheet(
                     } else {
                         // ── Tab Cards Grid / List (Modern Browser Cards) ────
                         LazyVerticalGrid(
-                            columns = GridCells.Fixed(1),
+                            columns = GridCells.Adaptive(minSize = 280.dp),
                             modifier = Modifier.weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -3481,7 +3518,7 @@ private fun TabGridSheet(
                                     },
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(96.dp),
+                                        .height(140.dp),
                                 ) {
                                     // ── Standard Browser Card Structure ────
                                     Surface(
@@ -3493,7 +3530,10 @@ private fun TabGridSheet(
                                             color = if (isActive) spaceAccentColor else cardBorder.copy(alpha = 0.7f),
                                         ),
                                         shadowElevation = if (isActive) 8.dp else 2.dp,
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .testTag("tab-card-${tab.id}")
+                                            .semantics { selected = isActive },
                                     ) {
                                         Column(
                                             modifier = Modifier.fillMaxSize(),
@@ -3522,18 +3562,18 @@ private fun TabGridSheet(
                                                     style = MaterialTheme.typography.labelMedium,
                                                     fontWeight = if (isActive) FontWeight.Bold else FontWeight.SemiBold,
                                                     color = primaryTextColor,
-                                                    maxLines = 1,
+                                                    maxLines = 2,
                                                     overflow = TextOverflow.Ellipsis,
                                                     modifier = Modifier.weight(1f),
                                                 )
 
                                                 IconButton(
                                                     onClick = { onClose(tab.id) },
-                                                    modifier = Modifier.size(22.dp),
+                                                    modifier = Modifier.size(48.dp),
                                                 ) {
                                                     Icon(
                                                         Icons.Default.Close,
-                                                        contentDescription = "Close tab",
+                                                        contentDescription = "Close ${tab.title?.takeIf(String::isNotBlank) ?: tabHost} tab",
                                                         tint = secondaryTextColor,
                                                         modifier = Modifier.size(14.dp),
                                                     )
@@ -3556,7 +3596,7 @@ private fun TabGridSheet(
                                                     Surface(
                                                         shape = CircleShape,
                                                         color = tabSpaceColor.copy(alpha = 0.16f),
-                                                        modifier = Modifier.size(32.dp),
+                                                        modifier = Modifier.size(48.dp),
                                                     ) {
                                                         Box(contentAlignment = Alignment.Center) {
                                                             Icon(
@@ -3572,7 +3612,7 @@ private fun TabGridSheet(
                                                             text = tabHost,
                                                             style = MaterialTheme.typography.bodyMedium,
                                                             color = primaryTextColor,
-                                                            maxLines = 1,
+                                                            maxLines = 2,
                                                             overflow = TextOverflow.Ellipsis,
                                                         )
                                                         Text(
@@ -3690,7 +3730,7 @@ private fun BrowserTabStrip(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = Color(0xFF0F141C),
+        color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
@@ -3721,14 +3761,23 @@ private fun BrowserTabStrip(
                 Surface(
                     onClick = { onSelectTab(tab.id) },
                     shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
-                    color = if (isActive) Color(0xFF1E2636) else Color(0xFF141923),
+                    color = if (isActive) {
+                        MaterialTheme.colorScheme.surfaceContainerHigh
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    },
                     border = BorderStroke(
                         width = 1.dp,
-                        color = if (isActive) spaceAccentColor.copy(alpha = 0.6f) else Color(0xFF263040).copy(alpha = 0.5f),
+                        color = if (isActive) {
+                            spaceAccentColor.copy(alpha = 0.6f)
+                        } else {
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        },
                     ),
                     modifier = Modifier
-                        .widthIn(min = 120.dp, max = 180.dp)
-                        .height(34.dp),
+                        .widthIn(min = 160.dp, max = 220.dp)
+                        .height(48.dp)
+                        .semantics { selected = isActive },
                 ) {
                     Row(
                         modifier = Modifier
@@ -3740,26 +3789,26 @@ private fun BrowserTabStrip(
                         Icon(
                             imageVector = Icons.Default.Language,
                             contentDescription = null,
-                            tint = if (isActive) spaceAccentColor else Color(0xFF93929D),
+                            tint = if (isActive) spaceAccentColor else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(14.dp),
                         )
                         Text(
                             text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (isActive) Color(0xFFFBFBFE) else Color(0xFF93929D),
+                            color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
                         IconButton(
                             onClick = { onCloseTab(tab.id) },
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(48.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Close tab",
-                                tint = Color(0xFF93929D),
+                                contentDescription = "Close ${tab.title?.takeIf(String::isNotBlank) ?: tabHost} tab",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(12.dp),
                             )
                         }
@@ -3770,12 +3819,12 @@ private fun BrowserTabStrip(
             // '+' New Tab button
             IconButton(
                 onClick = onNewTab,
-                modifier = Modifier.size(30.dp),
+                modifier = Modifier.size(48.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = "New Tab",
-                    tint = Color(0xFF93929D),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(16.dp),
                 )
             }
@@ -4456,8 +4505,8 @@ private fun VideoDownloadBanner(
 ) {
     Surface(
         shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
-        color = Color(0xFF2B2A33),
-        border = BorderStroke(1.dp, Color(0xFF383741)),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 8.dp,
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -4468,14 +4517,14 @@ private fun VideoDownloadBanner(
             // Video icon in accent circle
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFF4F8EF7).copy(alpha = 0.15f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                 modifier = Modifier.size(40.dp),
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Default.OndemandVideo,
                         contentDescription = null,
-                        tint = Color(0xFF4F8EF7),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp),
                     )
                 }
@@ -4487,20 +4536,20 @@ private fun VideoDownloadBanner(
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
-                    color = Color(0xFFFBFBFE),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
                 Text(
                     video.suggestedFilename,
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    color = Color(0xFF93929D),
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
                 if (extraCount > 0) {
                     Text(
                         "+$extraCount more",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF93929D),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
             }
@@ -4509,28 +4558,29 @@ private fun VideoDownloadBanner(
             Surface(
                 onClick = onDownload,
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFF4F8EF7),
+                color = MaterialTheme.colorScheme.primary,
             ) {
                 Text(
                     "Download",
                     style = MaterialTheme.typography.labelMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
             Spacer(Modifier.width(6.dp))
-            Surface(
+            IconButton(
                 onClick = onDismiss,
-                shape = CircleShape,
-                color = Color(0xFF383741),
-                modifier = Modifier.size(30.dp),
+                modifier = Modifier.size(48.dp),
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Close, "Dismiss",
-                        tint = Color(0xFF93929D), modifier = Modifier.size(14.dp))
-                }
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Dismiss video download banner",
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
             }
         }
     }

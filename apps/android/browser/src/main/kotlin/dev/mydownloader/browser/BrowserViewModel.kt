@@ -12,6 +12,11 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import dev.mydownloader.browser.DurableBrowserTabStore
+import dev.mydownloader.browser.DurableBrowserTabStore.WriteResult
+import dev.mydownloader.browser.TabRestoreGuard
+import dev.mydownloader.browser.TabRestoreNavigationGate
+import dev.mydownloader.browser.TabSnapshotWriteGate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -24,6 +29,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.fetchx.core.download.YtDlpFormat
+import java.io.File
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
@@ -85,6 +91,7 @@ enum class SearchEngine(
 data class BrowserUiState(
     val tabs: List<TabState> = emptyList(),
     val activeTabId: String? = null,
+    val isRestoringTabs: Boolean = false,
     val urlInput: String = "about:blank",
     val showHistory: Boolean = false,
     val historyEntries: List<HistoryEntry> = emptyList(),
@@ -145,6 +152,15 @@ data class BrowserUiState(
     val selectedProfile: BrowserProfile? get() = profiles.firstOrNull { it.id == selectedProfileId }
 }
 
+internal data class BrowserTabIdentityLayers(
+    val tabStoreIds: List<String>,
+    val tabStoreActiveId: String?,
+    val tabManagerIds: List<String>,
+    val tabManagerActiveId: String?,
+    val viewModelIds: List<String>,
+    val viewModelActiveId: String?,
+)
+
 data class PendingDownload(
     val url: String,
     val filename: String? = null,
@@ -179,6 +195,12 @@ class BrowserViewModel internal constructor(
     private var applicationContext: Context? = null
     private var searchPreferences: SharedPreferences? = null
     private var browserDataPreferences: SharedPreferences? = null
+    private var durableTabStore: DurableBrowserTabStore? = null
+    private var tabRestoreJob: Job? = null
+    private val tabRestoreGuard = TabRestoreGuard()
+    private val tabSnapshotWriteGate = TabSnapshotWriteGate()
+    private val tabRestoreNavigationGate = TabRestoreNavigationGate()
+    private var tabManagerInitialized = false
     private var searchSuggestionJob: Job? = null
     private var findRequestGeneration = 0
     private var mediaFormatJob: Job? = null
@@ -199,7 +221,7 @@ class BrowserViewModel internal constructor(
 
     /**
      * Called from the AndroidView factory (and on recomposition).
-     * First call: creates the TabManager, restores saved tabs and bookmarks.
+     * First call: creates the TabManager and asynchronously restores saved tabs.
      * Subsequent calls: re-attaches the active session to the (potentially new) GeckoView.
      */
     fun attachView(view: GeckoView, runtime: GeckoRuntime) {
@@ -224,8 +246,14 @@ class BrowserViewModel internal constructor(
         applyPrivacySettings()
         val tm = tabManager ?: TabManager(runtime, trackerBlockingController).also { newTm ->
             tabManager = newTm
-            newTm.onStateChanged = ::rebuildState
-            newTm.onNavigationStateChanged = ::updateNavigationState
+            newTm.onStateChanged = {
+                tabRestoreGuard.markStateChanged()
+                rebuildState()
+            }
+            newTm.onNavigationStateChanged = { tabId, tab ->
+                tabRestoreGuard.markStateChanged()
+                updateNavigationState(tabId, tab)
+            }
             newTm.onVideoDetected = ::onVideoDetected
             newTm.onDownloadRequested = { url, filename, mimeType, contentLength ->
                 _uiState.update {
@@ -243,19 +271,64 @@ class BrowserViewModel internal constructor(
             newTm.onMagnetRequested = ::onMagnetRequested
             newTm.onSitePermissionRequested = ::enqueueSitePermission
             newTm.onAndroidPermissionsRequested = ::requestAndroidRuntimePermissions
-            val restoredTabs = loadSavedTabs()
-            val restoredActiveId = loadSavedActiveTabId()
-            newTm.restoreHistory(loadSavedHistory())
-            if (restoredTabs.isNotEmpty()) {
-                newTm.restoreTabs(restoredTabs, restoredActiveId)
-            } else {
-                newTm.createTab()
-            }
-            Log.i(TAG, "TabManager initialized")
         }
-        // Always attach the active session to the current view.
-        tm.activeSession()?.let { view.setSession(it) }
-        rebuildState()
+        if (!tabManagerInitialized && tabRestoreJob == null) {
+            beginTabRestore(tm)
+        } else {
+            tm.activeSession()?.let { view.setSession(it) }
+            if (tabManagerInitialized) rebuildState()
+        }
+    }
+
+    private fun beginTabRestore(manager: TabManager) {
+        val context = applicationContext ?: return
+        val store = getDurableTabStore()
+        val restoreVersion = tabRestoreGuard.version()
+        tabSnapshotWriteGate.beginRestore()
+        tabRestoreNavigationGate.beginRestore()
+        _uiState.update { it.copy(isRestoringTabs = true) }
+        tabRestoreJob = viewModelScope.launch {
+            try {
+                val (savedTabs, savedHistory) = withContext(Dispatchers.IO) {
+                    loadSavedTabSnapshot(store, context) to loadSavedHistory(context)
+                }
+                if (!tabRestoreGuard.canApply(restoreVersion)) {
+                    Log.w(TAG, "Skipping tab restore because browser state changed while loading")
+                    completeTabRestore(manager)
+                    return@launch
+                }
+
+                manager.restoreHistory(savedHistory)
+                if (savedTabs.first.isNotEmpty()) {
+                    manager.restoreTabs(savedTabs.first, savedTabs.second)
+                } else {
+                    manager.createTab()
+                }
+                completeTabRestore(manager)
+                Log.i(TAG, "TabManager initialized")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not restore browser state; opening a new tab", error)
+                if (tabRestoreGuard.canApply(restoreVersion)) {
+                    manager.createTab()
+                }
+                completeTabRestore(manager)
+            } finally {
+                if (!tabRestoreGuard.isDisposed()) {
+                    _uiState.update { it.copy(isRestoringTabs = false) }
+                    tabSnapshotWriteGate.completeRestore(::persistCurrentTabs)
+                }
+                tabRestoreJob = null
+            }
+        }
+    }
+
+    private fun completeTabRestore(manager: TabManager) {
+        tabManagerInitialized = true
+        tabRestoreNavigationGate.completeRestore()?.let { url ->
+            manager.navigate(url, _uiState.value.selectedSearchEngine)
+        }
     }
 
     private fun rebuildState() {
@@ -267,7 +340,6 @@ class BrowserViewModel internal constructor(
         }
         val tabs = tm.allTabStates()
         val activeUrl = tabs.find { it.id == activeId }?.url ?: "about:blank"
-        val activeTabIsLoading = tabs.find { it.id == activeId }?.isLoading == true
         val historyEntries = tm.allHistory()
         bookmarkController.refreshForUrl(activeUrl)
         val bState = bookmarkController.state.value
@@ -276,7 +348,7 @@ class BrowserViewModel internal constructor(
         val showEssentials = activeUrl == "about:blank" || activeUrl.isEmpty()
         val findState = _uiState.value.findInPage
         if (findState != null &&
-            (activeId != findState.tabId || activeUrl != findState.pageUrl || activeTabIsLoading)
+            (activeId != findState.tabId || activeUrl != findState.pageUrl)
         ) {
             findRequestGeneration += 1
             tm.clearFindInPage(findState.tabId)
@@ -307,6 +379,20 @@ class BrowserViewModel internal constructor(
         _uiState.update { it.copy(cloudflareBypassState = cfState) }
     }
 
+    internal fun tabIdentityLayersForTest(): BrowserTabIdentityLayers? {
+        val manager = tabManager ?: return null
+        val ui = _uiState.value
+        val (storeIds, storeActiveId) = manager.tabStoreIdentityForTest()
+        return BrowserTabIdentityLayers(
+            tabStoreIds = storeIds,
+            tabStoreActiveId = storeActiveId,
+            tabManagerIds = manager.allTabStates().map { it.id },
+            tabManagerActiveId = manager.activeTabId(),
+            viewModelIds = ui.tabs.map { it.id },
+            viewModelActiveId = ui.activeTabId,
+        )
+    }
+
     private fun updateNavigationState(tabId: String, tab: TabState) {
         _uiState.update { state ->
             if (state.tabs.none { it.id == tabId }) return@update state
@@ -314,12 +400,13 @@ class BrowserViewModel internal constructor(
                 if (existing.id == tabId) tab else existing
             })
         }
+        tabManager?.let { manager -> saveCurrentTabs(manager.allTabStates(), manager.activeTabId()) }
     }
 
     // ──Tab actions ────────────────────────────────────────────────────────
 
-    fun newTab(url: String = "about:blank") {
-        tabManager?.createTab(url)
+    fun newTab(url: String = "about:blank", spaceId: String = "default") {
+        tabManager?.createTab(url, spaceId)
         reattachActiveSession()
     }
 
@@ -413,6 +500,7 @@ class BrowserViewModel internal constructor(
 
     fun navigate(rawUrl: String) {
         clearDetectedVideos()
+        if (tabRestoreNavigationGate.defer(rawUrl)) return
         tabManager?.navigate(rawUrl, _uiState.value.selectedSearchEngine)
     }
 
@@ -427,7 +515,10 @@ class BrowserViewModel internal constructor(
         if (previous != null) tabManager?.clearFindInPage(previous.tabId)
         findRequestGeneration += 1
         _uiState.update {
-            it.copy(findInPage = FindInPageState(tab.id, tab.url))
+            it.copy(
+                showTabOverview = false,
+                findInPage = FindInPageState(tab.id, tab.url),
+            )
         }
         return true
     }
@@ -654,8 +745,7 @@ class BrowserViewModel internal constructor(
 
     fun newTabInCurrentSpace(url: String = "about:blank") {
         val spaceId = _uiState.value.selectedProfileId
-        tabManager?.createTab(url, spaceId)
-        reattachActiveSession()
+        newTab(url, spaceId)
     }
 
     // Essentials
@@ -1477,35 +1567,62 @@ class BrowserViewModel internal constructor(
         }
     }
 
-    private fun loadSavedTabs(): List<TabState> {
-        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+    private fun loadSavedTabSnapshot(
+        store: DurableBrowserTabStore?,
+        context: Context,
+    ): Pair<List<TabState>, String?> {
+        val durableSnapshot = try {
+            store?.load()
+        } catch (error: IOException) {
+            Log.e(TAG, "Could not load durable browser tabs; trying the legacy snapshot", error)
+            null
+        }
+        if (durableSnapshot != null) {
+            Log.i(TAG, "Restored browser tab snapshot generation ${durableSnapshot.generation}")
+            return durableSnapshot.tabs to durableSnapshot.activeTabId
+        }
+
+        val prefs = context.getSharedPreferences(
             BROWSER_DATA_PREFERENCES_FILE,
             Context.MODE_PRIVATE,
-        )?.also { browserDataPreferences = it } ?: return emptyList()
-
-        val raw = prefs.getString(SAVED_TABS_KEY, null) ?: return emptyList()
-        return BrowserDataCodec.decodeTabs(raw)
-    }
-
-    private fun loadSavedActiveTabId(): String? {
-        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
-            BROWSER_DATA_PREFERENCES_FILE,
-            Context.MODE_PRIVATE,
-        )?.also { browserDataPreferences = it } ?: return null
-        return prefs.getString(SAVED_ACTIVE_TAB_ID_KEY, null)?.takeIf { it.isNotBlank() }
+        )
+        val legacyTabs = BrowserDataCodec.decodeTabs(prefs.getString(SAVED_TABS_KEY, null).orEmpty())
+        val legacyActiveId = prefs.getString(SAVED_ACTIVE_TAB_ID_KEY, null)?.takeIf { it.isNotBlank() }
+        if (legacyTabs.isNotEmpty()) {
+            Log.i(TAG, "Restoring legacy SharedPreferences browser tabs for durable migration")
+        }
+        return legacyTabs to legacyActiveId
     }
 
     private fun saveCurrentTabs(tabs: List<TabState>, activeId: String?) {
-        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
-            BROWSER_DATA_PREFERENCES_FILE,
-            Context.MODE_PRIVATE,
-        )?.also { browserDataPreferences = it } ?: return
+        tabSnapshotWriteGate.submit(tabs, activeId, ::persistCurrentTabs)
+    }
 
-        val encoded = BrowserDataCodec.encodeTabs(tabs)
-        prefs.edit()
-            .putString(SAVED_TABS_KEY, encoded)
-            .putString(SAVED_ACTIVE_TAB_ID_KEY, activeId.orEmpty())
-            .apply()
+    private fun persistCurrentTabs(tabs: List<TabState>, activeId: String?) {
+        val store = getDurableTabStore() ?: return
+        store.submit(tabs, activeId)
+    }
+
+    private fun getDurableTabStore(): DurableBrowserTabStore? {
+        durableTabStore?.let { return it }
+        val context = applicationContext ?: return null
+        return DurableBrowserTabStore(
+            slots = AtomicFileSnapshotSlotStorage(File(context.filesDir, BROWSER_TAB_SNAPSHOT_DIRECTORY)),
+            onReadError = { error -> Log.e(TAG, "Browser tab snapshot read failed", error) },
+            onWriteResult = { result ->
+                when (result) {
+                    is WriteResult.Persisted ->
+                        Log.d(TAG, "Browser tab snapshot generation ${result.generation} is durable")
+                    is WriteResult.Superseded ->
+                        Log.d(
+                            TAG,
+                            "Browser tab snapshot generation ${result.generation} superseded by ${result.byGeneration}",
+                        )
+                    is WriteResult.Failed ->
+                        Log.e(TAG, "Browser tab snapshot generation ${result.generation} was not persisted", result.error)
+                }
+            },
+        ).also { durableTabStore = it }
     }
 
     private fun loadSavedBookmarks(): List<Bookmark> {
@@ -1528,11 +1645,11 @@ class BrowserViewModel internal constructor(
         prefs.edit().putString(SAVED_BOOKMARKS_KEY, encoded).apply()
     }
 
-    private fun loadSavedHistory(): List<HistoryEntry> {
-        val prefs = browserDataPreferences ?: applicationContext?.getSharedPreferences(
+    private fun loadSavedHistory(context: Context): List<HistoryEntry> {
+        val prefs = context.getSharedPreferences(
             BROWSER_DATA_PREFERENCES_FILE,
             Context.MODE_PRIVATE,
-        )?.also { browserDataPreferences = it } ?: return emptyList()
+        )
         return BrowserDataCodec.decodeHistory(prefs.getString(SAVED_HISTORY_KEY, null).orEmpty())
     }
 
@@ -1601,6 +1718,11 @@ class BrowserViewModel internal constructor(
         outstandingAndroidPermissions.forEach { it.resolve(false) }
         searchSuggestionJob?.cancel()
         searchSuggestionJob = null
+        tabRestoreGuard.dispose()
+        tabSnapshotWriteGate.dispose()
+        tabRestoreNavigationGate.dispose()
+        tabRestoreJob?.cancel()
+        tabRestoreJob = null
         mediaFormatJob?.cancel()
         mediaFormatJob = null
         tabManager?.dispose()
@@ -1687,6 +1809,7 @@ class BrowserViewModel internal constructor(
         private const val BROWSER_DATA_PREFERENCES_FILE = "fetchx_browser_data"
         private const val SAVED_TABS_KEY = "saved_browser_tabs"
         private const val SAVED_ACTIVE_TAB_ID_KEY = "saved_active_tab_id"
+        private const val BROWSER_TAB_SNAPSHOT_DIRECTORY = "browser-tab-snapshots"
         private const val SAVED_BOOKMARKS_KEY = "saved_bookmarks"
         private const val SAVED_HISTORY_KEY = "saved_browser_history"
         private const val PRIVACY_AD_BLOCKING_KEY = "privacy_ad_blocking"

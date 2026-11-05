@@ -2,6 +2,7 @@ package dev.fetchx.browser
 
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class BrowserDataCodecTest {
     @Test
@@ -69,5 +70,49 @@ class BrowserDataCodecTest {
             ),
             BrowserDataCodec.decodeTabs("v1:dGFi.aHR0cHM6Ly9leGFtcGxlLmNvbQ.VGl0bGU.ZGVmYXVsdA"),
         )
+    }
+
+    @Test
+    fun `four tab snapshot preserves IDs and selected tab across close and restore`() {
+        val store = TabStore()
+        val originalIds = listOf("t1", "t2", "t3", "t4")
+        originalIds.forEach { id ->
+            store.addTab(
+                TabState(
+                    id = id,
+                    url = "https://$id.example.com",
+                    title = id,
+                    spaceId = "default",
+                ),
+            )
+        }
+
+        assertEquals(originalIds, BrowserDataCodec.decodeTabs(BrowserDataCodec.encodeTabs(store.allTabs())).map { it.id })
+
+        assertTrue(store.setActive("t2"))
+        assertEquals(3, store.removeTab("t4"))
+        val savedTabs = BrowserDataCodec.decodeTabs(BrowserDataCodec.encodeTabs(store.allTabs()))
+        val savedActiveId = store.activeTabId()
+        val restored = TabStore()
+        savedTabs.forEach { restored.addTab(it) }
+        assertTrue(restored.setActive(resolveRestoredActiveTabId(savedTabs, savedActiveId)))
+
+        assertEquals(listOf("t1", "t2", "t3"), restored.allTabs().map { it.id })
+        assertEquals("t2", restored.activeTabId())
+    }
+
+    @Test
+    fun `malformed and duplicate tab records are safely ignored`() {
+        val valid = TabState(
+            id = "tab",
+            url = "https://example.com",
+            spaceId = "default",
+        )
+        val duplicate = valid.copy(url = "https://duplicate.example.com")
+        val encoded = BrowserDataCodec.encodeTabs(listOf(valid, duplicate))
+
+        assertEquals(listOf(valid), BrowserDataCodec.decodeTabs(encoded))
+        assertEquals(emptyList(), BrowserDataCodec.decodeTabs("v2:%%%"))
+        assertEquals(emptyList(), BrowserDataCodec.decodeTabs("v2:"))
     }
 }

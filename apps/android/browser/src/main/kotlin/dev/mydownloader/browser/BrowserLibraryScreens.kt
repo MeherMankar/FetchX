@@ -15,10 +15,13 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
@@ -51,6 +54,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.LocalDate
@@ -81,7 +88,7 @@ internal fun BrowserBookmarksScreen(
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().widthIn(max = 840.dp),
             color = MaterialTheme.colorScheme.background,
         ) {
             Column(
@@ -198,21 +205,21 @@ private fun BookmarkRow(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable(onClick = onOpen)
+                    .clickable(role = Role.Button, onClick = onOpen)
                     .padding(vertical = 8.dp),
             ) {
                 Text(
                     text = bookmark.title,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = bookmark.url,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -303,7 +310,7 @@ internal fun BrowserHistoryScreen(
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().widthIn(max = 840.dp),
             color = MaterialTheme.colorScheme.background,
         ) {
             Column(
@@ -414,7 +421,7 @@ private fun HistoryRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onOpen)
+            .clickable(role = Role.Button, onClick = onOpen)
             .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
     ) {
         Column(
@@ -425,14 +432,14 @@ private fun HistoryRow(
             Text(
                 text = entry.title?.takeIf(String::isNotBlank) ?: entry.url,
                 style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = entry.url,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
@@ -583,6 +590,10 @@ internal fun SitePrivacyDialog(
                     Switch(
                         checked = trackerProtectionEnabled,
                         onCheckedChange = onTrackerProtectionChange,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Tracking protection"
+                            stateDescription = if (trackerProtectionEnabled) "On" else "Off"
+                        },
                     )
                 }
                 Text(
@@ -621,10 +632,17 @@ internal fun SitePermissionPromptDialog(
         title = { Text("Allow website permission?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${prompt.origin} wants permission to use ${prompt.permission}.")
+                Text(
+                    "${prompt.origin} wants permission to use ${prompt.permission}.",
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 prompt.detail?.let {
                     Text(
                         it,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp)
+                            .verticalScroll(rememberScrollState()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

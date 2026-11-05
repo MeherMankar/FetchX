@@ -23,6 +23,31 @@ enum class FindDirection {
     PREVIOUS,
 }
 
+internal class RestoredTabLocationGuard {
+    private val pendingTabIds = mutableSetOf<String>()
+
+    fun track(tabId: String, restoredUrl: String) {
+        if (restoredUrl.isNotBlank() && restoredUrl != "about:blank") {
+            pendingTabIds.add(tabId)
+        }
+    }
+
+    fun shouldIgnore(tabId: String, url: String?, hasUserGesture: Boolean): Boolean {
+        if (tabId !in pendingTabIds) return false
+        if (url == "about:blank" && !hasUserGesture) return true
+        pendingTabIds.remove(tabId)
+        return false
+    }
+
+    fun clear(tabId: String) {
+        pendingTabIds.remove(tabId)
+    }
+
+    fun clear() {
+        pendingTabIds.clear()
+    }
+}
+
 data class PageFindResult(
     val found: Boolean,
     val current: Int,
@@ -84,6 +109,7 @@ class TabManager(
     private val historyStore = HistoryStore()
     private val bypassControllers = mutableMapOf<String, CloudflareBypassController>()
     private val pendingPermissionResults = OneShotPermissionDecisions()
+    private val restoredTabLocationGuard = RestoredTabLocationGuard()
 
     /** Callback to notify observers of state changes. */
     var onStateChanged: (() -> Unit)? = null
@@ -117,11 +143,12 @@ class TabManager(
         sessions.values.forEach { it.close() }
         sessions.clear()
         loadedTabIds.clear()
+        restoredTabLocationGuard.clear()
         store.clear()
 
-        val restoredActiveId = activeId?.takeIf { saved -> savedTabs.any { it.id == saved } }
-            ?: savedTabs.last().id
+        val restoredActiveId = resolveRestoredActiveTabId(savedTabs, activeId)
         for (tab in savedTabs) {
+            restoredTabLocationGuard.track(tab.id, tab.url)
             val session = buildSession(tab.id, tab.desktopSiteEnabled)
             session.open(runtime)
             trackerBlockingController.registerTab(tab.id)
@@ -154,6 +181,7 @@ class TabManager(
         if (store.findTab(tabId) == null) return
         historyStore.removeTab(tabId)
         trackerBlockingController.removeTab(tabId)
+        restoredTabLocationGuard.clear(tabId)
         sessions.remove(tabId)?.close()
         loadedTabIds.remove(tabId)
         bypassControllers.remove(tabId)?.reset()
@@ -173,6 +201,7 @@ class TabManager(
         tabsToClose.forEach { tab ->
             historyStore.removeTab(tab.id)
             trackerBlockingController.removeTab(tab.id)
+            restoredTabLocationGuard.clear(tab.id)
             sessions.remove(tab.id)?.close()
             loadedTabIds.remove(tab.id)
             store.removeTab(tab.id)
@@ -204,6 +233,9 @@ class TabManager(
     /** Returns the active tab ID. */
     fun activeTabId(): String? = store.activeTabId()
 
+    internal fun tabStoreIdentityForTest(): Pair<List<String>, String?> =
+        store.allTabs().map { it.id } to store.activeTabId()
+
     /** Count of open tabs. */
     fun tabCount(): Int = store.tabCount()
 
@@ -215,6 +247,7 @@ class TabManager(
     ) {
         val url = normalizeUrl(rawUrl, searchEngine)
         val tabId = store.activeTabId() ?: return
+        restoredTabLocationGuard.clear(tabId)
         val session = sessions[tabId]
         Log.i(TAG, "Navigating tab $tabId")
         session?.loadUri(url)
@@ -223,20 +256,27 @@ class TabManager(
     }
 
     fun goBack(): Boolean {
-        val session = activeSession() ?: return false
+        val tabId = store.activeTabId() ?: return false
+        val session = sessions[tabId] ?: return false
+        restoredTabLocationGuard.clear(tabId)
         return SessionNavigationActions.goBackIfAvailable(store.activeTab()) {
             session.goBack()
         }
     }
 
     fun goForward(): Boolean {
-        val session = activeSession() ?: return false
+        val tabId = store.activeTabId() ?: return false
+        val session = sessions[tabId] ?: return false
+        restoredTabLocationGuard.clear(tabId)
         return SessionNavigationActions.goForwardIfAvailable(store.activeTab()) {
             session.goForward()
         }
     }
 
-    fun reload() { activeSession()?.reload() }
+    fun reload() {
+        store.activeTabId()?.let(restoredTabLocationGuard::clear)
+        activeSession()?.reload()
+    }
 
     fun stopLoading() { activeSession()?.stop() }
 
@@ -246,6 +286,7 @@ class TabManager(
         val session = sessions[tabId] ?: return false
         applyDesktopSiteSettings(session, enabled)
         if (!store.updateTab(tabId) { it.copy(desktopSiteEnabled = enabled) }) return false
+        restoredTabLocationGuard.clear(tabId)
         session.reload()
         onStateChanged?.invoke()
         return true
@@ -349,6 +390,7 @@ class TabManager(
         val openSessions = sessions.values.toList()
         sessions.clear()
         loadedTabIds.clear()
+        restoredTabLocationGuard.clear()
         openSessions.forEach { it.close() }
         bypassControllers.values.forEach { it.reset() }
         bypassControllers.clear()
@@ -721,6 +763,10 @@ class TabManager(
                 perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean,
             ) {
+                if (restoredTabLocationGuard.shouldIgnore(tabId, url, hasUserGesture)) {
+                    cfController.onLocationChange(url.orEmpty())
+                    return
+                }
                 updateTabState(tabId) { it.copy(url = url ?: "", errorText = null) }
                 cfController.onLocationChange(url ?: "")
             }
@@ -752,6 +798,7 @@ class TabManager(
                         return null
                     }
                 }
+                restoredTabLocationGuard.clear(tabId)
                 updateTabState(tabId) {
                     it.copy(
                         errorText = "Could not load page. Check your connection.",

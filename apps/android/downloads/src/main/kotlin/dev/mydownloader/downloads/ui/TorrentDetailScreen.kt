@@ -1,6 +1,7 @@
 package dev.fetchx.downloads.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -32,6 +34,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -111,12 +117,18 @@ fun TorrentDetailScreen(
             return@Scaffold
         }
 
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(innerPadding),
+            contentAlignment = Alignment.TopCenter,
         ) {
+            LazyColumn(
+                modifier = Modifier
+                    .widthIn(max = 840.dp)
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+            ) {
             // ── (a) Info card ──────────────────────────────────────────────
             item(key = "info_card") {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -260,6 +272,7 @@ fun TorrentDetailScreen(
                 )
                 Spacer(modifier = Modifier.height(24.dp))
             }
+            }
         }
     }
 }
@@ -336,7 +349,11 @@ private fun DirectoryHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggleExpand)
+            .clickable(role = Role.Button, onClick = onToggleExpand)
+            .semantics {
+                contentDescription = "Folder $directory"
+                stateDescription = if (isExpanded) "Expanded" else "Collapsed"
+            }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -373,6 +390,9 @@ private fun FileRow(
         Checkbox(
             checked = checked,
             onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics {
+                contentDescription = "Select $path"
+            },
         )
         Text(
             text = path,

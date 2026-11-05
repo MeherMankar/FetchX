@@ -50,3 +50,7 @@ class TabStore {
     }
 }
 
+internal fun resolveRestoredActiveTabId(tabs: List<TabState>, savedActiveId: String?): String {
+    require(tabs.isNotEmpty())
+    return savedActiveId?.takeIf { id -> tabs.any { it.id == id } } ?: tabs.last().id
+}
