@@ -33,7 +33,14 @@ pub async fn resume(svc: &CoreServices, id_str: String, json: bool) -> ExitCode 
         Some(v) => v,
         None => return exit::INVALID_ARGS,
     };
-    match svc.queue().resume(id).await {
+    let result = async {
+        // Short-lived CLI processes leave resumed work queued for a
+        // long-running desktop/server worker instead of pausing it at exit.
+        svc.queue().defer_download(id).await?;
+        svc.queue().resume(id).await
+    }
+    .await;
+    match result {
         Ok(()) => success(json, id, "resumed"),
         Err(e) => queue_error(json, &e),
     }
@@ -151,7 +158,7 @@ pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
         return exit::GENERAL_ERROR;
     }
 
-    if let Err(e) = svc.queue().enqueue(new_item).await {
+    if let Err(e) = svc.queue().enqueue_deferred(new_item).await {
         output::print_error(json, &format!("could not re-enqueue: {e}"));
         return exit::GENERAL_ERROR;
     }

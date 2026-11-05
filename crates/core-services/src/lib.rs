@@ -16,6 +16,7 @@
 //!     downloads_dir: PathBuf::from("/downloads"),
 //!     runtime_dir:   PathBuf::from("/tmp/fetchx-runtime"),
 //!     bundled_engines_dir: None,
+//!     defer_queued_on_start: false,
 //! };
 //! let services = CoreServices::start(config).await?;
 //! // use services.queue(), services.scheduler(), etc.
@@ -85,6 +86,9 @@ pub struct CoreServicesConfig {
     /// Optional directory containing installer-bundled desktop engine binaries.
     /// Used only to seed engine defaults when no engine config has been stored.
     pub bundled_engines_dir: Option<PathBuf>,
+    /// Defers persisted runnable work while a short-lived host performs a CLI
+    /// operation. Long-running app and server hosts should leave this false.
+    pub defer_queued_on_start: bool,
 }
 
 // ============================================================
@@ -200,10 +204,33 @@ impl CoreServices {
         .await?;
 
         // Queue + Scheduler
-        let scheduler = match Scheduler::start_with_resource_policy(
+        let deferred = if cfg.defer_queued_on_start {
+            repository
+                .list()
+                .await
+                .map_err(|error| CoreServicesError::Database(error.to_string()))?
+                .into_iter()
+                .filter(|item| {
+                    matches!(
+                        item.status(),
+                        DownloadStatus::Queued
+                            | DownloadStatus::Preparing
+                            | DownloadStatus::Downloading
+                            | DownloadStatus::MetadataAcquiring
+                            | DownloadStatus::Recovering
+                            | DownloadStatus::Seeding
+                    )
+                })
+                .map(|item| item.id())
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+        let scheduler = match Scheduler::start_with_resource_policy_and_deferred(
             repository.clone(),
             engine_runtime.dispatcher.clone(),
             engine_config.resource_policy.clone(),
+            deferred,
         )
         .await
         {
@@ -1182,7 +1209,7 @@ impl EngineRuntime {
         // pass it to YtDlpProcessRunnerAdapter for the media extraction registry.
         let ytdlp_runner_for_registry = ytdlp_runner.clone();
         let (yt_dlp_engine, ytdlp_avail) =
-            init_ytdlp(repository.clone(), config, ytdlp_runner).await;
+            init_ytdlp(repository.clone(), config, runtime_dir, ytdlp_runner).await;
         let (native_torrent_engine, native_torrent_avail) =
             init_native_torrent(repository.clone(), config).await;
 
@@ -1462,6 +1489,7 @@ fn stub_aria2(repository: CoreRepository) -> Arc<Aria2Engine<CoreRepository>> {
 async fn init_ytdlp(
     repository: CoreRepository,
     config: &EngineConfig,
+    runtime_dir: &std::path::Path,
     runner: Option<Arc<dyn YtDlpProcessRunner>>,
 ) -> (Option<Arc<YtDlpEngine<CoreRepository>>>, EngineAvailability) {
     if !config.yt_dlp.enabled {
@@ -1470,6 +1498,9 @@ async fn init_ytdlp(
     let mut ytdlp_cfg = DownloaderYtDlpConfig::new();
     if let Some(p) = &config.yt_dlp.executable_path {
         ytdlp_cfg = ytdlp_cfg.with_executable(p.clone());
+    }
+    if runner.is_none() {
+        ytdlp_cfg = ytdlp_cfg.with_version_cache_path(runtime_dir.join("yt-dlp-version.json"));
     }
     let initialized = if let Some(runner) = runner {
         YtDlpEngine::initialize_with_runner_and_executable(
@@ -1772,6 +1803,7 @@ mod tests {
             downloads_dir: root.join("downloads"),
             runtime_dir: root.join("runtime"),
             bundled_engines_dir: None,
+            defer_queued_on_start: false,
         }
     }
 
@@ -1970,6 +2002,7 @@ mod tests {
             downloads_dir: dir.path().join("downloads"),
             runtime_dir: dir.path().join("runtime"),
             bundled_engines_dir: None,
+            defer_queued_on_start: false,
         })
         .await?;
 

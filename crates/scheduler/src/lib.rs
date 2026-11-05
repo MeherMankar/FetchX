@@ -115,12 +115,34 @@ where
     where
         E: ManagedDownloadEngine + 'static,
     {
+        Self::start_with_resource_policy_and_deferred(
+            repository,
+            engine,
+            resource_policy,
+            HashSet::new(),
+        )
+        .await
+    }
+
+    /// Starts the scheduler while keeping selected downloads out of worker
+    /// dispatch. Hosts that only perform short-lived database/queue commands
+    /// use this to avoid starting transfers that would be paused at shutdown.
+    pub async fn start_with_resource_policy_and_deferred<E>(
+        repository: R,
+        engine: Arc<E>,
+        resource_policy: ResourcePolicy,
+        mut deferred: HashSet<DownloadId>,
+    ) -> Result<Self, ScheduleError>
+    where
+        E: ManagedDownloadEngine + 'static,
+    {
         let schedules = repository.list_schedules().await?;
-        let deferred = schedules
-            .iter()
-            .filter(|schedule| schedule.enabled())
-            .map(|schedule| schedule.download_id())
-            .collect::<HashSet<_>>();
+        deferred.extend(
+            schedules
+                .iter()
+                .filter(|schedule| schedule.enabled())
+                .map(|schedule| schedule.download_id()),
+        );
         let queue = QueueManager::new_with_deferred_policy(
             repository.clone(),
             engine,

@@ -63,6 +63,7 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         downloads_dir: root.path().join("downloads"),
         runtime_dir: root.path().join("runtime"),
         bundled_engines_dir: None,
+        defer_queued_on_start: false,
     };
 
     // Enable yt-dlp so the YtDlpExtractor is registered in the registry.

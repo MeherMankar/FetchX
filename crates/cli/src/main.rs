@@ -108,7 +108,7 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
             Ok(code)
         }
         Monitor => {
-            let svc = bootstrap::start().await?;
+            let svc = bootstrap::start_worker().await?;
             let code = commands::monitor::run(&svc).await;
             svc.shutdown().await?;
             Ok(code)

@@ -15,8 +15,18 @@ pub async fn run(json: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     "version": null,
                     "note": "built-in"
                 },
+                "hls": {
+                    "available": true,
+                    "version": null,
+                    "note": "built-in"
+                },
                 "aria2": avail_json(&status.aria2),
                 "yt_dlp": avail_json(&status.yt_dlp),
+                "native_torrent": avail_json(&status.native_torrent),
+                "ftp": avail_json(&status.ftp),
+                "ftps": avail_json(&status.ftp),
+                "sftp": avail_json(&status.sftp),
+                "metalink": avail_json(&status.metalink),
             }
         }));
     } else {
@@ -28,6 +38,16 @@ pub async fn run(json: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
         ]);
         table.add_row(avail_row("aria2", &status.aria2));
         table.add_row(avail_row("yt-dlp", &status.yt_dlp));
+        table.add_row(vec![
+            "hls".to_owned(),
+            "yes".to_owned(),
+            "built-in".to_owned(),
+        ]);
+        table.add_row(avail_row("native-torrent", &status.native_torrent));
+        table.add_row(avail_row("ftp", &status.ftp));
+        table.add_row(avail_row("ftps", &status.ftp));
+        table.add_row(avail_row("sftp", &status.sftp));
+        table.add_row(avail_row("metalink", &status.metalink));
         table.print();
     }
 

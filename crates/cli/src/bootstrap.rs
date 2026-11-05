@@ -62,12 +62,25 @@ pub fn database_path() -> PathBuf {
 
 /// Start the shared core services using the same paths as the desktop app.
 pub async fn start() -> Result<CoreServices, CoreServicesError> {
+    start_with_queue_mode(true).await
+}
+
+/// Starts services for the long-running monitor command, which owns queue
+/// dispatch for its lifetime.
+pub async fn start_worker() -> Result<CoreServices, CoreServicesError> {
+    start_with_queue_mode(false).await
+}
+
+async fn start_with_queue_mode(
+    defer_queued_on_start: bool,
+) -> Result<CoreServices, CoreServicesError> {
     let data_dir = app_data_dir();
     start_with_config(CoreServicesConfig {
         database_path: data_dir.join("fetchx.db"),
         downloads_dir: downloads_dir(),
         runtime_dir: data_dir.join("runtime"),
         bundled_engines_dir: None,
+        defer_queued_on_start,
     })
     .await
 }
@@ -92,6 +105,10 @@ mod tests {
 
     use super::start_with_config;
     use fetchx_core_services::CoreServicesConfig;
+    use fetchx_models::{
+        DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp,
+    };
+    use fetchx_storage::{Database, DownloadRepository};
 
     #[tokio::test]
     async fn cli_bootstrap_uses_shared_core_services() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,6 +118,7 @@ mod tests {
             downloads_dir: root.path().join("downloads"),
             runtime_dir: root.path().join("runtime"),
             bundled_engines_dir: None,
+            defer_queued_on_start: true,
         })
         .await?;
 
@@ -110,6 +128,48 @@ mod tests {
                 .is_available(fetchx_models::EngineKind::DirectHttp)
         );
         assert!(services.queue().snapshot().await?.items.is_empty());
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn short_lived_cli_bootstrap_keeps_queued_items_from_starting()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let database = Database::connect_path(root.path().join("fetchx.db")).await?;
+        let repository = database.downloads();
+        let id = DownloadId::new();
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new("https://example.test/file", EngineKind::DirectHttp)?,
+            FileName::new("file.bin")?,
+            root.path().join("downloads/file.bin"),
+            Timestamp::from_unix_millis(1),
+        );
+        repository.create(&item).await?;
+        drop(repository);
+        database.close().await;
+
+        let services = start_with_config(CoreServicesConfig {
+            database_path: root.path().join("fetchx.db"),
+            downloads_dir: root.path().join("downloads"),
+            runtime_dir: root.path().join("runtime"),
+            bundled_engines_dir: None,
+            defer_queued_on_start: true,
+        })
+        .await?;
+
+        let snapshot = services.queue().snapshot().await?;
+        assert!(snapshot.active.is_empty());
+        assert_eq!(
+            services
+                .repository
+                .get(id)
+                .await?
+                .ok_or("missing download")?
+                .status(),
+            fetchx_models::DownloadStatus::Queued
+        );
         services.shutdown().await?;
         Ok(())
     }

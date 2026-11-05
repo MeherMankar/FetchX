@@ -185,7 +185,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             output::print_error(json, &format!("priority error: {error}"));
             return exit::GENERAL_ERROR;
         }
-        if let Err(error) = svc.queue().enqueue(item).await {
+        if let Err(error) = svc.queue().enqueue_deferred(item).await {
             output::print_error(json, &format!("failed to enqueue: {error}"));
             return exit::GENERAL_ERROR;
         }

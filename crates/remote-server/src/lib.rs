@@ -127,6 +127,7 @@ mod local_rpc_tests {
             downloads_dir: directory.path().join("downloads"),
             runtime_dir: directory.path().join("runtime"),
             bundled_engines_dir: None,
+            defer_queued_on_start: false,
         })
         .await?;
 

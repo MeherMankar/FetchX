@@ -30,7 +30,11 @@ use crate::{
     ManagedDownloadEngine, ResourceDemand,
 };
 
-const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
+// Cold Python/packaged-runtime startup can exceed five seconds on Windows and
+// on first launch in Android's embedded runtime. Keep validation bounded, but
+// leave enough time for a healthy binary to initialize.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
+const VERSION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
 const MAX_FORMAT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -48,6 +52,7 @@ pub type YtDlpRunnerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>
 pub struct YtDlpConfig {
     executable: Option<PathBuf>,
     version_timeout: Duration,
+    version_cache_path: Option<PathBuf>,
 }
 
 impl Default for YtDlpConfig {
@@ -61,6 +66,7 @@ impl YtDlpConfig {
         Self {
             executable: None,
             version_timeout: VERSION_TIMEOUT,
+            version_cache_path: None,
         }
     }
 
@@ -71,6 +77,13 @@ impl YtDlpConfig {
 
     pub fn with_version_timeout(mut self, timeout: Duration) -> Self {
         self.version_timeout = timeout;
+        self
+    }
+
+    /// Caches successful version checks for the same unchanged executable.
+    /// The cache is advisory: unreadable or stale data always triggers validation.
+    pub fn with_version_cache_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.version_cache_path = Some(path.into());
         self
     }
 }
@@ -104,6 +117,15 @@ pub struct YtDlpFormat {
 struct YtDlpFinalizationRecord {
     output_name: String,
     output_size: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+struct YtDlpVersionCacheRecord {
+    executable_path: PathBuf,
+    executable_size: u64,
+    executable_modified_unix_ms: Option<u64>,
+    validated_at_unix_secs: u64,
+    version: String,
 }
 
 struct YtDlpProgressState {
@@ -263,9 +285,13 @@ where
             return Err(YtDlpError::InvalidVersion);
         }
         let executable = executable.into();
-        let version = runner
-            .validate_version(&executable, config.version_timeout)
-            .await?;
+        let version = validate_version_cached(
+            &runner,
+            &executable,
+            config.version_timeout,
+            config.version_cache_path.as_deref(),
+        )
+        .await?;
         if version.is_empty() || version.len() > MAX_VERSION_OUTPUT_BYTES {
             return Err(YtDlpError::InvalidVersion);
         }
@@ -877,6 +903,77 @@ where
         }
         Ok(())
     }
+}
+
+async fn validate_version_cached(
+    runner: &Arc<dyn YtDlpProcessRunner>,
+    executable: &Path,
+    timeout: Duration,
+    cache_path: Option<&Path>,
+) -> Result<String, YtDlpError> {
+    let identity = if cache_path.is_some() {
+        executable_identity(executable).await
+    } else {
+        None
+    };
+    if let (Some(cache_path), Some((size, modified_ms))) = (cache_path, identity) {
+        if let Some(record) = read_version_cache(cache_path).await
+            && record.executable_path == executable
+            && record.executable_size == size
+            && record.executable_modified_unix_ms == modified_ms
+            && record.version.len() <= MAX_VERSION_OUTPUT_BYTES
+            && !record.version.trim().is_empty()
+            && unix_seconds()
+                .and_then(|now| now.checked_sub(record.validated_at_unix_secs))
+                .is_some_and(|age| age <= VERSION_CACHE_TTL.as_secs())
+        {
+            return Ok(record.version);
+        }
+    }
+
+    let version = runner.validate_version(executable, timeout).await?;
+    if let (Some(cache_path), Some((executable_size, executable_modified_unix_ms))) =
+        (cache_path, identity)
+        && !version.trim().is_empty()
+        && version.len() <= MAX_VERSION_OUTPUT_BYTES
+        && let Some(validated_at_unix_secs) = unix_seconds()
+    {
+        let record = YtDlpVersionCacheRecord {
+            executable_path: executable.to_path_buf(),
+            executable_size,
+            executable_modified_unix_ms,
+            validated_at_unix_secs,
+            version: version.clone(),
+        };
+        if let Ok(bytes) = serde_json::to_vec(&record) {
+            // A partial write simply invalidates the advisory cache next time.
+            let _ = tokio::fs::write(cache_path, bytes).await;
+        }
+    }
+    Ok(version)
+}
+
+async fn executable_identity(executable: &Path) -> Option<(u64, Option<u64>)> {
+    let metadata = tokio::fs::metadata(executable).await.ok()?;
+    let modified_ms = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+    Some((metadata.len(), modified_ms))
+}
+
+async fn read_version_cache(path: &Path) -> Option<YtDlpVersionCacheRecord> {
+    let bytes = tokio::fs::read(path).await.ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn unix_seconds() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_secs()).ok())
 }
 
 fn download_failure_diagnostic_code(error: &DownloadEngineError) -> &'static str {
@@ -1838,6 +1935,11 @@ mod tests {
     use super::*;
     use crate::{DownloadEngine, ManagedDownloadControl};
 
+    #[test]
+    fn default_version_validation_timeout_allows_cold_runtime_startup() {
+        assert_eq!(YtDlpConfig::new().version_timeout, Duration::from_secs(15));
+    }
+
     #[derive(Default)]
     struct FakeRunner {
         state: Arc<Mutex<FakeRunnerState>>,
@@ -1845,6 +1947,7 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRunnerState {
+        version_validation_count: usize,
         run_count: usize,
         arguments: Vec<String>,
         diagnostic_codes: Vec<&'static str>,
@@ -1877,7 +1980,13 @@ mod tests {
             _executable: &'a Path,
             _timeout: Duration,
         ) -> YtDlpRunnerFuture<'a, Result<String, YtDlpError>> {
-            Box::pin(async { Ok("2025.01.01".to_owned()) })
+            Box::pin(async move {
+                self.state
+                    .lock()
+                    .expect("test runner mutex")
+                    .version_validation_count += 1;
+                Ok("2025.01.01".to_owned())
+            })
         }
 
         fn run<'a>(
@@ -1942,6 +2051,48 @@ mod tests {
                 })
             })
         }
+    }
+
+    #[tokio::test]
+    async fn successful_version_validation_is_reused_for_unchanged_executable()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let runner = Arc::new(FakeRunner::default());
+        let state = Arc::clone(&runner.state);
+        let executable = directory.path().join("yt-dlp.mock");
+        tokio::fs::write(&executable, b"first binary").await?;
+        let config =
+            YtDlpConfig::new().with_version_cache_path(directory.path().join("version-cache.json"));
+
+        for _ in 0..2 {
+            YtDlpEngine::initialize_with_runner_and_executable(
+                repository.clone(),
+                config.clone(),
+                executable.clone(),
+                runner.clone(),
+            )
+            .await?;
+        }
+
+        tokio::fs::write(&executable, b"replacement binary with a new size").await?;
+        YtDlpEngine::initialize_with_runner_and_executable(
+            repository.clone(),
+            config,
+            executable,
+            runner,
+        )
+        .await?;
+
+        assert_eq!(
+            state
+                .lock()
+                .expect("test runner mutex")
+                .version_validation_count,
+            2
+        );
+        Ok(())
     }
 
     async fn fixture(

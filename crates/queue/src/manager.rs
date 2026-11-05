@@ -1147,6 +1147,17 @@ where
             }
         }
         Command::Cancel { id, reply } => {
+            let current = repository
+                .get(id)
+                .await?
+                .ok_or(StateMachineError::NotFound(id))?;
+            if matches!(
+                current.status(),
+                DownloadStatus::Cancelled | DownloadStatus::Failed | DownloadStatus::Completed
+            ) {
+                let _ = reply.send(Ok(()));
+                return Ok(());
+            }
             if let Some(worker) = active.get_mut(&id) {
                 worker.shutdown_requeue = false;
                 worker.cancelling = true;
@@ -1155,15 +1166,10 @@ where
                 return Ok(());
             } else {
                 let result = async {
-                    let item = repository
-                        .get(id)
-                        .await?
-                        .ok_or(StateMachineError::NotFound(id))?;
-                    match item.status() {
-                        DownloadStatus::Cancelled => Ok(()),
+                    match current.status() {
                         DownloadStatus::Queued | DownloadStatus::Paused => {
                             if matches!(
-                                item.status(),
+                                current.status(),
                                 DownloadStatus::Paused
                                     | DownloadStatus::MetadataAcquiring
                                     | DownloadStatus::Seeding
@@ -1527,7 +1533,10 @@ where
         let _ = waiter.send(response);
     }
     for waiter in worker.cancel_waiters {
-        let response = if current.status() == DownloadStatus::Cancelled {
+        let response = if matches!(
+            current.status(),
+            DownloadStatus::Cancelled | DownloadStatus::Failed | DownloadStatus::Completed
+        ) {
             Ok(())
         } else {
             Err(QueueError::InvalidStatus {
@@ -3550,6 +3559,37 @@ mod tests {
         assert_eq!(
             repository.get(id).await?.ok_or("missing item")?.status(),
             DownloadStatus::Paused
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancel_is_idempotent_for_failed_and_completed_downloads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let failed_id = persist_item_in_status(&repository, DownloadStatus::Failed).await?;
+        let completed_id = persist_item_in_status(&repository, DownloadStatus::Completed).await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+
+        manager.cancel(failed_id).await?;
+        manager.cancel(completed_id).await?;
+
+        assert_eq!(
+            repository
+                .get(failed_id)
+                .await?
+                .ok_or("missing failed item")?
+                .status(),
+            DownloadStatus::Failed
+        );
+        assert_eq!(
+            repository
+                .get(completed_id)
+                .await?
+                .ok_or("missing completed item")?
+                .status(),
+            DownloadStatus::Completed
         );
         manager.shutdown().await?;
         Ok(())

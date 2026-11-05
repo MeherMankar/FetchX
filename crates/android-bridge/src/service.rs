@@ -158,6 +158,7 @@ impl DownloadService {
             downloads_dir: PathBuf::from(&config.downloads_dir),
             runtime_dir: PathBuf::from(&config.runtime_dir),
             bundled_engines_dir: None,
+            defer_queued_on_start: false,
         };
         let ytdlp_runner = yt_dlp_runtime.map(|runtime| {
             Arc::new(AndroidYtDlpProcessRunner {
@@ -883,13 +884,22 @@ impl YtDlpProcessRunner for AndroidYtDlpProcessRunner {
     fn validate_version<'a>(
         &'a self,
         _executable: &'a Path,
-        _timeout: Duration,
+        command_timeout: Duration,
     ) -> YtDlpRunnerFuture<'a, Result<String, YtDlpError>> {
         Box::pin(async move {
+            if command_timeout.is_zero() {
+                return Err(YtDlpError::VersionTimeout);
+            }
             let runtime = Arc::clone(&self.runtime);
-            tokio::task::spawn_blocking(move || runtime.validate_version())
-                .await
-                .map_err(|_| YtDlpError::ProcessRunner)
+            match tokio::time::timeout(
+                command_timeout,
+                tokio::task::spawn_blocking(move || runtime.validate_version()),
+            )
+            .await
+            {
+                Ok(result) => result.map_err(|_| YtDlpError::ProcessRunner),
+                Err(_) => Err(YtDlpError::VersionTimeout),
+            }
         })
     }
 
@@ -1082,14 +1092,16 @@ fn unique_destination_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::thread;
+    use std::{path::Path, sync::Arc, time::Duration};
 
     use tempfile::tempdir;
 
-    use super::{DownloadService, engine_for_url, is_direct_media_url};
+    use super::{AndroidYtDlpProcessRunner, DownloadService, engine_for_url, is_direct_media_url};
+    use crate::YtDlpRuntime;
     use crate::dto::{CoreConfig, DownloadEventDto, DownloadPriorityDto};
     use crate::error::MobileApiError;
+    use fetchx_downloader::{YtDlpError, YtDlpProcessRunner};
     use fetchx_models::EngineKind;
 
     fn make_config() -> (CoreConfig, tempfile::TempDir) {
@@ -1102,6 +1114,47 @@ mod tests {
             aria2_executable_path: None,
         };
         (config, dir)
+    }
+
+    struct SlowVersionRuntime;
+
+    impl YtDlpRuntime for SlowVersionRuntime {
+        fn validate_version(&self) -> String {
+            thread::sleep(Duration::from_millis(150));
+            "test-version".to_owned()
+        }
+
+        fn run(
+            &self,
+            _arguments: Vec<String>,
+            _progress_path: String,
+            _cancel_path: String,
+        ) -> String {
+            String::new()
+        }
+
+        fn discover_formats(&self, _url: String) -> String {
+            "[]".to_owned()
+        }
+
+        fn report_failure(&self, _diagnostic_code: String) {}
+    }
+
+    #[tokio::test]
+    async fn android_version_validation_honors_timeout() {
+        let directory = tempdir().expect("tempdir");
+        let runner = AndroidYtDlpProcessRunner {
+            runtime: Arc::new(SlowVersionRuntime),
+            runtime_dir: directory.path().to_path_buf(),
+        };
+        let started = std::time::Instant::now();
+
+        let result = runner
+            .validate_version(Path::new("embedded"), Duration::from_millis(10))
+            .await;
+
+        assert!(matches!(result, Err(YtDlpError::VersionTimeout)));
+        assert!(started.elapsed() < Duration::from_millis(100));
     }
 
     #[test]

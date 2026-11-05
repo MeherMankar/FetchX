@@ -32,6 +32,7 @@ impl AppState {
             downloads_dir,
             runtime_dir,
             bundled_engines_dir: Some(bundled_engines_dir),
+            defer_queued_on_start: false,
         })
         .await?;
         Ok(AppState::from_core_services(services))

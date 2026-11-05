@@ -50,6 +50,7 @@ fn make_config(root: &std::path::Path) -> CoreServicesConfig {
         downloads_dir: root.join("downloads"),
         runtime_dir: root.join("runtime"),
         bundled_engines_dir: None,
+        defer_queued_on_start: false,
     }
 }
 
