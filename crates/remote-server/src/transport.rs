@@ -87,6 +87,7 @@ impl RemoteServer {
                 downloads_dir: config.downloads_dir.clone(),
                 runtime_dir: config.runtime_dir.clone(),
                 bundled_engines_dir: None,
+                defer_queued_on_start: false,
             })
             .await
             .map_err(|error| ServerError::Core(error.to_string()))?,
