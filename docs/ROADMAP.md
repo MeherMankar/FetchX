@@ -1916,9 +1916,10 @@ This phase is reliability hardening of existing capabilities. It does not
 implement Download Intelligence, introduce unrelated features, or imply that
 all platform/crash scenarios are live validated.
 
-**Current status: PARTIAL.** Retry diagnostics, injected filesystem-failure
-cases, missing-partial recovery, retry cancellation/pause behavior, and a
-subprocess crash-recovery harness pass. The downloader library suite passed
+**Current status: PARTIAL — DEFERRED VERIFICATION.** Retry diagnostics,
+injected filesystem-failure cases, missing-partial recovery, retry
+cancellation/pause behavior, and a subprocess crash-recovery harness pass.
+The downloader library suite passed
 (270 passed, 3 ignored), including killing and recovering an isolated
 downloader test process; this does not validate recovery of the FetchX Windows
 application. The queue suite passed (35 tests), including a queue-drain test
@@ -1947,6 +1948,15 @@ download execution, Windows app process recovery, remote download completion,
 real OS permission/disk-full behavior, and queue cleanup after an actual
 filesystem write failure remain unvalidated. See
 [`PHASE30_RELIABILITY_REPORT.md`](./PHASE30_RELIABILITY_REPORT.md).
+
+The Android browser verification follow-up is deferred until a safe,
+adequately resourced target is available. Remaining checks are current-HEAD
+test execution; Compose tab-grid runtime testing; GeckoView title/location
+callback integration; TabManager and BrowserViewModel identity verification;
+live process-restart restoration; investigation of the historical search
+discrepancy; and explanation of snapshot generations 64–66. Historical test
+reports are not evidence for the current HEAD, and this work does not claim
+Phase 30 completion.
 
 ---
 

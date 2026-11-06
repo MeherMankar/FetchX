@@ -2,7 +2,25 @@
 
 ## Status
 
-**PARTIAL**
+**PARTIAL — DEFERRED VERIFICATION**
+
+The Android browser reliability follow-up is deferred until a safe, adequately
+resourced test environment is available. Preserve existing implementation and
+tests; do not treat historical test reports as verification of the current
+checkout. This checkpoint was recorded at HEAD
+`f620c4d574dd457700a73a6f904ff7238bcdb34a`; the current-HEAD suite and Compose
+runtime tests were not executed because host memory was constrained and no
+disposable Android target was available. Outstanding items:
+
+- Execute the test suite against the current HEAD.
+- Run the Compose tab-grid test on a safe disposable target.
+- Exercise GeckoView title/location callback delivery.
+- Verify exact TabManager and BrowserViewModel tab/active identity.
+- Verify live process-restart restoration and file/state integrity.
+- Reproduce or otherwise explain the historical search discrepancy.
+- Explain historical snapshot generations 64–66.
+
+No Phase 30 completion is claimed by this deferred checkpoint.
 
 Retry diagnostics, deterministic filesystem-fault coverage, and a subprocess
 crash-recovery harness are implemented and tested. The downloader library suite

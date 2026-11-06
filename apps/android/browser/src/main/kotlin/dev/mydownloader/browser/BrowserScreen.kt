@@ -593,7 +593,7 @@ fun BrowserScreen(
                                             style = MaterialTheme.typography.titleSmall,
                                             color = MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
-                                            overflow = TextOverflow.MiddleEllipsis,
+                                            overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f),
                                         )
                                         if (uiState.activeTabBlockedRequests > 0) {
@@ -778,9 +778,11 @@ fun BrowserScreen(
 
                 BrowserBottomBar(
                     canGoBack = activeTab?.canGoBack == true,
+                    canGoForward = activeTab?.canGoForward == true,
                     tabCount = uiState.tabs.size,
                     ongoingDownloadCount = ongoingDownloadCount,
                     onBack = { viewModel.goBack() },
+                    onForward = { viewModel.goForward() },
                     onHome = {
                     viewModel.navigate("about:blank")
                     viewModel.syncUrlInput("")
@@ -891,10 +893,6 @@ fun BrowserScreen(
                     onGoBack = {
                         closeMenu()
                         viewModel.goBack()
-                    },
-                    onGoForward = {
-                        closeMenu()
-                        viewModel.goForward()
                     },
                     onReload = {
                         closeMenu()
@@ -1981,11 +1979,13 @@ private fun BrowserDownloadStatus(
 
 
 @Composable
-private fun BrowserBottomBar(
+internal fun BrowserBottomBar(
     canGoBack: Boolean,
+    canGoForward: Boolean,
     tabCount: Int,
     ongoingDownloadCount: Int,
     onBack: () -> Unit,
+    onForward: () -> Unit,
     onHome: () -> Unit,
     onDownloads: () -> Unit,
     onTabs: () -> Unit,
@@ -2022,7 +2022,22 @@ private fun BrowserBottomBar(
                 )
             }
 
-            // 2. Home button
+            // 2. Forward button
+            IconButton(
+                onClick = onForward,
+                enabled = canGoForward,
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowForward,
+                    contentDescription = "Forward",
+                    tint = if (canGoForward) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            // 3. Home button
             IconButton(
                 onClick = onHome,
                 modifier = Modifier.size(48.dp),
@@ -2035,7 +2050,7 @@ private fun BrowserBottomBar(
                 )
             }
 
-            // 3. Tabs badge
+            // 4. Tabs badge
             IconButton(
                 onClick = onTabs,
                 modifier = Modifier.size(48.dp),
@@ -2059,7 +2074,7 @@ private fun BrowserBottomBar(
                 }
             }
 
-            // 4. Downloads
+            // 5. Downloads
             IconButton(
                 onClick = onDownloads,
                 modifier = Modifier.size(48.dp),
@@ -2086,7 +2101,7 @@ private fun BrowserBottomBar(
                 }
             }
 
-            // 5. 3-dot Menu
+            // 6. 3-dot Menu
             IconButton(
                 onClick = onMenu,
                 modifier = Modifier.size(48.dp),
@@ -2112,7 +2127,6 @@ private fun BrowserMenuSheet(
     onDismiss: () -> Unit,
     onNavigateHome: () -> Unit,
     onGoBack: () -> Unit,
-    onGoForward: () -> Unit,
     onReload: () -> Unit,
     onToggleBookmark: () -> Unit,
     onDownloadMedia: () -> Unit,
@@ -2235,34 +2249,6 @@ private fun BrowserMenuSheet(
                         }
                         Spacer(Modifier.height(4.dp))
                         Text("Back", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    // Forward
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable(
-                            enabled = activeTab?.canGoForward == true,
-                            onClick = onGoForward,
-                        ),
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.surfaceVariant
-                                   else MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.size(42.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = "Forward",
-                                    tint = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.onSurface
-                                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text("Forward", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Reload
@@ -2557,7 +2543,7 @@ private fun BrowserMenuSheet(
 }
 
 @Composable
-private fun FindInPagePanel(
+internal fun FindInPagePanel(
     state: FindInPageState,
     focusRequester: FocusRequester,
     onQueryChange: (String) -> Unit,
@@ -2626,7 +2612,10 @@ private fun FindInPagePanel(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(
-                            onSearch = { keyboardController?.hide() },
+                            onSearch = {
+                                keyboardController?.hide()
+                                if (state.totalMatches > 0) onNext()
+                            },
                         ),
                         trailingIcon = {
                             if (state.query.isNotEmpty()) {
