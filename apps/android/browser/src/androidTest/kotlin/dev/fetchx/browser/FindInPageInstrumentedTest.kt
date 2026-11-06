@@ -105,6 +105,9 @@ class FindInPageInstrumentedTest {
 
         composeRule.onNodeWithText("FetchX").performImeAction()
         composeRule.runOnIdle { assertEquals(1, nextCalls) }
+
+        composeRule.onNodeWithText("FetchX").performImeAction()
+        composeRule.runOnIdle { assertEquals(2, nextCalls) }
     }
 
     @Test

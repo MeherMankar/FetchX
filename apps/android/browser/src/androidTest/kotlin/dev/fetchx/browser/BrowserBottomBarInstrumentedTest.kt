@@ -46,4 +46,31 @@ class BrowserBottomBarInstrumentedTest {
         composeRule.onNodeWithContentDescription("Forward").assertIsEnabled().performClick()
         composeRule.runOnIdle { assertEquals(1, forwardCalls) }
     }
+
+    @Test
+    fun tabsControlAnnouncesCurrentTabCount() {
+        val tabCount = mutableStateOf(1)
+
+        composeRule.setContent {
+            MaterialTheme {
+                BrowserBottomBar(
+                    canGoBack = false,
+                    canGoForward = false,
+                    tabCount = tabCount.value,
+                    ongoingDownloadCount = 0,
+                    onBack = {},
+                    onForward = {},
+                    onHome = {},
+                    onDownloads = {},
+                    onTabs = {},
+                    onMenu = {},
+                    accentColor = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Tabs, 1 tab").assertExists()
+        composeRule.runOnIdle { tabCount.value = 3 }
+        composeRule.onNodeWithContentDescription("Tabs, 3 tabs").assertExists()
+    }
 }

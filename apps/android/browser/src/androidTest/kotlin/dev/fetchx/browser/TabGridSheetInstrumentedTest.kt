@@ -2,14 +2,17 @@ package dev.fetchx.browser
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.MutableState
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
 
@@ -21,6 +24,13 @@ class TabGridSheetInstrumentedTest {
         BrowserProfile("default", "Default", "#4F8EF7", "Default tabs"),
         BrowserProfile("work", "Work", "#7C6AF2", "Work tabs"),
     )
+
+    @Test
+    fun `empty state action meets minimum touch target height`() {
+        showTabs(emptyList(), "missing")
+
+        composeRule.onNodeWithText("Open new tab").assertHeightIsAtLeast(48.dp)
+    }
 
     @Test
     fun `rendered cards expose stable IDs and exactly one active ID`() {

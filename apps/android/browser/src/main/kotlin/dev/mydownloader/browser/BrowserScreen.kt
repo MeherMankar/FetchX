@@ -154,6 +154,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -2053,7 +2055,15 @@ internal fun BrowserBottomBar(
             // 4. Tabs badge
             IconButton(
                 onClick = onTabs,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier
+                    .size(48.dp)
+                    .semantics {
+                        contentDescription = if (tabCount == 1) {
+                            "Tabs, 1 tab"
+                        } else {
+                            "Tabs, $tabCount tabs"
+                        }
+                    },
             ) {
                 Surface(
                     shape = RoundedCornerShape(6.dp),
@@ -2642,6 +2652,7 @@ internal fun FindInPagePanel(
                             modifier = Modifier.semantics {
                                 contentDescription = state.error
                                     ?: "${if (state.found) state.currentMatch else 0} of ${state.totalMatches} matches"
+                                liveRegion = LiveRegionMode.Polite
                             },
                         )
                     }
@@ -3435,6 +3446,7 @@ internal fun TabGridSheet(
                                     onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
                                     shape = RoundedCornerShape(14.dp),
                                     color = spaceAccentColor,
+                                    modifier = Modifier.heightIn(min = 48.dp),
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
