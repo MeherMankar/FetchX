@@ -225,6 +225,7 @@ class DownloadsViewModel(
         destinationPath: String,
         priority: DownloadPriority,
         selectedTorrentFileIndexes: List<Int>? = null,
+        expectedSha256: String? = null,
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
@@ -243,10 +244,16 @@ class DownloadsViewModel(
                         priority = priority,
                     )
                 } else {
-                    repository.addDownload(
+                    if (expectedSha256.isNullOrBlank()) repository.addDownload(
                         url = url,
                         fileName = fileName,
                         destinationPath = destinationPath,
+                        priority = priority,
+                    ) else repository.addDownloadWithSha256(
+                        url = url,
+                        fileName = fileName,
+                        destinationPath = destinationPath,
+                        expectedSha256 = expectedSha256,
                         priority = priority,
                     )
                 }

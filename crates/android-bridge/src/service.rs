@@ -28,6 +28,20 @@ use tokio::{
 use tracing::warn;
 use url::Url;
 
+fn validate_sha256(value: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("SHA-256 must contain exactly 64 hexadecimal characters".to_owned());
+    }
+    Ok(())
+}
+
+fn checksum_sidecar_path(destination: &Path) -> PathBuf {
+    let mut sidecar = destination.as_os_str().to_os_string();
+    sidecar.push(".fetchx.sha256");
+    PathBuf::from(sidecar)
+}
+
 use crate::dto::{
     CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentDownloadMetadataDto, TorrentFileDto,
     TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto,
@@ -282,6 +296,24 @@ impl DownloadService {
     ) -> Result<String, MobileApiError> {
         let engine = engine_for_url(&url);
         self.add_download_for_engine(url, filename, destination, priority, engine, None)
+    }
+
+    pub fn add_download_with_sha256(
+        &self,
+        url: String,
+        filename: String,
+        destination: String,
+        priority: DownloadPriorityDto,
+        expected_sha256: String,
+    ) -> Result<String, MobileApiError> {
+        validate_sha256(&expected_sha256).map_err(|message| MobileApiError::Validation(message))?;
+        let engine = engine_for_url(&url);
+        let result =
+            self.add_download_for_engine(url, filename, destination.clone(), priority, engine, None)?;
+        let checksum_path = checksum_sidecar_path(Path::new(&destination));
+        std::fs::write(checksum_path, expected_sha256.trim().to_ascii_lowercase())
+            .map_err(|error| MobileApiError::Storage(format!("could not store SHA-256: {error}")))?;
+        Ok(result)
     }
 
     pub fn add_magnet_download(

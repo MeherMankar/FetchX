@@ -99,6 +99,14 @@ interface DownloadRepository {
         referrer: String? = null
     ): String
 
+    suspend fun addDownloadWithSha256(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        expectedSha256: String,
+        priority: DownloadPriority = DownloadPriority.DEFAULT,
+    ): String = addDownload(url, fileName, destinationPath, priority)
+
     /** Add a webpage URL to the media extractor instead of the direct-file engine. */
     suspend fun addMediaDownload(
         url: String,

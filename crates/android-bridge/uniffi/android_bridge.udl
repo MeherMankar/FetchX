@@ -144,6 +144,15 @@ interface DownloadService {
     );
 
     [Throws=MobileApiError]
+    string add_download_with_sha256(
+        string url,
+        string filename,
+        string destination,
+        DownloadPriorityDto priority,
+        string expected_sha256
+    );
+
+    [Throws=MobileApiError]
     string add_magnet_download(
         string magnet_uri,
         DownloadPriorityDto priority

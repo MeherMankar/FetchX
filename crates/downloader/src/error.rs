@@ -129,6 +129,8 @@ pub enum DownloadEngineError {
         expected: String,
         actual: String,
     },
+    #[error("SHA-256 mismatch: expected={expected} actual={actual}")]
+    Sha256Mismatch { expected: String, actual: String },
 }
 
 impl DownloadEngineError {
@@ -238,6 +240,10 @@ impl DownloadEngineError {
             Self::MetalinkError(_) | Self::MetalinkChecksumMismatch { .. } => (
                 DownloadErrorCode::Engine,
                 "The Metalink download could not be completed.".to_owned(),
+            ),
+            Self::Sha256Mismatch { .. } => (
+                DownloadErrorCode::Engine,
+                "The downloaded file failed SHA-256 verification and was not published.".to_owned(),
             ),
             Self::Cancelled => (
                 DownloadErrorCode::Internal,

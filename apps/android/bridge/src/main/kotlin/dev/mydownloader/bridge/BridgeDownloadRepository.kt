@@ -245,6 +245,23 @@ class BridgeDownloadRepository(
         }
     }
 
+    override suspend fun addDownloadWithSha256(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        expectedSha256: String,
+        priority: DownloadPriority,
+    ): String = withContext(Dispatchers.IO) {
+        val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
+        service.addDownloadWithSha256(
+            url,
+            fileName,
+            stagingPath,
+            mapPriorityToDto(priority),
+            expectedSha256,
+        )
+    }
+
     override suspend fun addMediaDownload(
         url: String,
         fileName: String,

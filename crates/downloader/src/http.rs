@@ -32,6 +32,7 @@ use tokio::{
     time::interval,
 };
 use tracing::{info, warn};
+use sha2::{Digest, Sha256};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
@@ -2507,6 +2508,7 @@ async fn publish_without_replacement(
     temporary: &Path,
     destination: &Path,
 ) -> Result<(), DownloadEngineError> {
+    verify_expected_sha256(temporary, destination).await?;
     // Try hard link first (zero-copy, atomic on same filesystem).
     match fs::hard_link(temporary, destination).await {
         Ok(()) => return Ok(()),
@@ -2530,6 +2532,43 @@ async fn publish_without_replacement(
         }
         Err(error) => Err(DownloadEngineError::Io(error)),
     }
+}
+
+async fn verify_expected_sha256(
+    temporary: &Path,
+    destination: &Path,
+) -> Result<(), DownloadEngineError> {
+    let mut sidecar = destination.as_os_str().to_os_string();
+    sidecar.push(".fetchx.sha256");
+    let sidecar = PathBuf::from(sidecar);
+    let expected = match fs::read_to_string(&sidecar).await {
+        Ok(expected) => expected.trim().to_ascii_lowercase(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DownloadEngineError::InvalidConfiguration);
+    }
+
+    let mut file = File::open(temporary).await.map_err(DownloadEngineError::Io)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await.map_err(DownloadEngineError::Io)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = hex::encode(hasher.finalize());
+    if actual != expected {
+        return Err(DownloadEngineError::Sha256Mismatch {
+            expected,
+            actual,
+        });
+    }
+    let _ = fs::remove_file(sidecar).await;
+    Ok(())
 }
 
 #[cfg(test)]

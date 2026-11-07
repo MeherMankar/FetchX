@@ -272,13 +272,14 @@ fun DownloadsScreen(
             downloadsDir = downloadsDir,
             reservedFileNames = reservedFileNames,
             onInspectTorrent = viewModel::inspectTorrentFile,
-            onAdd = { url, fileName, destinationPath, priority, selectedTorrentFileIndexes ->
+            onAdd = { url, fileName, destinationPath, priority, selectedTorrentFileIndexes, expectedSha256 ->
                 viewModel.addDownload(
                     url,
                     fileName,
                     destinationPath,
                     priority,
                     selectedTorrentFileIndexes,
+                    expectedSha256,
                 )
                 showAddDialog = false
             },

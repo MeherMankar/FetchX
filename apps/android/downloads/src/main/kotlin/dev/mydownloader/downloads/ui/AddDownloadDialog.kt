@@ -64,6 +64,7 @@ fun AddDownloadDialog(
         destinationPath: String,
         priority: DownloadPriority,
         selectedTorrentFileIndexes: List<Int>?,
+        expectedSha256: String?,
     ) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -72,6 +73,7 @@ fun AddDownloadDialog(
     var userEditedFileName by rememberSaveable { mutableStateOf(false) }
     var urlError by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedPriority by rememberSaveable { mutableStateOf(DownloadPriority.NORMAL) }
+    var expectedSha256 by rememberSaveable { mutableStateOf("") }
     var torrentMetadata by remember { mutableStateOf<TorrentMetadata?>(null) }
     var selectedTorrentFiles by remember { mutableStateOf<Set<Int>>(emptySet()) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -306,6 +308,24 @@ fun AddDownloadDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
+                OutlinedTextField(
+                    value = expectedSha256,
+                    onValueChange = { expectedSha256 = it.trim() },
+                    label = { Text("Expected SHA-256 (optional)") },
+                    placeholder = { Text("64 hexadecimal characters") },
+                    supportingText = {
+                        if (expectedSha256.isNotEmpty() &&
+                            !Regex("^[0-9a-fA-F]{64}$").matches(expectedSha256)
+                        ) {
+                            Text("Enter exactly 64 hexadecimal characters")
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Text(
                     text = "Priority",
                     style = MaterialTheme.typography.labelMedium,
@@ -344,7 +364,18 @@ fun AddDownloadDialog(
                         // in the caller). Do NOT call onDismiss() here — that would cause a
                         // double-dismiss which triggers extra recompositions.
                         val selected = torrentMetadata?.let { selectedTorrentFiles.sorted() }
-                        onAdd(url.trim(), resolvedFileName, destinationPath, selectedPriority, selected)
+                        val checksum = expectedSha256.takeIf { it.isNotEmpty() }
+                        if (checksum != null && !Regex("^[0-9a-fA-F]{64}$").matches(checksum)) {
+                            return@TextButton
+                        }
+                        onAdd(
+                            url.trim(),
+                            resolvedFileName,
+                            destinationPath,
+                            selectedPriority,
+                            selected,
+                            checksum,
+                        )
                     }
                 },
                 enabled = url.isNotBlank(),
