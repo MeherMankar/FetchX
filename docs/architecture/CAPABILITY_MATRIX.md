@@ -68,3 +68,7 @@ pub struct CoreCapabilityStatus {
 ```
 
 Unknown or unavailable capabilities are explicit values, never omitted as if supported.
+
+## Runtime status projection
+
+FetchX exposes lightweight runtime-only download state through shared Rust models and CoreServices. Android UniFFI, desktop Tauri/TypeScript, and remote JSON-RPC consume the same projection; CLI and browser targets can use the same core contract.

@@ -8,7 +8,8 @@ use fetchx_models::{
 use fetchx_queue::QueueError;
 use fetchx_remote_protocol::{
     CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_GET, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
-    DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY,
+    DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS, DOWNLOAD_SET_ENGINE,
+    DOWNLOAD_SET_PRIORITY,
     DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams, JSON_RPC_VERSION, PROTOCOL_VERSION,
     ProtocolError, ProtocolInfo, RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess,
     SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
@@ -144,6 +145,13 @@ pub(crate) async fn dispatch(
             let items = items.iter().map(safe_download).collect::<Vec<_>>();
             json!({ "downloads": items })
         }
+        RemoteCommand::DownloadRuntimeStatus => {
+            let statuses = services
+                .download_runtime_statuses()
+                .await
+                .map_err(map_storage_error)?;
+            json!({ "statuses": statuses })
+        }
         RemoteCommand::DownloadPause(id) => {
             queue_command(services.queue().pause(id).await)?;
             json!({ "id": id })
@@ -193,6 +201,7 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         DOWNLOAD_CREATE,
         DOWNLOAD_GET,
         DOWNLOAD_LIST,
+        DOWNLOAD_RUNTIME_STATUS,
         DOWNLOAD_PAUSE,
         DOWNLOAD_RESUME,
         DOWNLOAD_CANCEL,

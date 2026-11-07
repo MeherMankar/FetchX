@@ -8,6 +8,7 @@ mod ids;
 mod priority;
 mod progress;
 mod resources;
+mod runtime;
 mod schedule;
 mod timestamp;
 mod torrent;
@@ -31,6 +32,7 @@ pub use progress::{DownloadProgress, DownloadProgressError};
 pub use resources::{
     EngineBandwidthLimits, ResourcePolicy, ResourcePolicyError, ResourcePressure, ResourceProfile,
 };
+pub use runtime::DownloadRuntimeStatus;
 pub use schedule::{DownloadSchedule, DownloadScheduleError};
 pub use timestamp::{Timestamp, TimestampError};
 pub use torrent::{

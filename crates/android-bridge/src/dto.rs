@@ -61,6 +61,13 @@ pub struct DownloadInfoDto {
     pub error_message: Option<String>,
 }
 
+pub struct DownloadRuntimeStatusDto {
+    pub id: String,
+    pub status: DownloadStatusDto,
+    pub progress: DownloadProgressDto,
+    pub updated_at_millis: i64,
+}
+
 pub struct YtDlpFormatDto {
     pub format_id: String,
     pub label: String,
@@ -116,7 +123,10 @@ pub enum DownloadEventDto {
 
 // ── Conversion helpers ────────────────────────────────────────────────────
 
-use fetchx_models::{DownloadItem, DownloadPriority, DownloadProgress, DownloadStatus, EngineKind};
+use fetchx_models::{
+    DownloadItem, DownloadPriority, DownloadProgress, DownloadRuntimeStatus, DownloadStatus,
+    EngineKind,
+};
 use fetchx_queue::DownloadEvent;
 
 /// Converts a `DownloadStatus` to its DTO counterpart.
@@ -205,6 +215,15 @@ pub fn item_to_dto(item: &DownloadItem) -> DownloadInfoDto {
         created_at_millis: i64::try_from(item.created_at().as_unix_millis()).unwrap_or(i64::MAX),
         updated_at_millis: i64::try_from(item.updated_at().as_unix_millis()).unwrap_or(i64::MAX),
         error_message,
+    }
+}
+
+pub fn runtime_status_to_dto(status: &DownloadRuntimeStatus) -> DownloadRuntimeStatusDto {
+    DownloadRuntimeStatusDto {
+        id: status.id().to_string(),
+        status: status_to_dto(status.status()),
+        progress: progress_to_dto(status.progress()),
+        updated_at_millis: i64::try_from(status.updated_at().as_unix_millis()).unwrap_or(i64::MAX),
     }
 }
 

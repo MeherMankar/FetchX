@@ -91,6 +91,7 @@ export type RemoteMethod =
   | "download.create"
   | "download.get"
   | "download.list"
+  | "download.runtimeStatus"
   | "download.pause"
   | "download.resume"
   | "download.cancel"

@@ -40,6 +40,7 @@ pub const SYSTEM_WEBSOCKET_TICKET: &str = "system.websocketTicket";
 pub const DOWNLOAD_CREATE: &str = "download.create";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
+pub const DOWNLOAD_RUNTIME_STATUS: &str = "download.runtimeStatus";
 pub const BROWSER_RPC_METHODS: &[&str] = &[SYSTEM_DISCOVER, DOWNLOAD_CREATE, DOWNLOAD_LIST];
 pub const DOWNLOAD_PAUSE: &str = "download.pause";
 pub const DOWNLOAD_RESUME: &str = "download.resume";
@@ -132,6 +133,7 @@ pub enum RemoteCommand {
     DownloadCreate(DownloadCreateParams),
     DownloadGet(DownloadId),
     DownloadList,
+    DownloadRuntimeStatus,
     DownloadPause(DownloadId),
     DownloadResume(DownloadId),
     DownloadCancel(DownloadId),
@@ -228,6 +230,7 @@ pub const CAPABILITIES: &[&str] = &[
     DOWNLOAD_CREATE,
     DOWNLOAD_GET,
     DOWNLOAD_LIST,
+    DOWNLOAD_RUNTIME_STATUS,
     DOWNLOAD_PAUSE,
     DOWNLOAD_RESUME,
     DOWNLOAD_CANCEL,
@@ -406,6 +409,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
         DOWNLOAD_GET => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::DownloadGet(params.id)),
         DOWNLOAD_LIST => parse_empty_params(&request).map(|()| RemoteCommand::DownloadList),
+        DOWNLOAD_RUNTIME_STATUS => {
+            parse_empty_params(&request).map(|()| RemoteCommand::DownloadRuntimeStatus)
+        }
         DOWNLOAD_PAUSE => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::DownloadPause(params.id)),
         DOWNLOAD_RESUME => parse_params::<DownloadIdParams>(&request)

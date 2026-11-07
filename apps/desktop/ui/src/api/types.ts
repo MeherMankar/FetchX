@@ -69,6 +69,13 @@ export interface Download {
   updated_at: number;
 }
 
+export interface DownloadRuntimeStatus {
+  id: string;
+  status: DownloadStatus;
+  progress: DownloadProgress;
+  updated_at: number;
+}
+
 export interface AddDownloadRequest {
   url: string;
   package_name?: string;

@@ -43,8 +43,10 @@ fn checksum_sidecar_path(destination: &Path) -> PathBuf {
 }
 
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentDownloadMetadataDto, TorrentFileDto,
+    CoreConfig, DownloadInfoDto, DownloadPriorityDto, DownloadRuntimeStatusDto,
+    TorrentDownloadMetadataDto, TorrentFileDto,
     TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto,
+    runtime_status_to_dto,
     priority_from_dto,
 };
 use crate::error::MobileApiError;
@@ -290,6 +292,16 @@ impl DownloadService {
                 .block_on(inner.core.repository.list())
                 .map_err(|e| MobileApiError::Storage(e.to_string()))?;
             Ok(items.iter().map(item_to_dto).collect())
+        })
+    }
+
+    pub fn list_runtime_statuses(&self) -> Result<Vec<DownloadRuntimeStatusDto>, MobileApiError> {
+        self.with_inner(|inner| {
+            let statuses = inner
+                .runtime
+                .block_on(inner.core.download_runtime_statuses())
+                .map_err(|error| MobileApiError::Storage(error.to_string()))?;
+            Ok(statuses.iter().map(runtime_status_to_dto).collect())
         })
     }
 

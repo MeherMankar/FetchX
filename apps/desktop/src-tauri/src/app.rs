@@ -183,6 +183,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::list_downloads,
+            commands::list_runtime_statuses,
             commands::extract_download_links,
             commands::suggest_download_filename,
             commands::suggest_download_package_name,

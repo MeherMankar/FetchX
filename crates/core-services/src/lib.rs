@@ -43,7 +43,7 @@ use fetchx_media_extractor::{
 use fetchx_models::{
     ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
     DiagnosticHealth, DiagnosticsSnapshot, DownloadId, DownloadItem, DownloadPriority,
-    DownloadSource, DownloadStatus, EngineDiagnostics, EngineKind, FileName, PluginDiagnostics,
+    DownloadSource, DownloadStatus, DownloadRuntimeStatus, EngineDiagnostics, EngineKind, FileName, PluginDiagnostics,
     QueueDiagnostics, RpcDiagnostics, StorageDiagnostics, Timestamp, TorrentFileSelection,
     TorrentMetadata, global_diagnostics, parse_magnet_uri, parse_torrent_metainfo,
 };
@@ -279,6 +279,17 @@ impl CoreServices {
     #[must_use]
     pub fn downloads_dir(&self) -> &std::path::Path {
         &self.downloads_dir
+    }
+
+    /// Returns only fields that change during download execution.
+    ///
+    /// Clients can poll this compact projection without transferring durable
+    /// metadata such as source URLs, destinations, filenames, and priorities.
+    pub async fn download_runtime_statuses(
+        &self,
+    ) -> Result<Vec<DownloadRuntimeStatus>, fetchx_storage::StorageError> {
+        let items = self.repository.list().await?;
+        Ok(items.iter().map(DownloadRuntimeStatus::from).collect())
     }
 
     /// Builds a bounded snapshot containing aggregate state and no user configuration.

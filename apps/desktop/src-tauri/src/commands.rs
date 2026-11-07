@@ -570,6 +570,26 @@ pub struct DownloadDto {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DownloadRuntimeStatusDto {
+    pub id: String,
+    pub status: DownloadStatus,
+    pub progress: DownloadProgressDto,
+    pub updated_at: u64,
+}
+
+impl From<&fetchx_models::DownloadProgress> for DownloadProgressDto {
+    fn from(progress: &fetchx_models::DownloadProgress) -> Self {
+        Self {
+            downloaded_bytes: progress.downloaded_bytes(),
+            total_bytes: progress.total_bytes(),
+            speed_bytes_per_second: progress.speed_bytes_per_second(),
+            estimated_remaining_seconds: progress.estimated_remaining_seconds(),
+            percentage_basis_points: progress.percentage_basis_points(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DownloadProgressDto {
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
@@ -790,6 +810,36 @@ pub fn get_app_info() -> AppInfo {
 #[tauri::command]
 pub async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadDto>, IpcError> {
     state.list().await
+}
+
+#[tauri::command]
+pub async fn list_runtime_statuses(
+    state: State<'_, AppState>,
+) -> Result<Vec<DownloadRuntimeStatusDto>, IpcError> {
+    let statuses = if let Some(core) = state.core_services.as_ref() {
+        core.download_runtime_statuses()
+            .await
+            .map_err(|_| IpcError::internal())?
+    } else {
+        state
+            .repository
+            .list()
+            .await
+            .map_err(|_| IpcError::internal())?
+            .iter()
+            .map(fetchx_models::DownloadRuntimeStatus::from)
+            .collect()
+    };
+
+    Ok(statuses
+        .iter()
+        .map(|status| DownloadRuntimeStatusDto {
+            id: status.id().to_string(),
+            status: status.status(),
+            progress: DownloadProgressDto::from(status.progress()),
+            updated_at: status.updated_at().as_unix_millis(),
+        })
+        .collect())
 }
 
 #[tauri::command]

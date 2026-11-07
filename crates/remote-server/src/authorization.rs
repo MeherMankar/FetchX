@@ -97,7 +97,9 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
     match command {
         RemoteCommand::Discover => Permission::ServerRead,
         RemoteCommand::WebSocketTicket => Permission::EventsRead,
-        RemoteCommand::DownloadGet(_) | RemoteCommand::DownloadList => Permission::DownloadsRead,
+        RemoteCommand::DownloadGet(_)
+        | RemoteCommand::DownloadList
+        | RemoteCommand::DownloadRuntimeStatus => Permission::DownloadsRead,
         RemoteCommand::DownloadCreate(_) => Permission::DownloadsCreate,
         RemoteCommand::DownloadPause(_)
         | RemoteCommand::DownloadResume(_)

@@ -5,6 +5,7 @@ import type {
   AddDownloadRequest,
   DeleteDownloadResponse,
   Download,
+  DownloadRuntimeStatus,
   DownloadRemovedEvent,
   DownloadSchedule,
   DownloadUpdatedEvent,
@@ -20,6 +21,10 @@ import type { DownloadPriority } from "./types";
 
 export function listDownloads(): Promise<Download[]> {
   return invoke<Download[]>("list_downloads");
+}
+
+export function listRuntimeStatuses(): Promise<DownloadRuntimeStatus[]> {
+  return invoke<DownloadRuntimeStatus[]>("list_runtime_statuses");
 }
 
 export function addDownload(request: AddDownloadRequest): Promise<Download> {

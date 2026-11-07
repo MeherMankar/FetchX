@@ -111,6 +111,13 @@ dictionary DownloadInfoDto {
     string? error_message;
 };
 
+dictionary DownloadRuntimeStatusDto {
+    string id;
+    DownloadStatusDto status;
+    DownloadProgressDto progress;
+    i64 updated_at_millis;
+};
+
 [Enum]
 interface DownloadEventDto {
     Created(DownloadInfoDto item);
@@ -128,6 +135,9 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     sequence<DownloadInfoDto> list_downloads();
+
+    [Throws=MobileApiError]
+    sequence<DownloadRuntimeStatusDto> list_runtime_statuses();
 
     [Throws=MobileApiError]
     string diagnostics_snapshot();
