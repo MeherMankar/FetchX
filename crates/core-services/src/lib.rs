@@ -63,8 +63,13 @@ pub use config::{
 };
 pub use engine_status::{EngineAvailability, EngineRuntimeStatus};
 
+mod builtin;
 pub mod config;
 mod engine_status;
+pub use builtin::{
+    CoreBuiltinError, FilenameTemplateContext, FilenameTemplateDiagnostic, FilenameTemplateResult,
+    find_archive_link, render_filename_template, resolve_core_url,
+};
 
 // ============================================================
 // Repository type alias
@@ -559,6 +564,36 @@ impl CoreServices {
         opts: MediaExtractOptions,
     ) -> Result<fetchx_media_extractor::MediaInfo, ExtractionError> {
         self.engine_runtime.media_registry.extract(url, opts).await
+    }
+
+    /// Applies FetchX's core page discovery. This is equivalent to the built-in
+    /// page scraper but runs inside every shared-core host.
+    pub async fn discover_archive_url(&self, url: &str) -> Option<String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(3))
+            .build()
+            .ok()?;
+        let response = client.get(url).send().await.ok()?;
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !content_type.contains("text/html") {
+            return None;
+        }
+        let html = response.text().await.ok()?;
+        find_archive_link(&html, url)
+    }
+
+    /// Resolves the core URL resolver providers. Unknown providers are left
+    /// unchanged and return `Ok(None)`.
+    pub async fn resolve_core_url(&self, url: &str) -> Result<Option<String>, CoreBuiltinError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|_| CoreBuiltinError::InvalidResponse)?;
+        builtin::resolve_core_url(&client, url).await
     }
 
     /// Durable torrent metadata repository for aria2 magnet/.torrent downloads.

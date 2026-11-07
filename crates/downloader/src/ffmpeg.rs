@@ -398,6 +398,102 @@ impl FfmpegProcessor {
         parse_probe_output(&output)
     }
 
+    /// Combines the first video stream from one file with the first audio
+    /// stream from another, copying both streams without re-encoding.
+    pub async fn merge_audio_video(
+        &self,
+        video_input: impl AsRef<Path>,
+        audio_input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        cancellation: watch::Receiver<bool>,
+    ) -> Result<MediaProcessOutput, FfmpegError> {
+        let _permit = self.acquire_slot(cancellation.clone()).await?;
+        if *cancellation.borrow() {
+            return Err(FfmpegError::Cancelled);
+        }
+
+        let video = canonical_input(video_input.as_ref()).await?;
+        let audio = canonical_input(audio_input.as_ref()).await?;
+        let destination =
+            canonical_input(output.as_ref().parent().unwrap_or(Path::new("."))).await?;
+        let destination = destination.join(
+            output
+                .as_ref()
+                .file_name()
+                .ok_or(FfmpegError::InvalidOutput)?,
+        );
+        if tokio::fs::symlink_metadata(&destination).await.is_ok() {
+            return Err(FfmpegError::DestinationExists);
+        }
+
+        let workspace = create_workspace(&destination).await?;
+        let extension = destination
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("mp4");
+        let extension = if extension.eq_ignore_ascii_case("mkv") {
+            "mkv"
+        } else {
+            "mp4"
+        };
+        let temporary_output = workspace.join(format!("output.{extension}"));
+        let arguments = [
+            OsString::from("-y"),
+            OsString::from("-v"),
+            OsString::from("error"),
+            OsString::from("-i"),
+            video.as_os_str().to_owned(),
+            OsString::from("-i"),
+            audio.as_os_str().to_owned(),
+            OsString::from("-map"),
+            OsString::from("0:v:0"),
+            OsString::from("-map"),
+            OsString::from("1:a:0"),
+            OsString::from("-c"),
+            OsString::from("copy"),
+            OsString::from("-shortest"),
+            temporary_output.as_os_str().to_owned(),
+        ];
+
+        let mut child = Command::new(&self.ffmpeg_executable)
+            .args(arguments)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| FfmpegError::ProcessStart)?;
+        let success = match timeout(self.process_timeout, child.wait()).await {
+            Ok(Ok(status)) => status.success(),
+            Ok(Err(_)) => return Err(FfmpegError::ProcessRunner),
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                return Err(FfmpegError::ProcessTimeout);
+            }
+        };
+        if !success {
+            let _ = tokio::fs::remove_dir_all(&workspace).await;
+            return Err(FfmpegError::FfmpegFailed { code: None });
+        }
+        if tokio::fs::symlink_metadata(&temporary_output)
+            .await
+            .is_err()
+        {
+            return Err(FfmpegError::OutputUnavailable);
+        }
+        let size = tokio::fs::metadata(&temporary_output)
+            .await
+            .map_err(|_| FfmpegError::OutputUnavailable)?
+            .len();
+        tokio::fs::hard_link(&temporary_output, &destination)
+            .await
+            .map_err(|_| FfmpegError::InvalidOutput)?;
+        let _ = tokio::fs::remove_dir_all(&workspace).await;
+        Ok(MediaProcessOutput {
+            destination,
+            size_bytes: size,
+        })
+    }
+
     pub async fn process(
         &self,
         request: MediaProcessRequest,
