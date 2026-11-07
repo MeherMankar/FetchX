@@ -31,8 +31,78 @@ class StorageManager(private val context: Context) {
 
     companion object {
         private const val KEY_CUSTOM_URI = "custom_download_uri"
+        private const val KEY_SMART_FOLDERS = "smart_folders"
         private const val MAX_FILENAME_LENGTH = 200
     }
+
+    fun isSmartFoldersEnabled(): Boolean =
+        prefs.getBoolean(KEY_SMART_FOLDERS, false)
+
+    fun setSmartFoldersEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_SMART_FOLDERS, enabled) }
+    }
+
+    fun resolveSmartDownloadDirectory(baseDirectory: String, fileName: String, mimeType: String?): String {
+        if (!isSmartFoldersEnabled()) return baseDirectory
+        val folder = smartFolderName(fileName, mimeType)
+        val baseUri = Uri.parse(baseDirectory)
+        if (baseUri.scheme == "content") {
+            val child = findChildDocument(baseUri, folder)
+                ?: contentResolverCreateDirectory(baseUri, folder)
+            return child?.toString() ?: baseDirectory
+        }
+        val directory = File(baseDirectory, folder)
+        if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory) {
+            return baseDirectory
+        }
+        return directory.absolutePath
+    }
+
+    private fun findChildDocument(parent: Uri, displayName: String): Uri? {
+        val children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+            parent,
+            android.provider.DocumentsContract.getTreeDocumentId(parent),
+        )
+        context.contentResolver.query(
+            children,
+            arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+            ),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            )
+            val nameIndex = cursor.getColumnIndexOrThrow(
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            )
+            val mimeIndex = cursor.getColumnIndexOrThrow(
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+            )
+            while (cursor.moveToNext()) {
+                if (
+                    cursor.getString(nameIndex) == displayName &&
+                    cursor.getString(mimeIndex) == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                ) {
+                    val documentId = cursor.getString(idIndex)
+                    return android.provider.DocumentsContract.buildDocumentUriUsingTree(parent, documentId)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun contentResolverCreateDirectory(parent: Uri, displayName: String): Uri? =
+        android.provider.DocumentsContract.createDocument(
+            context.contentResolver,
+            parent,
+            android.provider.DocumentsContract.Document.MIME_TYPE_DIR,
+            displayName,
+        )
 
     /**
      * Returns the effective download directory.
@@ -138,4 +208,20 @@ internal fun uniqueAvailableFileName(
         index++
     }
     return "$base ($index)$extension"
+}
+
+internal fun smartFolderName(fileName: String, mimeType: String? = null): String {
+    val mime = mimeType?.lowercase().orEmpty()
+    val extension = fileName.substringAfterLast('.', "").lowercase().let { if (it.isBlank()) "" else ".$it" }
+    return when {
+        mime.startsWith("video/") ||
+            extension in setOf(".mp4", ".mkv", ".avi", ".flv", ".mov", ".webm", ".m4v") -> "Videos"
+        mime.startsWith("audio/") ||
+            extension in setOf(".mp3", ".m4a", ".opus", ".wav", ".flac", ".ogg", ".aac") -> "Audio"
+        mime.contains("zip") || mime.contains("rar") || mime.contains("compressed") ||
+            extension in setOf(".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz") -> "Archives"
+        mime.contains("pdf") || mime.contains("document") || mime.startsWith("text/") ||
+            extension in setOf(".pdf", ".doc", ".docx", ".txt", ".xlsx", ".pptx", ".epub", ".rtf") -> "Documents"
+        else -> "Others"
+    }
 }

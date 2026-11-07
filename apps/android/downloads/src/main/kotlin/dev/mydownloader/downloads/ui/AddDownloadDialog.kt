@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.TorrentMetadata
+import dev.fetchx.downloads.storage.StorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -152,7 +153,11 @@ fun AddDownloadDialog(
             ?: dev.fetchx.downloads.storage.StorageManager(context)
                 .uniqueFileName(java.io.File(downloadsDir), rawFileName, reservedFileNames)
     }
-    val destinationPath = "$downloadsDir/$resolvedFileName"
+    val storageManager = remember(context) { StorageManager(context) }
+    val destinationDirectory = remember(downloadsDir, fileName, url) {
+        storageManager.resolveSmartDownloadDirectory(downloadsDir, resolvedFileName, null)
+    }
+    val destinationPath = "$destinationDirectory/$resolvedFileName"
 
     AlertDialog(
         onDismissRequest = onDismiss,

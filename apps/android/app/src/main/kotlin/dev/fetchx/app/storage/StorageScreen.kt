@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import dev.fetchx.app.service.DownloadNetworkPolicy
+import dev.fetchx.downloads.storage.StorageManager
 
 @Composable
 internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
@@ -55,6 +56,10 @@ internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
     }
     var batteryThreshold by remember(context) {
         mutableIntStateOf(DownloadNetworkPolicy.getBatteryThreshold(context))
+    }
+    val downloadStorageManager = remember(context) { StorageManager(context) }
+    var smartFolders by remember(context) {
+        mutableStateOf(downloadStorageManager.isSmartFoldersEnabled())
     }
 
     LaunchedEffect(refreshRequest) {
@@ -106,6 +111,15 @@ internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            PolicySwitch(
+                title = "Smart download folders",
+                description = "Route files into Videos, Audio, Archives, Documents, or Others automatically.",
+                checked = smartFolders,
+                onCheckedChange = { enabled ->
+                    smartFolders = enabled
+                    downloadStorageManager.setSmartFoldersEnabled(enabled)
+                },
+            )
         }
         Card(modifier = Modifier.fillMaxWidth()) {
             Row(

@@ -87,12 +87,21 @@ class MainActivity : ComponentActivity() {
             return
         }
         when (i?.action) {
+            Intent.ACTION_SEND -> {
+                val sharedText = i.getStringExtra(Intent.EXTRA_TEXT)
+                val url = extractSharedUrl(sharedText)
+                if (url != null) {
+                    android.util.Log.i("FetchXApp", "handleIntent: ACTION_SEND url=$url")
+                    pendingIntentUrl.value = url
+                }
+            }
             DownloadNotificationManager.ACTION_OPEN_DOWNLOAD -> {
                 val id = i.getStringExtra(DownloadNotificationManager.EXTRA_DOWNLOAD_ID)
                 if (id != null) {
                     android.util.Log.i("FetchXApp", "handleIntent: open download id=$id")
                     pendingDownloadId.value = id
                 }
+
             }
             Intent.ACTION_VIEW -> {
                 val url = i.dataString ?: return
@@ -152,3 +161,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+internal fun extractSharedUrl(text: String?): String? =
+    text?.let { shared ->
+        Regex("""https?://[^\s]+""", RegexOption.IGNORE_CASE).find(shared)?.value
+            ?.trimEnd('.', ',', ';', ':', '!', '?', ')', ']')
+    }
