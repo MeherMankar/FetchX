@@ -176,6 +176,12 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import java.util.Date
 
+internal fun browserLoadingActionLabel(isLoading: Boolean): String =
+    if (isLoading) "Stop" else "Reload"
+
+internal fun browserLoadingActionDescription(isLoading: Boolean): String =
+    if (isLoading) "Stop loading" else "Reload"
+
 /**
  * Full-screen browser powered by GeckoView, with multi-tab support and history.
  *
@@ -898,7 +904,8 @@ fun BrowserScreen(
                     },
                     onReload = {
                         closeMenu()
-                        viewModel.reload()
+                        if (activeTab?.isLoading == true) viewModel.stopLoading()
+                        else viewModel.reload()
                     },
                     onToggleBookmark = {
                         closeMenu()
@@ -2245,7 +2252,7 @@ private fun BrowserMenuSheet(
                             shape = RoundedCornerShape(12.dp),
                             color = if (activeTab?.canGoBack == true) MaterialTheme.colorScheme.surfaceVariant
                                    else MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.size(42.dp),
+                            modifier = Modifier.size(48.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
@@ -2269,15 +2276,20 @@ private fun BrowserMenuSheet(
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.size(42.dp),
+                            modifier = Modifier.size(48.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Reload",
+                                Icon(
+                                    if (activeTab?.isLoading == true) Icons.Default.Close
+                                    else Icons.Default.Refresh,
+                                    contentDescription = browserLoadingActionDescription(activeTab?.isLoading == true),
                                     tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
                             }
                         }
                         Spacer(Modifier.height(4.dp))
-                        Text("Reload", style = MaterialTheme.typography.labelSmall,
+                        Text(
+                            browserLoadingActionLabel(activeTab?.isLoading == true),
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     // Bookmark
@@ -2294,7 +2306,7 @@ private fun BrowserMenuSheet(
                                    else if (canBookmark) MaterialTheme.colorScheme.surfaceVariant
                                    else MaterialTheme.colorScheme.surface,
                             border = if (isBookmarked) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-                            modifier = Modifier.size(42.dp),
+                            modifier = Modifier.size(48.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
@@ -2326,7 +2338,7 @@ private fun BrowserMenuSheet(
                             color = if (canDownload) MaterialTheme.colorScheme.primaryContainer
                                    else MaterialTheme.colorScheme.surface,
                             border = if (canDownload) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-                            modifier = Modifier.size(42.dp),
+                            modifier = Modifier.size(48.dp),
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(

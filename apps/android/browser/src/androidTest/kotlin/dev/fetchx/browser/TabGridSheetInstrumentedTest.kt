@@ -26,14 +26,14 @@ class TabGridSheetInstrumentedTest {
     )
 
     @Test
-    fun `empty state action meets minimum touch target height`() {
+    fun emptyStateActionMeetsMinimumTouchTargetHeight() {
         showTabs(emptyList(), "missing")
 
         composeRule.onNodeWithText("Open new tab").assertHeightIsAtLeast(48.dp)
     }
 
     @Test
-    fun `rendered cards expose stable IDs and exactly one active ID`() {
+    fun renderedCardsExposeStableIdsAndExactlyOneActiveId() {
         val tabs = listOf(
             TabState("default-url", "https://example.test/five-tab-selected", "Neutral title"),
             TabState("default-title", "https://title.test", "Five-tab-selected title"),
@@ -55,7 +55,7 @@ class TabGridSheetInstrumentedTest {
     }
 
     @Test
-    fun `rendered search and space filters preserve URL title and tab identity semantics`() {
+    fun renderedSearchAndSpaceFiltersPreserveIdentitySemantics() {
         val tabs = mutableStateOf(
             listOf(
                 TabState("default-url", "https://example.test/five-tab-selected", "Neutral title"),
@@ -112,7 +112,7 @@ class TabGridSheetInstrumentedTest {
     }
 
     @Test
-    fun `search observes URL after the tab state update`() {
+    fun searchObservesUrlAfterTabStateUpdate() {
         val tabs = mutableStateOf(
             listOf(TabState("navigating", "about:blank", "New tab")),
         )

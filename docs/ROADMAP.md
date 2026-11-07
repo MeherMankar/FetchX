@@ -2054,3 +2054,36 @@ require dedicated alignment tasks:
 | 19 | Android does not yet support plugin processes | Phase 20P+ |
 | 20D | Windows download UI not aligned with Android UI patterns | Phase 20P |
 | 20N | Windows filename sanitization not formally aligned | Phase 20Q |
+
+---
+
+## Android UI-11 — Browser Experience Refinement
+
+### Scope
+
+- Keep Reload/Stop behavior consistent between the top address area and browser menu.
+- Standardize browser-menu quick actions on Material 3 48 dp touch targets.
+- Preserve top address bar, bottom navigation, GeckoView lifecycle, and Phase 30.
+
+### Implemented
+
+- Browser menu Reload now switches to Stop during active page loading and calls
+  the existing `stopLoading()` action.
+- Browser menu Reload/Stop uses the same visible label and accessibility description
+  as the top address-bar control.
+- Browser menu Back, Reload/Stop, Bookmark, and Download quick-action surfaces use
+  48 dp targets.
+- Focused JVM coverage verifies loading and idle action semantics.
+
+### Verification status
+
+- Production Kotlin and Android-test Kotlin compilation passed.
+- Browser JVM unit tests passed; current count is reported in the task verification.
+- Instrumentation is compiled but not executed without an approved device.
+- Live narrow-screen, font-scale, TalkBack, and physical-device validation remains required.
+- UI-11 responsive and accessibility audit should continue into source-reviewed follow-up work.
+
+### Known limitation
+
+Phase 30 remains **PARTIAL — DEFERRED VERIFICATION**. UI changes do not reopen,
+modify, or replace Phase 30 reliability work.
