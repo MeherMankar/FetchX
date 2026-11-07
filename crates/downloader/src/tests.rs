@@ -1295,7 +1295,7 @@ async fn invalid_adaptive_configuration_is_rejected_by_engine() -> Result<(), Bo
     let database = Database::connect("sqlite::memory:").await?;
     let config = HttpEngineConfig {
         adaptive: AdaptiveConfig {
-            max_concurrency: 33,
+            max_concurrency: 65,
             ..AdaptiveConfig::default()
         },
         ..HttpEngineConfig::default()

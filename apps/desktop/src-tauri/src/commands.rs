@@ -131,8 +131,8 @@ impl AppState {
             magnet.is_some() || torrent_path.is_some(),
             request.engine_kind,
         ) {
-            (true, None) => EngineKind::Aria2,
-            (true, Some(EngineKind::Aria2)) => EngineKind::Aria2,
+            (true, None) => EngineKind::NativeTorrent,
+            (true, Some(EngineKind::NativeTorrent)) => EngineKind::NativeTorrent,
             (true, Some(_)) => return Err(IpcError::invalid_request()),
             (false, Some(engine)) => engine,
             (false, None) => EngineKind::DirectHttp,

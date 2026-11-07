@@ -25,7 +25,6 @@ interface AddDialogProps {
 /** Display label and serde key for each engine option. */
 const ENGINE_OPTIONS: { kind: EngineKind; label: string }[] = [
   { kind: "direct_http", label: "Direct HTTP" },
-  { kind: "aria2",       label: "aria2" },
   { kind: "yt_dlp",      label: "yt-dlp" },
 ];
 
@@ -38,8 +37,9 @@ function isEngineAvailable(kind: EngineKind, status: EngineStatus | null): boole
   if (!status) return kind === "direct_http"; // safe default while loading
   switch (kind) {
     case "direct_http": return status.direct_http.available;
-    case "aria2":       return status.aria2.available;
+    case "aria2":       return false;
     case "yt_dlp":      return status.yt_dlp.available;
+    case "native_torrent": return true;
   }
 }
 
@@ -55,6 +55,7 @@ function engineUnavailableReason(kind: EngineKind, status: EngineStatus | null):
       if (!status.yt_dlp.enabled) return "disabled in Settings";
       if (!status.yt_dlp.available) return status.yt_dlp.error ?? "unavailable";
       return null;
+    case "native_torrent": return null;
   }
 }
 
@@ -152,7 +153,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
           : await addDownload({
               url: targetUrl.trim(),
               package_name: packageName.trim() || undefined,
-              engine_kind: isTorrent ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
+              engine_kind: isTorrent ? "native_torrent" : engineKind === "direct_http" ? undefined : engineKind,
             });
 
         if (priority !== "normal") {
@@ -271,9 +272,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             />
             <p className="field-hint">
               {isMagnet
-                ? "Magnet links use aria2. Tracker credentials and unsafe tracker protocols are rejected."
+                ? "Magnet links use FetchX's native BitTorrent engine."
                 : isTorrentFile
-                  ? "Local .torrent files use aria2. Metainfo paths are validated before the job is queued."
+                  ? "Local .torrent files use FetchX's native BitTorrent engine."
                 : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
             {isTorrentFile && (
@@ -371,7 +372,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               <select
                 id="add-engine"
                 className="field-select"
-                value={isTorrent ? "aria2" : engineKind}
+                value={isTorrent ? "native_torrent" : engineKind}
                 onChange={(e) => {
                   setEngineKind(e.target.value as EngineKind);
                   setFormats(null);
@@ -393,7 +394,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             )}
             <p id="add-engine-hint" className="field-hint">
               {isTorrent
-                ? "Magnet links and local torrent files require aria2."
+                ? "Magnet links and local torrent files use the native FetchX BitTorrent engine."
                 : "Only available engines are selectable. Configure engines in Settings."}
             </p>
           </div>

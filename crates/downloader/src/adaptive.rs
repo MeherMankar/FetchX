@@ -30,7 +30,7 @@ pub struct AdaptiveConfig {
     pub enabled: bool,
     pub min_concurrency: usize,
     pub initial_concurrency: usize,
-    /// A hard ceiling, not a guaranteed number of active requests. Values above 32 are rejected.
+    /// A hard ceiling, not a guaranteed number of active requests.
     pub max_concurrency: usize,
     pub measurement_window: Duration,
     pub improvement_threshold_percent: u8,
@@ -46,7 +46,7 @@ impl Default for AdaptiveConfig {
             enabled: true,
             min_concurrency: 1,
             initial_concurrency: 4,
-            max_concurrency: 8,
+            max_concurrency: 64,
             measurement_window: Duration::from_millis(500),
             improvement_threshold_percent: 10,
             regression_threshold_percent: 20,
@@ -62,7 +62,7 @@ impl AdaptiveConfig {
         self.min_concurrency >= 1
             && self.min_concurrency <= self.initial_concurrency
             && self.initial_concurrency <= self.max_concurrency
-            && self.max_concurrency <= 32
+            && self.max_concurrency <= 64
             && self.measurement_window >= Duration::from_millis(10)
             && (1..=100).contains(&self.improvement_threshold_percent)
             && (1..=100).contains(&self.regression_threshold_percent)
@@ -425,18 +425,18 @@ mod tests {
     }
 
     #[test]
-    fn configured_extreme_ceiling_is_bounded_at_thirty_two_workers() {
+    fn configured_extreme_ceiling_is_bounded_at_sixty_four_workers() {
         let extreme = AdaptiveConfig {
             min_concurrency: 8,
             initial_concurrency: 8,
-            max_concurrency: 32,
+            max_concurrency: 64,
             ..config()
         };
         assert!(extreme.is_valid());
         assert_eq!(AdaptiveController::new(extreme).desired_concurrency(64), 8);
         assert!(
             !AdaptiveConfig {
-                max_concurrency: 33,
+                max_concurrency: 65,
                 ..config()
             }
             .is_valid()
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn balanced_turbo_and_extreme_ceiling_configurations_are_accepted() {
-        for (minimum, initial, maximum) in [(2, 2, 8), (4, 4, 16), (8, 8, 32)] {
+        for (minimum, initial, maximum) in [(2, 2, 8), (4, 4, 16), (8, 8, 32), (16, 16, 64)] {
             let profile = AdaptiveConfig {
                 min_concurrency: minimum,
                 initial_concurrency: initial,
@@ -567,11 +567,11 @@ mod tests {
                 ..config()
             },
             AdaptiveConfig {
-                initial_concurrency: 9,
+                initial_concurrency: 65,
                 ..config()
             },
             AdaptiveConfig {
-                max_concurrency: 33,
+                max_concurrency: 65,
                 ..config()
             },
             AdaptiveConfig {

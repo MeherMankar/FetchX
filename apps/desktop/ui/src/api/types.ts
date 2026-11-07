@@ -53,7 +53,7 @@ export interface DownloadError {
   message: string;
 }
 
-export type EngineKind = "direct_http" | "aria2" | "yt_dlp";
+export type EngineKind = "direct_http" | "aria2" | "yt_dlp" | "native_torrent";
 
 export interface Download {
   id: string;

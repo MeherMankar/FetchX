@@ -58,7 +58,7 @@ pub(super) fn plan_segments(
     count: usize,
     path_for_index: impl Fn(usize) -> PathBuf,
 ) -> Result<Option<Vec<Segment>>, SegmentPlanError> {
-    if total_size == 0 || !(2..=32).contains(&count) {
+    if total_size == 0 || !(2..=64).contains(&count) {
         return Ok(None);
     }
 
@@ -512,7 +512,7 @@ mod tests {
                 .is_none()
         );
         assert!(
-            plan_segments(100, 33, |_| PathBuf::new())
+            plan_segments(100, 65, |_| PathBuf::new())
                 .expect("unbounded count selects fallback")
                 .is_none()
         );

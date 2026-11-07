@@ -108,7 +108,7 @@ pub struct HttpEngineConfig {
     pub progress_bytes_interval: u64,
     pub progress_time_interval: Duration,
     pub user_agent: String,
-    /// Maximum number of planned ranges; values outside 2..=32 disable segmentation.
+    /// Maximum number of planned ranges; values outside 2..=64 disable segmentation.
     pub segment_count: usize,
     /// Files smaller than this threshold use the single-stream path.
     pub minimum_segmented_file_size: u64,
@@ -184,7 +184,7 @@ impl Default for HttpEngineConfig {
             progress_bytes_interval: 1024 * 1024,
             progress_time_interval: Duration::from_secs(1),
             user_agent: DEFAULT_USER_AGENT.to_owned(),
-            segment_count: 8,
+            segment_count: 64,
             minimum_segmented_file_size: 4 * 1024 * 1024,
             adaptive: AdaptiveConfig::default(),
         }
@@ -447,7 +447,7 @@ where
             )
             .await?;
         let initial_validator = response_validator(&response);
-        let segmentation_enabled = (2..=32).contains(&self.config.segment_count)
+        let segmentation_enabled =         (2..=64).contains(&self.config.segment_count)
             && self.config.minimum_segmented_file_size > 0;
         let supports_ranges = response
             .headers()
@@ -2332,7 +2332,7 @@ async fn segmented_layout(
     total_size: u64,
 ) -> Result<usize, DownloadEngineError> {
     if configured_segment_count != 4 {
-        for candidate in std::iter::once(4).chain(2..=32) {
+        for candidate in std::iter::once(4).chain(2..=64) {
             if candidate == configured_segment_count {
                 continue;
             }
