@@ -44,10 +44,9 @@ fn checksum_sidecar_path(destination: &Path) -> PathBuf {
 
 use crate::dto::{
     CoreConfig, DownloadInfoDto, DownloadPriorityDto, DownloadRuntimeStatusDto,
-    TorrentDownloadMetadataDto, TorrentFileDto,
-    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto,
+    TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto,
+    YtDlpFormatDto, duplicate_match_to_dto, event_to_dto, item_to_dto, priority_from_dto,
     runtime_status_to_dto,
-    priority_from_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -302,6 +301,19 @@ impl DownloadService {
                 .block_on(inner.core.download_runtime_statuses())
                 .map_err(|error| MobileApiError::Storage(error.to_string()))?;
             Ok(statuses.iter().map(runtime_status_to_dto).collect())
+        })
+    }
+
+    pub fn find_duplicate_download(
+        &self,
+        url: String,
+    ) -> Result<Option<crate::DuplicateDownloadMatchDto>, MobileApiError> {
+        self.with_inner(|inner| {
+            let duplicate = inner
+                .runtime
+                .block_on(inner.core.find_duplicate_download(&url))
+                .map_err(|error| MobileApiError::Storage(error.to_string()))?;
+            Ok(duplicate.as_ref().map(duplicate_match_to_dto))
         })
     }
 

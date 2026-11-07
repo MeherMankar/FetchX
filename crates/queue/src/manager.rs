@@ -119,6 +119,7 @@ pub enum QueueError {
 pub struct QueueManager {
     commands: mpsc::Sender<Command>,
     actor: SharedActorHandle,
+    shutdown_lock: Arc<Mutex<bool>>,
 }
 
 type SharedActorHandle = Arc<Mutex<Option<JoinHandle<Result<(), QueueError>>>>>;
@@ -226,6 +227,7 @@ impl QueueManager {
         Ok(Self {
             commands: command_sender,
             actor: Arc::new(Mutex::new(Some(actor))),
+            shutdown_lock: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -348,6 +350,10 @@ impl QueueManager {
     }
 
     pub async fn shutdown(&self) -> Result<(), QueueError> {
+        let mut shutdown_complete = self.shutdown_lock.lock().await;
+        if *shutdown_complete {
+            return Ok(());
+        }
         let (reply, result) = oneshot::channel();
         if self
             .commands
@@ -365,6 +371,7 @@ impl QueueManager {
         if let Some(actor) = self.actor.lock().await.take() {
             actor.await.map_err(QueueError::Actor)??;
         }
+        *shutdown_complete = true;
         Ok(())
     }
 
@@ -1147,10 +1154,17 @@ where
             }
         }
         Command::Cancel { id, reply } => {
-            let current = repository
-                .get(id)
-                .await?
-                .ok_or(StateMachineError::NotFound(id))?;
+            let current = match repository.get(id).await {
+                Ok(Some(item)) => item,
+                Ok(None) => {
+                    let _ = reply.send(Err(QueueError::DownloadNotFound(id)));
+                    return Ok(());
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(QueueError::Storage(error)));
+                    return Ok(());
+                }
+            };
             if matches!(
                 current.status(),
                 DownloadStatus::Cancelled | DownloadStatus::Failed | DownloadStatus::Completed
@@ -3751,6 +3765,32 @@ mod tests {
                 .status(),
             DownloadStatus::Paused
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_idempotent() -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository, engine, QueueConfig::default()).await?;
+
+        manager.shutdown().await?;
+        manager.shutdown().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_unknown_download_does_not_stop_queue_actor()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository, engine, QueueConfig::default()).await?;
+
+        assert!(matches!(
+            manager.cancel(DownloadId::new()).await,
+            Err(QueueError::DownloadNotFound(_))
+        ));
+        manager.snapshot().await?;
+        manager.shutdown().await?;
         Ok(())
     }
 

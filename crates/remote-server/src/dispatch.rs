@@ -3,16 +3,16 @@ use std::path::PathBuf;
 use fetchx_core_services::{CoreServices, CoreServicesError};
 use fetchx_downloader::{save_initial_context_headers, validate_http_source_url};
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadPriority, DownloadSource, EngineKind, FileName, Timestamp,
+    DownloadId, DownloadItem, DownloadPriority, DownloadRuntimeStatus, DownloadSource, EngineKind,
+    FileName, Timestamp,
 };
 use fetchx_queue::QueueError;
 use fetchx_remote_protocol::{
-    CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_GET, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
-    DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS, DOWNLOAD_SET_ENGINE,
-    DOWNLOAD_SET_PRIORITY,
-    DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams, JSON_RPC_VERSION, PROTOCOL_VERSION,
-    ProtocolError, ProtocolInfo, RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess,
-    SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
+    CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_GET,
+    DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
+    DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY, DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams,
+    JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo, RemoteCommand, RpcErrorCode,
+    RpcFailure, RpcId, RpcSuccess, SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use serde_json::{Value, json};
@@ -150,7 +150,16 @@ pub(crate) async fn dispatch(
                 .download_runtime_statuses()
                 .await
                 .map_err(map_storage_error)?;
+            let statuses = statuses.iter().map(safe_runtime_status).collect::<Vec<_>>();
             json!({ "statuses": statuses })
+        }
+        RemoteCommand::DownloadFindDuplicate(params) => {
+            let duplicate = services
+                .find_duplicate_download(&params.url)
+                .await
+                .map_err(map_storage_error)?;
+            serde_json::to_value(duplicate)
+                .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?
         }
         RemoteCommand::DownloadPause(id) => {
             queue_command(services.queue().pause(id).await)?;
@@ -202,6 +211,7 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         DOWNLOAD_GET,
         DOWNLOAD_LIST,
         DOWNLOAD_RUNTIME_STATUS,
+        DOWNLOAD_FIND_DUPLICATE,
         DOWNLOAD_PAUSE,
         DOWNLOAD_RESUME,
         DOWNLOAD_CANCEL,
@@ -243,6 +253,22 @@ fn safe_download(item: &DownloadItem) -> Value {
         "error_code": item.error().map(|error| error.code()),
         "created_at": item.created_at(),
         "updated_at": item.updated_at(),
+    })
+}
+
+fn safe_runtime_status(status: &DownloadRuntimeStatus) -> Value {
+    let progress = status.progress();
+    json!({
+        "id": status.id(),
+        "status": status.status(),
+        "progress": {
+            "downloaded_bytes": progress.downloaded_bytes(),
+            "total_bytes": progress.total_bytes(),
+            "speed_bytes_per_second": progress.speed_bytes_per_second(),
+            "estimated_remaining_seconds": progress.estimated_remaining_seconds(),
+            "percentage_basis_points": progress.percentage_basis_points(),
+        },
+        "updated_at": status.updated_at().as_unix_millis(),
     })
 }
 
@@ -393,7 +419,36 @@ fn unsupported(method: &'static str) -> RpcError {
 
 #[cfg(test)]
 mod tests {
-    use super::safe_filename;
+    use super::*;
+    use fetchx_models::{DownloadProgress, DownloadStatus};
+
+    #[test]
+    fn runtime_status_rpc_shape_includes_shared_progress_fields()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let item = DownloadItem::from_parts(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/file.bin", EngineKind::DirectHttp)?,
+            FileName::new("file.bin")?,
+            PathBuf::from("file.bin"),
+            DownloadStatus::Downloading,
+            DownloadPriority::default(),
+            DownloadProgress::new(50, Some(100), Some(25), Some(2))?,
+            Timestamp::from_unix_millis(10),
+            Timestamp::from_unix_millis(20),
+            None,
+        )?;
+
+        let payload = safe_runtime_status(&DownloadRuntimeStatus::from(&item));
+
+        assert_eq!(payload["status"], "downloading");
+        assert_eq!(payload["progress"]["downloaded_bytes"], 50);
+        assert_eq!(payload["progress"]["total_bytes"], 100);
+        assert_eq!(payload["progress"]["speed_bytes_per_second"], 25);
+        assert_eq!(payload["progress"]["estimated_remaining_seconds"], 2);
+        assert_eq!(payload["progress"]["percentage_basis_points"], 5_000);
+        assert_eq!(payload["updated_at"], 20);
+        Ok(())
+    }
 
     #[test]
     fn browser_filename_is_reduced_to_a_safe_basename() {

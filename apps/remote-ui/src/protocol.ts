@@ -68,6 +68,28 @@ export interface RemoteDownload {
   updated_at: number;
 }
 
+export interface RemoteDuplicateDownloadMatch {
+  id: string;
+  filename: string;
+  status: DownloadStatus;
+  updated_at: number;
+}
+
+export interface RemoteDownloadProgress {
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  speed_bytes_per_second: number | null;
+  estimated_remaining_seconds: number | null;
+  percentage_basis_points: number | null;
+}
+
+export interface RemoteDownloadRuntimeStatus {
+  id: string;
+  status: DownloadStatus;
+  progress: RemoteDownloadProgress;
+  updated_at: number;
+}
+
 export interface ProtocolInfo {
   protocol_version: string;
   server_version: string;
@@ -92,6 +114,7 @@ export type RemoteMethod =
   | "download.get"
   | "download.list"
   | "download.runtimeStatus"
+  | "download.findDuplicate"
   | "download.pause"
   | "download.resume"
   | "download.cancel"
@@ -200,6 +223,17 @@ export class RemoteClient {
       throw new RemoteError("The server returned an invalid JSON-RPC response.", "protocol");
     }
     return envelope.result;
+  }
+
+  findDuplicate(url: string): Promise<RemoteDuplicateDownloadMatch | null> {
+    return this.call<RemoteDuplicateDownloadMatch | null>("download.findDuplicate", { url });
+  }
+
+  async listRuntimeStatuses(): Promise<RemoteDownloadRuntimeStatus[]> {
+    const result = await this.call<{ statuses: RemoteDownloadRuntimeStatus[] }>(
+      "download.runtimeStatus",
+    );
+    return result.statuses;
   }
 
   async openEvents(

@@ -184,6 +184,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_app_info,
             commands::list_downloads,
             commands::list_runtime_statuses,
+            commands::find_duplicate_download,
             commands::extract_download_links,
             commands::suggest_download_filename,
             commands::suggest_download_package_name,

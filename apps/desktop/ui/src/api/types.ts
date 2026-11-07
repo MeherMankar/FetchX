@@ -76,6 +76,13 @@ export interface DownloadRuntimeStatus {
   updated_at: number;
 }
 
+export interface DuplicateDownloadMatch {
+  id: string;
+  filename: string;
+  status: DownloadStatus;
+  updated_at: number;
+}
+
 export interface AddDownloadRequest {
   url: string;
   package_name?: string;

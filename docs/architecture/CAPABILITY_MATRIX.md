@@ -29,6 +29,7 @@ Capabilities have two independent states:
 | Background execution | Platform adapter responsibility | Foreground service/Android lifecycle | OS application lifecycle | Long-running process |
 | Browser integration | Protocol/native host/modules | GeckoView/browser module | Desktop browser IPC/native host | Browser extension client via server |
 | Plugins | Policy/API crates; Android service has no execution adapter | Policy evaluation only, no execution capability | Depends on future/host adapter | Policy/manager if wired |
+| Normalized-URL duplicate lookup | CoreServices repository-backed query | UniFFI `find_duplicate_download` | Tauri command and TypeScript API | CLI and `download.findDuplicate` JSON-RPC; browser RPC allowlisted |
 
 Availability notes:
 
@@ -71,4 +72,8 @@ Unknown or unavailable capabilities are explicit values, never omitted as if sup
 
 ## Runtime status projection
 
-FetchX exposes lightweight runtime-only download state through shared Rust models and CoreServices. Android UniFFI, desktop Tauri/TypeScript, and remote JSON-RPC consume the same projection; CLI and browser targets can use the same core contract.
+FetchX exposes lightweight runtime-only download state through shared Rust models and CoreServices. Android UniFFI, desktop Tauri/TypeScript, and remote JSON-RPC consume the same `id`, `status`, nested progress, and `updated_at` millisecond timestamp shape. The restricted browser RPC allowlist includes the read-only method. Removed downloads are absent because no record remains.
+
+## Persisted duplicate lookup
+
+`CoreServices::find_duplicate_download` compares a candidate URL with persisted download sources using the shared URL normalizer. It returns a privacy-limited match (ID, filename, status, and update time), or `None`. It neither blocks creation nor changes lifecycle state. Android UniFFI, desktop Tauri, local/remote CLI, remote JSON-RPC, and the browser RPC route expose this same Rust behavior. No migration is required.

@@ -39,6 +39,12 @@ pub enum Command {
     /// Add a download to the queue.
     Add(AddOpts),
 
+    /// Find a persisted download with the same normalized URL.
+    FindDuplicate {
+        /// HTTP(S) URL or source URI to check.
+        url: String,
+    },
+
     /// List downloads.
     List(ListOpts),
 
@@ -164,6 +170,11 @@ pub enum RemoteCommand {
     Status,
     /// List downloads on the remote server.
     Downloads,
+    /// Find a remote download with the same normalized URL.
+    FindDuplicate {
+        /// HTTP(S) URL or source URI to check.
+        url: String,
+    },
     /// Create a download on the remote server.
     Add {
         /// HTTP(S) URL or magnet URI.

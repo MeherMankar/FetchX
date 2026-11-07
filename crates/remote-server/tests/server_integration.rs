@@ -334,11 +334,25 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
     for request in [
         json!({ "jsonrpc": "2.0", "id": "read-list", "method": "download.list" }),
         json!({ "jsonrpc": "2.0", "id": "read-discover", "method": "system.discover" }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": "read-runtime-status",
+            "method": "download.runtimeStatus"
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": "read-duplicate",
+            "method": "download.findDuplicate",
+            "params": { "url": "https://example.test/file.bin" }
+        }),
     ] {
         let response = send_rpc(&client, address, &request).await?;
         assert!(response.status().is_success());
         let body: Value = serde_json::from_slice(&response.bytes().await?)?;
         assert!(body.get("result").is_some());
+        if request["method"] == "download.runtimeStatus" {
+            assert!(body["result"]["statuses"].as_array().is_some());
+        }
     }
     let read_get = post_rpc(
         &client,
@@ -379,7 +393,7 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
         }),
     )
     .await?;
-    assert_eq!(operator_remove["error"]["code"], -32010);
+    assert_eq!(operator_remove["error"]["code"], -32004);
 
     set_auth_role(&restart_config.database_path, Role::ReadOnly).await?;
     operator_socket.close(None).await?;

@@ -64,8 +64,23 @@ pub struct DownloadInfoDto {
 pub struct DownloadRuntimeStatusDto {
     pub id: String,
     pub status: DownloadStatusDto,
-    pub progress: DownloadProgressDto,
-    pub updated_at_millis: i64,
+    pub progress: DownloadRuntimeProgressDto,
+    pub updated_at: u64,
+}
+
+pub struct DownloadRuntimeProgressDto {
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub speed_bytes_per_second: Option<u64>,
+    pub estimated_remaining_seconds: Option<u64>,
+    pub percentage_basis_points: Option<u16>,
+}
+
+pub struct DuplicateDownloadMatchDto {
+    pub id: String,
+    pub filename: String,
+    pub status: DownloadStatusDto,
+    pub updated_at: u64,
 }
 
 pub struct YtDlpFormatDto {
@@ -125,7 +140,7 @@ pub enum DownloadEventDto {
 
 use fetchx_models::{
     DownloadItem, DownloadPriority, DownloadProgress, DownloadRuntimeStatus, DownloadStatus,
-    EngineKind,
+    DuplicateDownloadMatch, EngineKind,
 };
 use fetchx_queue::DownloadEvent;
 
@@ -219,11 +234,27 @@ pub fn item_to_dto(item: &DownloadItem) -> DownloadInfoDto {
 }
 
 pub fn runtime_status_to_dto(status: &DownloadRuntimeStatus) -> DownloadRuntimeStatusDto {
+    let progress = status.progress();
     DownloadRuntimeStatusDto {
         id: status.id().to_string(),
         status: status_to_dto(status.status()),
-        progress: progress_to_dto(status.progress()),
-        updated_at_millis: i64::try_from(status.updated_at().as_unix_millis()).unwrap_or(i64::MAX),
+        progress: DownloadRuntimeProgressDto {
+            downloaded_bytes: progress.downloaded_bytes(),
+            total_bytes: progress.total_bytes(),
+            speed_bytes_per_second: progress.speed_bytes_per_second(),
+            estimated_remaining_seconds: progress.estimated_remaining_seconds(),
+            percentage_basis_points: progress.percentage_basis_points(),
+        },
+        updated_at: status.updated_at().as_unix_millis(),
+    }
+}
+
+pub fn duplicate_match_to_dto(item: &DuplicateDownloadMatch) -> DuplicateDownloadMatchDto {
+    DuplicateDownloadMatchDto {
+        id: item.id().to_string(),
+        filename: item.filename().to_owned(),
+        status: status_to_dto(item.status()),
+        updated_at: item.updated_at().as_unix_millis(),
     }
 }
 
@@ -237,5 +268,39 @@ pub fn event_to_dto(e: DownloadEvent) -> DownloadEventDto {
             item: item_to_dto(&item),
         },
         DownloadEvent::Removed { id, .. } => DownloadEventDto::Removed { id: id.to_string() },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fetchx_models::{DownloadId, DownloadSource, EngineKind, FileName, Timestamp};
+    use std::path::PathBuf;
+
+    #[test]
+    fn runtime_status_dto_uses_shared_progress_shape() -> Result<(), Box<dyn std::error::Error>> {
+        let progress = DownloadProgress::new(50, Some(100), Some(25), Some(2))?;
+        let item = DownloadItem::from_parts(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/file.bin", EngineKind::DirectHttp)?,
+            FileName::new("file.bin")?,
+            PathBuf::from("file.bin"),
+            DownloadStatus::Downloading,
+            DownloadPriority::default(),
+            progress,
+            Timestamp::from_unix_millis(10),
+            Timestamp::from_unix_millis(20),
+            None,
+        )?;
+
+        let dto = runtime_status_to_dto(&DownloadRuntimeStatus::from(&item));
+
+        assert_eq!(dto.progress.downloaded_bytes, 50);
+        assert_eq!(dto.progress.total_bytes, Some(100));
+        assert_eq!(dto.progress.speed_bytes_per_second, Some(25));
+        assert_eq!(dto.progress.estimated_remaining_seconds, Some(2));
+        assert_eq!(dto.progress.percentage_basis_points, Some(5_000));
+        assert_eq!(dto.updated_at, 20);
+        Ok(())
     }
 }

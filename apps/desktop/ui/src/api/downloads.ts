@@ -5,6 +5,7 @@ import type {
   AddDownloadRequest,
   DeleteDownloadResponse,
   Download,
+  DuplicateDownloadMatch,
   DownloadRuntimeStatus,
   DownloadRemovedEvent,
   DownloadSchedule,
@@ -139,6 +140,10 @@ export function retryDownload(downloadId: string): Promise<Download> {
 
 export function getQueueSnapshot(): Promise<QueueSnapshot> {
   return invoke<QueueSnapshot>("get_queue_snapshot");
+}
+
+export function findDuplicateDownload(url: string): Promise<DuplicateDownloadMatch | null> {
+  return invoke<DuplicateDownloadMatch | null>("find_duplicate_download", { url });
 }
 
 export function getTorrentTelemetry(downloadId: string): Promise<TorrentTelemetry | null> {

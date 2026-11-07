@@ -53,6 +53,12 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
             svc.shutdown().await?;
             Ok(code)
         }
+        FindDuplicate { url } => {
+            let svc = bootstrap::start().await?;
+            let code = commands::duplicate::run(&svc, &url, cli.json).await;
+            svc.shutdown().await?;
+            Ok(code)
+        }
         List(opts) => {
             let svc = bootstrap::start().await?;
             let code = commands::list::run(&svc, opts, cli.json).await;

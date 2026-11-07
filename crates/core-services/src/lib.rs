@@ -43,9 +43,10 @@ use fetchx_media_extractor::{
 use fetchx_models::{
     ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
     DiagnosticHealth, DiagnosticsSnapshot, DownloadId, DownloadItem, DownloadPriority,
-    DownloadSource, DownloadStatus, DownloadRuntimeStatus, EngineDiagnostics, EngineKind, FileName, PluginDiagnostics,
-    QueueDiagnostics, RpcDiagnostics, StorageDiagnostics, Timestamp, TorrentFileSelection,
-    TorrentMetadata, global_diagnostics, parse_magnet_uri, parse_torrent_metainfo,
+    DownloadRuntimeStatus, DownloadSource, DownloadStatus, DuplicateDownloadMatch,
+    EngineDiagnostics, EngineKind, FileName, PluginDiagnostics, QueueDiagnostics, RpcDiagnostics,
+    StorageDiagnostics, Timestamp, TorrentFileSelection, TorrentMetadata, global_diagnostics,
+    parse_magnet_uri, parse_torrent_metainfo,
 };
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
@@ -290,6 +291,18 @@ impl CoreServices {
     ) -> Result<Vec<DownloadRuntimeStatus>, fetchx_storage::StorageError> {
         let items = self.repository.list().await?;
         Ok(items.iter().map(DownloadRuntimeStatus::from).collect())
+    }
+
+    pub async fn find_duplicate_download(
+        &self,
+        url: &str,
+    ) -> Result<Option<DuplicateDownloadMatch>, fetchx_storage::StorageError> {
+        let normalized = normalize_download_url(url);
+        let items = self.repository.list().await?;
+        Ok(items
+            .iter()
+            .find(|item| normalize_download_url(item.source().url()) == normalized)
+            .map(DuplicateDownloadMatch::from))
     }
 
     /// Builds a bounded snapshot containing aggregate state and no user configuration.

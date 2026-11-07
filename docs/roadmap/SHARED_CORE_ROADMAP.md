@@ -4,6 +4,14 @@
 
 FetchX already has the strongest part of the architecture in place: canonical Rust models, lifecycle, storage, queue, scheduler, engines, and a composition root. This phase should therefore align and constrain hosts rather than rewrite the core.
 
+## Current Gopeed-derived progress
+
+- Runtime status is projected from persisted domain records and exposed through Android UniFFI, desktop Tauri/TypeScript, and remote JSON-RPC.
+- A repository-backed normalized-URL duplicate lookup is exposed through CoreServices and existing Android, desktop, CLI, remote, and browser-RPC boundaries. It reports a match without enforcing duplicate policy.
+- A missing-download cancellation no longer terminates the queue actor; shutdown is idempotent. Focused queue and remote restart regression tests cover this lifecycle fix.
+- The repository remains schema-compatible; no migration or new dependency was introduced.
+- Next: assess a full pre-creation `resolve_task` contract for protocol-specific metadata and file selection, building on Gopeed's separate resolve/create workflow. Do not equate this with the narrower duplicate lookup.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

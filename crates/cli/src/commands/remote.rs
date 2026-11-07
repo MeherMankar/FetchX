@@ -1,9 +1,9 @@
 use std::{env, sync::atomic::AtomicU64, time::Duration};
 
 use fetchx_remote_protocol::{
-    DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_RESUME,
-    JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ProtocolInfo, RpcFailure, RpcId,
-    RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
+    DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
+    DOWNLOAD_RESUME, JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ProtocolInfo,
+    RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
 };
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
@@ -101,6 +101,24 @@ pub async fn run(options: RemoteOpts, json_output: bool) -> ExitCode {
                 println!("\n{} remote download(s)", downloads.len());
             }
         }),
+        RemoteCommand::FindDuplicate { url } => {
+            client.find_duplicate(&url).await.map(|duplicate| {
+                if json_output {
+                    output::print_json_ok(&json!({
+                        "duplicate": duplicate.is_some(),
+                        "download": duplicate,
+                    }));
+                } else if let Some(download) = duplicate {
+                    println!(
+                        "Duplicate download found: {} ({})",
+                        download["filename"].as_str().unwrap_or("unknown file"),
+                        download["id"].as_str().unwrap_or("unknown ID")
+                    );
+                } else {
+                    println!("No matching download found.");
+                }
+            })
+        }
         RemoteCommand::Add { url } => client.add(&url).await.map(|id| {
             if json_output {
                 output::print_json_ok(&json!({ "ok": true, "id": id }));
@@ -202,6 +220,15 @@ impl RemoteClient {
             .as_array()
             .cloned()
             .ok_or_else(|| "remote server returned an invalid downloads response".to_owned())
+    }
+
+    async fn find_duplicate(&self, url: &str) -> Result<Option<Value>, String> {
+        self.call(DOWNLOAD_FIND_DUPLICATE, Some(json!({ "url": url })))
+            .await
+            .and_then(|result| {
+                serde_json::from_value(result)
+                    .map_err(|_| "remote server returned an invalid duplicate response".to_owned())
+            })
     }
 
     async fn add(&self, url: &str) -> Result<String, String> {

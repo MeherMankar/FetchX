@@ -2,6 +2,7 @@
 
 mod diagnostics;
 mod download;
+mod duplicate;
 mod engine;
 mod error;
 mod ids;
@@ -24,6 +25,7 @@ pub use download::{
     DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus, FileName,
     FileNameError, MagnetInfo, parse_magnet_uri,
 };
+pub use duplicate::DuplicateDownloadMatch;
 pub use engine::EngineKind;
 pub use error::{DownloadError, DownloadErrorCode, DownloadErrorMessageError};
 pub use ids::{DownloadId, DownloadIdParseError};

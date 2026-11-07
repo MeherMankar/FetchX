@@ -41,7 +41,14 @@ pub const DOWNLOAD_CREATE: &str = "download.create";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
 pub const DOWNLOAD_RUNTIME_STATUS: &str = "download.runtimeStatus";
-pub const BROWSER_RPC_METHODS: &[&str] = &[SYSTEM_DISCOVER, DOWNLOAD_CREATE, DOWNLOAD_LIST];
+pub const DOWNLOAD_FIND_DUPLICATE: &str = "download.findDuplicate";
+pub const BROWSER_RPC_METHODS: &[&str] = &[
+    SYSTEM_DISCOVER,
+    DOWNLOAD_CREATE,
+    DOWNLOAD_LIST,
+    DOWNLOAD_RUNTIME_STATUS,
+    DOWNLOAD_FIND_DUPLICATE,
+];
 pub const DOWNLOAD_PAUSE: &str = "download.pause";
 pub const DOWNLOAD_RESUME: &str = "download.resume";
 pub const DOWNLOAD_CANCEL: &str = "download.cancel";
@@ -134,6 +141,7 @@ pub enum RemoteCommand {
     DownloadGet(DownloadId),
     DownloadList,
     DownloadRuntimeStatus,
+    DownloadFindDuplicate(DownloadUrlParams),
     DownloadPause(DownloadId),
     DownloadResume(DownloadId),
     DownloadCancel(DownloadId),
@@ -175,6 +183,12 @@ pub struct DownloadCreateParams {
 #[serde(deny_unknown_fields)]
 pub struct DownloadIdParams {
     pub id: DownloadId,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadUrlParams {
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -231,6 +245,7 @@ pub const CAPABILITIES: &[&str] = &[
     DOWNLOAD_GET,
     DOWNLOAD_LIST,
     DOWNLOAD_RUNTIME_STATUS,
+    DOWNLOAD_FIND_DUPLICATE,
     DOWNLOAD_PAUSE,
     DOWNLOAD_RESUME,
     DOWNLOAD_CANCEL,
@@ -412,6 +427,13 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
         DOWNLOAD_RUNTIME_STATUS => {
             parse_empty_params(&request).map(|()| RemoteCommand::DownloadRuntimeStatus)
         }
+        DOWNLOAD_FIND_DUPLICATE => parse_params::<DownloadUrlParams>(&request).and_then(|params| {
+            if params.url.trim().is_empty() || params.url.len() > MAX_DOWNLOAD_URL_BYTES {
+                Err(invalid_params(&request))
+            } else {
+                Ok(RemoteCommand::DownloadFindDuplicate(params))
+            }
+        }),
         DOWNLOAD_PAUSE => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::DownloadPause(params.id)),
         DOWNLOAD_RESUME => parse_params::<DownloadIdParams>(&request)
@@ -581,6 +603,34 @@ mod tests {
             parse_request(&encoded(&request(SYSTEM_WEBSOCKET_TICKET, None))?)?.command,
             RemoteCommand::WebSocketTicket
         );
+        assert_eq!(
+            parse_request(&encoded(&request(
+                DOWNLOAD_FIND_DUPLICATE,
+                Some(serde_json::json!({ "url": "https://example.test/file.bin" })),
+            ))?)?
+            .command,
+            RemoteCommand::DownloadFindDuplicate(DownloadUrlParams {
+                url: "https://example.test/file.bin".to_owned(),
+            })
+        );
+        assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_RUNTIME_STATUS));
+        assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_FIND_DUPLICATE));
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_lookup_rejects_empty_or_oversized_url() -> Result<(), Box<dyn std::error::Error>> {
+        let oversized_url = "x".repeat(MAX_DOWNLOAD_URL_BYTES + 1);
+        for url in ["  ", oversized_url.as_str()] {
+            let body = request(
+                DOWNLOAD_FIND_DUPLICATE,
+                Some(serde_json::json!({ "url": url })),
+            );
+            assert!(matches!(
+                parse_request(&encoded(&body)?),
+                Err(ProtocolError::InvalidParams { .. })
+            ));
+        }
         Ok(())
     }
 

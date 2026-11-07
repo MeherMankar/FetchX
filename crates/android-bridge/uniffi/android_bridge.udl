@@ -114,8 +114,23 @@ dictionary DownloadInfoDto {
 dictionary DownloadRuntimeStatusDto {
     string id;
     DownloadStatusDto status;
-    DownloadProgressDto progress;
-    i64 updated_at_millis;
+    DownloadRuntimeProgressDto progress;
+    u64 updated_at;
+};
+
+dictionary DownloadRuntimeProgressDto {
+    u64 downloaded_bytes;
+    u64? total_bytes;
+    u64? speed_bytes_per_second;
+    u64? estimated_remaining_seconds;
+    u16? percentage_basis_points;
+};
+
+dictionary DuplicateDownloadMatchDto {
+    string id;
+    string filename;
+    DownloadStatusDto status;
+    u64 updated_at;
 };
 
 [Enum]
@@ -138,6 +153,9 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     sequence<DownloadRuntimeStatusDto> list_runtime_statuses();
+
+    [Throws=MobileApiError]
+    DuplicateDownloadMatchDto? find_duplicate_download(string url);
 
     [Throws=MobileApiError]
     string diagnostics_snapshot();

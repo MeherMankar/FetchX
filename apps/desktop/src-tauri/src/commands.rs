@@ -577,6 +577,14 @@ pub struct DownloadRuntimeStatusDto {
     pub updated_at: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DuplicateDownloadMatchDto {
+    pub id: String,
+    pub filename: String,
+    pub status: DownloadStatus,
+    pub updated_at: u64,
+}
+
 impl From<&fetchx_models::DownloadProgress> for DownloadProgressDto {
     fn from(progress: &fetchx_models::DownloadProgress) -> Self {
         Self {
@@ -840,6 +848,27 @@ pub async fn list_runtime_statuses(
             updated_at: status.updated_at().as_unix_millis(),
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn find_duplicate_download(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<Option<DuplicateDownloadMatchDto>, IpcError> {
+    let core = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let duplicate = core
+        .find_duplicate_download(&url)
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(duplicate.map(|item| DuplicateDownloadMatchDto {
+        id: item.id().to_string(),
+        filename: item.filename().to_owned(),
+        status: item.status(),
+        updated_at: item.updated_at().as_unix_millis(),
+    }))
 }
 
 #[tauri::command]
