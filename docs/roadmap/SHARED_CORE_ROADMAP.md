@@ -12,6 +12,14 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - The repository remains schema-compatible; no migration or new dependency was introduced.
 - Next: assess a full pre-creation `resolve_task` contract for protocol-specific metadata and file selection, building on Gopeed's separate resolve/create workflow. Do not equate this with the narrower duplicate lookup.
 
+## Current Ketch-derived progress
+
+- Verified that the Rust HTTP downloader already implements range negotiation, parallel segmented transfer, adaptive worker limits, bounded retries, bandwidth sharing, pause/cancel recovery, and safe assembly.
+- Tightened HTTP segment recovery: saved fragments are reused only when the current server provides the same non-empty validator as the saved resource identity. Without a validator, segments are discarded and requested again.
+- The behavior is entirely inside `DirectHttpEngine`; Android, desktop, CLI, and remote hosts continue to use their existing shared-core engine dispatch. No adapter API, schema, or dependency change is required.
+- Deferred: parallel FTP, dynamic persistent-segment rebalancing, and per-segment UI remain separate investigations and are not implied by this recovery-safety change.
+- Next repository in the research order: AB Download Manager.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

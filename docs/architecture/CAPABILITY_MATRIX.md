@@ -30,6 +30,7 @@ Capabilities have two independent states:
 | Browser integration | Protocol/native host/modules | GeckoView/browser module | Desktop browser IPC/native host | Browser extension client via server |
 | Plugins | Policy/API crates; Android service has no execution adapter | Policy evaluation only, no execution capability | Depends on future/host adapter | Policy/manager if wired |
 | Normalized-URL duplicate lookup | CoreServices repository-backed query | UniFFI `find_duplicate_download` | Tauri command and TypeScript API | CLI and `download.findDuplicate` JSON-RPC; browser RPC allowlisted |
+| HTTP segmented transfer with validator-safe resume | Shared Rust range engine; stale segments are discarded if current resource validator is absent or mismatched | Same Rust engine via CoreServices | Same Rust engine via CoreServices | Same Rust engine for direct HTTP downloads |
 
 Availability notes:
 
@@ -73,6 +74,10 @@ Unknown or unavailable capabilities are explicit values, never omitted as if sup
 ## Runtime status projection
 
 FetchX exposes lightweight runtime-only download state through shared Rust models and CoreServices. Android UniFFI, desktop Tauri/TypeScript, and remote JSON-RPC consume the same `id`, `status`, nested progress, and `updated_at` millisecond timestamp shape. The restricted browser RPC allowlist includes the read-only method. Removed downloads are absent because no record remains.
+
+## HTTP segment recovery integrity
+
+Direct HTTP uses the Rust downloader's parallel byte ranges, bounded adaptive connection scheduling, retries, pause/cancel handling, and persisted partial segment files. A fragment is reused on a later invocation only when the URL and non-empty server validator match the saved identity. With no current validator, segments are restarted to avoid assembling mixed server representations. This requires no schema migration or adapter-specific logic.
 
 ## Persisted duplicate lookup
 

@@ -66,6 +66,7 @@ pub(crate) struct ScriptedResponse {
 #[derive(Clone, Copy)]
 enum SegmentServerMode {
     Valid,
+    NoValidator,
     WrongStart,
     WrongEnd,
     WrongTotal,
@@ -510,9 +511,14 @@ async fn serve_segment_connection(
 
     let Some(range) = range else {
         let _ = no_range_requests.fetch_add(1, Ordering::AcqRel);
+        let validator = if matches!(mode, SegmentServerMode::NoValidator) {
+            ""
+        } else {
+            "ETag: \"test-v1\"\r\n"
+        };
         let headers = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"test-v1\"\r\nConnection: close\r\n\r\n",
-            body.len()
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{validator}Connection: close\r\n\r\n",
+            body.len(),
         );
         if stream.write_all(headers.as_bytes()).await.is_err() || stream.flush().await.is_err() {
             return;
@@ -590,7 +596,9 @@ async fn serve_segment_connection(
                 body.get(start..end).unwrap_or_default().to_vec(),
                 end.saturating_sub(start).saturating_add(1),
             ),
-            SegmentServerMode::FailAboveConcurrency(_) | SegmentServerMode::Valid => (
+            SegmentServerMode::FailAboveConcurrency(_)
+            | SegmentServerMode::Valid
+            | SegmentServerMode::NoValidator => (
                 206,
                 start,
                 end,
@@ -600,8 +608,13 @@ async fn serve_segment_connection(
             ),
         };
 
+    let validator = if matches!(mode, SegmentServerMode::NoValidator) {
+        ""
+    } else {
+        "ETag: \"test-v1\"\r\n"
+    };
     let mut headers = format!(
-        "HTTP/1.1 {} Segment\r\nContent-Length: {content_length}\r\nETag: \"test-v1\"\r\nConnection: close\r\n",
+        "HTTP/1.1 {} Segment\r\nContent-Length: {content_length}\r\n{validator}Connection: close\r\n",
         status
     );
     if status == 206 {
@@ -660,6 +673,22 @@ async fn write_resume_identity(
     let metadata = serde_json::to_vec(&serde_json::json!({
         "url": url,
         "validator": validator,
+    }))?;
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part.meta", destination.display())),
+        metadata,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn write_resume_identity_without_validator(
+    destination: &Path,
+    url: &str,
+) -> Result<(), Box<dyn Error>> {
+    let metadata = serde_json::to_vec(&serde_json::json!({
+        "url": url,
+        "validator": null,
     }))?;
     tokio::fs::write(
         PathBuf::from(format!("{}.part.meta", destination.display())),
@@ -1419,6 +1448,64 @@ async fn failed_segment_does_not_publish_any_destination() -> Result<(), Box<dyn
     let report = server.await?;
     assert!(report.requests.len() >= 2);
     assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn resumed_segments_without_a_server_validator_are_restarted() -> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 256 * 1024;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 239) as u8).collect();
+    let (url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::NoValidator, 5, false).await?;
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("unverified-segment-resume.bin");
+    let temporary_path = PathBuf::from(format!("{}.part", destination.display()));
+
+    for index in 0..4 {
+        let segment_path = PathBuf::from(format!(
+            "{}.segments-4-{TOTAL}-{index}",
+            temporary_path.display()
+        ));
+        tokio::fs::write(segment_path, vec![0x11; TOTAL / 4]).await?;
+    }
+    write_resume_identity_without_validator(&destination, &url).await?;
+
+    let source_item = make_item(&url, &destination)?;
+    let item = DownloadItem::from_parts(
+        source_item.id(),
+        source_item.source().clone(),
+        source_item.filename().clone(),
+        source_item.destination().to_path_buf(),
+        DownloadStatus::Cancelled,
+        source_item.priority(),
+        DownloadProgress::new(TOTAL as u64, Some(TOTAL as u64), None, None)?,
+        source_item.created_at(),
+        Timestamp::from_unix_millis(2),
+        None,
+    )?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    let completed = engine.download(id, receiver).await?;
+    let report = server.await?;
+    let mut ranges = report
+        .requests
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    let mut expected_ranges = vec![
+        "bytes=0-65535",
+        "bytes=65536-131071",
+        "bytes=131072-196607",
+        "bytes=196608-262143",
+    ];
+    expected_ranges.sort_unstable();
+
+    assert_eq!(ranges, expected_ranges);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
     Ok(())
 }
 

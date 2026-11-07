@@ -447,7 +447,7 @@ where
             )
             .await?;
         let initial_validator = response_validator(&response);
-        let segmentation_enabled =         (2..=64).contains(&self.config.segment_count)
+        let segmentation_enabled = (2..=64).contains(&self.config.segment_count)
             && self.config.minimum_segmented_file_size > 0;
         let supports_ranges = response
             .headers()
@@ -466,11 +466,15 @@ where
             let segment_count =
                 segmented_layout(&temporary_path, self.config.segment_count, total_size).await?;
             let validator = initial_validator.clone().unwrap_or_default();
-            let can_resume_segments = stored_identity.as_ref().is_some_and(|identity| {
-                identity.url == url.as_str()
-                    && (validator.is_empty()
-                        || identity.validator.as_deref() == Some(validator.as_str()))
-            });
+            let can_resume_segments = initial_validator
+                .as_ref()
+                .filter(|validator| !validator.is_empty())
+                .is_some_and(|validator| {
+                    stored_identity.as_ref().is_some_and(|identity| {
+                        identity.url == url.as_str()
+                            && identity.validator.as_deref() == Some(validator.as_str())
+                    })
+                });
             if !can_resume_segments {
                 cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
             }
