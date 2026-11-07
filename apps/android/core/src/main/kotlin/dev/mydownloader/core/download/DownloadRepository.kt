@@ -143,6 +143,12 @@ interface DownloadRepository {
     /** Set the queue priority of a download. */
     suspend fun setPriority(downloadId: String, priority: DownloadPriority)
 
+    /** Move a queued download earlier among downloads with the same priority. */
+    suspend fun moveUpInQueue(downloadId: String)
+
+    /** Move a queued download later among downloads with the same priority. */
+    suspend fun moveDownInQueue(downloadId: String)
+
     /** Schedule a download to start at a specific wall-clock time (epoch millis). */
     suspend fun scheduleDownload(downloadId: String, startAtMillis: Long)
 

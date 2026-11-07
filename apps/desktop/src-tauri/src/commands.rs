@@ -81,7 +81,13 @@ impl AppState {
         self.repository
             .list()
             .await
-            .map(|items| items.into_iter().map(DownloadDto::from).collect())
+            .map(|items| {
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(position, item)| DownloadDto::from_with_queue_position(item, position as u64))
+                    .collect()
+            })
             .map_err(|_| IpcError::internal())
     }
 
@@ -459,6 +465,14 @@ impl AppState {
         self.get(id).await
     }
 
+    async fn move_up_queue(&self, id: DownloadId) -> Result<(), IpcError> {
+        self.queue.move_up(id).await.map_err(IpcError::from_queue)
+    }
+
+    async fn move_down_queue(&self, id: DownloadId) -> Result<(), IpcError> {
+        self.queue.move_down(id).await.map_err(IpcError::from_queue)
+    }
+
     async fn schedule(&self, id: DownloadId, scheduled_at_ms: u64) -> Result<(), IpcError> {
         let scheduled_at = Timestamp::from_unix_millis(scheduled_at_ms);
         self.scheduler
@@ -565,6 +579,7 @@ pub struct DownloadDto {
     pub engine: EngineKind,
     pub progress: DownloadProgressDto,
     pub error: Option<DownloadErrorDto>,
+    pub queue_position: u64,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -659,8 +674,8 @@ pub struct QueueSnapshotDto {
     pub total_connections: usize,
 }
 
-impl From<DownloadItem> for DownloadDto {
-    fn from(item: DownloadItem) -> Self {
+impl DownloadDto {
+    fn from_with_queue_position(item: DownloadItem, queue_position: u64) -> Self {
         let progress = item.progress();
         Self {
             id: item.id().to_string(),
@@ -681,9 +696,16 @@ impl From<DownloadItem> for DownloadDto {
                 code: error.code(),
                 message: error.message().to_owned(),
             }),
+            queue_position,
             created_at: item.created_at().as_unix_millis(),
             updated_at: item.updated_at().as_unix_millis(),
         }
+    }
+}
+
+impl From<DownloadItem> for DownloadDto {
+    fn from(item: DownloadItem) -> Self {
+        Self::from_with_queue_position(item, 0)
     }
 }
 
@@ -1127,6 +1149,24 @@ pub async fn set_download_priority(
         },
     );
     Ok(download)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn move_download_up_in_queue(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<(), IpcError> {
+    let id = parse_download_id(&download_id)?;
+    state.move_up_queue(id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn move_download_down_in_queue(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<(), IpcError> {
+    let id = parse_download_id(&download_id)?;
+    state.move_down_queue(id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

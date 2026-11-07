@@ -750,6 +750,28 @@ impl DownloadService {
         })
     }
 
+    pub fn move_download_up_in_queue(&self, id: String) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.queue().move_up(download_id))
+                .map_err(MobileApiError::from)
+        })
+    }
+
+    pub fn move_download_down_in_queue(&self, id: String) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.queue().move_down(download_id))
+                .map_err(MobileApiError::from)
+        })
+    }
+
     // ── Schedule ──────────────────────────────────────────────────────────
 
     pub fn schedule_download(

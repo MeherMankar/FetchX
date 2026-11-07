@@ -65,6 +65,7 @@ export interface Download {
   engine: EngineKind;
   progress: DownloadProgress;
   error: DownloadError | null;
+  queue_position?: number;
   created_at: number;
   updated_at: number;
 }

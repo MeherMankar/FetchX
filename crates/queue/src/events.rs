@@ -120,6 +120,10 @@ where
         self.inner.move_to_queue_tail(id).await
     }
 
+    async fn set_queue_order(&self, ids: &[DownloadId]) -> Result<(), StorageError> {
+        self.inner.set_queue_order(ids).await
+    }
+
     async fn set_priority(
         &self,
         id: DownloadId,

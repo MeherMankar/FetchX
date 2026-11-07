@@ -118,6 +118,14 @@ export function setDownloadPriority(
   return invoke<Download>("set_download_priority", { download_id: downloadId, request });
 }
 
+export function moveDownloadUpInQueue(downloadId: string): Promise<void> {
+  return invoke<void>("move_download_up_in_queue", { download_id: downloadId });
+}
+
+export function moveDownloadDownInQueue(downloadId: string): Promise<void> {
+  return invoke<void>("move_download_down_in_queue", { download_id: downloadId });
+}
+
 export function scheduleDownload(
   downloadId: string,
   scheduledAtMs: number,

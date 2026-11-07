@@ -20,6 +20,15 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - Deferred: parallel FTP, dynamic persistent-segment rebalancing, and per-segment UI remain separate investigations and are not implied by this recovery-safety change.
 - Next repository in the research order: AB Download Manager.
 
+## Current AB Download Manager–derived progress
+
+- Reviewed AB Download Manager queue orchestration and manual ordering at revision `68f0ea6e8ba5cbeb02c92342cd3bf7475378ae68` (Apache-2.0); no upstream code was copied.
+- Added Rust queue operations to move queued downloads up or down within the same priority group. The existing priority-first dispatch rule remains authoritative.
+- The queue actor persists reordered IDs using the existing SQLite `queue_order` column. No schema migration or new dependency is required; restart recovery preserves the ordering.
+- Exposed the operations through Android UniFFI and queued-row controls, desktop Tauri and queue-order sorting/actions, local/remote CLI, authenticated JSON-RPC, and the remote web UI. The browser extension/native-host method allowlist remains read-only.
+- Focused queue/storage, adapter, frontend, and Android unit/build results are recorded in `docs/research/AB_DOWNLOAD_MANAGER_FEATURE_ANALYSIS.md`.
+- Next repository in the research order: Download Navi, focusing on Android background reliability rather than another queue-ordering feature.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

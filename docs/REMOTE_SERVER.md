@@ -73,18 +73,23 @@ generic HTTP 401 response and JSON-RPC `Unauthorized` error (`-32001`). Credenti
 material is never included in the error body or logs. Requests are verified centrally
 before JSON-RPC dispatch, not separately inside each operation.
 
-Current RPC operations are `system.discover`, `download.create`, `download.get`,
-`download.list`, `download.pause`, `download.resume`, `download.cancel`,
-`download.remove`, `download.setPriority`, and `system.websocketTicket`. Creation
-supports HTTP(S) downloads through DirectHttp and magnet downloads through the engine selected by CoreServices.
+Current implemented RPC operations include `system.discover`, `download.create`,
+`download.get`, `download.list`, `download.pause`, `download.resume`,
+`download.cancel`, `download.remove`, `download.setPriority`, `queue.moveUp`,
+`queue.moveDown`, and `system.websocketTicket`. Queue move methods accept
+`{ "id": "<download-id>" }`, act only on queued downloads, and move within the
+same-priority group; the existing priority-first scheduler rule remains unchanged.
+Queue order is persisted using the existing SQLite column. Creation supports HTTP(S)
+downloads through DirectHttp and magnet downloads through the engine selected by CoreServices.
 Discovery reports only supported operations and event names. An operation accepted by
 the shared Phase 21A parser but not implemented by CoreServices returns the stable
 `UnsupportedOperation` error; it is not reported as a successful no-op.
 
-The browser UI exposes current download data and queue actions supported by these
-methods. Queue metrics/order, engine management/status, scheduling, remote settings,
+The authenticated remote web UI exposes the queue move actions. Queue metrics and
+resource-slot telemetry, engine management/status, scheduling, remote settings,
 device pairing, and plugin management are not available in the current protocol and
-are shown as unavailable rather than simulated.
+are shown as unavailable rather than simulated. The separate browser extension/native-host
+RPC allowlist intentionally remains read-only for queue management.
 
 Download responses and event payloads include the ID, filename, lifecycle state,
 priority, engine, progress, timestamps, and a non-sensitive error code. They do not

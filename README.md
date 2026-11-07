@@ -43,6 +43,11 @@ path; no shell or PATH-based executable discovery is used. One-shot scheduled st
 times are persisted in SQLite and coordinated by an event-driven Scheduler above the
 Queue Manager.
 
+Queued downloads can be moved earlier or later within their own priority group. The
+Rust queue actor persists this ordering through the existing SQLite `queue_order`
+field, so the same ordering is used by Android, desktop, CLI, and authenticated remote
+controls and survives restart.
+
 Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
 video/audio selections use a bundled, statically linked FFmpeg 8.1.2 executable
 (LGPL configuration, without GPL-only external libraries), built for the app's

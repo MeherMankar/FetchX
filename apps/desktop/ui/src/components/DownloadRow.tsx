@@ -34,6 +34,7 @@ interface DownloadRowProps {
   onDelete: (id: string) => void;
   onRetry: (id: string) => void;
   onPriorityChange: (id: string, priority: DownloadPriority) => void;
+  onQueueMove: (id: string, direction: "up" | "down") => void;
   onSetSchedule: (id: string, ms: number) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
   onError: (message: string) => void;
@@ -54,6 +55,7 @@ export const DownloadRow = memo(function DownloadRow({
   onDelete,
   onRetry,
   onPriorityChange,
+  onQueueMove,
   onSetSchedule,
   onClearSchedule,
   onError,
@@ -169,6 +171,28 @@ export const DownloadRow = memo(function DownloadRow({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
+        {download.status === "queued" && (
+          <>
+            <button
+              className="button button-secondary"
+              disabled={busy}
+              onClick={() => onQueueMove(download.id, "up")}
+              aria-label={`Move ${download.filename} earlier in queue`}
+              title="Move earlier in queue"
+            >
+              ↑
+            </button>
+            <button
+              className="button button-secondary"
+              disabled={busy}
+              onClick={() => onQueueMove(download.id, "down")}
+              aria-label={`Move ${download.filename} later in queue`}
+              title="Move later in queue"
+            >
+              ↓
+            </button>
+          </>
+        )}
         {canChangePriority(download.status) && (
           <>
             <label className="visually-hidden" htmlFor={`priority-${download.id}`}>

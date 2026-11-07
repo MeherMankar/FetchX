@@ -261,6 +261,12 @@ interface DownloadService {
     void set_priority(string id, DownloadPriorityDto priority);
 
     [Throws=MobileApiError]
+    void move_download_up_in_queue(string id);
+
+    [Throws=MobileApiError]
+    void move_download_down_in_queue(string id);
+
+    [Throws=MobileApiError]
     void schedule_download(string id, i64 start_at_millis);
 
     [Throws=MobileApiError]

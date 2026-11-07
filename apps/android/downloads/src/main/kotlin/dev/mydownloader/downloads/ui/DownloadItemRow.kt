@@ -41,6 +41,8 @@ fun DownloadItemRow(
     onCancel: () -> Unit,
     onRemove: () -> Unit,
     onRetry: () -> Unit,
+    onMoveUpInQueue: () -> Unit,
+    onMoveDownInQueue: () -> Unit,
     torrentTelemetry: TorrentTelemetry? = null,
     torrentMetadata: TorrentDownloadMetadata? = null,
     onTorrentFileSelected: (Int, Boolean) -> Unit = { _, _ -> },
@@ -157,6 +159,8 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
+                        TextButton(onClick = onMoveUpInQueue) { Text("Move up") }
+                        TextButton(onClick = onMoveDownInQueue) { Text("Move down") }
                         TextButton(onClick = onCancel) { Text("Cancel") }
                     }
                 }

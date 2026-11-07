@@ -309,6 +309,31 @@ async fn queue_order_and_priority_updates_preserve_download_progress() -> Result
         reordered.iter().map(DownloadItem::id).collect::<Vec<_>>(),
         [second.id(), first.id()]
     );
+    repository.set_queue_order(&[first.id(), second.id()]).await?;
+    assert_eq!(
+        repository
+            .list()
+            .await?
+            .iter()
+            .map(DownloadItem::id)
+            .collect::<Vec<_>>(),
+        [first.id(), second.id()]
+    );
+    assert!(
+        repository
+            .set_queue_order(&[first.id(), first.id()])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        repository
+            .list()
+            .await?
+            .iter()
+            .map(DownloadItem::id)
+            .collect::<Vec<_>>(),
+        [first.id(), second.id()]
+    );
 
     let original = repository
         .get(first.id())

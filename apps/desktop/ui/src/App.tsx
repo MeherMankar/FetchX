@@ -38,7 +38,8 @@ export type SortKey =
   | "progress"
   | "size"
   | "speed"
-  | "priority";
+  | "priority"
+  | "queue";
 
 // ---------------------------------------------------------------------------
 // Filtering and sorting (pure functions, client-side only)
@@ -108,6 +109,13 @@ function sortDownloads(downloads: Download[], sort: SortKey): Download[] {
       break;
     case "priority":
       sorted.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 1) - (PRIORITY_ORDER[b.priority] ?? 1));
+      break;
+    case "queue":
+      sorted.sort(
+        (a, b) =>
+          (a.queue_position ?? Number.MAX_SAFE_INTEGER)
+          - (b.queue_position ?? Number.MAX_SAFE_INTEGER),
+      );
       break;
   }
   return sorted;
@@ -188,7 +196,7 @@ export function App() {
   const {
     downloads, schedules, loading, error, busyId, load,
     ensureScheduleFetched, pause, resume, cancel, remove, retry,
-    bulkOperation, setPriority, setSchedule, clearSchedule, dismissError,
+    bulkOperation, setPriority, moveUpInQueue, moveDownInQueue, setSchedule, clearSchedule, dismissError,
   } = useDownloads();
 
   // -------------------------------------------------------------------------
@@ -311,6 +319,11 @@ export function App() {
     (id: string, priority: DownloadPriority) => void setPriority(id, priority),
     [setPriority],
   );
+  const handleQueueMove = useCallback((id: string, direction: "up" | "down") => {
+    setSort("queue");
+    if (direction === "up") void moveUpInQueue(id);
+    else void moveDownInQueue(id);
+  }, [moveDownInQueue, moveUpInQueue]);
   const handleSetSchedule = useCallback((id: string, ms: number) => setSchedule(id, ms), [setSchedule]);
   const handleClearSchedule = useCallback((id: string) => clearSchedule(id), [clearSchedule]);
   const handleError = useCallback((message: string) => setGlobalError(message), []);
@@ -646,6 +659,7 @@ export function App() {
                     onDelete={handleDelete}
                     onRetry={handleRetry}
                     onPriorityChange={handlePriorityChange}
+                    onQueueMove={handleQueueMove}
                     onSetSchedule={handleSetSchedule}
                     onClearSchedule={handleClearSchedule}
                     onError={handleError}

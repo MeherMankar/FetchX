@@ -122,6 +122,46 @@ impl DownloadRepository for SqliteDownloadRepository {
         Ok(())
     }
 
+    async fn set_queue_order(&self, ids: &[DownloadId]) -> Result<(), StorageError> {
+        let mut transaction = self.pool.begin().await?;
+        let current_ids = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM downloads ORDER BY queue_order, id",
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
+        if current_ids.len() != ids.len() {
+            return Err(StorageError::Maintenance(
+                "queue ordering must include every persisted download".to_owned(),
+            ));
+        }
+
+        let requested_ids = ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<std::collections::HashSet<_>>();
+        let persisted_ids = current_ids.into_iter().collect::<std::collections::HashSet<_>>();
+        if requested_ids.len() != ids.len() || requested_ids != persisted_ids {
+            return Err(StorageError::Maintenance(
+                "queue ordering contains a duplicate or unknown download".to_owned(),
+            ));
+        }
+
+        for (position, id) in ids.iter().enumerate() {
+            let queue_order = i64::try_from(position).map_err(|_| {
+                StorageError::IntegerOutOfRange {
+                    field: "queue_order",
+                }
+            })?;
+            sqlx::query("UPDATE downloads SET queue_order = ? WHERE id = ?")
+                .bind(queue_order)
+                .bind(id.to_string())
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     async fn set_priority(
         &self,
         id: DownloadId,

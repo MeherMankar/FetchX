@@ -200,6 +200,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::cancel_download,
             commands::delete_download,
             commands::set_download_priority,
+            commands::move_download_up_in_queue,
+            commands::move_download_down_in_queue,
             commands::schedule_download,
             commands::remove_download_schedule,
             commands::get_download_schedule,

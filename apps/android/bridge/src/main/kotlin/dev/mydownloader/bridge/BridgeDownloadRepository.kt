@@ -437,6 +437,18 @@ class BridgeDownloadRepository(
             service.setPriority(downloadId, mapPriorityToDto(priority))
         }
 
+    override suspend fun moveUpInQueue(downloadId: String) =
+        withContext(Dispatchers.IO) {
+            service.moveDownloadUpInQueue(downloadId)
+            _downloads.value = loadDownloadsAndReconcile()
+        }
+
+    override suspend fun moveDownInQueue(downloadId: String) =
+        withContext(Dispatchers.IO) {
+            service.moveDownloadDownInQueue(downloadId)
+            _downloads.value = loadDownloadsAndReconcile()
+        }
+
     override suspend fun scheduleDownload(downloadId: String, startAtMillis: Long) =
         withContext(Dispatchers.IO) {
             service.scheduleDownload(downloadId, startAtMillis)

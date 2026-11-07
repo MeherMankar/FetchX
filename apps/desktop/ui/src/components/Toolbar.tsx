@@ -64,6 +64,7 @@ export function Toolbar({
           <option value="size">Size</option>
           <option value="speed">Speed</option>
           <option value="priority">Priority</option>
+          <option value="queue">Queue position</option>
         </select>
 
         <button

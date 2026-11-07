@@ -272,6 +272,25 @@ export function App() {
     }
   }, [busy, client, handleError, refreshDownloads]);
 
+  const moveInQueue = useCallback(async (
+    download: RemoteDownload,
+    direction: "up" | "down",
+  ) => {
+    if (!client || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await client.call(direction === "up" ? "queue.moveUp" : "queue.moveDown", {
+        id: download.id,
+      });
+      await refreshDownloads(client);
+    } catch (cause) {
+      handleError(cause);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, client, handleError, refreshDownloads]);
+
   const addDownload = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!client || busy || !newUrl.trim()) return;
@@ -461,6 +480,7 @@ export function App() {
               onAdd={(event) => void addDownload(event)}
               onAction={(download, action) => void operate(download, action)}
               onPriorityChange={(download, value) => void changePriority(download, value)}
+              onQueueMove={(download, direction) => void moveInQueue(download, direction)}
               busy={busy}
               capabilities={capabilities}
             />
@@ -470,6 +490,7 @@ export function App() {
               downloads={visibleDownloads}
               allCount={downloads.length}
               onAction={(download, action) => void operate(download, action)}
+              onQueueMove={(download, direction) => void moveInQueue(download, direction)}
               busy={busy}
               capabilities={capabilities}
             />
@@ -579,6 +600,7 @@ function DownloadsView(props: {
   onAdd: (event: FormEvent<HTMLFormElement>) => void;
   onAction: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
   onPriorityChange: (download: RemoteDownload, value: DownloadPriority) => void;
+  onQueueMove: (download: RemoteDownload, direction: "up" | "down") => void;
   busy: boolean;
   capabilities: Set<string>;
 }) {
@@ -631,11 +653,13 @@ function DownloadsView(props: {
             downloads={props.downloads}
             onAction={props.onAction}
             onPriorityChange={props.onPriorityChange}
+            onQueueMove={props.onQueueMove}
             busy={props.busy}
             canControl={props.capabilities.has("download.pause") && props.capabilities.has("download.resume")}
             canCancel={props.capabilities.has("download.cancel")}
             canRemove={props.capabilities.has("download.remove")}
             canSetPriority={props.capabilities.has("download.setPriority")}
+            canMoveQueue={props.capabilities.has("queue.moveUp") && props.capabilities.has("queue.moveDown")}
           />
           : <EmptyState title={props.search ? "No matching downloads" : "No downloads yet"} detail={props.search ? "Try a different search." : "Add a URL or magnet URI above to start."} />}
       </section>
@@ -647,6 +671,7 @@ function QueueView(props: {
   downloads: RemoteDownload[];
   allCount: number;
   onAction: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
+  onQueueMove: (download: RemoteDownload, direction: "up" | "down") => void;
   busy: boolean;
   capabilities: Set<string>;
 }) {
@@ -656,7 +681,7 @@ function QueueView(props: {
         <div>
           <p className="eyebrow">QUEUE SNAPSHOT</p>
           <h2>{props.downloads.length} queued or active records</h2>
-          <p className="muted">This view is derived from the server’s download.list results. Queue ordering and slot/resource telemetry are not exposed by the current protocol.</p>
+          <p className="muted">Reorder queued downloads within their priority group. Active downloads cannot be moved.</p>
         </div>
       </section>
       <section className="panel">
@@ -664,10 +689,12 @@ function QueueView(props: {
           ? <DownloadTable
             downloads={props.downloads}
             onAction={props.onAction}
+            onQueueMove={props.onQueueMove}
             busy={props.busy}
             canControl={props.capabilities.has("download.pause") && props.capabilities.has("download.resume")}
             canCancel={props.capabilities.has("download.cancel")}
             canRemove={false}
+            canMoveQueue={props.capabilities.has("queue.moveUp") && props.capabilities.has("queue.moveDown")}
           />
           : <EmptyState title="The queue is clear" detail={`${props.allCount} total download records are not queued or active.`} />}
       </section>
@@ -743,11 +770,13 @@ function DownloadTable(props: {
   compact?: boolean;
   onAction?: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
   onPriorityChange?: (download: RemoteDownload, value: DownloadPriority) => void;
+  onQueueMove?: (download: RemoteDownload, direction: "up" | "down") => void;
   busy?: boolean;
   canControl?: boolean;
   canCancel?: boolean;
   canRemove?: boolean;
   canSetPriority?: boolean;
+  canMoveQueue?: boolean;
 }) {
   return (
     <div className="table-scroll">
@@ -810,6 +839,10 @@ function DownloadTable(props: {
                     <div className="row-actions">
                       {props.onAction && props.canControl && canPause && <button disabled={props.busy} onClick={() => props.onAction?.(download, "pause")}>Pause</button>}
                       {props.onAction && props.canControl && canResume && <button disabled={props.busy} onClick={() => props.onAction?.(download, "resume")}>Resume</button>}
+                      {props.onQueueMove && props.canMoveQueue && download.status === "queued" && <>
+                        <button disabled={props.busy} aria-label={`Move ${download.filename} earlier in queue`} onClick={() => props.onQueueMove?.(download, "up")}>↑</button>
+                        <button disabled={props.busy} aria-label={`Move ${download.filename} later in queue`} onClick={() => props.onQueueMove?.(download, "down")}>↓</button>
+                      </>}
                       {props.onAction && props.canCancel && !["completed", "cancelled", "failed", "stopped"].includes(download.status) && <button disabled={props.busy} onClick={() => props.onAction?.(download, "cancel")}>Cancel</button>}
                       {props.onAction && props.canRemove && <button className="danger-text" disabled={props.busy} onClick={() => {
                         if (window.confirm(`Remove "${download.filename}" from FetchX? Files on disk are preserved.`)) {

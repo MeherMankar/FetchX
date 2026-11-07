@@ -6,6 +6,8 @@ import {
   getDownloadSchedule,
   listenForDownloadChanges,
   listDownloads,
+  moveDownloadDownInQueue,
+  moveDownloadUpInQueue,
   pauseDownload,
   removeDownloadSchedule,
   resumeDownload,
@@ -54,8 +56,11 @@ export function useDownloads() {
         const stop = await listenForDownloadChanges(
           (download) => {
             setDownloads((current) => {
-              const without = current.filter((d) => d.id !== download.id);
-              return [download, ...without];
+              const existingIndex = current.findIndex((item) => item.id === download.id);
+              if (existingIndex < 0) return [...current, download];
+              return current.map((item, index) =>
+                index === existingIndex ? download : item,
+              );
             });
           },
           (downloadId) => {
@@ -183,6 +188,26 @@ export function useDownloads() {
     [],
   );
 
+  const moveUpInQueue = useCallback(
+    async (id: string) => {
+      await withBusy(id, async () => {
+        await moveDownloadUpInQueue(id);
+        await load();
+      });
+    },
+    [load, withBusy],
+  );
+
+  const moveDownInQueue = useCallback(
+    async (id: string) => {
+      await withBusy(id, async () => {
+        await moveDownloadDownInQueue(id);
+        await load();
+      });
+    },
+    [load, withBusy],
+  );
+
   const setSchedule = useCallback(
     async (id: string, scheduledAtMs: number) => {
       setBusyId(id);
@@ -232,6 +257,8 @@ export function useDownloads() {
     retry,
     bulkOperation,
     setPriority,
+    moveUpInQueue,
+    moveDownInQueue,
     setSchedule,
     clearSchedule,
     dismissError,

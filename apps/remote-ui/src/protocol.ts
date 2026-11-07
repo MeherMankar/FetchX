@@ -119,7 +119,9 @@ export type RemoteMethod =
   | "download.resume"
   | "download.cancel"
   | "download.remove"
-  | "download.setPriority";
+  | "download.setPriority"
+  | "queue.moveUp"
+  | "queue.moveDown";
 
 export class RemoteError extends Error {
   readonly kind: "network" | "authentication" | "forbidden" | "rpc" | "protocol";

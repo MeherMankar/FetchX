@@ -294,6 +294,14 @@ class DownloadsViewModel(
         performAction("update priority") { repository.setPriority(downloadId, priority) }
     }
 
+    fun moveUpInQueue(downloadId: String) {
+        performAction("move download in queue") { repository.moveUpInQueue(downloadId) }
+    }
+
+    fun moveDownInQueue(downloadId: String) {
+        performAction("move download in queue") { repository.moveDownInQueue(downloadId) }
+    }
+
     fun setTorrentFileSelected(downloadId: String, fileIndex: Int, selected: Boolean) {
         val torrentRepository = repository as? TorrentDownloadRepository ?: return
         performAction("update torrent selection") {

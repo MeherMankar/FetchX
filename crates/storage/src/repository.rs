@@ -28,6 +28,12 @@ pub trait DownloadRepository: Send + Sync {
         id: DownloadId,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
+    /// Replaces the persisted ordering of every download.
+    fn set_queue_order(
+        &self,
+        ids: &[DownloadId],
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
     /// Updates priority without replacing progress or lifecycle fields.
     fn set_priority(
         &self,

@@ -69,6 +69,9 @@ pub enum Command {
     /// Change a download's priority.
     Priority(PriorityOpts),
 
+    /// Move a queued download within its priority group.
+    QueueMove(QueueMoveOpts),
+
     /// Set a one-shot start time for a queued download.
     Schedule(ScheduleOpts),
 
@@ -192,6 +195,16 @@ pub enum RemoteCommand {
     },
     /// Cancel a remote download.
     Cancel {
+        /// Download ID.
+        id: String,
+    },
+    /// Move a queued remote download earlier in its priority group.
+    QueueUp {
+        /// Download ID.
+        id: String,
+    },
+    /// Move a queued remote download later in its priority group.
+    QueueDown {
         /// Download ID.
         id: String,
     },
@@ -341,6 +354,22 @@ pub struct PriorityOpts {
     pub priority: String,
 }
 
+#[derive(Args, Debug)]
+pub struct QueueMoveOpts {
+    /// Download ID.
+    pub id: String,
+
+    /// Move direction.
+    #[arg(value_enum)]
+    pub direction: QueueDirection,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueueDirection {
+    Up,
+    Down,
+}
+
 // ── Schedule ──────────────────────────────────────────────────────────────
 
 #[derive(Args, Debug)]
@@ -400,7 +429,9 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use super::{Cli, Command, DbCommand, RemoteCommand, ServerAction, TorrentCommand};
+    use super::{
+        Cli, Command, DbCommand, QueueDirection, RemoteCommand, ServerAction, TorrentCommand,
+    };
 
     #[test]
     fn add_accepts_explicit_magnet_option() {
@@ -467,6 +498,26 @@ mod tests {
         assert!(matches!(
             options.command,
             TorrentCommand::Select { files, .. } if files == "1,3"
+        ));
+    }
+
+    #[test]
+    fn queue_move_accepts_direction_and_remote_queue_actions() {
+        let local = Cli::try_parse_from(["fetchx", "queue-move", "download-id", "up"])
+            .expect("queue move command should parse");
+        let Command::QueueMove(options) = local.command else {
+            panic!("expected queue move command");
+        };
+        assert_eq!(options.direction, QueueDirection::Up);
+
+        let remote = Cli::try_parse_from(["fetchx", "remote", "queue-down", "download-id"])
+            .expect("remote queue move command should parse");
+        let Command::Remote(options) = remote.command else {
+            panic!("expected remote command");
+        };
+        assert!(matches!(
+            options.command,
+            RemoteCommand::QueueDown { id } if id == "download-id"
         ));
     }
 

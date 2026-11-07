@@ -332,6 +332,18 @@ impl QueueManager {
         .await
     }
 
+    /// Moves a queued download one place earlier among queued downloads with
+    /// the same priority. Priority ordering remains authoritative.
+    pub async fn move_up(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::MoveUp { id, reply }).await
+    }
+
+    /// Moves a queued download one place later among queued downloads with
+    /// the same priority. Priority ordering remains authoritative.
+    pub async fn move_down(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::MoveDown { id, reply }).await
+    }
+
     pub async fn set_global_connection_limit(&self, limit: usize) -> Result<(), QueueError> {
         self.request(|reply| Command::SetConnectionLimit { limit, reply })
             .await
@@ -559,6 +571,14 @@ enum Command {
     SetPriority {
         id: DownloadId,
         priority: DownloadPriority,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    MoveUp {
+        id: DownloadId,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    MoveDown {
+        id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
     SetConnectionLimit {
@@ -1278,6 +1298,14 @@ where
             .await;
             let _ = reply.send(result);
         }
+        Command::MoveUp { id, reply } => {
+            let result = move_queued_download(id, true, repository, entries, active).await;
+            let _ = reply.send(result);
+        }
+        Command::MoveDown { id, reply } => {
+            let result = move_queued_download(id, false, repository, entries, active).await;
+            let _ = reply.send(result);
+        }
         Command::SetConnectionLimit { limit, reply } => {
             let result = if limit == 0 || limit > MAX_GLOBAL_CONNECTIONS {
                 Err(QueueError::InvalidConfiguration)
@@ -1351,6 +1379,80 @@ where
             stop_workers_for_shutdown(engine, entries, active);
             shutdown_waiters.push(reply);
         }
+    }
+    Ok(())
+}
+
+async fn move_queued_download<R>(
+    id: DownloadId,
+    move_up: bool,
+    repository: &R,
+    entries: &mut HashMap<DownloadId, Entry>,
+    active: &HashMap<DownloadId, ActiveWorker>,
+) -> Result<(), QueueError>
+where
+    R: DownloadRepository,
+{
+    let item = repository
+        .get(id)
+        .await?
+        .ok_or(QueueError::DownloadNotFound(id))?;
+    if item.status() != DownloadStatus::Queued || active.contains_key(&id) {
+        return Err(QueueError::InvalidStatus {
+            id,
+            action: if move_up { "move up in queue" } else { "move down in queue" },
+            status: item.status(),
+        });
+    }
+
+    let mut same_priority = entries
+        .iter()
+        .filter(|(_, entry)| {
+            entry.item.status() == DownloadStatus::Queued
+                && entry.item.priority() == item.priority()
+        })
+        .map(|(entry_id, entry)| (*entry_id, entry.sequence))
+        .collect::<Vec<_>>();
+    same_priority.sort_by_key(|(_, sequence)| *sequence);
+    let Some(position) = same_priority
+        .iter()
+        .position(|(queued_id, _)| *queued_id == id)
+    else {
+        return Err(QueueError::ResourceInvariant);
+    };
+    let target = if move_up {
+        position.checked_sub(1)
+    } else {
+        (position + 1 < same_priority.len()).then_some(position + 1)
+    };
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let neighbor_id = same_priority[target].0;
+
+    let mut order = entries
+        .iter()
+        .map(|(entry_id, entry)| (*entry_id, entry.sequence))
+        .collect::<Vec<_>>();
+    order.sort_by_key(|(_, sequence)| *sequence);
+    let current_position = order
+        .iter()
+        .position(|(entry_id, _)| *entry_id == id)
+        .ok_or(QueueError::ResourceInvariant)?;
+    let neighbor_position = order
+        .iter()
+        .position(|(entry_id, _)| *entry_id == neighbor_id)
+        .ok_or(QueueError::ResourceInvariant)?;
+    order.swap(current_position, neighbor_position);
+    let ordered_ids = order.iter().map(|(entry_id, _)| *entry_id).collect::<Vec<_>>();
+    repository.set_queue_order(&ordered_ids).await?;
+
+    for (position, (entry_id, _)) in order.into_iter().enumerate() {
+        let sequence = u64::try_from(position).map_err(|_| QueueError::ResourceInvariant)?;
+        entries
+            .get_mut(&entry_id)
+            .ok_or(QueueError::ResourceInvariant)?
+            .sequence = sequence;
     }
     Ok(())
 }
@@ -3228,6 +3330,119 @@ mod tests {
                 .ok_or("download missing")?
                 .status(),
             DownloadStatus::Cancelled
+        );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queued_downloads_can_be_reordered_and_order_survives_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new_with_deferred(
+            repository.clone(),
+            Arc::clone(&engine),
+            QueueConfig::default(),
+            HashSet::new(),
+        )
+        .await?;
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let download = item()?;
+            ids.push(download.id());
+            manager.enqueue_deferred(download).await?;
+        }
+
+        manager.move_up(ids[2]).await?;
+        assert_eq!(
+            repository
+                .list()
+                .await?
+                .iter()
+                .map(DownloadItem::id)
+                .collect::<Vec<_>>(),
+            [ids[0], ids[2], ids[1]]
+        );
+        manager.move_up(ids[2]).await?;
+        manager.move_up(ids[2]).await?;
+        assert_eq!(
+            repository
+                .list()
+                .await?
+                .iter()
+                .map(DownloadItem::id)
+                .collect::<Vec<_>>(),
+            [ids[2], ids[0], ids[1]]
+        );
+        manager.move_down(ids[2]).await?;
+        manager.shutdown().await?;
+
+        let restarted = QueueManager::new_with_deferred(
+            repository.clone(),
+            engine,
+            QueueConfig::default(),
+            ids.iter().copied().collect(),
+        )
+        .await?;
+        assert_eq!(
+            restarted
+                .snapshot()
+                .await?
+                .items
+                .iter()
+                .map(DownloadItem::id)
+                .collect::<Vec<_>>(),
+            [ids[0], ids[2], ids[1]]
+        );
+        restarted.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queue_reordering_rejects_nonqueued_downloads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let paused_id = persist_item_in_status(&repository, DownloadStatus::Paused).await?;
+        let manager = QueueManager::new(
+            repository.clone(),
+            engine,
+            QueueConfig::default(),
+        )
+        .await?;
+
+        assert!(manager.move_up(paused_id).await.is_err());
+        assert!(manager.move_down(DownloadId::new()).await.is_err());
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn queue_reordering_does_not_cross_priority_groups()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(
+            repository.clone(),
+            engine,
+            QueueConfig::default(),
+        )
+        .await?;
+        let mut high = item()?;
+        high.set_priority_at(DownloadPriority::High, high.updated_at())?;
+        let high_id = high.id();
+        manager.enqueue_deferred(high).await?;
+        let normal = item()?;
+        let normal_id = normal.id();
+        manager.enqueue_deferred(normal).await?;
+
+        manager.move_up(normal_id).await?;
+        assert_eq!(
+            repository
+                .list()
+                .await?
+                .iter()
+                .map(DownloadItem::id)
+                .collect::<Vec<_>>(),
+            [high_id, normal_id]
         );
         manager.shutdown().await?;
         Ok(())

@@ -3,7 +3,7 @@ use std::{env, sync::atomic::AtomicU64, time::Duration};
 use fetchx_remote_protocol::{
     DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
     DOWNLOAD_RESUME, JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ProtocolInfo,
-    RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
+    QUEUE_MOVE_DOWN, QUEUE_MOVE_UP, RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
 };
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
@@ -134,6 +134,12 @@ pub async fn run(options: RemoteOpts, json_output: bool) -> ExitCode {
         }
         RemoteCommand::Cancel { id } => {
             run_lifecycle(&client, DOWNLOAD_CANCEL, id, json_output).await
+        }
+        RemoteCommand::QueueUp { id } => {
+            run_lifecycle(&client, QUEUE_MOVE_UP, id, json_output).await
+        }
+        RemoteCommand::QueueDown { id } => {
+            run_lifecycle(&client, QUEUE_MOVE_DOWN, id, json_output).await
         }
     };
 

@@ -9,6 +9,7 @@ use fetchx_queue::QueueError;
 use reqwest::Url;
 
 use crate::{
+    args::QueueDirection,
     exit::{self, ExitCode},
     output,
 };
@@ -172,6 +173,47 @@ pub async fn retry(svc: &CoreServices, id_str: String, json: bool) -> ExitCode {
         println!("Retried: new download {new_id}");
     }
     exit::SUCCESS
+}
+
+pub async fn move_in_queue(
+    svc: &CoreServices,
+    id_str: String,
+    direction: QueueDirection,
+    json: bool,
+) -> ExitCode {
+    let id = match super::parse_id(&id_str) {
+        Ok(id) => id,
+        Err(error) => {
+            output::print_error(json, &error.to_string());
+            return exit::INVALID_ARGS;
+        }
+    };
+    let result = match direction {
+        QueueDirection::Up => svc.queue().move_up(id).await,
+        QueueDirection::Down => svc.queue().move_down(id).await,
+    };
+    match result {
+        Ok(()) => {
+            let direction = match direction {
+                QueueDirection::Up => "up",
+                QueueDirection::Down => "down",
+            };
+            if json {
+                output::print_json_ok(&serde_json::json!({
+                    "ok": true,
+                    "id": id.to_string(),
+                    "direction": direction,
+                }));
+            } else {
+                println!("Moved download {id} {direction} in the queue.");
+            }
+            exit::SUCCESS
+        }
+        Err(error) => {
+            output::print_error(json, &error.to_string());
+            exit::GENERAL_ERROR
+        }
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

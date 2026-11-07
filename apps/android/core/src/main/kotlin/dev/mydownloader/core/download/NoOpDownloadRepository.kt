@@ -33,7 +33,8 @@ class NoOpDownloadRepository : DownloadRepository {
     override suspend fun removeDownload(downloadId: String, deleteFile: Boolean) = Unit
     override suspend fun retryDownload(downloadId: String): String = ""
     override suspend fun setPriority(downloadId: String, priority: DownloadPriority) = Unit
+    override suspend fun moveUpInQueue(downloadId: String) = Unit
+    override suspend fun moveDownInQueue(downloadId: String) = Unit
     override suspend fun scheduleDownload(downloadId: String, startAtMillis: Long) = Unit
     override suspend fun getDownload(downloadId: String): DownloadItem? = null
 }
-

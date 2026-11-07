@@ -31,6 +31,15 @@ Capabilities have two independent states:
 | Plugins | Policy/API crates; Android service has no execution adapter | Policy evaluation only, no execution capability | Depends on future/host adapter | Policy/manager if wired |
 | Normalized-URL duplicate lookup | CoreServices repository-backed query | UniFFI `find_duplicate_download` | Tauri command and TypeScript API | CLI and `download.findDuplicate` JSON-RPC; browser RPC allowlisted |
 | HTTP segmented transfer with validator-safe resume | Shared Rust range engine; stale segments are discarded if current resource validator is absent or mismatched | Same Rust engine via CoreServices | Same Rust engine via CoreServices | Same Rust engine for direct HTTP downloads |
+| Manual queued-download ordering | Rust queue actor moves queued items up/down within their priority group; SQLite queue order is updated transactionally and restored on restart | UniFFI service methods and queued-row controls | Tauri commands, queue-order sort, and queued-row controls | CLI commands, authenticated `queue.moveUp` / `queue.moveDown`, remote UI controls |
+
+Manual queue-ordering constraints:
+
+- Only items in `Queued` state can move; active, paused, and terminal items are rejected.
+- A move affects the relative order only among queued items with the same priority; priority remains the primary dispatch order.
+- Boundary moves are idempotent and do not change the stored ordering.
+- The browser extension/native-host RPC allowlist remains read-only and does not expose these queue mutations. The authenticated remote web UI does.
+- Existing `queue_order` storage is reused; there is no schema migration.
 
 Availability notes:
 

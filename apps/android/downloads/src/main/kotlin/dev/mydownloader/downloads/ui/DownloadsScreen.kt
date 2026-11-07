@@ -234,6 +234,8 @@ fun DownloadsScreen(
                             onCancel = { viewModel.cancel(item.id) },
                             onRemove = { viewModel.remove(item.id) },
                             onRetry = { viewModel.retry(item.id) },
+                            onMoveUpInQueue = { viewModel.moveUpInQueue(item.id) },
+                            onMoveDownInQueue = { viewModel.moveDownInQueue(item.id) },
                             torrentTelemetry = torrentTelemetry[item.id],
                             torrentMetadata = torrentMetadata[item.id],
                             onTorrentFileSelected = { index, selected ->

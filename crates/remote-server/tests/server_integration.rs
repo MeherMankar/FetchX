@@ -137,6 +137,12 @@ async fn remote_http_auth_and_security_limits_survive_restart()
             Some("download.retry" | "download.setEngine" | "download.setSpeedLimit")
         )
     }));
+    assert!(capabilities
+        .iter()
+        .any(|capability| capability.as_str() == Some("queue.moveUp")));
+    assert!(capabilities
+        .iter()
+        .any(|capability| capability.as_str() == Some("queue.moveDown")));
     let unsupported = post_rpc(
         &client,
         address,
@@ -292,6 +298,16 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
                 "id": "00000000-0000-0000-0000-000000000001",
                 "priority": "low"
             }),
+        ),
+        (
+            "queue-up",
+            "queue.moveUp",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
+        ),
+        (
+            "queue-down",
+            "queue.moveDown",
+            json!({ "id": "00000000-0000-0000-0000-000000000001" }),
         ),
         (
             "engine",

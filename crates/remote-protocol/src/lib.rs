@@ -57,6 +57,8 @@ pub const DOWNLOAD_REMOVE: &str = "download.remove";
 pub const DOWNLOAD_SET_PRIORITY: &str = "download.setPriority";
 pub const DOWNLOAD_SET_ENGINE: &str = "download.setEngine";
 pub const DOWNLOAD_SET_SPEED_LIMIT: &str = "download.setSpeedLimit";
+pub const QUEUE_MOVE_UP: &str = "queue.moveUp";
+pub const QUEUE_MOVE_DOWN: &str = "queue.moveDown";
 
 /// A JSON-RPC request envelope before method-specific parameter validation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -159,6 +161,8 @@ pub enum RemoteCommand {
         id: DownloadId,
         bytes_per_second: Option<u64>,
     },
+    QueueMoveUp(DownloadId),
+    QueueMoveDown(DownloadId),
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -254,6 +258,8 @@ pub const CAPABILITIES: &[&str] = &[
     DOWNLOAD_SET_PRIORITY,
     DOWNLOAD_SET_ENGINE,
     DOWNLOAD_SET_SPEED_LIMIT,
+    QUEUE_MOVE_UP,
+    QUEUE_MOVE_DOWN,
     "download.created",
     "download.updated",
     "download.progress",
@@ -466,6 +472,10 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
                 }
             })
         }
+        QUEUE_MOVE_UP => parse_params::<DownloadIdParams>(&request)
+            .map(|params| RemoteCommand::QueueMoveUp(params.id)),
+        QUEUE_MOVE_DOWN => parse_params::<DownloadIdParams>(&request)
+            .map(|params| RemoteCommand::QueueMoveDown(params.id)),
         _ => return Err(ProtocolError::MethodNotFound),
     }?;
 
@@ -584,6 +594,8 @@ mod tests {
                 DOWNLOAD_SET_SPEED_LIMIT,
                 serde_json::json!({ "id": ID, "bytes_per_second": 1024 }),
             ),
+            (QUEUE_MOVE_UP, serde_json::json!({ "id": ID })),
+            (QUEUE_MOVE_DOWN, serde_json::json!({ "id": ID })),
         ];
         for (method, params) in cases {
             assert!(
@@ -615,6 +627,8 @@ mod tests {
         );
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_RUNTIME_STATUS));
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_FIND_DUPLICATE));
+        assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_UP));
+        assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_DOWN));
         Ok(())
     }
 
