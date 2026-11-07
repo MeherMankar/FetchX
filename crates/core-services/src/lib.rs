@@ -70,6 +70,7 @@ pub use builtin::{
     CoreBuiltinError, FilenameTemplateContext, FilenameTemplateDiagnostic, FilenameTemplateResult,
     extract_download_links, find_archive_link, is_duplicate_download_url, match_download_category,
     normalize_download_url, render_filename_template, resolve_core_url, suggest_download_filename,
+    suggest_download_package_name,
 };
 
 // ============================================================

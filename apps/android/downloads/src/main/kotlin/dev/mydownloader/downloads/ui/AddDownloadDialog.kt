@@ -75,6 +75,7 @@ fun AddDownloadDialog(
     var userEditedFileName by rememberSaveable { mutableStateOf(false) }
     var urlError by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedPriority by rememberSaveable { mutableStateOf(DownloadPriority.NORMAL) }
+    var packageName by rememberSaveable { mutableStateOf("") }
     var expectedSha256 by rememberSaveable { mutableStateOf("") }
     var torrentMetadata by remember { mutableStateOf<TorrentMetadata?>(null) }
     var selectedTorrentFiles by remember { mutableStateOf<Set<Int>>(emptySet()) }
@@ -139,6 +140,17 @@ fun AddDownloadDialog(
             val derived = url.trimEnd('/').substringAfterLast('/')
             if (derived.isNotBlank() && derived != url) {
                 fileName = derived
+            }
+        }
+    }
+    LaunchedEffect(bulkUrls.firstOrNull(), packageName) {
+        if (packageName.isBlank()) {
+            val firstUrl = bulkUrls.firstOrNull()
+            if (!firstUrl.isNullOrBlank()) {
+                packageName = BulkLinkParser.suggestedPackageName(
+                    firstUrl,
+                    BulkLinkParser.suggestedFileName(firstUrl),
+                )
             }
         }
     }
@@ -324,6 +336,18 @@ fun AddDownloadDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 OutlinedTextField(
+                    value = packageName,
+                    onValueChange = { packageName = it },
+                    label = { Text("Package name") },
+                    placeholder = { Text("FetchX Downloads") },
+                    supportingText = { Text("Related links will be stored in this package folder.") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
                     value = expectedSha256,
                     onValueChange = { expectedSha256 = it.trim() },
                     label = { Text("Expected SHA-256 (optional)") },
@@ -398,20 +422,31 @@ fun AddDownloadDialog(
                                     bulkFileName,
                                     null,
                                 )
+                                val packageFolder = packageFolderName(packageName)
+                                val packagedDestination = if (packageFolder == null) {
+                                    "$bulkDestination/$bulkFileName"
+                                } else {
+                                    "$downloadsDir/$packageFolder/$bulkFileName"
+                                }
                                 onAdd(
                                     link,
                                     bulkFileName,
-                                    "$bulkDestination/$bulkFileName",
+                                    packagedDestination,
                                     selectedPriority,
                                     null,
                                     checksum,
                                 )
                             }
                         } else {
+                            val packageFolder = packageFolderName(packageName)
                             onAdd(
                                 url.trim(),
                                 resolvedFileName,
-                                destinationPath,
+                                if (packageFolder == null) {
+                                    destinationPath
+                                } else {
+                                    "$downloadsDir/$packageFolder/$resolvedFileName"
+                                },
                                 selectedPriority,
                                 selected,
                                 checksum,
@@ -449,5 +484,15 @@ internal fun validateUrl(url: String): String? {
     ) {
         return "Enter an HTTP(S) URL, magnet URI, or local .torrent path"
     }
+
     return null
+}
+
+internal fun packageFolderName(name: String): String? {
+    if (name.trim().let { it == "." || it == ".." }) return null
+    val sanitized = name.trim()
+        .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
+        .trim('.', ' ')
+        .ifBlank { "FetchX Downloads" }
+    return sanitized.takeIf { it != "." && it != ".." }
 }

@@ -7,6 +7,8 @@ import {
   addMediaDownload,
   discoverYtDlpFormats,
   extractDownloadLinks,
+  suggestDownloadFilename,
+  suggestDownloadPackageName,
   inspectTorrentFile,
   scheduleDownload,
   setDownloadPriority,
@@ -58,6 +60,7 @@ function engineUnavailableReason(kind: EngineKind, status: EngineStatus | null):
 
 export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps) {
   const [url, setUrl] = useState(initialUrl);
+  const [packageName, setPackageName] = useState("");
   const [priority, setPriority] = useState<DownloadPriority>("normal");
   const [engineKind, setEngineKind] = useState<EngineKind>("direct_http");
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
@@ -77,6 +80,22 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
   const isTorrent = isMagnet || isTorrentFile;
+
+  useEffect(() => {
+    if (packageName.trim() || !url.trim()) return;
+    let cancelled = false;
+    const firstUrl = extractDownloadLinks(url)
+      .then((links) => links[0] ?? url.trim())
+      .catch(() => url.trim().split(/\s+/)[0] ?? "");
+    void Promise.all([firstUrl, suggestDownloadFilename(url)])
+      .then(async ([targetUrl, filename]) => {
+        if (!cancelled && targetUrl) {
+          setPackageName(await suggestDownloadPackageName(targetUrl, filename));
+        }
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [url, packageName]);
 
   // Load engine availability once when the dialog opens.
   // No polling — one fetch on mount.
@@ -132,6 +151,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             )
           : await addDownload({
               url: targetUrl.trim(),
+              package_name: packageName.trim() || undefined,
               engine_kind: isTorrent ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
             });
 
@@ -208,6 +228,23 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               {error}
             </div>
           )}
+
+          <div className="field">
+            <label htmlFor="add-package" className="field-label">
+              Package
+            </label>
+            <input
+              id="add-package"
+              className="field-input"
+              value={packageName}
+              onChange={(event) => setPackageName(event.target.value)}
+              placeholder="FetchX Downloads"
+              disabled={busy}
+            />
+            <p className="field-hint">
+              Related downloads are stored together in this package folder.
+            </p>
+          </div>
 
           <div className="field">
             <label htmlFor="add-url" className="field-label">

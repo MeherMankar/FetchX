@@ -133,6 +133,9 @@ object BridgeInitializer {
     fun suggestDownloadFilename(url: String): String =
         service?.suggestDownloadFilename(url) ?: "download"
 
+    fun suggestDownloadPackageName(url: String, filename: String): String =
+        service?.suggestDownloadPackageName(url, filename) ?: "FetchX Downloads"
+
     fun normalizeDownloadUrl(url: String): String =
         service?.normalizeDownloadUrl(url) ?: url.trim()
 

@@ -71,6 +71,7 @@ export interface Download {
 
 export interface AddDownloadRequest {
   url: string;
+  package_name?: string;
   /** Optional engine selection. Omitting defaults to Direct HTTP on the backend. */
   engine_kind?: EngineKind;
 }

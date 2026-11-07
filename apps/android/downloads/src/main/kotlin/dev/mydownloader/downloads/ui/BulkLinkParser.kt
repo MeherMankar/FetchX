@@ -34,4 +34,7 @@ internal object BulkLinkParser {
             .trim('.', ' ')
             .ifBlank { "download" }
     }
+
+    fun suggestedPackageName(url: String, filename: String = suggestedFileName(url)): String =
+        BridgeInitializer.suggestDownloadPackageName(url, filename)
 }

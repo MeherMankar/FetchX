@@ -136,6 +136,8 @@ interface DownloadService {
 
     string suggest_download_filename(string url);
 
+    string suggest_download_package_name(string url, string filename);
+
     string normalize_download_url(string url);
 
     boolean is_duplicate_download_url(string url, sequence<string> existing_urls);

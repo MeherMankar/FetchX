@@ -34,6 +34,10 @@ export function suggestDownloadFilename(url: string): Promise<string> {
   return invoke<string>("suggest_download_filename", { url });
 }
 
+export function suggestDownloadPackageName(url: string, filename: string): Promise<string> {
+  return invoke<string>("suggest_download_package_name", { url, filename });
+}
+
 export function normalizeDownloadUrl(url: string): Promise<string> {
   return invoke<string>("normalize_download_url", { url });
 }

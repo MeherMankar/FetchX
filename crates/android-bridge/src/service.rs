@@ -162,6 +162,10 @@ impl DownloadService {
         fetchx_core_services::suggest_download_filename(&url)
     }
 
+    pub fn suggest_download_package_name(&self, url: String, filename: String) -> String {
+        fetchx_core_services::suggest_download_package_name(&url, &filename)
+    }
+
     pub fn normalize_download_url(&self, url: String) -> String {
         fetchx_core_services::normalize_download_url(&url)
     }

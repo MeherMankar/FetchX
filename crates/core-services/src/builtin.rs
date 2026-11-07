@@ -291,6 +291,43 @@ pub fn match_download_category(
     None
 }
 
+pub fn suggest_download_package_name(url: &str, filename: &str) -> String {
+    let stem = Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .or_else(|| {
+            filename
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "FetchX Downloads".to_owned());
+    let stem = stem
+        .trim_start_matches("www.")
+        .split('.')
+        .next()
+        .unwrap_or(&stem)
+        .replace(['-', '_'], " ");
+    let mut package = stem.trim().to_owned();
+    package = package
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || character.is_whitespace() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    package = package.split_whitespace().collect::<Vec<_>>().join(" ");
+    if package.is_empty() {
+        "FetchX Downloads".to_owned()
+    } else {
+        package
+    }
+}
+
 fn decode_percent_bytes(value: String) -> String {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
@@ -395,6 +432,18 @@ pub async fn resolve_core_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggests_shared_download_package_names() {
+        assert_eq!(
+            suggest_download_package_name("https://files.example.com/archive.zip", ""),
+            "files"
+        );
+        assert_eq!(
+            suggest_download_package_name("https://www.example.com/archive.zip", ""),
+            "example"
+        );
+    }
 
     #[test]
     fn normalizes_urls_and_detects_duplicates() {

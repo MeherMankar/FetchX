@@ -30,4 +30,10 @@ class BulkLinkParserTest {
         val name = BulkLinkParser.suggestedFileName("https://example.com/path/my:file?.mp4?download=1")
         assertTrue(name.all { it != ':' && it != '?' && it != '/' })
     }
+
+    @Test
+    fun packageFolderNameSanitizesUnsafeCharacters() {
+        assertEquals("Example_Downloads_", packageFolderName(" Example/Downloads? "))
+        assertEquals(null, packageFolderName(".."))
+    }
 }

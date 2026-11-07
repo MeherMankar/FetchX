@@ -270,6 +270,7 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
 
             let add_request = AddDownloadRequest {
                 url: canonical_url,
+                package_name: None,
                 engine_kind: None,
                 referer: browser_req.referer,
                 user_agent: browser_req.user_agent,

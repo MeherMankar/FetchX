@@ -1,5 +1,5 @@
 use std::{
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
     sync::{Arc, atomic::AtomicU8},
 };
 
@@ -188,7 +188,13 @@ impl AppState {
                 None => Ok(source),
             })
             .map_err(|_| IpcError::invalid_request())?;
-        let destination = self.downloads_dir.join(filename.as_str());
+        let destination = package_destination(&self.downloads_dir, request.package_name.as_deref())
+            .join(filename.as_str());
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|_| IpcError::internal())?;
+        }
         let mut context_headers = Vec::new();
         if let Some(ref referer) = request.referer {
             context_headers.push(("Referer".to_string(), referer.clone()));
@@ -487,6 +493,8 @@ impl AppState {
 #[serde(deny_unknown_fields)]
 pub struct AddDownloadRequest {
     pub url: String,
+    #[serde(default)]
+    pub package_name: Option<String>,
     /// Optional engine selection.  `None` (or absent from JSON) means Direct HTTP.
     /// The backend validates availability; the frontend cannot bypass this check.
     #[serde(default)]
@@ -500,6 +508,30 @@ pub struct AddDownloadRequest {
     /// Raw `Cookie` header value captured by the extension.
     #[serde(default)]
     pub cookies: Option<String>,
+}
+
+fn package_destination(downloads_dir: &Path, package_name: Option<&str>) -> PathBuf {
+    let Some(package_name) = package_name else {
+        return downloads_dir.to_path_buf();
+    };
+    let package_name = package_name
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'..='\u{001f}' => '_',
+            other => other,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|character| matches!(character, '.' | ' '))
+        .to_owned();
+    if package_name.is_empty() || package_name == "." || package_name == ".." {
+        downloads_dir.to_path_buf()
+    } else {
+        downloads_dir.join(package_name)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -768,6 +800,11 @@ pub fn extract_download_links(text: String) -> Vec<String> {
 #[tauri::command]
 pub fn suggest_download_filename(url: String) -> String {
     fetchx_core_services::suggest_download_filename(&url)
+}
+
+#[tauri::command]
+pub fn suggest_download_package_name(url: String, filename: String) -> String {
+    fetchx_core_services::suggest_download_package_name(&url, &filename)
 }
 
 #[tauri::command]
