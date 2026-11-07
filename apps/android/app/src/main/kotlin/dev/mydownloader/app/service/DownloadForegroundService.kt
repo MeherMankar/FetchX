@@ -3,6 +3,11 @@ package dev.fetchx.app.service
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -16,7 +21,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 private const val TAG = "DownloadForegroundSvc"
 
@@ -38,10 +45,34 @@ class DownloadForegroundService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var notificationManager: DownloadNotificationManager
     private var downloadsJob: Job? = null
+    private val policyPausedIds = mutableSetOf<String>()
+    private val connectivityManager by lazy {
+        getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = reconcileNetworkPolicy()
+        override fun onLost(network: Network) = reconcileNetworkPolicy()
+        override fun onCapabilitiesChanged(
+            network: Network,
+            capabilities: NetworkCapabilities,
+        ) = reconcileNetworkPolicy()
+    }
+    private val networkPreferenceListener =
+        android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == DownloadNetworkPolicy.WIFI_ONLY_KEY) reconcileNetworkPolicy()
+        }
 
     override fun onCreate() {
         super.onCreate()
         notificationManager = DownloadNotificationManager(applicationContext)
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        connectivityManager.registerNetworkCallback(request, networkCallback)
+        applicationContext.getSharedPreferences(
+            DownloadNetworkPolicy.PREFERENCES_NAME,
+            Context.MODE_PRIVATE,
+        ).registerOnSharedPreferenceChangeListener(networkPreferenceListener)
         Log.i(TAG, "Service created")
     }
 
@@ -89,6 +120,7 @@ class DownloadForegroundService : Service() {
                         is DownloadState.Cancelled -> notificationManager.notifyCancelled(item)
                     }
                 }
+                reconcileNetworkPolicy(items)
 
                 if (runningCount == 0) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -122,6 +154,11 @@ class DownloadForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        connectivityManager.unregisterNetworkCallback(networkCallback)
+        getSharedPreferences(
+            DownloadNetworkPolicy.PREFERENCES_NAME,
+            Context.MODE_PRIVATE,
+        ).unregisterOnSharedPreferenceChangeListener(networkPreferenceListener)
         scope.cancel()
         Log.i(TAG, "Service destroyed")
         super.onDestroy()
@@ -137,6 +174,30 @@ class DownloadForegroundService : Service() {
             )
         } else {
             startForeground(DownloadNotificationManager.FOREGROUND_SUMMARY_ID, notification)
+        }
+    }
+
+    private fun reconcileNetworkPolicy(
+        items: List<dev.fetchx.core.download.DownloadItem>? = null,
+    ) {
+        val repo = BridgeInitializer.repositoryOrNull() ?: return
+        scope.launch {
+            val currentItems = items ?: repo.observeDownloads().first()
+            val allowed = DownloadNetworkPolicy.isDownloadAllowed(applicationContext)
+
+            if (!allowed) {
+                currentItems.filter { it.state is DownloadState.Active }
+                    .forEach { item ->
+                        if (policyPausedIds.add(item.id)) {
+                            repo.pauseDownload(item.id)
+                        }
+                    }
+            } else if (policyPausedIds.isNotEmpty()) {
+                policyPausedIds.toList().forEach { id ->
+                    policyPausedIds.remove(id)
+                    repo.resumeDownload(id)
+                }
+            }
         }
     }
 }

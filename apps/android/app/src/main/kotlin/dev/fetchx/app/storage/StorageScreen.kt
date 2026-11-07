@@ -12,6 +12,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import dev.fetchx.app.service.DownloadNetworkPolicy
 
 @Composable
 internal fun StorageScreen(onBack: () -> Unit) {
@@ -35,6 +37,9 @@ internal fun StorageScreen(onBack: () -> Unit) {
     var usage by remember { mutableStateOf<FetchXStorageUsage?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var wifiOnly by remember(context) {
+        mutableStateOf(DownloadNetworkPolicy.isWifiOnlyEnabled(context))
+    }
 
     LaunchedEffect(refreshRequest) {
         isLoading = true
@@ -74,6 +79,29 @@ internal fun StorageScreen(onBack: () -> Unit) {
             "Read-only estimates of app-specific storage. FetchX does not remove files from this screen.",
             style = MaterialTheme.typography.bodyMedium,
         )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Download only on Wi-Fi", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Pause active transfers when Wi-Fi is unavailable, then resume them on Wi-Fi.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = wifiOnly,
+                    onCheckedChange = { enabled ->
+                        wifiOnly = enabled
+                        DownloadNetworkPolicy.setWifiOnlyEnabled(context, enabled)
+                    },
+                )
+            }
+        }
 
         if (isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         errorMessage?.let { message ->
