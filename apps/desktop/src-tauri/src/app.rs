@@ -239,6 +239,62 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("desktop application state was already initialized".into());
             }
 
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if cfg!(target_os = "android") {
+                        return;
+                    }
+                    let results = {
+                        let manager = app_handle.state::<HelperManager>();
+                        manager.ensure_all_installed(&app_handle).await
+                    };
+                    let mut needs_save = false;
+                    let state = app_handle.state::<AppState>();
+                    if let Ok(mut config) = state.config_service.load().await {
+                        let manager = app_handle.state::<HelperManager>();
+                        let statuses = manager
+                            .get_statuses(
+                                &crate::helper_manager::configured_helper_paths(&config),
+                            )
+                            .await;
+                        for status in statuses {
+                            let Some(path) = status.executable_path else {
+                                continue;
+                            };
+                            let path = std::path::PathBuf::from(path);
+                            match status.helper {
+                                crate::helper_manager::HelperId::Aria2c => {
+                                    if config.aria2.executable_path.as_deref() != Some(path.as_path()) {
+                                        config.aria2.executable_path = Some(path.clone());
+                                        needs_save = true;
+                                    }
+                                }
+                                crate::helper_manager::HelperId::YtDlp => {
+                                    if config.yt_dlp.executable_path.as_deref() != Some(path.as_path()) {
+                                        config.yt_dlp.executable_path = Some(path.clone());
+                                        needs_save = true;
+                                    }
+                                }
+                                crate::helper_manager::HelperId::Ffmpeg
+                                | crate::helper_manager::HelperId::Ffprobe => {}
+                            }
+                        }
+                        if needs_save {
+                            if let Err(error) = state.config_service.save(&config).await {
+                                tracing::warn!(%error, "could not persist automatically installed engine paths");
+                            }
+                        }
+                    }
+                    for (helper, result) in results {
+                        match result {
+                            Ok(()) => tracing::info!(?helper, "desktop engine installed automatically"),
+                            Err(error) => tracing::warn!(?helper, %error, "automatic desktop engine installation failed"),
+                        }
+                    }
+                });
+            }
+
             // Start the browser integration IPC server after state is managed.
             // The server borrows AppState via the Tauri handle so it shares the
             // same queue/engine runtime without duplication.

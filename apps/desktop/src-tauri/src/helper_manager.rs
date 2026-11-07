@@ -57,11 +57,20 @@ fn is_safe_archive_entry(name: &str, expected: &str) -> bool {
 
 impl HelperId {
     fn executable_name(self) -> &'static str {
-        match self {
-            Self::Aria2c => "aria2c.exe",
-            Self::YtDlp => "yt-dlp.exe",
-            Self::Ffmpeg => "ffmpeg.exe",
-            Self::Ffprobe => "ffprobe.exe",
+        if cfg!(target_os = "windows") {
+            match self {
+                Self::Aria2c => "aria2c.exe",
+                Self::YtDlp => "yt-dlp.exe",
+                Self::Ffmpeg => "ffmpeg.exe",
+                Self::Ffprobe => "ffprobe.exe",
+            }
+        } else {
+            match self {
+                Self::Aria2c => "aria2c",
+                Self::YtDlp => "yt-dlp",
+                Self::Ffmpeg => "ffmpeg",
+                Self::Ffprobe => "ffprobe",
+            }
         }
     }
 
@@ -83,7 +92,11 @@ impl HelperId {
     }
 
     fn supported_install_architecture(self, architecture: &str) -> bool {
-        architecture == "x86_64"
+        if cfg!(target_os = "windows") {
+            architecture == "x86_64"
+        } else {
+            matches!(architecture, "x86_64" | "aarch64")
+        }
     }
 }
 
@@ -167,7 +180,7 @@ impl HelperManager {
         }
     }
 
-    async fn get_statuses(
+    pub async fn get_statuses(
         &self,
         configured_paths: &HashMap<HelperId, PathBuf>,
     ) -> Vec<HelperStatus> {
@@ -189,8 +202,12 @@ impl HelperManager {
         configured_path: Option<&PathBuf>,
     ) -> HelperStatus {
         let executable = self.find_executable(helper, configured_path);
-        let install_supported = cfg!(target_os = "windows")
-            && helper.supported_install_architecture(std::env::consts::ARCH);
+        let install_supported = helper.supported_install_architecture(std::env::consts::ARCH)
+            && cfg!(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "linux"
+            ));
         let Some(executable) = executable else {
             return HelperStatus {
                 helper,
@@ -205,7 +222,7 @@ impl HelperManager {
         };
 
         let executable_path = executable.to_string_lossy().into_owned();
-        match validate_pe_architecture(&executable) {
+        match validate_helper_executable(&executable) {
             Ok(architecture) => match detect_version(helper, &executable).await {
                 Ok(version) => HelperStatus {
                     helper,
@@ -267,9 +284,6 @@ impl HelperManager {
         app: &AppHandle,
         helper: HelperId,
     ) -> Result<Vec<(HelperId, PathBuf)>, String> {
-        if !cfg!(target_os = "windows") {
-            return Err("Helper installation is currently supported only on Windows.".to_owned());
-        }
         if !helper.supported_install_architecture(std::env::consts::ARCH) {
             return Err(format!(
                 "Helper installation is not supported for Windows architecture '{}'.",
@@ -733,6 +747,30 @@ impl HelperManager {
             tracing::warn!(%error, "could not emit helper installation progress");
         }
     }
+
+    /// Installs every desktop helper not already available.
+    /// Android has its own runtime and never calls this method.
+    pub async fn ensure_all_installed(
+        &self,
+        app: &AppHandle,
+    ) -> Vec<(HelperId, Result<(), String>)> {
+        let statuses = self.get_statuses(&HashMap::new()).await;
+        let mut results = Vec::new();
+        for status in statuses {
+            if status.available {
+                continue;
+            }
+            let result = if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+                install_with_native_package_manager(status.helper).await
+            } else if status.install_supported {
+                self.install(app, status.helper).await.map(|_| ())
+            } else {
+                continue;
+            };
+            results.push((status.helper, result));
+        }
+        results
+    }
 }
 
 #[tauri::command]
@@ -792,6 +830,19 @@ pub async fn cancel_helper_install(
     } else {
         Ok(false)
     }
+}
+
+pub fn configured_helper_paths(
+    config: &fetchx_core_services::EngineConfig,
+) -> HashMap<HelperId, PathBuf> {
+    let mut configured = HashMap::new();
+    if let Some(path) = config.aria2.executable_path.as_deref() {
+        configured.insert(HelperId::Aria2c, path.to_path_buf());
+    }
+    if let Some(path) = config.yt_dlp.executable_path.as_deref() {
+        configured.insert(HelperId::YtDlp, path.to_path_buf());
+    }
+    configured
 }
 
 fn aria2_package() -> Result<InstallPackage, String> {
@@ -906,6 +957,93 @@ fn expected_pe_machine(architecture: &str) -> Option<u16> {
         "aarch64" => Some(0xaa64),
         _ => None,
     }
+}
+
+fn validate_helper_executable(path: &Path) -> Result<&'static str, String> {
+    if cfg!(target_os = "windows") {
+        return validate_pe_architecture(path);
+    }
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("Could not inspect executable: {error}"))?;
+    if !metadata.is_file() {
+        return Err("The executable is not a regular file.".to_owned());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err("The executable is not runnable.".to_owned());
+        }
+    }
+    Ok(std::env::consts::ARCH)
+}
+
+async fn install_with_native_package_manager(helper: HelperId) -> Result<(), String> {
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let _ = helper;
+    #[cfg(target_os = "macos")]
+    {
+        let package = match helper {
+            HelperId::Aria2c => "aria2",
+            HelperId::YtDlp => "yt-dlp",
+            HelperId::Ffmpeg | HelperId::Ffprobe => "ffmpeg",
+        };
+        let output = Command::new("brew")
+            .args(["install", package])
+            .output()
+            .await
+            .map_err(|_| "Homebrew is required on macOS but was not found.".to_owned())?;
+        return if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Homebrew could not install {package}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        };
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let packages: &[&str] = match helper {
+            HelperId::Aria2c => &["aria2"],
+            HelperId::YtDlp => &["yt-dlp"],
+            HelperId::Ffmpeg | HelperId::Ffprobe => &["ffmpeg"],
+        };
+        let mut command = if Path::new("/usr/bin/pkexec").exists() {
+            let (manager, args) = if Path::new("/usr/bin/apt-get").exists() {
+                ("apt-get", vec!["-y", "install"])
+            } else if Path::new("/usr/bin/dnf").exists() {
+                ("dnf", vec!["-y", "install"])
+            } else if Path::new("/usr/bin/pacman").exists() {
+                ("pacman", vec!["--noconfirm", "-S"])
+            } else {
+                return Err("No supported native package manager was found.".to_owned());
+            };
+            let mut command = Command::new("pkexec");
+            command.arg(manager).args(args).args(packages);
+            command
+        } else {
+            return Err(
+                "A graphical package authorization helper (pkexec) was not found.".to_owned(),
+            );
+        };
+        let output = command
+            .output()
+            .await
+            .map_err(|error| format!("Could not start the native installer: {error}"))?;
+        return if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "The native package manager failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        };
+    }
+
+    #[allow(unreachable_code)]
+    Err("Automatic helper installation is not supported on this desktop platform.".to_owned())
 }
 
 fn validate_pe_architecture(path: &Path) -> Result<&'static str, String> {
