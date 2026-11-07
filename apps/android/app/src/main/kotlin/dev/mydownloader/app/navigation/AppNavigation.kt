@@ -44,6 +44,7 @@ import dev.fetchx.downloads.ui.DownloadsViewModel
 import dev.fetchx.downloads.ui.TorrentDetailScreen
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
+import dev.fetchx.app.aria2.Aria2RemoteScreen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
@@ -361,7 +362,17 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 }
             }
             composable(Screen.Storage.route) {
-                StorageScreen(onBack = { navController.popBackStack() })
+                StorageScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenAria2 = {
+                        navController.navigate(Screen.Aria2Remote.route) {
+                            launchSingleTop = true
+                        }
+                    },
+                )
+            }
+            composable(Screen.Aria2Remote.route) {
+                Aria2RemoteScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.TorrentDetail.ROUTE_PATTERN) { backStackEntry ->
                 val downloadId = backStackEntry.arguments?.getString("downloadId") ?: ""
