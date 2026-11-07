@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import dev.fetchx.app.service.DownloadNetworkPolicy
+import dev.fetchx.app.media.MediaDownloadPreferences
 import dev.fetchx.downloads.storage.StorageManager
 
 @Composable
@@ -60,6 +61,21 @@ internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
     val downloadStorageManager = remember(context) { StorageManager(context) }
     var smartFolders by remember(context) {
         mutableStateOf(downloadStorageManager.isSmartFoldersEnabled())
+    }
+    var quickSharedDownloads by remember(context) {
+        mutableStateOf(MediaDownloadPreferences.isQuickDownloadEnabled(context))
+    }
+    var removeSponsorSegments by remember(context) {
+        mutableStateOf(MediaDownloadPreferences.isSponsorBlockEnabled(context))
+    }
+    var downloadSubtitles by remember(context) {
+        mutableStateOf(MediaDownloadPreferences.areSubtitlesEnabled(context))
+    }
+    var embedSubtitles by remember(context) {
+        mutableStateOf(MediaDownloadPreferences.areSubtitlesEmbedded(context))
+    }
+    var embedMetadata by remember(context) {
+        mutableStateOf(MediaDownloadPreferences.isMetadataEmbeddingEnabled(context))
     }
 
     LaunchedEffect(refreshRequest) {
@@ -135,6 +151,52 @@ internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                Text("Media downloads", style = MaterialTheme.typography.titleMedium)
+                PolicySwitch(
+                    title = "Quick shared links",
+                    description = "Open shared video links directly in FetchX’s media download flow.",
+                    checked = quickSharedDownloads,
+                    onCheckedChange = { enabled ->
+                        quickSharedDownloads = enabled
+                        MediaDownloadPreferences.setQuickDownloadEnabled(context, enabled)
+                    },
+                )
+                PolicySwitch(
+                    title = "Remove SponsorBlock segments",
+                    description = "Remove sponsors, introductions, outros, and self-promotions from supported yt-dlp videos.",
+                    checked = removeSponsorSegments,
+                    onCheckedChange = { enabled ->
+                        removeSponsorSegments = enabled
+                        MediaDownloadPreferences.setSponsorBlockEnabled(context, enabled)
+                    },
+                )
+                PolicySwitch(
+                    title = "Download subtitles",
+                    description = "Write subtitles using the preferred language matching rules.",
+                    checked = downloadSubtitles,
+                    onCheckedChange = { enabled ->
+                        downloadSubtitles = enabled
+                        MediaDownloadPreferences.setSubtitlesEnabled(context, enabled)
+                    },
+                )
+                PolicySwitch(
+                    title = "Embed subtitles",
+                    description = "Embed downloaded subtitles when the selected output format supports them.",
+                    checked = embedSubtitles,
+                    onCheckedChange = { enabled ->
+                        embedSubtitles = enabled
+                        MediaDownloadPreferences.setSubtitlesEmbedded(context, enabled)
+                    },
+                )
+                PolicySwitch(
+                    title = "Embed media metadata",
+                    description = "Add title, author, and other available metadata to media files.",
+                    checked = embedMetadata,
+                    onCheckedChange = { enabled ->
+                        embedMetadata = enabled
+                        MediaDownloadPreferences.setMetadataEmbeddingEnabled(context, enabled)
+                    },
+                )
                 Switch(
                     checked = wifiOnly,
                     onCheckedChange = { enabled ->

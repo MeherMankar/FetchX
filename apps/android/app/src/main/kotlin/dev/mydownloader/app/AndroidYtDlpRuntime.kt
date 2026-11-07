@@ -6,6 +6,7 @@ import android.util.Log
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import dev.fetchx.bridge.uniffi.YtDlpRuntime
+import dev.fetchx.app.media.MediaDownloadPreferences
 import java.io.File
 
 class AndroidYtDlpRuntime : YtDlpRuntime {
@@ -20,15 +21,16 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         progressPath: String,
         cancelPath: String,
     ): String {
-        val runtimeArguments = if (requiresFfmpeg(arguments)) {
-            val withFfmpeg = arguments.toMutableList()
+        val mediaArguments = MediaDownloadPreferences.applyArguments(context, arguments)
+        val runtimeArguments = if (requiresFfmpeg(mediaArguments)) {
+            val withFfmpeg = mediaArguments.toMutableList()
             val urlDelimiter = withFfmpeg.indexOf("--")
             check(urlDelimiter >= 0) { "yt-dlp arguments are missing the URL delimiter" }
             withFfmpeg.add(urlDelimiter, "--ffmpeg-location")
             withFfmpeg.add(urlDelimiter + 1, ensureFfmpegExecutable().absolutePath)
             withFfmpeg
         } else {
-            arguments
+            mediaArguments
         }
         val result = module.callAttr(
             "run",

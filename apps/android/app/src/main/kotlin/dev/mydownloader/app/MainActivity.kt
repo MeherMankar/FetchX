@@ -10,6 +10,7 @@ import dev.fetchx.app.navigation.AppNavigation
 import dev.fetchx.app.ui.theme.FetchXTheme
 import dev.fetchx.app.navigation.awaitRepositoryReady
 import dev.fetchx.downloads.notification.DownloadNotificationManager
+import dev.fetchx.app.media.MediaDownloadPreferences
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 
@@ -90,7 +91,7 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_SEND -> {
                 val sharedText = i.getStringExtra(Intent.EXTRA_TEXT)
                 val url = extractSharedUrl(sharedText)
-                if (url != null) {
+                if (url != null && MediaDownloadPreferences.isQuickDownloadEnabled(this)) {
                     android.util.Log.i("FetchXApp", "handleIntent: ACTION_SEND url=$url")
                     pendingIntentUrl.value = url
                 }
@@ -163,6 +164,7 @@ class MainActivity : ComponentActivity() {
 
 internal fun extractSharedUrl(text: String?): String? =
     text?.let { shared ->
-        Regex("""https?://[^\s]+""", RegexOption.IGNORE_CASE).find(shared)?.value
-            ?.trimEnd('.', ',', ';', ':', '!', '?', ')', ']')
+        Regex("""https?://[^\s<>"']+""", RegexOption.IGNORE_CASE).find(
+            shared.replace("&amp;", "&"),
+        )?.value?.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}')
     }
