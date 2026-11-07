@@ -425,7 +425,7 @@ arm64-v8a + x86_64 `.so` files cross-compiled and packaged.
 `libfetchx_android_bridge.so` confirmed in APK.
 `libjnidispatch.so` pre-loaded via `System.loadLibrary("jnidispatch")`.
 Bridge initialization confirmed on physical device:
-`I MyDownloaderBridge: Bridge initialized successfully`.
+`I fetchxBridge: Bridge initialized successfully`.
 
 ---
 

@@ -1,4 +1,4 @@
-package dev.mydownloader.browser
+package dev.fetchx.browser
 
 import dev.fetchx.browser.TabState
 

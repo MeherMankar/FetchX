@@ -1,8 +1,8 @@
 package dev.fetchx.browser
 
-import dev.mydownloader.browser.TabRestoreGuard
-import dev.mydownloader.browser.TabRestoreNavigationGate
-import dev.mydownloader.browser.TabSnapshotWriteGate
+import dev.fetchx.browser.TabRestoreGuard
+import dev.fetchx.browser.TabRestoreNavigationGate
+import dev.fetchx.browser.TabSnapshotWriteGate
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

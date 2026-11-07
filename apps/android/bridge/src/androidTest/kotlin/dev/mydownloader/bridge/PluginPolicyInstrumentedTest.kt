@@ -1,4 +1,4 @@
-package dev.mydownloader.bridge
+package dev.fetchx.bridge
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.fetchx.bridge.uniffi.MobileApiException

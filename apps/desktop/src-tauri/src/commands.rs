@@ -760,6 +760,16 @@ pub async fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadDt
     state.list().await
 }
 
+#[tauri::command]
+pub fn extract_download_links(text: String) -> Vec<String> {
+    fetchx_core_services::extract_download_links(&text)
+}
+
+#[tauri::command]
+pub fn suggest_download_filename(url: String) -> String {
+    fetchx_core_services::suggest_download_filename(&url)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn add_download(
     app: AppHandle,

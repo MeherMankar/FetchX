@@ -1,4 +1,4 @@
-package dev.mydownloader.bridge
+package dev.fetchx.bridge
 
 import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase

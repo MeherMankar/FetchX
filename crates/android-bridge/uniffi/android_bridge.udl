@@ -132,6 +132,10 @@ interface DownloadService {
     [Throws=MobileApiError]
     string diagnostics_snapshot();
 
+    sequence<string> extract_download_links(string text);
+
+    string suggest_download_filename(string url);
+
     [Throws=MobileApiError]
     DownloadInfoDto? get_download(string id);
 

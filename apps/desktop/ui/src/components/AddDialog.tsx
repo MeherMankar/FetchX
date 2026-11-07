@@ -6,6 +6,7 @@ import {
   addDownload,
   addMediaDownload,
   discoverYtDlpFormats,
+  extractDownloadLinks,
   inspectTorrentFile,
   scheduleDownload,
   setDownloadPriority,
@@ -118,26 +119,30 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       // Pass the selected engine to the backend.
       // The backend re-validates availability — the frontend cannot bypass this check.
       // Omit engine_kind when Direct HTTP is selected to use the backend default.
-      const download = isTorrentFile && torrentInspection
-        ? await addTorrentDownload(url.trim(), selectedTorrentFiles)
-        : engineKind === "yt_dlp" && !isTorrent
-        ? await addMediaDownload(
-            url,
-            selectedFormatId || undefined,
-            formats?.find((format) => format.format_id === selectedFormatId)?.extension,
-          )
-        : await addDownload({
-            url,
-            engine_kind: isTorrent ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
-          });
+      const bulkLinks = await extractDownloadLinks(url);
+      const urlsToAdd = bulkLinks.length > 1 ? bulkLinks : [url];
+      for (const targetUrl of urlsToAdd) {
+        const download = isTorrentFile && torrentInspection
+          ? await addTorrentDownload(url.trim(), selectedTorrentFiles)
+          : engineKind === "yt_dlp" && !isTorrent
+          ? await addMediaDownload(
+              targetUrl,
+              selectedFormatId || undefined,
+              formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+            )
+          : await addDownload({
+              url: targetUrl.trim(),
+              engine_kind: isTorrent ? "aria2" : engineKind === "direct_http" ? undefined : engineKind,
+            });
 
-      if (priority !== "normal") {
-        await setDownloadPriority(download.id, priority);
-      }
+        if (priority !== "normal") {
+          await setDownloadPriority(download.id, priority);
+        }
 
-      if (scheduleEnabled) {
-        const ms = new Date(scheduledAt).getTime();
-        await scheduleDownload(download.id, ms);
+        if (scheduleEnabled) {
+          const ms = new Date(scheduledAt).getTime();
+          await scheduleDownload(download.id, ms);
+        }
       }
 
       onAdded();

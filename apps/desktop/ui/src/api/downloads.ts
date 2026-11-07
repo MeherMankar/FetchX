@@ -26,6 +26,14 @@ export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
 }
 
+export function extractDownloadLinks(text: string): Promise<string[]> {
+  return invoke<string[]>("extract_download_links", { text });
+}
+
+export function suggestDownloadFilename(url: string): Promise<string> {
+  return invoke<string>("suggest_download_filename", { url });
+}
+
 export function addTorrentDownload(
   torrentPath: string,
   selectedFileIndexes?: number[],

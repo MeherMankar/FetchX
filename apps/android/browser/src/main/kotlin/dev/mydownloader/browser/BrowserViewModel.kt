@@ -12,11 +12,11 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import dev.mydownloader.browser.DurableBrowserTabStore
-import dev.mydownloader.browser.DurableBrowserTabStore.WriteResult
-import dev.mydownloader.browser.TabRestoreGuard
-import dev.mydownloader.browser.TabRestoreNavigationGate
-import dev.mydownloader.browser.TabSnapshotWriteGate
+import dev.fetchx.browser.DurableBrowserTabStore
+import dev.fetchx.browser.DurableBrowserTabStore.WriteResult
+import dev.fetchx.browser.TabRestoreGuard
+import dev.fetchx.browser.TabRestoreNavigationGate
+import dev.fetchx.browser.TabSnapshotWriteGate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job

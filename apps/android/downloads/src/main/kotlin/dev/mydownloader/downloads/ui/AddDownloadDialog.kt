@@ -70,6 +70,7 @@ fun AddDownloadDialog(
     onDismiss: () -> Unit,
 ) {
     var url by rememberSaveable { mutableStateOf("") }
+    val bulkUrls = remember(url) { BulkLinkParser.extract(url) }
     var fileName by rememberSaveable { mutableStateOf("") }
     var userEditedFileName by rememberSaveable { mutableStateOf(false) }
     var urlError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -184,6 +185,15 @@ fun AddDownloadDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+
+                if (bulkUrls.size > 1) {
+                    Text(
+                        text = "${bulkUrls.size} unique links detected",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
 
                 Button(
                     onClick = {
@@ -373,14 +383,40 @@ fun AddDownloadDialog(
                         if (checksum != null && !Regex("^[0-9a-fA-F]{64}$").matches(checksum)) {
                             return@TextButton
                         }
-                        onAdd(
-                            url.trim(),
-                            resolvedFileName,
-                            destinationPath,
-                            selectedPriority,
-                            selected,
-                            checksum,
-                        )
+                        if (bulkUrls.size > 1 && selectedTorrentFiles.isEmpty()) {
+                            bulkUrls.forEach { link ->
+                                val rawName = BulkLinkParser.suggestedFileName(link)
+                                val bulkFileName = BridgeInitializer.publicDownloadStorageOrNull()
+                                    ?.uniquePublicFileName(rawName, reservedFileNames = reservedFileNames)
+                                    ?: StorageManager(context).uniqueFileName(
+                                        File(downloadsDir),
+                                        rawName,
+                                        reservedFileNames,
+                                    )
+                                val bulkDestination = StorageManager(context).resolveSmartDownloadDirectory(
+                                    downloadsDir,
+                                    bulkFileName,
+                                    null,
+                                )
+                                onAdd(
+                                    link,
+                                    bulkFileName,
+                                    "$bulkDestination/$bulkFileName",
+                                    selectedPriority,
+                                    null,
+                                    checksum,
+                                )
+                            }
+                        } else {
+                            onAdd(
+                                url.trim(),
+                                resolvedFileName,
+                                destinationPath,
+                                selectedPriority,
+                                selected,
+                                checksum,
+                            )
+                        }
                     }
                 },
                 enabled = url.isNotBlank(),

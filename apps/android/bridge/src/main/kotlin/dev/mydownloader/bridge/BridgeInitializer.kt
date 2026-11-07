@@ -127,6 +127,12 @@ object BridgeInitializer {
 
     fun publicDownloadStorageOrNull(): PublicDownloadStorage? = publicDownloadStorage
 
+    fun extractDownloadLinks(text: String): List<String> =
+        service?.extractDownloadLinks(text) ?: emptyList()
+
+    fun suggestDownloadFilename(url: String): String =
+        service?.suggestDownloadFilename(url) ?: "download"
+
     /**
      * Returns the initialized repository, or throws if [initialize] was not called first.
      */

@@ -153,6 +153,110 @@ pub fn render_filename_template(
     }
 }
 
+/// Extracts unique HTTP(S) URLs from mixed text.
+pub fn extract_download_links(text: &str) -> Vec<String> {
+    let text = text.replace("&amp;", "&");
+    let mut links = Vec::new();
+    let mut remainder = text.as_str();
+    while let Some(start) = find_http_start(remainder) {
+        let candidate_end = remainder[start..]
+            .find(|character: char| {
+                character.is_whitespace() || matches!(character, '<' | '>' | '"' | '\'')
+            })
+            .map(|position| start + position)
+            .unwrap_or(remainder.len());
+        let mut candidate = remainder[start..candidate_end]
+            .trim_end_matches(|character: char| {
+                matches!(
+                    character,
+                    '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'
+                )
+            })
+            .to_owned();
+        if !candidate.is_empty() {
+            candidate = candidate.trim_end_matches('/').to_owned();
+            if let Ok(url) = Url::parse(&candidate) {
+                if matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some()
+                    && !links.iter().any(|existing: &String| existing == &candidate)
+                {
+                    links.push(candidate);
+                }
+            }
+        }
+        let next = if candidate_end <= start {
+            (start + 1).min(remainder.len())
+        } else {
+            candidate_end
+        };
+        remainder = &remainder[next..];
+    }
+    links
+}
+
+fn find_http_start(text: &str) -> Option<usize> {
+    ["http://", "https://"]
+        .into_iter()
+        .filter_map(|scheme| text.to_ascii_lowercase().find(scheme))
+        .min()
+}
+
+/// Returns a safe filename suggested by the URL's final path segment.
+pub fn suggest_download_filename(url: &str) -> String {
+    let filename = decode_percent_bytes(
+        Url::parse(url)
+            .ok()
+            .and_then(|url| url.path_segments()?.next_back().map(str::to_owned))
+            .unwrap_or_else(|| "download".to_owned()),
+    )
+    .replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_")
+    .chars()
+    .map(|character| {
+        if character.is_control() {
+            '_'
+        } else {
+            character
+        }
+    })
+    .collect::<String>()
+    .trim_matches(|character: char| character.is_whitespace() || character == '.')
+    .to_owned();
+    if filename.is_empty() {
+        "download".to_owned()
+    } else {
+        sanitise_filename(filename, "")
+    }
+}
+
+fn decode_percent_bytes(value: String) -> String {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                output.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(output).unwrap_or(value)
+}
+
+fn hex_value(character: u8) -> Option<u8> {
+    match character {
+        b'0'..=b'9' => Some(character - b'0'),
+        b'a'..=b'f' => Some(character - b'a' + 10),
+        b'A'..=b'F' => Some(character - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Finds an archive file linked directly from an HTML download page.
 pub fn find_archive_link(html: &str, base_url: &str) -> Option<String> {
     let base = Url::parse(base_url).ok()?;
@@ -228,6 +332,32 @@ pub async fn resolve_core_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_and_deduplicates_mixed_download_links() {
+        let links = extract_download_links(
+            "Files: https://example.com/a.zip, and https://example.com/a.zip\nhttps://example.org/b.bin.",
+        );
+        assert_eq!(
+            links,
+            vec![
+                "https://example.com/a.zip".to_owned(),
+                "https://example.org/b.bin".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn suggests_safe_download_filename() {
+        assert_eq!(
+            suggest_download_filename("https://example.com/files/report%20final.zip?token=x"),
+            "report final.zip"
+        );
+        assert_eq!(
+            suggest_download_filename("https://example.com/files/<bad>.zip"),
+            "_bad_.zip"
+        );
+    }
 
     #[test]
     fn filename_template_preserves_extension() {

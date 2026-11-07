@@ -37,12 +37,12 @@ boundary.
 
 Evidence:
 
-- [BrowserScreen.kt](../apps/android/browser/src/main/kotlin/dev/mydownloader/browser/BrowserScreen.kt)
-- [BrowserViewModel.kt](../apps/android/browser/src/main/kotlin/dev/mydownloader/browser/BrowserViewModel.kt)
-- [TabManager.kt](../apps/android/browser/src/main/kotlin/dev/mydownloader/browser/TabManager.kt)
-- [TabState.kt](../apps/android/browser/src/main/kotlin/dev/mydownloader/browser/TabState.kt)
-- [AppNavigation.kt](../apps/android/app/src/main/kotlin/dev/mydownloader/app/navigation/AppNavigation.kt)
-- [BridgeDownloadRepository.kt](../apps/android/bridge/src/main/kotlin/dev/mydownloader/bridge/BridgeDownloadRepository.kt)
+- [BrowserScreen.kt](../apps/android/browser/src/main/kotlin/dev/fetchx/browser/BrowserScreen.kt)
+- [BrowserViewModel.kt](../apps/android/browser/src/main/kotlin/dev/fetchx/browser/BrowserViewModel.kt)
+- [TabManager.kt](../apps/android/browser/src/main/kotlin/dev/fetchx/browser/TabManager.kt)
+- [TabState.kt](../apps/android/browser/src/main/kotlin/dev/fetchx/browser/TabState.kt)
+- [AppNavigation.kt](../apps/android/app/src/main/kotlin/dev/fetchx/app/navigation/AppNavigation.kt)
+- [BridgeDownloadRepository.kt](../apps/android/bridge/src/main/kotlin/dev/fetchx/bridge/BridgeDownloadRepository.kt)
 
 ### Known behavior gaps
 

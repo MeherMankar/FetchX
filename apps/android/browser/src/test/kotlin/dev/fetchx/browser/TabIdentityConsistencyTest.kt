@@ -1,6 +1,6 @@
 package dev.fetchx.browser
 
-import dev.mydownloader.browser.DurableBrowserTabStore
+import dev.fetchx.browser.DurableBrowserTabStore
 import java.util.UUID
 import java.util.concurrent.Executor
 import org.junit.Test

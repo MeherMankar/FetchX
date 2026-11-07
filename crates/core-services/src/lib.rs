@@ -41,11 +41,11 @@ use fetchx_media_extractor::{
     UnsupportedExtractor, YtDlpExtractor,
 };
 use fetchx_models::{
-    ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
-    DiagnosticHealth, DiagnosticsSnapshot, DownloadId, DownloadItem, DownloadPriority,
-    DownloadSource, DownloadStatus, EngineDiagnostics, EngineKind, FileName, PluginDiagnostics,
-    QueueDiagnostics, RpcDiagnostics, StorageDiagnostics, Timestamp, TorrentFileSelection,
-    TorrentMetadata, global_diagnostics, parse_magnet_uri, parse_torrent_metainfo,
+    global_diagnostics, parse_magnet_uri, parse_torrent_metainfo, ApplicationDiagnostics,
+    DiagnosticComponentStatus, DiagnosticHealth, DiagnosticsSnapshot, DownloadId, DownloadItem,
+    DownloadPriority, DownloadSource, DownloadStatus, EngineDiagnostics, EngineKind, FileName,
+    PluginDiagnostics, QueueDiagnostics, RpcDiagnostics, StorageDiagnostics, Timestamp,
+    TorrentFileSelection, TorrentMetadata, DIAGNOSTICS_SCHEMA_VERSION,
 };
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
@@ -67,8 +67,9 @@ mod builtin;
 pub mod config;
 mod engine_status;
 pub use builtin::{
-    CoreBuiltinError, FilenameTemplateContext, FilenameTemplateDiagnostic, FilenameTemplateResult,
-    find_archive_link, render_filename_template, resolve_core_url,
+    extract_download_links, find_archive_link, render_filename_template, resolve_core_url,
+    suggest_download_filename, CoreBuiltinError, FilenameTemplateContext,
+    FilenameTemplateDiagnostic, FilenameTemplateResult,
 };
 
 // ============================================================
@@ -1843,8 +1844,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn starts_shared_graph_and_shutdown_is_idempotent()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn starts_shared_graph_and_shutdown_is_idempotent(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let services = CoreServices::start(config(root.path())).await?;
 
@@ -1860,8 +1861,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn diagnostics_snapshot_reports_healthy_storage_without_exposing_paths()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn diagnostics_snapshot_reports_healthy_storage_without_exposing_paths(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let database_path = root.path().join("fetchx.db");
         let services = CoreServices::start(config(root.path())).await?;
@@ -1881,8 +1882,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stopping_native_seeding_without_a_queue_worker_preserves_completed_file_state()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn stopping_native_seeding_without_a_queue_worker_preserves_completed_file_state(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use super::{ConfigService, EngineConfig, NativeTorrentConfig};
         use fetchx_storage::Database;
 
@@ -1973,8 +1974,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_service_graphs_can_start_and_stop_independently()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn concurrent_service_graphs_can_start_and_stop_independently(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let first_root = tempdir()?;
         let second_root = tempdir()?;
         let (first, second) = tokio::try_join!(
@@ -1989,8 +1990,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_configuration_and_reports_optional_engine_start_failure()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn persists_configuration_and_reports_optional_engine_start_failure(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use super::{Aria2Config, ConfigService, EngineConfig, YtDlpConfig};
         use fetchx_storage::Database;
 
@@ -2029,8 +2030,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_magnet_enqueue_validates_before_engine_availability()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn shared_magnet_enqueue_validates_before_engine_availability(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempdir()?;
         let services = CoreServices::start(CoreServicesConfig {
             database_path: dir.path().join("fetchx.db"),
@@ -2064,8 +2065,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn magnet_file_selection_uses_shared_model_and_persists_size_and_indexes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn magnet_file_selection_uses_shared_model_and_persists_size_and_indexes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let services = CoreServices::start(config(root.path())).await?;
         let id = DownloadId::new();
@@ -2193,8 +2194,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_torrent_enqueue_validates_metainfo_before_engine_availability()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn shared_torrent_enqueue_validates_metainfo_before_engine_availability(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let services = CoreServices::start(config(root.path())).await?;
         let malformed = root.path().join("malformed.torrent");
@@ -2297,8 +2298,8 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn torrent_destination_rejects_symlinks_but_accepts_configured_symlink_root()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn torrent_destination_rejects_symlinks_but_accepts_configured_symlink_root(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::symlink;
 
         let root = tempdir()?;
@@ -2345,8 +2346,8 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn torrent_destination_junction_escape_is_caught_after_creation()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn torrent_destination_junction_escape_is_caught_after_creation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::symlink;
 
         let root = tempdir()?;
@@ -2382,17 +2383,15 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn torrent_destination_rejects_unc_and_drive_paths_outside_the_root()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn torrent_destination_rejects_unc_and_drive_paths_outside_the_root(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let downloads_dir = root.path().join("downloads");
         tokio::fs::create_dir_all(&downloads_dir).await?;
         let unc = std::path::PathBuf::from(r"\\server\share\outside");
-        assert!(
-            super::validate_torrent_destination(&unc, &downloads_dir)
-                .await
-                .is_err()
-        );
+        assert!(super::validate_torrent_destination(&unc, &downloads_dir)
+            .await
+            .is_err());
 
         let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
         let drive_path = std::path::PathBuf::from(format!(

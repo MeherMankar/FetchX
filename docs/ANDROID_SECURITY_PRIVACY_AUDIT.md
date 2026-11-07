@@ -52,7 +52,7 @@ Key attack surfaces observed:
 
 ### ID-20O-001 — LOW
 - Severity: LOW
-- Affected component: `apps/android/app/src/main/kotlin/dev/mydownloader/app/FetchXApp.kt`, `apps/android/app/src/main/kotlin/dev/mydownloader/app/service/DownloadForegroundService.kt`
+- Affected component: `apps/android/app/src/main/kotlin/dev/fetchx/app/FetchXApp.kt`, `apps/android/app/src/main/kotlin/dev/fetchx/app/service/DownloadForegroundService.kt`
 - Description: The app starts the foreground service during normal app startup regardless of whether any downloads are active. The service then immediately promotes itself to the foreground and continues observing the bridge repository even when there are no active or queued downloads.
 - Attack scenario: An attacker or malicious flow that causes the app to start repeatedly can keep the process alive longer than necessary and increase the app’s background footprint. This is not a privilege escalation, but it expands the runtime and service surface.
 - Impact: Increased background persistence, unnecessary foreground notifications, higher resource usage, and a broader lifecycle attack surface than required.
@@ -63,7 +63,7 @@ Key attack surfaces observed:
 
 ### ID-20O-002 — LOW
 - Severity: LOW
-- Affected component: `apps/android/browser/src/main/kotlin/dev/mydownloader/browser/ExtensionPackageImporter.kt`, `apps/android/browser/src/main/kotlin/dev/mydownloader/browser/GeckoExtensionGateway.kt`, `apps/android/browser/src/main/kotlin/dev/mydownloader/browser/ExtensionModels.kt`
+- Affected component: `apps/android/browser/src/main/kotlin/dev/fetchx/browser/ExtensionPackageImporter.kt`, `apps/android/browser/src/main/kotlin/dev/fetchx/browser/GeckoExtensionGateway.kt`, `apps/android/browser/src/main/kotlin/dev/fetchx/browser/ExtensionModels.kt`
 - Description: The extension import path accepts a user-selected local `.xpi` package, stages it in the app cache, and installs it without any cryptographic signature verification or trust check beyond the local picker and the GeckoView install prompt. Metadata permissions are normalized, but the validation model does not prove the package is signed or trustworthy.
 - Attack scenario: A malicious extension package is manually imported by a user or delivered via a malicious local file provider. If the user is tricked into installing it, the app will accept it subject to the WebExtension install prompt.
 - Impact: This is a trust and integrity problem for extension installation; the app depends on the user to make a trust decision rather than verifying the package authoritatively.
@@ -74,7 +74,7 @@ Key attack surfaces observed:
 
 ### ID-20O-003 — INFORMATIONAL
 - Severity: INFORMATIONAL
-- Affected component: `apps/android/downloads/src/main/kotlin/dev/mydownloader/downloads/notification/DownloadNotificationManager.kt`
+- Affected component: `apps/android/downloads/src/main/kotlin/dev/fetchx/downloads/notification/DownloadNotificationManager.kt`
 - Description: Download notifications include file names such as the target download title. This is useful for user feedback but can expose file names on a lock screen or in an accessible notification context.
 - Attack scenario: A shared device or local attacker with access to the notification shade can identify downloaded content names.
 - Impact: Privacy leakage of downloaded content names, but not a secret exfiltration vector by itself.

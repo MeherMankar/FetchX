@@ -46,7 +46,7 @@ The `:browser` module (`apps/android/browser`) contains:
 
 ### `:core` module — NetworkRoute
 
-A `NetworkRoute` sealed class already exists at `apps/android/core/src/main/kotlin/dev/mydownloader/core/network/NetworkRoute.kt`:
+A `NetworkRoute` sealed class already exists at `apps/android/core/src/main/kotlin/dev/fetchx/core/network/NetworkRoute.kt`:
 
 ```kotlin
 sealed class NetworkRoute {

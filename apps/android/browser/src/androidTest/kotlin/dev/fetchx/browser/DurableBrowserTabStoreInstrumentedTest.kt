@@ -7,7 +7,7 @@ import android.util.Log
 import android.util.AtomicFile
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.mydownloader.browser.DurableBrowserTabStore
+import dev.fetchx.browser.DurableBrowserTabStore
 import java.io.File
 import java.io.IOException
 import java.util.UUID

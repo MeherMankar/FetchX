@@ -52,7 +52,7 @@ The supervised aria2 RPC listener is restricted to loopback and requires a
 runtime-generated authentication secret. The secret is supplied through a short-lived
 private runtime config file, not process arguments, logs, or persistent application
 storage. Child output is drained without logging. GIDs remain memory-only and are scoped
-to a process generation; after a crash, active jobs are resubmitted from MyDownloader's
+to a process generation; after a crash, active jobs are resubmitted from fetchx's
 persisted state, while completed and cancelled records are never resurrected. Shutdown
 is graceful first, then bounded and forced if required. Each aria2 job uses one
 connection; Queue Manager remains authoritative for queueing and global resources.
@@ -196,7 +196,7 @@ cargo test --workspace
 ```
 
 The storage crate accepts a caller-provided SQLite URL and applies embedded
-migrations during connection, for example `sqlite://mydownloader.db`. In-memory
+migrations during connection, for example `sqlite://fetchx.db`. In-memory
 SQLite databases are also supported for tests. The repository API is documented
 through the `DownloadRepository` trait; database setup is provided by
 `Database::connect` for SQLite URLs and `Database::connect_path` for filesystem

@@ -3,22 +3,22 @@ use std::{
     ffi::OsString,
     path::Path,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use fetchx_core_services::{CoreServices, CoreServicesConfig};
 use fetchx_downloader::{
-    YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
-    YtDlpRunnerFuture, is_hls_url, parse_format_output,
+    is_hls_url, parse_format_output, YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner,
+    YtDlpRunnerEvent, YtDlpRunnerFuture,
 };
 use fetchx_models::{
-    DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId, DownloadItem,
-    DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, global_diagnostics,
+    global_diagnostics, DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId,
+    DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
 };
-use fetchx_plugin_api::{PluginPolicy, PluginTrustContext, PolicyEnvironment, parse_manifest};
+use fetchx_plugin_api::{parse_manifest, PluginPolicy, PluginTrustContext, PolicyEnvironment};
 use fetchx_storage::DownloadRepository as _;
 use tokio::{
     fs,
@@ -43,9 +43,9 @@ fn checksum_sidecar_path(destination: &Path) -> PathBuf {
 }
 
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, TorrentDownloadMetadataDto, TorrentFileDto,
-    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, event_to_dto, item_to_dto,
-    priority_from_dto,
+    event_to_dto, item_to_dto, priority_from_dto, CoreConfig, DownloadInfoDto, DownloadPriorityDto,
+    TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto,
+    YtDlpFormatDto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -154,6 +154,14 @@ fn engine_for_url(url: &str) -> EngineKind {
 }
 
 impl DownloadService {
+    pub fn extract_download_links(&self, text: String) -> Vec<String> {
+        fetchx_core_services::extract_download_links(&text)
+    }
+
+    pub fn suggest_download_filename(&self, url: String) -> String {
+        fetchx_core_services::suggest_download_filename(&url)
+    }
+
     /// Creates the service, starts the Tokio runtime, and initialises CoreServices.
     ///
     /// This is the UniFFI constructor; called from Kotlin as `DownloadService(config)`.
@@ -308,11 +316,18 @@ impl DownloadService {
     ) -> Result<String, MobileApiError> {
         validate_sha256(&expected_sha256).map_err(|message| MobileApiError::Validation(message))?;
         let engine = engine_for_url(&url);
-        let result =
-            self.add_download_for_engine(url, filename, destination.clone(), priority, engine, None)?;
+        let result = self.add_download_for_engine(
+            url,
+            filename,
+            destination.clone(),
+            priority,
+            engine,
+            None,
+        )?;
         let checksum_path = checksum_sidecar_path(Path::new(&destination));
-        std::fs::write(checksum_path, expected_sha256.trim().to_ascii_lowercase())
-            .map_err(|error| MobileApiError::Storage(format!("could not store SHA-256: {error}")))?;
+        std::fs::write(checksum_path, expected_sha256.trim().to_ascii_lowercase()).map_err(
+            |error| MobileApiError::Storage(format!("could not store SHA-256: {error}")),
+        )?;
         Ok(result)
     }
 
@@ -1129,10 +1144,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{AndroidYtDlpProcessRunner, DownloadService, engine_for_url, is_direct_media_url};
-    use crate::YtDlpRuntime;
+    use super::{engine_for_url, is_direct_media_url, AndroidYtDlpProcessRunner, DownloadService};
     use crate::dto::{CoreConfig, DownloadEventDto, DownloadPriorityDto};
     use crate::error::MobileApiError;
+    use crate::YtDlpRuntime;
     use fetchx_downloader::{YtDlpError, YtDlpProcessRunner};
     use fetchx_models::EngineKind;
 

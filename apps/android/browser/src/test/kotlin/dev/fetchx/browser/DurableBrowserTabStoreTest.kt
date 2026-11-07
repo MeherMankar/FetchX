@@ -1,6 +1,6 @@
 package dev.fetchx.browser
 
-import dev.mydownloader.browser.DurableBrowserTabStore
+import dev.fetchx.browser.DurableBrowserTabStore
 import java.io.IOException
 import java.util.Collections
 import java.util.UUID
