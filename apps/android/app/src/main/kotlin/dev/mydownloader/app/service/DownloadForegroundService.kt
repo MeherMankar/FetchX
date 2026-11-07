@@ -2,6 +2,8 @@ package dev.fetchx.app.service
 
 import android.app.Service
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.BroadcastReceiver
 import android.content.pm.ServiceInfo
 import android.content.Context
 import android.net.ConnectivityManager
@@ -59,8 +61,13 @@ class DownloadForegroundService : Service() {
     }
     private val networkPreferenceListener =
         android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == DownloadNetworkPolicy.WIFI_ONLY_KEY) reconcileNetworkPolicy()
+            if (key != null) reconcileNetworkPolicy()
         }
+    private val powerReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            reconcileNetworkPolicy()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -73,6 +80,19 @@ class DownloadForegroundService : Service() {
             DownloadNetworkPolicy.PREFERENCES_NAME,
             Context.MODE_PRIVATE,
         ).registerOnSharedPreferenceChangeListener(networkPreferenceListener)
+        val powerFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(Intent.ACTION_BATTERY_LOW)
+            addAction(Intent.ACTION_BATTERY_OKAY)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(powerReceiver, powerFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(powerReceiver, powerFilter)
+        }
         Log.i(TAG, "Service created")
     }
 
@@ -159,6 +179,7 @@ class DownloadForegroundService : Service() {
             DownloadNetworkPolicy.PREFERENCES_NAME,
             Context.MODE_PRIVATE,
         ).unregisterOnSharedPreferenceChangeListener(networkPreferenceListener)
+        unregisterReceiver(powerReceiver)
         scope.cancel()
         Log.i(TAG, "Service destroyed")
         super.onDestroy()

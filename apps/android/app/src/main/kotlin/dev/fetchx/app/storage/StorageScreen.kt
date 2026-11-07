@@ -12,6 +12,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +40,21 @@ internal fun StorageScreen(onBack: () -> Unit) {
     var isLoading by remember { mutableStateOf(false) }
     var wifiOnly by remember(context) {
         mutableStateOf(DownloadNetworkPolicy.isWifiOnlyEnabled(context))
+    }
+    var unmeteredOnly by remember(context) {
+        mutableStateOf(DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.UNMETERED_ONLY_KEY))
+    }
+    var roamingAllowed by remember(context) {
+        mutableStateOf(DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.ROAMING_ALLOWED_KEY))
+    }
+    var chargingOnly by remember(context) {
+        mutableStateOf(DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.CHARGING_ONLY_KEY))
+    }
+    var batteryControl by remember(context) {
+        mutableStateOf(DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.BATTERY_CONTROL_KEY))
+    }
+    var batteryThreshold by remember(context) {
+        mutableIntStateOf(DownloadNetworkPolicy.getBatteryThreshold(context))
     }
 
     LaunchedEffect(refreshRequest) {
@@ -102,6 +118,56 @@ internal fun StorageScreen(onBack: () -> Unit) {
                 )
             }
         }
+        PolicySwitch(
+            title = "Unmetered connections only",
+            description = "Pause transfers on metered mobile and hotspot networks.",
+            checked = unmeteredOnly,
+            onCheckedChange = { enabled ->
+                unmeteredOnly = enabled
+                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.UNMETERED_ONLY_KEY, enabled)
+            },
+        )
+        PolicySwitch(
+            title = "Allow downloads while roaming",
+            description = "Keep roaming transfers paused unless explicitly allowed.",
+            checked = roamingAllowed,
+            onCheckedChange = { enabled ->
+                roamingAllowed = enabled
+                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.ROAMING_ALLOWED_KEY, enabled)
+            },
+        )
+        PolicySwitch(
+            title = "Download only while charging",
+            description = "Pause transfers while the device is running on battery.",
+            checked = chargingOnly,
+            onCheckedChange = { enabled ->
+                chargingOnly = enabled
+                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.CHARGING_ONLY_KEY, enabled)
+            },
+        )
+        PolicySwitch(
+            title = "Battery level control",
+            description = "Pause downloads when battery falls below $batteryThreshold%.",
+            checked = batteryControl,
+            onCheckedChange = { enabled ->
+                batteryControl = enabled
+                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.BATTERY_CONTROL_KEY, enabled)
+            },
+        )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text("Minimum battery level: $batteryThreshold%", style = MaterialTheme.typography.bodyLarge)
+                Slider(
+                    value = batteryThreshold.toFloat(),
+                    onValueChange = {
+                        batteryThreshold = it.toInt()
+                        DownloadNetworkPolicy.setBatteryThreshold(context, batteryThreshold)
+                    },
+                    valueRange = 0f..100f,
+                    steps = 19,
+                )
+            }
+        }
 
         if (isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         errorMessage?.let { message ->
@@ -111,6 +177,7 @@ internal fun StorageScreen(onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+
         usage?.let { result ->
             StorageUsageRow("Downloads (including partial files)", result.downloadsBytes)
             StorageUsageRow("Browser data (including extensions)", result.browserDataBytes)
@@ -134,6 +201,29 @@ internal fun StorageScreen(onBack: () -> Unit) {
                 "Browser extensions are included in browser data. This screen does not expose cache-cleanup or workspace-removal controls.",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun PolicySwitch(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(description, style = MaterialTheme.typography.bodySmall)
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
     }
 }
