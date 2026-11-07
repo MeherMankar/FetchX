@@ -34,6 +34,26 @@ export function suggestDownloadFilename(url: string): Promise<string> {
   return invoke<string>("suggest_download_filename", { url });
 }
 
+export function normalizeDownloadUrl(url: string): Promise<string> {
+  return invoke<string>("normalize_download_url", { url });
+}
+
+export function isDuplicateDownloadUrl(url: string, existingUrls: string[]): Promise<boolean> {
+  return invoke<boolean>("is_duplicate_download_url", { url, existing_urls: existingUrls });
+}
+
+export function matchDownloadCategory(
+  filename: string,
+  url?: string,
+  pageUrl?: string,
+): Promise<string | null> {
+  return invoke<string | null>("match_download_category", {
+    filename,
+    url: url ?? null,
+    page_url: pageUrl ?? null,
+  });
+}
+
 export function addTorrentDownload(
   torrentPath: string,
   selectedFileIndexes?: number[],

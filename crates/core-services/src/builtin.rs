@@ -228,6 +228,69 @@ pub fn suggest_download_filename(url: &str) -> String {
     }
 }
 
+pub fn normalize_download_url(url: &str) -> String {
+    let trimmed = url.trim();
+    let mut parsed = match Url::parse(trimmed) {
+        Ok(parsed) => parsed,
+        Err(_) => return trimmed.to_owned(),
+    };
+    let _ = parsed.set_fragment(None);
+    if let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) {
+        let _ = parsed.set_host(Some(&host));
+    }
+    parsed.to_string()
+}
+
+pub fn is_duplicate_download_url(url: &str, existing_urls: &[String]) -> bool {
+    let normalized = normalize_download_url(url);
+    existing_urls
+        .iter()
+        .any(|existing| normalize_download_url(existing) == normalized)
+}
+
+pub fn match_download_category(
+    filename: &str,
+    url: Option<&str>,
+    page_url: Option<&str>,
+) -> Option<&'static str> {
+    let lower_filename = filename.to_ascii_lowercase();
+    let lower_url = url.unwrap_or_default().to_ascii_lowercase();
+    let lower_page = page_url.unwrap_or_default().to_ascii_lowercase();
+    let categories = [
+        (
+            "Documents",
+            &[".pdf", ".docx", ".doc", ".ppt", ".pptx", ".odt", ".odf"][..],
+        ),
+        (
+            "Compressed",
+            &[".zip", ".rar", ".7z", ".gz", ".tar", ".tgz", ".bz2", ".xz"][..],
+        ),
+        ("Music", &[".mp3", ".aac", ".wav", ".ac3"][..]),
+        ("Videos", &[".ts", ".mp4", ".mkv", ".webm", ".avi"][..]),
+        (
+            "Programs",
+            &[
+                ".exe", ".msi", ".msix", ".deb", ".dmg", ".rpm", ".iso", ".pkg", ".sh", ".py",
+            ][..],
+        ),
+    ];
+    for (name, extensions) in categories {
+        if extensions
+            .iter()
+            .any(|extension| lower_filename.ends_with(extension))
+            || extensions
+                .iter()
+                .any(|extension| lower_url.ends_with(extension))
+            || extensions
+                .iter()
+                .any(|extension| lower_page.ends_with(extension))
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
 fn decode_percent_bytes(value: String) -> String {
     let bytes = value.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
@@ -332,6 +395,30 @@ pub async fn resolve_core_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalizes_urls_and_detects_duplicates() {
+        assert_eq!(
+            normalize_download_url("HTTPS://Example.COM/file.zip#part"),
+            "https://example.com/file.zip"
+        );
+        assert!(is_duplicate_download_url(
+            "https://example.com/file.zip#other",
+            &["HTTPS://EXAMPLE.COM/file.zip".to_owned()]
+        ));
+    }
+
+    #[test]
+    fn matches_xdm_style_download_categories() {
+        assert_eq!(
+            match_download_category("report.pdf", None, None),
+            Some("Documents")
+        );
+        assert_eq!(
+            match_download_category("release", Some("https://example.com/thing.zip"), None),
+            Some("Compressed")
+        );
+    }
 
     #[test]
     fn extracts_and_deduplicates_mixed_download_links() {

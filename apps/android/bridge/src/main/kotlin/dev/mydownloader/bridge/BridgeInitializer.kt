@@ -133,6 +133,15 @@ object BridgeInitializer {
     fun suggestDownloadFilename(url: String): String =
         service?.suggestDownloadFilename(url) ?: "download"
 
+    fun normalizeDownloadUrl(url: String): String =
+        service?.normalizeDownloadUrl(url) ?: url.trim()
+
+    fun isDuplicateDownloadUrl(url: String, existingUrls: List<String>): Boolean =
+        service?.isDuplicateDownloadUrl(url, existingUrls) ?: false
+
+    fun matchDownloadCategory(filename: String, url: String? = null, pageUrl: String? = null): String? =
+        service?.matchDownloadCategory(filename, url, pageUrl)
+
     /**
      * Returns the initialized repository, or throws if [initialize] was not called first.
      */

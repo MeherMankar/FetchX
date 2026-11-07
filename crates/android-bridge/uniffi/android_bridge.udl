@@ -136,6 +136,12 @@ interface DownloadService {
 
     string suggest_download_filename(string url);
 
+    string normalize_download_url(string url);
+
+    boolean is_duplicate_download_url(string url, sequence<string> existing_urls);
+
+    string? match_download_category(string filename, string? url, string? page_url);
+
     [Throws=MobileApiError]
     DownloadInfoDto? get_download(string id);
 

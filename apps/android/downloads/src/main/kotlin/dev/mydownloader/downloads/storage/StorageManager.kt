@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import androidx.core.content.edit
+import dev.fetchx.bridge.BridgeInitializer
 import java.io.File
 
 /**
@@ -213,6 +214,15 @@ internal fun uniqueAvailableFileName(
 internal fun smartFolderName(fileName: String, mimeType: String? = null): String {
     val mime = mimeType?.lowercase().orEmpty()
     val extension = fileName.substringAfterLast('.', "").lowercase().let { if (it.isBlank()) "" else ".$it" }
+    val sharedCategory = BridgeInitializer.matchDownloadCategory(fileName)
+    if (sharedCategory != null) {
+        return when (sharedCategory) {
+            "Compressed" -> "Archives"
+            "Music" -> "Audio"
+            "Programs" -> "Others"
+            else -> sharedCategory
+        }
+    }
     return when {
         mime.startsWith("video/") ||
             extension in setOf(".mp4", ".mkv", ".avi", ".flv", ".mov", ".webm", ".m4v") -> "Videos"

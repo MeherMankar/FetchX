@@ -770,6 +770,26 @@ pub fn suggest_download_filename(url: String) -> String {
     fetchx_core_services::suggest_download_filename(&url)
 }
 
+#[tauri::command]
+pub fn normalize_download_url(url: String) -> String {
+    fetchx_core_services::normalize_download_url(&url)
+}
+
+#[tauri::command]
+pub fn is_duplicate_download_url(url: String, existing_urls: Vec<String>) -> bool {
+    fetchx_core_services::is_duplicate_download_url(&url, &existing_urls)
+}
+
+#[tauri::command]
+pub fn match_download_category(
+    filename: String,
+    url: Option<String>,
+    page_url: Option<String>,
+) -> Option<String> {
+    fetchx_core_services::match_download_category(&filename, url.as_deref(), page_url.as_deref())
+        .map(str::to_owned)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn add_download(
     app: AppHandle,
