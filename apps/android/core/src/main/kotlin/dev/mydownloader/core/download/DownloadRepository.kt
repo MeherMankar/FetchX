@@ -10,6 +10,35 @@ data class YtDlpFormat(
     val platform: String? = null,
 )
 
+data class DownloadBatchItem(
+    val url: String,
+    val fileName: String,
+    val destinationPath: String,
+    val isMedia: Boolean = false,
+    val formatId: String? = null,
+    val extension: String? = null,
+    val audioFormat: String? = null,
+)
+
+enum class DownloadBatchError {
+    DUPLICATE_URL,
+    INVALID_URL,
+    INVALID_PACKAGE_NAME,
+    INVALID_FORMAT,
+    INVALID_CHECKSUM,
+    INVALID_DESTINATION,
+    UNAVAILABLE_ENGINE,
+    DESTINATION,
+    QUEUE,
+    STORAGE,
+}
+
+data class DownloadBatchOutcome(
+    val inputUrl: String,
+    val downloadId: String?,
+    val error: DownloadBatchError?,
+)
+
 data class TorrentTelemetry(
     val downloadSpeedBytesPerSecond: Long?,
     val uploadSpeedBytesPerSecond: Long?,
@@ -164,4 +193,29 @@ interface DownloadRepository {
 
     /** Retrieve a single download by ID, or null if not found. */
     suspend fun getDownload(downloadId: String): DownloadItem?
+}
+
+/**
+ * Optional repository capability for checking persisted URL duplicates.
+ *
+ * Kept separate from [DownloadRepository] so hosts without shared-core
+ * duplicate lookup do not need to provide a synthetic result.
+ */
+interface DuplicateDownloadRepository {
+    /** Returns the existing download filename, or null when no match exists. */
+    suspend fun findDuplicateDownload(url: String): String?
+}
+
+/**
+ * Optional shared-core batch admission capability.
+ *
+ * Platform adapters may supply explicit paths after applying OS storage policy;
+ * admission, collision handling, and per-input results remain in Rust.
+ */
+interface BatchDownloadRepository {
+    suspend fun addDownloadBatch(
+        items: List<DownloadBatchItem>,
+        priority: DownloadPriority,
+        expectedSha256: String? = null,
+    ): List<DownloadBatchOutcome>
 }

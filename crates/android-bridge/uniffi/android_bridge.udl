@@ -90,6 +90,46 @@ enum DownloadPriorityDto {
     "High",
 };
 
+enum BatchDownloadEngineDto {
+    "DirectHttp",
+    "YtDlp",
+};
+
+enum BatchDownloadAudioFormatDto {
+    "Mp3",
+    "M4a",
+};
+
+enum BatchDownloadErrorCodeDto {
+    "DuplicateUrl",
+    "InvalidUrl",
+    "InvalidPackageName",
+    "InvalidFormat",
+    "InvalidChecksum",
+    "InvalidDestination",
+    "UnavailableEngine",
+    "Destination",
+    "Queue",
+    "Storage",
+};
+
+dictionary BatchDownloadRequestDto {
+    string url;
+    string filename;
+    string destination;
+    BatchDownloadEngineDto engine;
+    string? format_id;
+    string? extension;
+    BatchDownloadAudioFormatDto? audio_format;
+    string? expected_sha256;
+};
+
+dictionary BatchDownloadOutcomeDto {
+    string input_url;
+    string? download_id;
+    BatchDownloadErrorCodeDto? error;
+};
+
 dictionary DownloadProgressDto {
     u64 downloaded_bytes;
     i64 total_bytes;
@@ -199,6 +239,12 @@ interface DownloadService {
         string destination,
         DownloadPriorityDto priority,
         string expected_sha256
+    );
+
+    [Throws=MobileApiError]
+    sequence<BatchDownloadOutcomeDto> enqueue_download_batch_with_destinations(
+        sequence<BatchDownloadRequestDto> requests,
+        DownloadPriorityDto priority
     );
 
     [Throws=MobileApiError]

@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.downloads.storage.StorageManager
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,7 @@ private const val MAX_TORRENT_FILE_BYTES = 8 * 1024 * 1024
  * Security note: URL values are never logged.
  *
  * @param downloadsDir    Absolute path to the downloads directory — displayed read-only.
+ * @param onFindDuplicate Checks persisted downloads for a matching HTTP(S) URL.
  * @param onAdd           Called with (url, fileName, destinationPath, priority) when
  *                        the user confirms and validation passes.
  * @param onDismiss       Called when the user cancels or dismisses the dialog.
@@ -59,12 +61,18 @@ fun AddDownloadDialog(
     downloadsDir: String,
     reservedFileNames: Set<String> = emptySet(),
     onInspectTorrent: suspend (String) -> TorrentMetadata,
+    onFindDuplicate: suspend (String) -> String?,
     onAdd: (
         url: String,
         fileName: String,
         destinationPath: String,
         priority: DownloadPriority,
         selectedTorrentFileIndexes: List<Int>?,
+        expectedSha256: String?,
+    ) -> Unit,
+    onAddBatch: (
+        items: List<DownloadBatchItem>,
+        priority: DownloadPriority,
         expectedSha256: String?,
     ) -> Unit,
     onDismiss: () -> Unit,
@@ -77,6 +85,9 @@ fun AddDownloadDialog(
     var selectedPriority by rememberSaveable { mutableStateOf(DownloadPriority.NORMAL) }
     var packageName by rememberSaveable { mutableStateOf("") }
     var expectedSha256 by rememberSaveable { mutableStateOf("") }
+    var duplicateWarning by rememberSaveable { mutableStateOf<String?>(null) }
+    var duplicateCheckConfirmed by rememberSaveable { mutableStateOf(false) }
+    var isCheckingDuplicate by remember { mutableStateOf(false) }
     var torrentMetadata by remember { mutableStateOf<TorrentMetadata?>(null) }
     var selectedTorrentFiles by remember { mutableStateOf<Set<Int>>(emptySet()) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -123,6 +134,8 @@ fun AddDownloadDialog(
                     }
                     url = sourceFile.absolutePath
                     urlError = null
+                    duplicateWarning = null
+                    duplicateCheckConfirmed = false
                     torrentMetadata = null
                     selectedTorrentFiles = emptySet()
                 } catch (error: IOException) {
@@ -187,6 +200,8 @@ fun AddDownloadDialog(
                     onValueChange = { newValue ->
                         url = newValue
                         urlError = null   // clear error while user types
+                        duplicateWarning = null
+                        duplicateCheckConfirmed = false
                         torrentMetadata = null
                         selectedTorrentFiles = emptySet()
                     },
@@ -204,6 +219,14 @@ fun AddDownloadDialog(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+
+                duplicateWarning?.let { warning ->
+                    Text(
+                        text = warning,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
 
@@ -399,64 +422,104 @@ fun AddDownloadDialog(
                     } else if (torrentMetadata != null && selectedTorrentFiles.isEmpty()) {
                         urlError = "Select at least one torrent file."
                     } else {
-                        // onAdd is responsible for closing the dialog (sets showAddDialog = false
-                        // in the caller). Do NOT call onDismiss() here — that would cause a
-                        // double-dismiss which triggers extra recompositions.
                         val selected = torrentMetadata?.let { selectedTorrentFiles.sorted() }
                         val checksum = expectedSha256.takeIf { it.isNotEmpty() }
                         if (checksum != null && !Regex("^[0-9a-fA-F]{64}$").matches(checksum)) {
                             return@TextButton
                         }
-                        if (bulkUrls.size > 1 && selectedTorrentFiles.isEmpty()) {
-                            bulkUrls.forEach { link ->
-                                val rawName = BulkLinkParser.suggestedFileName(link)
-                                val bulkFileName = BridgeInitializer.publicDownloadStorageOrNull()
-                                    ?.uniquePublicFileName(rawName, reservedFileNames = reservedFileNames)
-                                    ?: StorageManager(context).uniqueFileName(
-                                        File(downloadsDir),
-                                        rawName,
-                                        reservedFileNames,
-                                    )
-                                val bulkDestination = StorageManager(context).resolveSmartDownloadDirectory(
-                                    downloadsDir,
-                                    bulkFileName,
-                                    null,
-                                )
-                                val packageFolder = packageFolderName(packageName)
-                                val packagedDestination = if (packageFolder == null) {
-                                    "$bulkDestination/$bulkFileName"
-                                } else {
-                                    "$downloadsDir/$packageFolder/$bulkFileName"
+                        scope.launch {
+                            if (!duplicateCheckConfirmed) {
+                                isCheckingDuplicate = true
+                                urlError = null
+                                try {
+                                    val candidates = if (bulkUrls.size > 1 && selectedTorrentFiles.isEmpty()) {
+                                        bulkUrls
+                                    } else {
+                                        listOf(url.trim())
+                                    }
+                                    val duplicateNames = candidates
+                                        .filter {
+                                            it.startsWith("http://", ignoreCase = true) ||
+                                                it.startsWith("https://", ignoreCase = true)
+                                        }
+                                        .mapNotNull { onFindDuplicate(it) }
+                                    duplicateCheckConfirmed = true
+                                    if (duplicateNames.isNotEmpty()) {
+                                        val count = duplicateNames.size
+                                        duplicateWarning = buildString {
+                                            append("$count matching download")
+                                            if (count != 1) append('s')
+                                            append(" already exist: ")
+                                            append(duplicateNames.joinToString())
+                                            append(". Add anyway?")
+                                        }
+                                        return@launch
+                                    }
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (_: Exception) {
+                                    urlError = "Could not check for an existing download. Please try again."
+                                    duplicateCheckConfirmed = false
+                                    return@launch
+                                } finally {
+                                    isCheckingDuplicate = false
                                 }
+                            }
+                            duplicateWarning = null
+                            if (bulkUrls.size > 1 && selectedTorrentFiles.isEmpty()) {
+                                val batchItems = bulkUrls.map { link ->
+                                    val rawName = BulkLinkParser.suggestedFileName(link)
+                                    val bulkFileName = BridgeInitializer.publicDownloadStorageOrNull()
+                                        ?.uniquePublicFileName(rawName, reservedFileNames = reservedFileNames)
+                                        ?: StorageManager(context).uniqueFileName(
+                                            File(downloadsDir),
+                                            rawName,
+                                            reservedFileNames,
+                                        )
+                                    val bulkDestination = StorageManager(context).resolveSmartDownloadDirectory(
+                                        downloadsDir,
+                                        bulkFileName,
+                                        null,
+                                    )
+                                    val packageFolder = packageFolderName(packageName)
+                                    val packagedDestination = if (packageFolder == null) {
+                                        "$bulkDestination/$bulkFileName"
+                                    } else {
+                                        "$downloadsDir/$packageFolder/$bulkFileName"
+                                    }
+                                    DownloadBatchItem(
+                                        url = link,
+                                        fileName = bulkFileName,
+                                        destinationPath = packagedDestination,
+                                    )
+                                }
+                                onAddBatch(batchItems, selectedPriority, checksum)
+                            } else {
+                                val packageFolder = packageFolderName(packageName)
                                 onAdd(
-                                    link,
-                                    bulkFileName,
-                                    packagedDestination,
+                                    url.trim(),
+                                    resolvedFileName,
+                                    if (packageFolder == null) {
+                                        destinationPath
+                                    } else {
+                                        "$downloadsDir/$packageFolder/$resolvedFileName"
+                                    },
                                     selectedPriority,
-                                    null,
+                                    selected,
                                     checksum,
                                 )
                             }
-                        } else {
-                            val packageFolder = packageFolderName(packageName)
-                            onAdd(
-                                url.trim(),
-                                resolvedFileName,
-                                if (packageFolder == null) {
-                                    destinationPath
-                                } else {
-                                    "$downloadsDir/$packageFolder/$resolvedFileName"
-                                },
-                                selectedPriority,
-                                selected,
-                                checksum,
-                            )
+                            onDismiss()
                         }
                     }
                 },
-                enabled = url.isNotBlank(),
+                enabled = url.isNotBlank() && !isCheckingDuplicate,
             ) {
-                Text("Add")
+                Text(
+                    if (isCheckingDuplicate) "Checking..."
+                    else if (duplicateWarning != null) "Add anyway"
+                    else "Add",
+                )
             }
         },
         dismissButton = {

@@ -4,9 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import dev.fetchx.core.download.DownloadItem
+import dev.fetchx.core.download.BatchDownloadRepository
+import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentTelemetry
@@ -268,6 +271,47 @@ class DownloadsViewModel(
                 _uiState.update { it.copy(isLoading = false, error = userMessage) }
             }
         }
+
+    }
+
+    fun addDownloadBatch(
+        items: List<DownloadBatchItem>,
+        priority: DownloadPriority,
+        expectedSha256: String? = null,
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            try {
+                val batchRepository = repository as? BatchDownloadRepository
+                    ?: throw UnsupportedOperationException("Batch downloads are unavailable")
+                val outcomes = batchRepository.addDownloadBatch(items, priority, expectedSha256)
+                val failedCount = outcomes.count { it.error != null || it.downloadId == null }
+                val missingCount = (items.size - outcomes.size).coerceAtLeast(0)
+                val totalFailures = failedCount + missingCount
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = if (totalFailures == 0) null else
+                            "$totalFailures of ${items.size} downloads could not be fully added. Check Downloads for accepted items.",
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "Could not add the batch. Check Downloads before retrying.",
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun findDuplicateDownload(url: String): String? {
+        val duplicateRepository = repository as? DuplicateDownloadRepository
+            ?: throw UnsupportedOperationException("Duplicate lookup is unavailable")
+        return duplicateRepository.findDuplicateDownload(url)
     }
 
     /** Clear a pending error message shown in the Snackbar. */

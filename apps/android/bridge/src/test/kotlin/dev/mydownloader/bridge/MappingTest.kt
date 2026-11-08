@@ -4,6 +4,9 @@ import dev.fetchx.bridge.uniffi.DownloadInfoDto
 import dev.fetchx.bridge.uniffi.DownloadPriorityDto
 import dev.fetchx.bridge.uniffi.DownloadProgressDto
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
+import dev.fetchx.bridge.uniffi.BatchDownloadAudioFormatDto
+import dev.fetchx.bridge.uniffi.BatchDownloadEngineDto
+import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadState
 import org.junit.Assert.assertEquals
@@ -47,6 +50,67 @@ class MappingTest {
         val dto = repo.mapPriorityToDto(DownloadPriority.LOW)
         val back = repo.mapPriorityFromDto(dto)
         assertEquals(DownloadPriority.LOW, back)
+    }
+
+    @Test
+    fun batchRequestPreservesMediaRoutingChecksumAndStagedDestination() {
+        val staged = mutableListOf<String>()
+        val request = createBatchDownloadRequestDto(
+            item = DownloadBatchItem(
+                url = "https://www.youtube.com/watch?v=example",
+                fileName = "video",
+                destinationPath = "/storage/Download/Pack/video",
+            ),
+            expectedSha256 = "a".repeat(64),
+            stageDestination = { destination ->
+                staged += destination
+                destination.replace("/storage/Download", "/private/staging")
+            },
+        )
+
+        assertEquals(BatchDownloadEngineDto.YT_DLP, request.engine)
+        assertEquals("video", request.filename)
+        assertEquals("/private/staging/Pack/video.mp4", request.destination)
+        assertEquals(listOf("/storage/Download/Pack/video.mp4"), staged)
+        assertEquals("a".repeat(64), request.expectedSha256)
+    }
+
+    @Test
+    fun batchRequestPreservesAudioFormatExtensions() {
+        val request = createBatchDownloadRequestDto(
+            item = DownloadBatchItem(
+                url = "https://example.com/media",
+                fileName = "audio",
+                destinationPath = "/private/audio",
+                audioFormat = "mp3",
+            ),
+            expectedSha256 = null,
+            stageDestination = { it },
+        )
+
+        assertEquals(BatchDownloadEngineDto.YT_DLP, request.engine)
+        assertEquals(BatchDownloadAudioFormatDto.MP3, request.audioFormat)
+        assertEquals("mp3", request.extension)
+        assertEquals("audio.mp3", request.filename)
+        assertEquals("/private/audio.mp3", request.destination)
+    }
+
+    @Test
+    fun unsupportedBatchAudioFormatIsPassedToCoreValidation() {
+        val request = createBatchDownloadRequestDto(
+            item = DownloadBatchItem(
+                url = "https://example.com/media",
+                fileName = "audio",
+                destinationPath = "/private/audio",
+                audioFormat = "flac",
+            ),
+            expectedSha256 = null,
+            stageDestination = { it },
+        )
+
+        assertEquals(BatchDownloadEngineDto.YT_DLP, request.engine)
+        assertEquals("flac", request.extension)
+        assertEquals(null, request.audioFormat)
     }
 
     @Test

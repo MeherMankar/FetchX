@@ -9,7 +9,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fetchx_core_services::{CoreServices, CoreServicesConfig};
+use fetchx_core_services::{
+    BatchDownloadDestinationRequest, BatchDownloadError, CoreServices, CoreServicesConfig,
+};
 use fetchx_downloader::{
     YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
     YtDlpRunnerFuture, is_hls_url, parse_format_output,
@@ -43,11 +45,27 @@ fn checksum_sidecar_path(destination: &Path) -> PathBuf {
     PathBuf::from(sidecar)
 }
 
+fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
+    match error {
+        BatchDownloadError::DuplicateUrl => BatchDownloadErrorCodeDto::DuplicateUrl,
+        BatchDownloadError::InvalidUrl => BatchDownloadErrorCodeDto::InvalidUrl,
+        BatchDownloadError::InvalidPackageName => BatchDownloadErrorCodeDto::InvalidPackageName,
+        BatchDownloadError::InvalidFormat => BatchDownloadErrorCodeDto::InvalidFormat,
+        BatchDownloadError::InvalidChecksum => BatchDownloadErrorCodeDto::InvalidChecksum,
+        BatchDownloadError::InvalidDestination => BatchDownloadErrorCodeDto::InvalidDestination,
+        BatchDownloadError::UnavailableEngine(_) => BatchDownloadErrorCodeDto::UnavailableEngine,
+        BatchDownloadError::Destination(_) => BatchDownloadErrorCodeDto::Destination,
+        BatchDownloadError::Storage(_) => BatchDownloadErrorCodeDto::Storage,
+        BatchDownloadError::Queue(_) => BatchDownloadErrorCodeDto::Queue,
+    }
+}
+
 use crate::dto::{
-    CoreConfig, DownloadInfoDto, DownloadPriorityDto, DownloadRuntimeStatusDto,
-    TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto,
-    YtDlpFormatDto, duplicate_match_to_dto, event_to_dto, item_to_dto, priority_from_dto,
-    runtime_status_to_dto,
+    BatchDownloadAudioFormatDto, BatchDownloadEngineDto, BatchDownloadErrorCodeDto,
+    BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig, DownloadInfoDto,
+    DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto, TorrentFileDto,
+    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, duplicate_match_to_dto, event_to_dto,
+    item_to_dto, priority_from_dto, runtime_status_to_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -426,6 +444,57 @@ impl DownloadService {
             |error| MobileApiError::Storage(format!("could not store SHA-256: {error}")),
         )?;
         Ok(result)
+    }
+
+    pub fn enqueue_download_batch_with_destinations(
+        &self,
+        requests: Vec<BatchDownloadRequestDto>,
+        priority: DownloadPriorityDto,
+    ) -> Result<Vec<BatchDownloadOutcomeDto>, MobileApiError> {
+        let requests = requests
+            .into_iter()
+            .map(|request| BatchDownloadDestinationRequest {
+                url: request.url,
+                filename: request.filename,
+                destination: PathBuf::from(request.destination),
+                engine: match request.engine {
+                    BatchDownloadEngineDto::DirectHttp => EngineKind::DirectHttp,
+                    BatchDownloadEngineDto::YtDlp => EngineKind::YtDlp,
+                },
+                format_id: request.format_id,
+                extension: request.extension,
+                audio_format: request.audio_format.map(|format| match format {
+                    BatchDownloadAudioFormatDto::Mp3 => YtDlpAudioFormat::Mp3,
+                    BatchDownloadAudioFormatDto::M4a => YtDlpAudioFormat::M4a,
+                }),
+                expected_sha256: request.expected_sha256,
+            })
+            .collect::<Vec<_>>();
+
+        self.with_inner(|inner| {
+            let outcomes =
+                inner
+                    .runtime
+                    .block_on(inner.core.enqueue_download_batch_with_destinations(
+                        requests,
+                        priority_from_dto(priority),
+                    ));
+            Ok(outcomes
+                .into_iter()
+                .map(|outcome| match outcome.result {
+                    Ok(id) => BatchDownloadOutcomeDto {
+                        input_url: outcome.input_url,
+                        download_id: Some(id.to_string()),
+                        error: None,
+                    },
+                    Err(error) => BatchDownloadOutcomeDto {
+                        input_url: outcome.input_url,
+                        download_id: None,
+                        error: Some(batch_error_code(&error)),
+                    },
+                })
+                .collect())
+        })
     }
 
     pub fn add_magnet_download(
@@ -1309,7 +1378,10 @@ mod tests {
 
     use super::{AndroidYtDlpProcessRunner, DownloadService, engine_for_url, is_direct_media_url};
     use crate::YtDlpRuntime;
-    use crate::dto::{CoreConfig, DownloadEventDto, DownloadPriorityDto};
+    use crate::dto::{
+        BatchDownloadEngineDto, BatchDownloadErrorCodeDto, BatchDownloadRequestDto, CoreConfig,
+        DownloadEventDto, DownloadPriorityDto,
+    };
     use crate::error::MobileApiError;
     use fetchx_downloader::{YtDlpError, YtDlpProcessRunner};
     use fetchx_models::EngineKind;
@@ -1587,6 +1659,61 @@ mod tests {
         .expect("add second failed");
         let items = svc.list_downloads().expect("list failed");
         assert_eq!(items.len(), 2);
+        svc.shutdown();
+    }
+
+    #[test]
+    fn batch_admission_preserves_outcomes_destinations_and_checksum_sidecars() {
+        let (config, directory) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+        svc.pause_queue_dispatch().expect("pause queue");
+        let destination = directory.path().join("downloads").join("file.zip");
+        let request = |url: &str, checksum: Option<String>| BatchDownloadRequestDto {
+            url: url.to_owned(),
+            filename: "file.zip".to_owned(),
+            destination: destination.to_string_lossy().into_owned(),
+            engine: BatchDownloadEngineDto::DirectHttp,
+            format_id: None,
+            extension: None,
+            audio_format: None,
+            expected_sha256: checksum,
+        };
+        let outcomes = svc
+            .enqueue_download_batch_with_destinations(
+                vec![
+                    request("https://example.com/first.zip", Some("a".repeat(64))),
+                    request("file:///invalid", None),
+                    request("https://example.com/second.zip", None),
+                ],
+                DownloadPriorityDto::High,
+            )
+            .expect("batch admission");
+
+        assert_eq!(outcomes.len(), 3);
+        assert!(outcomes[0].download_id.is_some());
+        assert!(outcomes[0].error.is_none());
+        assert_eq!(outcomes[1].download_id, None);
+        assert!(matches!(
+            outcomes[1].error.as_ref(),
+            Some(BatchDownloadErrorCodeDto::InvalidUrl)
+        ));
+        assert!(outcomes[2].download_id.is_some());
+
+        let accepted = svc
+            .get_download(outcomes[0].download_id.clone().expect("first id"))
+            .expect("lookup first")
+            .expect("first item");
+        let collision = svc
+            .get_download(outcomes[2].download_id.clone().expect("third id"))
+            .expect("lookup third")
+            .expect("third item");
+        assert_eq!(accepted.destination, destination.to_string_lossy().as_ref());
+        assert_ne!(accepted.destination, collision.destination);
+        let sidecar = super::checksum_sidecar_path(Path::new(&accepted.destination));
+        assert_eq!(
+            std::fs::read_to_string(sidecar).expect("checksum sidecar"),
+            "a".repeat(64)
+        );
         svc.shutdown();
     }
 

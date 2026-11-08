@@ -33,6 +33,46 @@ pub enum DownloadPriorityDto {
     High,
 }
 
+pub enum BatchDownloadEngineDto {
+    DirectHttp,
+    YtDlp,
+}
+
+pub enum BatchDownloadAudioFormatDto {
+    Mp3,
+    M4a,
+}
+
+pub enum BatchDownloadErrorCodeDto {
+    DuplicateUrl,
+    InvalidUrl,
+    InvalidPackageName,
+    InvalidFormat,
+    InvalidChecksum,
+    InvalidDestination,
+    UnavailableEngine,
+    Destination,
+    Queue,
+    Storage,
+}
+
+pub struct BatchDownloadRequestDto {
+    pub url: String,
+    pub filename: String,
+    pub destination: String,
+    pub engine: BatchDownloadEngineDto,
+    pub format_id: Option<String>,
+    pub extension: Option<String>,
+    pub audio_format: Option<BatchDownloadAudioFormatDto>,
+    pub expected_sha256: Option<String>,
+}
+
+pub struct BatchDownloadOutcomeDto {
+    pub input_url: String,
+    pub download_id: Option<String>,
+    pub error: Option<BatchDownloadErrorCodeDto>,
+}
+
 /// Progress snapshot with `-1` sentinels replacing `Option<u64>` fields.
 /// Maps to the `dictionary DownloadProgressDto` in android_bridge.udl.
 pub struct DownloadProgressDto {

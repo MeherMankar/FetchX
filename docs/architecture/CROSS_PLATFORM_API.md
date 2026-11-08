@@ -20,6 +20,7 @@ Rust domain API / CoreServices
 | Operation group | Required behavior |
 |---|---|
 | Create download | URL/file source, filename, destination, priority, engine, headers, optional checksum |
+| Batch admission | Per-input URL/options, optional host-selected absolute destination, independent validation/admission results, shared duplicate/collision handling |
 | Add media/torrent | yt-dlp format selection or torrent metadata and file selection |
 | Control | Pause, resume, cancel, remove, retry |
 | Priority and queue | Change priority, list queue, inspect queue snapshot |
@@ -64,7 +65,9 @@ Host-facing messages should be context-rich in the UI, while machine-readable co
 
 UniFFI is appropriate for Android because it is already the generated Kotlin/FFI boundary.
 
-The `DownloadService` contract currently exposes the required download, torrent, media, schedule, built-in, diagnostics, and browser-RPC operations. Recommended convergence:
+The `DownloadService` contract exposes download, torrent, media, schedule, built-in, diagnostics, browser-RPC, and Android batch-admission operations. `enqueue_download_batch_with_destinations` is additive: each request carries a URL, filename, absolute destination, engine/media options, and optional SHA-256; each result returns the input URL, optional accepted ID, and optional typed error. Android keeps package selection in each destination path. Kotlin owns Android public-storage staging and publication; Rust owns admission validation, duplicate handling, collision resolution, and queue lifecycle. Rust writes any checksum sidecar before enqueueing. Existing batch operations and desktop behavior are unchanged.
+
+Recommended convergence:
 
 1. Keep operation names and DTO field mappings contract-tested.
 2. Generate or verify Kotlin DTO mappings instead of hand-maintaining parallel semantic models.

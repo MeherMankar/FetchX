@@ -2,10 +2,15 @@ package dev.fetchx.downloads.ui
 
 import androidx.lifecycle.viewModelScope
 import dev.fetchx.core.download.DownloadEvent
+import dev.fetchx.core.download.BatchDownloadRepository
+import dev.fetchx.core.download.DownloadBatchError
+import dev.fetchx.core.download.DownloadBatchItem
+import dev.fetchx.core.download.DownloadBatchOutcome
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentMetadata
@@ -96,6 +101,71 @@ class DownloadsViewModelTest {
             DownloadPriority.NORMAL,
         )
         assertEquals("https://example.com/file.zip", repo.lastAddUrl)
+    }
+
+    @Test
+    fun addDownloadBatchPreservesInputsAndReportsPartialFailure() = runTest {
+        val repo = FakeDownloadRepository().apply {
+            batchOutcomes = listOf(
+                DownloadBatchOutcome("https://example.com/one.zip", "id-one", null),
+                DownloadBatchOutcome(
+                    "https://example.com/two.zip",
+                    null,
+                    DownloadBatchError.INVALID_URL,
+                ),
+            )
+        }
+        val vm = DownloadsViewModel(repo)
+        val items = listOf(
+            DownloadBatchItem(
+                "https://example.com/one.zip",
+                "one.zip",
+                "/public/Pack/one.zip",
+            ),
+            DownloadBatchItem(
+                "https://example.com/two.zip",
+                "two.zip",
+                "/public/Pack/two.zip",
+            ),
+        )
+
+        vm.addDownloadBatch(items, DownloadPriority.HIGH, "a".repeat(64))
+
+        assertEquals(items, repo.lastBatchItems)
+        assertEquals(DownloadPriority.HIGH, repo.lastBatchPriority)
+        assertEquals("a".repeat(64), repo.lastBatchChecksum)
+        assertEquals("1 of 2 downloads could not be fully added. Check Downloads for accepted items.", vm.uiState.value.error)
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    @Test
+    fun findDuplicateDownloadUsesSharedRepositoryCapability() = runTest {
+        val repo = FakeDownloadRepository().apply { duplicateFileName = "file.zip" }
+        val vm = DownloadsViewModel(repo)
+
+        assertEquals("file.zip", vm.findDuplicateDownload("https://example.com/file.zip"))
+        assertEquals("https://example.com/file.zip", repo.lastDuplicateLookupUrl)
+    }
+
+    @Test
+    fun findDuplicateDownloadReturnsNullWhenThereIsNoMatch() = runTest {
+        val repo = FakeDownloadRepository()
+        val vm = DownloadsViewModel(repo)
+
+        assertNull(vm.findDuplicateDownload("https://example.com/file.zip"))
+    }
+
+    @Test
+    fun duplicateLookupFailureIsNotConvertedToNoMatch() = runTest {
+        val repo = FakeDownloadRepository().apply {
+            duplicateLookupFailure = IllegalStateException("storage unavailable")
+        }
+        val vm = DownloadsViewModel(repo)
+
+        val error = runCatching {
+            vm.findDuplicateDownload("https://example.com/file.zip")
+        }.exceptionOrNull()
+        assertEquals("storage unavailable", error?.message)
     }
 
     // ── 4. pause calls repository ──────────────────────────────────────────
@@ -365,7 +435,10 @@ private fun makeItem(id: String, state: DownloadState): DownloadItem = DownloadI
 
 // ── Fake repository ────────────────────────────────────────────────────────────
 
-private class FakeDownloadRepository : DownloadRepository {
+private class FakeDownloadRepository :
+    DownloadRepository,
+    DuplicateDownloadRepository,
+    BatchDownloadRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>()
@@ -379,6 +452,13 @@ private class FakeDownloadRepository : DownloadRepository {
     var lastSetPriorityId: String? = null
     var actionFailure: Exception? = null
     var initialSnapshot: CompletableDeferred<Unit>? = null
+    var duplicateFileName: String? = null
+    var lastDuplicateLookupUrl: String? = null
+    var duplicateLookupFailure: Exception? = null
+    var batchOutcomes: List<DownloadBatchOutcome> = emptyList()
+    var lastBatchItems: List<DownloadBatchItem>? = null
+    var lastBatchPriority: DownloadPriority? = null
+    var lastBatchChecksum: String? = null
 
     fun emit(items: List<DownloadItem>) {
         _downloads.value = items
@@ -391,6 +471,23 @@ private class FakeDownloadRepository : DownloadRepository {
     }
 
     override fun observeEvents(): Flow<DownloadEvent> = _events.asSharedFlow()
+
+    override suspend fun findDuplicateDownload(url: String): String? {
+        duplicateLookupFailure?.let { throw it }
+        lastDuplicateLookupUrl = url
+        return duplicateFileName
+    }
+
+    override suspend fun addDownloadBatch(
+        items: List<DownloadBatchItem>,
+        priority: DownloadPriority,
+        expectedSha256: String?,
+    ): List<DownloadBatchOutcome> {
+        lastBatchItems = items
+        lastBatchPriority = priority
+        lastBatchChecksum = expectedSha256
+        return batchOutcomes
+    }
 
     override suspend fun addDownload(
         url: String,

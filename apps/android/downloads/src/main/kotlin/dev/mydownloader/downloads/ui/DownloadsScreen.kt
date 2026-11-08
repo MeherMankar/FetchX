@@ -286,6 +286,7 @@ fun DownloadsScreen(
             downloadsDir = downloadsDir,
             reservedFileNames = reservedFileNames,
             onInspectTorrent = viewModel::inspectTorrentFile,
+            onFindDuplicate = viewModel::findDuplicateDownload,
             onAdd = { url, fileName, destinationPath, priority, selectedTorrentFileIndexes, expectedSha256 ->
                 viewModel.addDownload(
                     url,
@@ -295,7 +296,9 @@ fun DownloadsScreen(
                     selectedTorrentFileIndexes,
                     expectedSha256,
                 )
-                showAddDialog = false
+            },
+            onAddBatch = { items, priority, expectedSha256 ->
+                viewModel.addDownloadBatch(items, priority, expectedSha256)
             },
             onDismiss = { showAddDialog = false },
         )

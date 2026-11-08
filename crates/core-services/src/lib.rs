@@ -152,6 +152,31 @@ pub struct BatchDownloadRequest {
     pub audio_format: Option<YtDlpAudioFormat>,
 }
 
+/// One URL with an adapter-resolved destination for shared batch admission.
+///
+/// The destination is an absolute file path chosen by the host. This is useful
+/// for platform adapters that must stage files before handing them to the
+/// shared queue. URL validation, engine/format validation, collision handling,
+/// and queue admission remain in `CoreServices`.
+#[derive(Clone, Debug)]
+pub struct BatchDownloadDestinationRequest {
+    pub url: String,
+    pub filename: String,
+    pub destination: PathBuf,
+    pub engine: EngineKind,
+    pub format_id: Option<String>,
+    pub extension: Option<String>,
+    pub audio_format: Option<YtDlpAudioFormat>,
+    pub expected_sha256: Option<String>,
+}
+
+struct BatchAdmissionRequest {
+    request: BatchDownloadRequest,
+    destination: Option<PathBuf>,
+    filename: Option<String>,
+    expected_sha256: Option<String>,
+}
+
 /// Per-input result from [`CoreServices::enqueue_download_batch`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BatchDownloadOutcome {
@@ -169,10 +194,16 @@ pub enum BatchDownloadError {
     InvalidPackageName,
     #[error("media format selection is invalid")]
     InvalidFormat,
+    #[error("expected SHA-256 must contain exactly 64 hexadecimal characters")]
+    InvalidChecksum,
+    #[error("destination must be an absolute file path with a valid filename")]
+    InvalidDestination,
     #[error("download engine is unavailable: {0:?}")]
     UnavailableEngine(EngineKind),
     #[error("could not prepare download destination: {0}")]
     Destination(String),
+    #[error("could not store download checksum: {0}")]
+    Storage(String),
     #[error("could not create download record: {0}")]
     Queue(String),
 }
@@ -199,6 +230,10 @@ fn is_safe_batch_extension(extension: &str) -> bool {
     !extension.is_empty()
         && extension.len() <= 10
         && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn is_valid_batch_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn batch_destination_key(path: &Path) -> String {
@@ -758,6 +793,60 @@ impl CoreServices {
         requests: Vec<BatchDownloadRequest>,
         priority: DownloadPriority,
     ) -> Vec<BatchDownloadOutcome> {
+        self.enqueue_batch_items(
+            requests
+                .into_iter()
+                .map(|request| BatchAdmissionRequest {
+                    request,
+                    destination: None,
+                    filename: None,
+                    expected_sha256: None,
+                })
+                .collect(),
+            priority,
+        )
+        .await
+    }
+
+    /// Admits independent requests with host-selected explicit destinations.
+    ///
+    /// This additive operation is intended for adapters that own destination
+    /// policy or filesystem staging. It applies the same Rust URL, engine,
+    /// format, duplicate, collision, and queue rules as
+    /// [`Self::enqueue_download_batch`]. A failure for one input does not
+    /// prevent other valid inputs from being queued.
+    pub async fn enqueue_download_batch_with_destinations(
+        &self,
+        requests: Vec<BatchDownloadDestinationRequest>,
+        priority: DownloadPriority,
+    ) -> Vec<BatchDownloadOutcome> {
+        self.enqueue_batch_items(
+            requests
+                .into_iter()
+                .map(|request| BatchAdmissionRequest {
+                    request: BatchDownloadRequest {
+                        url: request.url,
+                        package_name: None,
+                        engine: request.engine,
+                        format_id: request.format_id,
+                        extension: request.extension,
+                        audio_format: request.audio_format,
+                    },
+                    destination: Some(request.destination),
+                    filename: Some(request.filename),
+                    expected_sha256: request.expected_sha256,
+                })
+                .collect(),
+            priority,
+        )
+        .await
+    }
+
+    async fn enqueue_batch_items(
+        &self,
+        requests: Vec<BatchAdmissionRequest>,
+        priority: DownloadPriority,
+    ) -> Vec<BatchDownloadOutcome> {
         if requests.is_empty() {
             return Vec::new();
         }
@@ -774,7 +863,7 @@ impl CoreServices {
                 return requests
                     .into_iter()
                     .map(|request| BatchDownloadOutcome {
-                        input_url: request.url,
+                        input_url: request.request.url,
                         result: Err(BatchDownloadError::Queue(message.clone())),
                     })
                     .collect();
@@ -782,7 +871,7 @@ impl CoreServices {
         };
 
         for request in requests {
-            let input_url = request.url.clone();
+            let input_url = request.request.url.clone();
             let result = self
                 .enqueue_batch_item(
                     request,
@@ -800,11 +889,17 @@ impl CoreServices {
 
     async fn enqueue_batch_item(
         &self,
-        request: BatchDownloadRequest,
+        admission: BatchAdmissionRequest,
         priority: DownloadPriority,
         seen_urls: &mut HashSet<String>,
         reserved_destinations: &mut HashSet<String>,
     ) -> Result<DownloadId, BatchDownloadError> {
+        let BatchAdmissionRequest {
+            request,
+            destination,
+            filename: explicit_filename,
+            expected_sha256,
+        } = admission;
         let canonical_url =
             validate_http_source_url(&request.url).map_err(|_| BatchDownloadError::InvalidUrl)?;
         if !seen_urls.insert(normalize_download_url(&canonical_url)) {
@@ -815,6 +910,12 @@ impl CoreServices {
         }
         if !valid_batch_format_options(&request) {
             return Err(BatchDownloadError::InvalidFormat);
+        }
+        if expected_sha256
+            .as_deref()
+            .is_some_and(|checksum| !is_valid_batch_sha256(checksum.trim()))
+        {
+            return Err(BatchDownloadError::InvalidChecksum);
         }
 
         let mut source = DownloadSource::new(&canonical_url, request.engine)
@@ -827,32 +928,60 @@ impl CoreServices {
         }
         .map_err(|_| BatchDownloadError::InvalidFormat)?;
 
-        let mut filename = suggest_download_filename(&canonical_url);
-        if let Some(extension) = request.extension {
-            filename = Path::new(&filename)
-                .with_extension(extension)
-                .file_name()
-                .and_then(std::ffi::OsStr::to_str)
-                .ok_or(BatchDownloadError::InvalidFormat)?
-                .to_owned();
-        }
-        let filename = FileName::new(filename).map_err(|_| BatchDownloadError::InvalidFormat)?;
-        let mut destination_dir = self.downloads_dir.clone();
-        if let Some(package_name) = request.package_name {
-            let package_name = sanitize_download_package_name(&package_name)
-                .ok_or(BatchDownloadError::InvalidPackageName)?;
-            destination_dir.push(package_name);
-        }
+        let (destination, filename) = if let Some(destination) = destination {
+            if !destination.is_absolute() {
+                return Err(BatchDownloadError::InvalidDestination);
+            }
+            let filename = explicit_filename.ok_or(BatchDownloadError::InvalidDestination)?;
+            let filename =
+                FileName::new(filename).map_err(|_| BatchDownloadError::InvalidDestination)?;
+            let destination_extension = destination.extension().and_then(std::ffi::OsStr::to_str);
+            let filename_extension = Path::new(filename.as_str())
+                .extension()
+                .and_then(std::ffi::OsStr::to_str);
+            if request.audio_format.is_some_and(|audio_format| {
+                destination_extension
+                    .is_none_or(|actual| !actual.eq_ignore_ascii_case(audio_format.extension()))
+                    || filename_extension
+                        .is_none_or(|actual| !actual.eq_ignore_ascii_case(audio_format.extension()))
+            }) {
+                return Err(BatchDownloadError::InvalidFormat);
+            }
+            (destination, filename)
+        } else {
+            let mut filename = suggest_download_filename(&canonical_url);
+            if let Some(extension) = request.extension {
+                filename = Path::new(&filename)
+                    .with_extension(extension)
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .ok_or(BatchDownloadError::InvalidFormat)?
+                    .to_owned();
+            }
+            let filename =
+                FileName::new(filename).map_err(|_| BatchDownloadError::InvalidFormat)?;
+            let mut destination_dir = self.downloads_dir.clone();
+            if let Some(package_name) = request.package_name {
+                let package_name = sanitize_download_package_name(&package_name)
+                    .ok_or(BatchDownloadError::InvalidPackageName)?;
+                destination_dir.push(package_name);
+            }
+            (destination_dir.join(filename.as_str()), filename)
+        };
+        let destination_dir = destination
+            .parent()
+            .ok_or(BatchDownloadError::InvalidDestination)?;
         fs::create_dir_all(&destination_dir)
             .await
             .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
-        let (destination, filename) = unique_batch_destination(
-            destination_dir.join(filename.as_str()),
-            filename,
-            reserved_destinations,
-        )
-        .await?;
+        let (destination, filename) =
+            unique_batch_destination(destination, filename, reserved_destinations).await?;
 
+        let checksum_sidecar = expected_sha256.as_deref().map(|_| {
+            let mut sidecar = destination.as_os_str().to_os_string();
+            sidecar.push(".fetchx.sha256");
+            PathBuf::from(sidecar)
+        });
         let created_at =
             Timestamp::now().map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
         let mut item =
@@ -860,10 +989,23 @@ impl CoreServices {
         item.set_priority_at(priority, created_at)
             .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
         let item_id = item.id();
-        self.queue
-            .enqueue(item)
-            .await
-            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+        if let (Some(checksum), Some(sidecar)) =
+            (expected_sha256.as_deref(), checksum_sidecar.as_ref())
+        {
+            fs::write(sidecar, checksum.trim().to_ascii_lowercase())
+                .await
+                .map_err(|error| BatchDownloadError::Storage(error.to_string()))?;
+        }
+        if let Err(error) = self.queue.enqueue(item).await {
+            if let Some(sidecar) = checksum_sidecar {
+                fs::remove_file(sidecar).await.map_err(|cleanup_error| {
+                    BatchDownloadError::Storage(format!(
+                        "queue admission failed ({error}) and checksum cleanup failed: {cleanup_error}"
+                    ))
+                })?;
+            }
+            return Err(BatchDownloadError::Queue(error.to_string()));
+        }
         Ok(item_id)
     }
 
@@ -2132,8 +2274,8 @@ mod tests {
     };
 
     use super::{
-        BatchDownloadError, BatchDownloadRequest, CoreServices, CoreServicesConfig,
-        EngineAvailability, suggest_download_package_name,
+        BatchDownloadDestinationRequest, BatchDownloadError, BatchDownloadRequest, CoreServices,
+        CoreServicesConfig, EngineAvailability, suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
 
@@ -2270,6 +2412,80 @@ mod tests {
             item.destination()
                 .starts_with(root.path().join("downloads").join("media_pack"))
         }));
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_destination_batch_preserves_partial_results_and_resolves_collisions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        services.pause_queue_dispatch().await?;
+        let destination = root
+            .path()
+            .join("downloads")
+            .join("package")
+            .join("file.zip");
+        let request = |url: &str, path: std::path::PathBuf, checksum: Option<&str>| {
+            BatchDownloadDestinationRequest {
+                url: url.to_owned(),
+                filename: "file.zip".to_owned(),
+                destination: path,
+                engine: EngineKind::DirectHttp,
+                format_id: None,
+                extension: None,
+                audio_format: None,
+                expected_sha256: checksum.map(str::to_owned),
+            }
+        };
+
+        let outcomes = services
+            .enqueue_download_batch_with_destinations(
+                vec![
+                    request(
+                        "https://example.com/first.zip",
+                        destination.clone(),
+                        Some(&"A".repeat(64)),
+                    ),
+                    request("file:///invalid", destination.clone(), None),
+                    request("https://example.com/first.zip", destination.clone(), None),
+                    request("https://example.com/second.zip", destination.clone(), None),
+                    request(
+                        "https://example.com/invalid-checksum.zip",
+                        root.path().join("downloads").join("bad.zip"),
+                        Some("not-a-checksum"),
+                    ),
+                ],
+                DownloadPriority::High,
+            )
+            .await;
+
+        assert_eq!(outcomes.len(), 5);
+        assert!(outcomes[0].result.is_ok());
+        assert_eq!(outcomes[1].result, Err(BatchDownloadError::InvalidUrl));
+        assert_eq!(outcomes[2].result, Err(BatchDownloadError::DuplicateUrl));
+        assert!(outcomes[3].result.is_ok());
+        assert_eq!(outcomes[4].result, Err(BatchDownloadError::InvalidChecksum));
+
+        let first = services
+            .repository
+            .get(outcomes[0].result.as_ref().unwrap().to_owned())
+            .await?
+            .expect("first admitted item");
+        let second = services
+            .repository
+            .get(outcomes[3].result.as_ref().unwrap().to_owned())
+            .await?
+            .expect("second admitted item");
+        assert_eq!(first.destination(), destination);
+        assert_ne!(first.destination(), second.destination());
+        assert_eq!(first.priority(), DownloadPriority::High);
+        assert_eq!(second.priority(), DownloadPriority::High);
+        let mut sidecar = first.destination().as_os_str().to_os_string();
+        sidecar.push(".fetchx.sha256");
+        assert_eq!(tokio::fs::read_to_string(sidecar).await?, "a".repeat(64));
 
         services.shutdown().await?;
         Ok(())

@@ -4,6 +4,10 @@ import android.util.Log
 import dev.fetchx.bridge.uniffi.DownloadEventDto
 import dev.fetchx.bridge.uniffi.DownloadEventListener
 import dev.fetchx.bridge.uniffi.DownloadInfoDto
+import dev.fetchx.bridge.uniffi.BatchDownloadAudioFormatDto
+import dev.fetchx.bridge.uniffi.BatchDownloadEngineDto
+import dev.fetchx.bridge.uniffi.BatchDownloadErrorCodeDto
+import dev.fetchx.bridge.uniffi.BatchDownloadRequestDto
 import dev.fetchx.bridge.uniffi.DownloadPriorityDto
 import dev.fetchx.bridge.uniffi.DownloadService
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
@@ -13,8 +17,13 @@ import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.DownloadEvent
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.BatchDownloadRepository
+import dev.fetchx.core.download.DownloadBatchError
+import dev.fetchx.core.download.DownloadBatchItem
+import dev.fetchx.core.download.DownloadBatchOutcome
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
+import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentFile
 import dev.fetchx.core.download.TorrentMetadata
@@ -64,7 +73,7 @@ class BridgeDownloadRepository(
     private val publicDownloadStorage: PublicDownloadStorage,
     private val externalScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
-) : TorrentDownloadRepository {
+) : TorrentDownloadRepository, DuplicateDownloadRepository, BatchDownloadRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
@@ -147,6 +156,38 @@ class BridgeDownloadRepository(
     override suspend fun awaitInitialSnapshot() {
         initialSnapshotReady.await()
     }
+
+    override suspend fun findDuplicateDownload(url: String): String? =
+        withContext(Dispatchers.IO) {
+            service.findDuplicateDownload(url)?.filename
+        }
+
+    override suspend fun addDownloadBatch(
+        items: List<DownloadBatchItem>,
+        priority: DownloadPriority,
+        expectedSha256: String?,
+    ): List<DownloadBatchOutcome> = withContext(Dispatchers.IO) {
+        val requests = items.map { item ->
+            toBatchDownloadRequestDto(item, expectedSha256)
+        }
+        service.enqueueDownloadBatchWithDestinations(requests, mapPriorityToDto(priority))
+            .map { outcome ->
+                DownloadBatchOutcome(
+                    inputUrl = outcome.inputUrl,
+                    downloadId = outcome.downloadId,
+                    error = outcome.error?.let(::mapBatchDownloadError),
+                )
+            }
+    }
+
+    internal fun toBatchDownloadRequestDto(
+        item: DownloadBatchItem,
+        expectedSha256: String? = null,
+    ): BatchDownloadRequestDto = createBatchDownloadRequestDto(
+        item = item,
+        expectedSha256 = expectedSha256,
+        stageDestination = publicDownloadStorage::stageDestinationIfPublic,
+    )
 
     suspend fun diagnosticsSnapshot(): String = withContext(Dispatchers.IO) {
         service.diagnosticsSnapshot()
@@ -640,9 +681,65 @@ class BridgeDownloadRepository(
                 else -> null
             }
         }
+
         is DownloadEventDto.Removed -> null
     }
 }
+
+private fun String.withExtension(extension: String): String {
+    val nameStart = maxOf(lastIndexOf('/'), lastIndexOf('\\')) + 1
+    val name = substring(nameStart)
+    val stem = name.substringBeforeLast('.', name)
+    return substring(0, nameStart) + "$stem.$extension"
+}
+
+internal fun createBatchDownloadRequestDto(
+    item: DownloadBatchItem,
+    expectedSha256: String?,
+    stageDestination: (String) -> String,
+): BatchDownloadRequestDto {
+    val media = item.isMedia || isMediaUrl(item.url) ||
+        item.formatId != null || item.extension != null || item.audioFormat != null
+    val selectedExtension = item.audioFormat?.lowercase() ?: item.extension
+    val audioFormat = when (item.audioFormat?.lowercase()) {
+        "mp3" -> BatchDownloadAudioFormatDto.MP3
+        "m4a" -> BatchDownloadAudioFormatDto.M4A
+        null -> null
+        else -> null
+    }
+    val desiredDestination = when {
+        selectedExtension != null -> item.destinationPath.withExtension(selectedExtension)
+        media && item.formatId == null ->
+            if (item.destinationPath.endsWith(".mp4", ignoreCase = true)) item.destinationPath
+            else item.destinationPath.withExtension("mp4")
+        else -> item.destinationPath
+    }
+    val stagedDestination = stageDestination(desiredDestination)
+    return BatchDownloadRequestDto(
+        url = item.url,
+        filename = selectedExtension?.let { item.fileName.withExtension(it) } ?: item.fileName,
+        destination = stagedDestination,
+        engine = if (media) BatchDownloadEngineDto.YT_DLP else BatchDownloadEngineDto.DIRECT_HTTP,
+        formatId = item.formatId,
+        extension = selectedExtension,
+        audioFormat = audioFormat,
+        expectedSha256 = expectedSha256,
+    )
+}
+
+private fun mapBatchDownloadError(error: BatchDownloadErrorCodeDto): DownloadBatchError =
+    when (error) {
+        BatchDownloadErrorCodeDto.DUPLICATE_URL -> DownloadBatchError.DUPLICATE_URL
+        BatchDownloadErrorCodeDto.INVALID_URL -> DownloadBatchError.INVALID_URL
+        BatchDownloadErrorCodeDto.INVALID_PACKAGE_NAME -> DownloadBatchError.INVALID_PACKAGE_NAME
+        BatchDownloadErrorCodeDto.INVALID_FORMAT -> DownloadBatchError.INVALID_FORMAT
+        BatchDownloadErrorCodeDto.INVALID_CHECKSUM -> DownloadBatchError.INVALID_CHECKSUM
+        BatchDownloadErrorCodeDto.INVALID_DESTINATION -> DownloadBatchError.INVALID_DESTINATION
+        BatchDownloadErrorCodeDto.UNAVAILABLE_ENGINE -> DownloadBatchError.UNAVAILABLE_ENGINE
+        BatchDownloadErrorCodeDto.DESTINATION -> DownloadBatchError.DESTINATION
+        BatchDownloadErrorCodeDto.QUEUE -> DownloadBatchError.QUEUE
+        BatchDownloadErrorCodeDto.STORAGE -> DownloadBatchError.STORAGE
+    }
 
 internal fun completedDownloadState(
     totalBytes: Long,
