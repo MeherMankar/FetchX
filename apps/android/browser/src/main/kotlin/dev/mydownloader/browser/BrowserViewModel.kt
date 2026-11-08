@@ -269,6 +269,7 @@ class BrowserViewModel internal constructor(
             }
             newTm.onExternalUriRequested = ::openExternalUri
             newTm.onMagnetRequested = ::onMagnetRequested
+            newTm.onVideoDetectionsCleared = { clearDetectedVideos() }
             newTm.onSitePermissionRequested = ::enqueueSitePermission
             newTm.onAndroidPermissionsRequested = ::requestAndroidRuntimePermissions
         }

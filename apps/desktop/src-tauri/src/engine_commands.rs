@@ -127,6 +127,9 @@ pub struct DiagnosticResult {
     pub executable: Option<String>,
     /// Version string as reported by the executable.
     pub version: Option<String>,
+    /// Features reported by aria2's JSON-RPC `getVersion` method.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled_features: Option<Vec<String>>,
     /// Human-readable status message.
     pub message: String,
 }
@@ -407,6 +410,7 @@ pub async fn test_aria2_config(
                 available: false,
                 executable: None,
                 version: None,
+                enabled_features: None,
                 message: e.message,
             });
         }
@@ -430,6 +434,7 @@ pub async fn test_aria2_config(
                 available: true,
                 executable: Some(executable.to_string_lossy().into_owned()),
                 version: Some(version),
+                enabled_features: None,
                 message: "aria2 is available.".to_owned(),
             })
         }
@@ -442,6 +447,7 @@ pub async fn test_aria2_config(
                 available: false,
                 executable: Some(executable.to_string_lossy().into_owned()),
                 version: None,
+                enabled_features: None,
                 message: format!(
                     "aria2 exited with status {}.",
                     out.status
@@ -455,12 +461,14 @@ pub async fn test_aria2_config(
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
+            enabled_features: None,
             message: format!("Could not start aria2: {io_err}"),
         }),
         Err(_timeout) => Ok(DiagnosticResult {
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
+            enabled_features: None,
             message: "aria2 version check timed out.".to_owned(),
         }),
     }
@@ -484,6 +492,7 @@ pub async fn test_remote_aria2(
                 available: false,
                 executable: None,
                 version: None,
+                enabled_features: None,
                 message: error.to_string(),
             });
         }
@@ -494,12 +503,14 @@ pub async fn test_remote_aria2(
             available: true,
             executable: None,
             version: Some(version.version().to_owned()),
+            enabled_features: Some(version.enabled_features().to_vec()),
             message: "Remote aria2 RPC is available.".to_owned(),
         }),
         Err(error) => Ok(DiagnosticResult {
             available: false,
             executable: None,
             version: None,
+            enabled_features: None,
             message: format!("Remote aria2 RPC check failed: {error}"),
         }),
     }
@@ -524,6 +535,7 @@ pub async fn test_ytdlp_config(
                 available: false,
                 executable: None,
                 version: None,
+                enabled_features: None,
                 message: e.message,
             });
         }
@@ -544,6 +556,7 @@ pub async fn test_ytdlp_config(
                 available: true,
                 executable: Some(executable.to_string_lossy().into_owned()),
                 version: Some(version),
+                enabled_features: None,
                 message: "yt-dlp is available.".to_owned(),
             })
         }
@@ -551,6 +564,7 @@ pub async fn test_ytdlp_config(
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
+            enabled_features: None,
             message: format!(
                 "yt-dlp exited with status {}.",
                 out.status
@@ -563,12 +577,14 @@ pub async fn test_ytdlp_config(
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
+            enabled_features: None,
             message: format!("Could not start yt-dlp: {io_err}"),
         }),
         Err(_timeout) => Ok(DiagnosticResult {
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
+            enabled_features: None,
             message: "yt-dlp version check timed out.".to_owned(),
         }),
     }
@@ -624,10 +640,12 @@ mod tests {
             available: true,
             executable: Some("/usr/bin/aria2c".to_owned()),
             version: Some("aria2 version 1.37.0".to_owned()),
+            enabled_features: Some(vec!["HTTPS".to_owned()]),
             message: "aria2 is available.".to_owned(),
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains(r#""available":true"#));
         assert!(json.contains(r#""version":"aria2 version 1.37.0""#));
+        assert!(json.contains(r#""enabled_features":["HTTPS"]"#));
     }
 }

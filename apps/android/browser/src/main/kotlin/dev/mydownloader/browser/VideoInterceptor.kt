@@ -23,6 +23,35 @@ object VideoInterceptor {
         "googlevideo.com", "fbcdn.net", "vimeocdn.com",
     )
 
+    /**
+     * Returns true when the URL looks like an individual HLS/DASH segment rather
+     * than a playlist or a full video file. Noisy segments produce high-frequency
+     * callbacks and should be suppressed at the [detect] entry point.
+     */
+    fun isNoisySegment(url: String): Boolean {
+        val path = url.lowercase(Locale.ROOT).substringBefore("?")
+        // .ts or .m4s file extension
+        if (path.endsWith(".ts") || path.endsWith(".m4s")) return true
+        // Common segment path patterns (case-insensitive)
+        val segmentPattern = Regex("""/seg-\d+|/chunk-\d+|/fragment\d+""", RegexOption.IGNORE_CASE)
+        if (segmentPattern.containsMatchIn(url)) return true
+        // /hls/ path with a purely numeric (or numeric.ts) last path segment
+        if (url.contains("/hls/", ignoreCase = true)) {
+            val lastSegment = path.substringAfterLast("/")
+            val numericSegment = Regex("""^\d+(\.ts)?$""")
+            if (numericSegment.matches(lastSegment)) return true
+        }
+        return false
+    }
+
+    /**
+     * Returns true for HLS playlists (.m3u8) and DASH manifests (.mpd).
+     */
+    fun isHlsPlaylist(url: String): Boolean {
+        val path = url.lowercase(Locale.ROOT).substringBefore("?")
+        return path.endsWith(".m3u8") || path.endsWith(".mpd")
+    }
+
     fun isVideoUrl(url: String): Boolean {
         val lower = url.lowercase(Locale.ROOT)
         val ext = lower.substringBefore("?").substringAfterLast(".", "")
@@ -54,6 +83,7 @@ object VideoInterceptor {
         mimeType: String?,
         contentLength: Long?,
     ): DetectedVideo? {
+        if (isNoisySegment(url)) return null
         val isMime = isVideoMimeType(mimeType)
         val isUrl = isVideoUrl(url)
         if (!isMime && !isUrl) return null

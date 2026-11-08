@@ -187,6 +187,11 @@ function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
         {result.version && (
           <span className="diagnostic-version">Version: {result.version}</span>
         )}
+        {result.enabled_features && (
+          <span className="diagnostic-version">
+            Enabled features: {result.enabled_features.join(", ") || "none reported"}
+          </span>
+        )}
         {result.executable && (
           <span className="diagnostic-path" title={result.executable}>
             {result.executable}
@@ -278,7 +283,10 @@ function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProp
     setRemoteDiagnostic(null);
     try {
       setRemoteDiagnostic(
-        await testRemoteAria2(remoteEndpoint.trim(), remoteSecret.trim() || null),
+        await testRemoteAria2(
+          remoteEndpoint.trim(),
+          remoteSecret.length > 0 ? remoteSecret : null,
+        ),
       );
     } catch (cause) {
       onError(errorMessage(cause));

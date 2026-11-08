@@ -19,7 +19,8 @@ Capabilities have two independent states:
 | HLS native segments | Available | Available through shared dispatcher/runtime | Available through shared dispatcher/runtime | Available |
 | Metalink | Available | Core implementation; advertise from runtime status | Core implementation; advertise from runtime status | Available |
 | Native BitTorrent/torrent | Available | Available; Android selects native fallback | Available; desktop native-torrent route | Core implementation; host availability as configured |
-| aria2 adapter | Available with configured/supervised executable | Optional/remote adapter; not presumed bundled | Optional helper/engine path | Optional executable/configuration |
+| aria2 engine adapter | Shared `Aria2Client`/`Aria2Engine`; `CoreServices` starts a configured local supervisor | Available only through the host's configured runtime; no remote endpoint UI in this phase | Local engine settings plus a non-persistent HTTPS remote RPC probe | Local configured engine; CLI remote commands target FetchX, not aria2 |
+| Remote aria2 endpoint preflight | Shared Rust JSON-RPC validation and `getVersion` parsing | Client code exists, but no UniFFI probe operation or Android UI | Test endpoint without saving it; show version and `enabledFeatures` | No CLI, FetchX remote RPC, remote UI, or browser-native-host probe |
 | yt-dlp | Available with process runner | Android runtime adapter supplies implementation | Optional executable/helper adapter | Optional executable/configuration |
 | FFmpeg/FFprobe | Available process orchestration | Android bundles statically linked FFmpeg runtime | Optional helper executable | Optional executable/configuration |
 | Media format extraction | Available in media-extractor | Android runtime adapter | Shared Rust plus process adapter | Shared Rust plus process adapter |
@@ -46,6 +47,13 @@ Android background recovery:
 
 - The foreground service uses `START_STICKY` when the Rust bridge is available, so process recreation can reconnect to the repository and Rust can requeue persisted interrupted work.
 - This does not cover force-stop or boot-time autostart and has not been runtime-tested on a device.
+
+Remote aria2 preflight:
+
+- The desktop probe reuses `Aria2Client`; HTTPS is required for remote hosts, while HTTP is accepted only for an IP loopback address. Embedded credentials, query strings, fragments, redirects, and proxy use are rejected or disabled.
+- A successful `aria2.getVersion` probe displays the daemon version and `enabledFeatures`; authentication and transport errors do not return the configured secret.
+- This is connectivity/capability discovery only. It does not configure remote aria2 as the download engine or expose arbitrary endpoint testing through FetchX's authenticated remote API.
+- No persistence or migration is involved.
 
 Availability notes:
 

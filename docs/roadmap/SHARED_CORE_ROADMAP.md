@@ -38,7 +38,16 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - No schema migration, UniFFI contract change, dependency, or desktop/CLI/remote change was required.
 - `cargo test -p fetchx-queue --lib` passed all 42 tests. The focused Android restart-policy unit test passed with `.\gradlew.bat :app:testDebugUnitTest --tests 'dev.fetchx.app.service.DownloadForegroundServiceTest'`.
 - No Android emulator/device process-recreation test was run. Force-stop and boot-time autostart are not covered.
-- Next repository in the research order: Aria2App, focusing on remote-engine integration.
+- Aria2App remote-engine integration has now been reviewed and completed as documented below.
+
+## Current Aria2App-derived progress
+
+- Reviewed `devgianlu/Aria2App` revision `dd6cbc9e7b17559e59d9bc41a3fd8c0468e088d7` (5.10.0, 2025-07-13); its application `LICENSE` is GNU GPL-3.0. The pinned `aria2lib` submodule revision is `290755e646f62fb26ed4112f6ea2c0e5d6cbea82` under Apache-2.0. No upstream source or binaries were copied.
+- FetchX already had a shared Rust aria2 JSON-RPC client/engine, token authentication, request correlation, and an authenticated FetchX remote server. The server and CLI remote commands control FetchX; they are not external aria2 clients.
+- Desktop exposes a non-persistent remote aria2 probe through `Aria2Client`. The probe requires HTTPS for remote endpoints and restricts HTTP to IP loopback; the returned diagnostic includes version and aria2 `enabledFeatures`, without persisting endpoint or secret.
+- The probe is read-only and does not configure remote aria2 as the active engine. No arbitrary-endpoint FetchX RPC, Android probe UI/UniFFI method, CLI probe command, storage change, migration, or dependency was added.
+- Per-target status, upstream files, tests, and limitations are recorded in `docs/research/ARIA2APP_FEATURE_ANALYSIS.md`. Android `START_STICKY` remains covered by host-side policy tests only; no process-recreation test on a device/emulator was run.
+- Recommended next repository/work item in the established research order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
 
 ## Milestone 0 — contract freeze
 

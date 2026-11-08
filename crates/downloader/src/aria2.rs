@@ -2402,7 +2402,9 @@ mod tests {
         ])
         .await?;
         let client = make_client(endpoint, Duration::from_secs(1))?;
-        assert_eq!(client.get_version().await?.version(), "1.37.0");
+        let version = client.get_version().await?;
+        assert_eq!(version.version(), "1.37.0");
+        assert_eq!(version.enabled_features(), ["Async DNS", "HTTPS"]);
         assert_eq!(client.get_version().await?.version(), "1.37.0");
 
         let first = requests.recv().await.ok_or("missing first request")?;

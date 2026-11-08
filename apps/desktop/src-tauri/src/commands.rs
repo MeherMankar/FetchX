@@ -1895,6 +1895,7 @@ mod tests {
                 error: None,
                 created_at: 1,
                 updated_at: 1,
+                queue_position: None,
             },
         };
         let serialized = serde_json::to_string(&updated)?;

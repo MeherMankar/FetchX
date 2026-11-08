@@ -129,6 +129,9 @@ class TabManager(
     /** Callback invoked when a magnet: URI is intercepted; takes priority over [onExternalUriRequested]. */
     var onMagnetRequested: ((String) -> Unit)? = null
 
+    /** Callback invoked when a new page navigation clears the detected-video list. */
+    var onVideoDetectionsCleared: (() -> Unit)? = null
+
     /** Callback invoked for GeckoView content/media permission requests. */
     var onSitePermissionRequested: ((origin: String, permission: String, detail: String?, resolve: (Boolean) -> Unit) -> Unit)? = null
 
@@ -694,12 +697,25 @@ class TabManager(
                 val filename = URLUtil.guessFileName(response.uri, disposition, contentType)
                     .takeIf { it.isNotBlank() }
                 val metadata = browserDownloadMetadata(response.headers)
-                onDownloadRequested?.invoke(
-                    response.uri,
-                    filename,
-                    metadata.mimeType,
-                    metadata.contentLength,
-                )
+                val isVideoMime = VideoInterceptor.isVideoMimeType(metadata.mimeType)
+                val isAttachment = disposition != null &&
+                    disposition.lowercase(java.util.Locale.ROOT).contains("attachment")
+
+                if (isVideoMime && !isAttachment) {
+                    VideoInterceptor.detect(
+                        tabId = tabId,
+                        url = response.uri,
+                        mimeType = metadata.mimeType,
+                        contentLength = metadata.contentLength,
+                    )?.let { onVideoDetected?.invoke(it) }
+                } else {
+                    onDownloadRequested?.invoke(
+                        response.uri,
+                        filename,
+                        metadata.mimeType,
+                        metadata.contentLength,
+                    )
+                }
             }
         }
 
@@ -768,6 +784,8 @@ class TabManager(
                     return
                 }
                 updateTabState(tabId) { it.copy(url = url ?: "", errorText = null) }
+                val nonBlankUrl = !url.isNullOrBlank() && url != "about:blank"
+                if (nonBlankUrl) onVideoDetectionsCleared?.invoke()
                 cfController.onLocationChange(url ?: "")
             }
 

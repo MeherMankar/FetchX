@@ -247,6 +247,7 @@ export interface DiagnosticResult {
   available: boolean;
   executable: string | null;
   version: string | null;
+  enabled_features?: string[];
   message: string;
 }
 
