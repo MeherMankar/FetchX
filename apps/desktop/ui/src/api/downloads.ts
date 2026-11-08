@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   AddDownloadRequest,
+  BatchDownloadResult,
   DeleteDownloadResponse,
   Download,
   DuplicateDownloadMatch,
@@ -30,6 +31,26 @@ export function listRuntimeStatuses(): Promise<DownloadRuntimeStatus[]> {
 
 export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
+}
+
+export function addDownloadBatch(options: {
+  urls: string[];
+  packageName?: string;
+  engine: "direct_http" | "yt_dlp";
+  priority: DownloadPriority;
+  formatId?: string;
+  extension?: string | null;
+  audioFormat?: "mp3" | "m4a";
+}): Promise<BatchDownloadResult[]> {
+  return invoke<BatchDownloadResult[]>("add_download_batch", {
+    urls: options.urls,
+    package_name: options.packageName ?? null,
+    engine: options.engine,
+    priority: options.priority,
+    format_id: options.formatId ?? null,
+    extension: options.extension ?? null,
+    audio_format: options.audioFormat ?? null,
+  });
 }
 
 export function extractDownloadLinks(text: string): Promise<string[]> {

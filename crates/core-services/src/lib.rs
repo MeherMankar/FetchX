@@ -27,14 +27,18 @@
 
 #![forbid(unsafe_code)]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use fetchx_downloader::{
     Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
     DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
     NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
     YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
-    YtDlpProcessRunnerAdapter,
+    YtDlpProcessRunnerAdapter, validate_http_source_url,
 };
 use fetchx_media_extractor::{
     ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry,
@@ -45,8 +49,8 @@ use fetchx_models::{
     DiagnosticHealth, DiagnosticsSnapshot, DownloadId, DownloadItem, DownloadPriority,
     DownloadRuntimeStatus, DownloadSource, DownloadStatus, DuplicateDownloadMatch,
     EngineDiagnostics, EngineKind, FileName, PluginDiagnostics, QueueDiagnostics, RpcDiagnostics,
-    StorageDiagnostics, Timestamp, TorrentFileSelection, TorrentMetadata, global_diagnostics,
-    parse_magnet_uri, parse_torrent_metainfo,
+    StorageDiagnostics, Timestamp, TorrentFileSelection, TorrentMetadata, YtDlpAudioFormat,
+    global_diagnostics, parse_magnet_uri, parse_torrent_metainfo,
 };
 use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
@@ -70,8 +74,8 @@ mod engine_status;
 pub use builtin::{
     CoreBuiltinError, FilenameTemplateContext, FilenameTemplateDiagnostic, FilenameTemplateResult,
     extract_download_links, find_archive_link, is_duplicate_download_url, match_download_category,
-    normalize_download_url, render_filename_template, resolve_core_url, suggest_download_filename,
-    suggest_download_package_name,
+    normalize_download_url, render_filename_template, resolve_core_url,
+    sanitize_download_package_name, suggest_download_filename, suggest_download_package_name,
 };
 
 // ============================================================
@@ -133,6 +137,107 @@ struct TorrentMetadataParams {
     selected_total_bytes: u64,
     selection_confirmed: bool,
     created_at: Timestamp,
+}
+
+/// One URL and its media-selection options for shared batch admission.
+#[derive(Clone, Debug)]
+pub struct BatchDownloadRequest {
+    pub url: String,
+    pub package_name: Option<String>,
+    pub engine: EngineKind,
+    pub format_id: Option<String>,
+    pub extension: Option<String>,
+    pub audio_format: Option<YtDlpAudioFormat>,
+}
+
+/// Per-input result from [`CoreServices::enqueue_download_batch`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchDownloadOutcome {
+    pub input_url: String,
+    pub result: Result<DownloadId, BatchDownloadError>,
+}
+
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+pub enum BatchDownloadError {
+    #[error("duplicate URL in batch")]
+    DuplicateUrl,
+    #[error("URL must be a valid HTTP or HTTPS address")]
+    InvalidUrl,
+    #[error("package name must be a single safe directory name")]
+    InvalidPackageName,
+    #[error("media format selection is invalid")]
+    InvalidFormat,
+    #[error("download engine is unavailable: {0:?}")]
+    UnavailableEngine(EngineKind),
+    #[error("could not prepare download destination: {0}")]
+    Destination(String),
+    #[error("could not create download record: {0}")]
+    Queue(String),
+}
+
+fn valid_batch_format_options(request: &BatchDownloadRequest) -> bool {
+    match (
+        request.engine,
+        request.format_id.is_some(),
+        request.audio_format,
+    ) {
+        (EngineKind::YtDlp, true, None) => request
+            .extension
+            .as_deref()
+            .is_none_or(is_safe_batch_extension),
+        (EngineKind::YtDlp, false, Some(audio_format)) => {
+            request.extension.as_deref() == Some(audio_format.extension())
+        }
+        (_, false, None) => request.extension.is_none(),
+        _ => false,
+    }
+}
+
+fn is_safe_batch_extension(extension: &str) -> bool {
+    !extension.is_empty()
+        && extension.len() <= 10
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn batch_destination_key(path: &Path) -> String {
+    path.to_string_lossy().to_lowercase()
+}
+
+async fn unique_batch_destination(
+    destination: PathBuf,
+    filename: FileName,
+    reserved_destinations: &mut HashSet<String>,
+) -> Result<(PathBuf, FileName), BatchDownloadError> {
+    let path = Path::new(filename.as_str());
+    let stem = path
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or(BatchDownloadError::InvalidFormat)?;
+    let extension = path.extension().and_then(std::ffi::OsStr::to_str);
+
+    for suffix in 1..=10_000 {
+        let candidate_name = if suffix == 1 {
+            filename.as_str().to_owned()
+        } else if let Some(extension) = extension {
+            format!("{stem} ({suffix}).{extension}")
+        } else {
+            format!("{stem} ({suffix})")
+        };
+        let candidate_filename = FileName::new(candidate_name)
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+        let candidate_path = destination.with_file_name(candidate_filename.as_str());
+        let key = batch_destination_key(&candidate_path);
+        let exists = tokio::fs::try_exists(&candidate_path)
+            .await
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+        if !exists && reserved_destinations.insert(key) {
+            return Ok((candidate_path, candidate_filename));
+        }
+    }
+
+    Err(BatchDownloadError::Destination(
+        "could not find an unused destination filename".to_owned(),
+    ))
 }
 
 impl CoreServices {
@@ -615,6 +720,126 @@ impl CoreServices {
         opts: MediaExtractOptions,
     ) -> Result<fetchx_media_extractor::MediaInfo, ExtractionError> {
         self.engine_runtime.media_registry.extract(url, opts).await
+    }
+
+    /// Validates and admits each URL independently, returning one result per input.
+    ///
+    /// The batch is intentionally not transactional: an invalid or duplicate
+    /// item does not prevent later items from being queued. Dropping this
+    /// future stops work that has not started, while items already accepted by
+    /// the queue remain persisted and continue through the ordinary lifecycle.
+    pub async fn enqueue_download_batch(
+        &self,
+        requests: Vec<BatchDownloadRequest>,
+        priority: DownloadPriority,
+    ) -> Vec<BatchDownloadOutcome> {
+        if requests.is_empty() {
+            return Vec::new();
+        }
+
+        let mut outcomes = Vec::with_capacity(requests.len());
+        let mut seen_urls = HashSet::with_capacity(requests.len());
+        let mut reserved_destinations = match self.repository.list().await {
+            Ok(items) => items
+                .into_iter()
+                .map(|item| batch_destination_key(item.destination()))
+                .collect(),
+            Err(error) => {
+                let message = error.to_string();
+                return requests
+                    .into_iter()
+                    .map(|request| BatchDownloadOutcome {
+                        input_url: request.url,
+                        result: Err(BatchDownloadError::Queue(message.clone())),
+                    })
+                    .collect();
+            }
+        };
+
+        for request in requests {
+            let input_url = request.url.clone();
+            let result = self
+                .enqueue_batch_item(
+                    request,
+                    priority,
+                    &mut seen_urls,
+                    &mut reserved_destinations,
+                )
+                .await;
+            outcomes.push(BatchDownloadOutcome { input_url, result });
+            tokio::task::yield_now().await;
+        }
+
+        outcomes
+    }
+
+    async fn enqueue_batch_item(
+        &self,
+        request: BatchDownloadRequest,
+        priority: DownloadPriority,
+        seen_urls: &mut HashSet<String>,
+        reserved_destinations: &mut HashSet<String>,
+    ) -> Result<DownloadId, BatchDownloadError> {
+        let canonical_url =
+            validate_http_source_url(&request.url).map_err(|_| BatchDownloadError::InvalidUrl)?;
+        if !seen_urls.insert(normalize_download_url(&canonical_url)) {
+            return Err(BatchDownloadError::DuplicateUrl);
+        }
+        if !self.engine_runtime.is_available(request.engine) {
+            return Err(BatchDownloadError::UnavailableEngine(request.engine));
+        }
+        if !valid_batch_format_options(&request) {
+            return Err(BatchDownloadError::InvalidFormat);
+        }
+
+        let mut source = DownloadSource::new(&canonical_url, request.engine)
+            .map_err(|_| BatchDownloadError::InvalidFormat)?;
+        source = match (request.format_id, request.audio_format) {
+            (Some(format_id), None) => source.with_yt_dlp_format(format_id),
+            (None, Some(audio_format)) => source.with_yt_dlp_audio_format(audio_format),
+            (None, None) => Ok(source),
+            (Some(_), Some(_)) => Err(fetchx_models::DownloadSourceError::InvalidYtDlpAudioFormat),
+        }
+        .map_err(|_| BatchDownloadError::InvalidFormat)?;
+
+        let mut filename = suggest_download_filename(&canonical_url);
+        if let Some(extension) = request.extension {
+            filename = Path::new(&filename)
+                .with_extension(extension)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .ok_or(BatchDownloadError::InvalidFormat)?
+                .to_owned();
+        }
+        let filename = FileName::new(filename).map_err(|_| BatchDownloadError::InvalidFormat)?;
+        let mut destination_dir = self.downloads_dir.clone();
+        if let Some(package_name) = request.package_name {
+            let package_name = sanitize_download_package_name(&package_name)
+                .ok_or(BatchDownloadError::InvalidPackageName)?;
+            destination_dir.push(package_name);
+        }
+        fs::create_dir_all(&destination_dir)
+            .await
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+        let (destination, filename) = unique_batch_destination(
+            destination_dir.join(filename.as_str()),
+            filename,
+            reserved_destinations,
+        )
+        .await?;
+
+        let created_at =
+            Timestamp::now().map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+        let mut item =
+            DownloadItem::new(DownloadId::new(), source, filename, destination, created_at);
+        item.set_priority_at(priority, created_at)
+            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+        let item_id = item.id();
+        self.queue
+            .enqueue(item)
+            .await
+            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+        Ok(item_id)
     }
 
     /// Applies FetchX's core page discovery. This is equivalent to the built-in
@@ -1874,13 +2099,17 @@ mod tests {
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSource,
         DownloadStatus, EngineKind, FileName, Timestamp, TorrentFile, TorrentMetadata,
+        YtDlpAudioFormat,
     };
     use fetchx_storage::{
         DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
         TorrentSourceType,
     };
 
-    use super::{CoreServices, CoreServicesConfig, EngineAvailability};
+    use super::{
+        BatchDownloadError, BatchDownloadRequest, CoreServices, CoreServicesConfig,
+        EngineAvailability,
+    };
     use fetchx_core::DownloadStateMachine;
 
     fn config(root: &std::path::Path) -> CoreServicesConfig {
@@ -1906,6 +2135,223 @@ mod tests {
         let (first, second) = tokio::join!(services.shutdown(), services.shutdown());
         first?;
         second?;
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_admission_keeps_successes_when_other_inputs_are_invalid_or_duplicate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        services.pause_queue_dispatch().await?;
+
+        let results = services
+            .enqueue_download_batch(
+                vec![
+                    BatchDownloadRequest {
+                        url: "https://example.com/a.zip".to_owned(),
+                        package_name: Some("media/pack".to_owned()),
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    BatchDownloadRequest {
+                        url: "https://EXAMPLE.com/a.zip#fragment".to_owned(),
+                        package_name: None,
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    BatchDownloadRequest {
+                        url: "file:///tmp/not-http".to_owned(),
+                        package_name: None,
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    BatchDownloadRequest {
+                        url: "https://example.net/audio.mp3".to_owned(),
+                        package_name: None,
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: Some("mp3".to_owned()),
+                        audio_format: Some(YtDlpAudioFormat::Mp3),
+                    },
+                    BatchDownloadRequest {
+                        url: "https://example.net/invalid-package.zip".to_owned(),
+                        package_name: Some("...".to_owned()),
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    BatchDownloadRequest {
+                        url: "https://example.net/aria2.zip".to_owned(),
+                        package_name: None,
+                        engine: EngineKind::Aria2,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    BatchDownloadRequest {
+                        url: "https://example.org/b.zip".to_owned(),
+                        package_name: None,
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    BatchDownloadRequest {
+                        url: String::new(),
+                        package_name: None,
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                ],
+                DownloadPriority::High,
+            )
+            .await;
+
+        assert_eq!(results.len(), 8);
+        assert!(results[0].result.is_ok());
+        assert_eq!(results[1].result, Err(BatchDownloadError::DuplicateUrl));
+        assert_eq!(results[2].result, Err(BatchDownloadError::InvalidUrl));
+        assert_eq!(results[3].result, Err(BatchDownloadError::InvalidFormat));
+        assert_eq!(
+            results[4].result,
+            Err(BatchDownloadError::InvalidPackageName)
+        );
+        assert_eq!(
+            results[5].result,
+            Err(BatchDownloadError::UnavailableEngine(EngineKind::Aria2))
+        );
+        assert!(results[6].result.is_ok());
+        assert_eq!(results[7].result, Err(BatchDownloadError::InvalidUrl));
+
+        let queued = services.repository.list().await?;
+        assert_eq!(queued.len(), 2);
+        assert!(
+            queued
+                .iter()
+                .all(|item| item.priority() == DownloadPriority::High)
+        );
+        assert!(queued.iter().any(|item| {
+            item.destination()
+                .starts_with(root.path().join("downloads").join("media_pack"))
+        }));
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_admission_keeps_output_names_unique() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        services.pause_queue_dispatch().await?;
+        let filename = FileName::new("file")?;
+        let existing = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://existing.example/file", EngineKind::DirectHttp)?,
+            filename,
+            root.path()
+                .join("downloads")
+                .join("same package")
+                .join("file"),
+            Timestamp::now()?,
+        );
+        services.repository.create(&existing).await?;
+
+        let results = services
+            .enqueue_download_batch(
+                ["https://one.example/file", "https://two.example/file"]
+                    .into_iter()
+                    .map(|url| BatchDownloadRequest {
+                        url: url.to_owned(),
+                        package_name: Some("same package".to_owned()),
+                        engine: EngineKind::DirectHttp,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    })
+                    .collect(),
+                DownloadPriority::Normal,
+            )
+            .await;
+
+        assert!(results.iter().all(|result| result.result.is_ok()));
+        let destinations = services
+            .repository
+            .list()
+            .await?
+            .into_iter()
+            .map(|item| item.destination().to_path_buf())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(destinations.len(), 3);
+        assert!(destinations.iter().any(|path| path.ends_with("file")));
+        assert!(destinations.iter().any(|path| path.ends_with("file (2)")));
+        assert!(destinations.iter().any(|path| path.ends_with("file (3)")));
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_batch_returns_no_outcomes() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+
+        assert!(
+            services
+                .enqueue_download_batch(Vec::new(), DownloadPriority::Normal)
+                .await
+                .is_empty()
+        );
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_batch_admission_keeps_items_already_accepted_by_the_queue()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = std::sync::Arc::new(CoreServices::start(config(root.path())).await?);
+        services.pause_queue_dispatch().await?;
+        let requests = (0..500)
+            .map(|index| BatchDownloadRequest {
+                url: format!("https://example.com/{index}.bin"),
+                package_name: None,
+                engine: EngineKind::DirectHttp,
+                format_id: None,
+                extension: None,
+                audio_format: None,
+            })
+            .collect();
+        let batch_services = std::sync::Arc::clone(&services);
+        let batch = tokio::spawn(async move {
+            batch_services
+                .enqueue_download_batch(requests, DownloadPriority::Normal)
+                .await
+        });
+
+        loop {
+            if !services.repository.list().await?.is_empty() {
+                batch.abort();
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let queued = services.repository.list().await?;
+        assert!(!queued.is_empty());
+        assert!(queued.len() < 500);
         services.shutdown().await?;
         Ok(())
     }

@@ -91,6 +91,12 @@ export interface AddDownloadRequest {
   engine_kind?: EngineKind;
 }
 
+export interface BatchDownloadResult {
+  input_url: string;
+  download_id: string | null;
+  error: string | null;
+}
+
 export interface TorrentTelemetry {
   download_speed_bps: number | null;
   upload_speed_bps: number | null;

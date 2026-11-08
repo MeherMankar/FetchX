@@ -192,6 +192,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::is_duplicate_download_url,
             commands::match_download_category,
             commands::add_download,
+            commands::add_download_batch,
             commands::add_torrent_download,
             commands::add_media_download,
             commands::extract_media_formats,

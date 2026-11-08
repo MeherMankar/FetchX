@@ -227,6 +227,25 @@ pub fn suggest_download_filename(url: &str) -> String {
     }
 }
 
+pub fn sanitize_download_package_name(package_name: &str) -> Option<String> {
+    let package_name = package_name
+        .trim()
+        .chars()
+        .map(|character| match character {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'..='\u{001f}' => '_',
+            other => other,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|character| matches!(character, '.' | ' '))
+        .to_owned();
+
+    (!package_name.is_empty() && package_name != "." && package_name != "..")
+        .then_some(package_name)
+}
+
 pub fn normalize_download_url(url: &str) -> String {
     let trimmed = url.trim();
     let mut parsed = match Url::parse(trimmed) {

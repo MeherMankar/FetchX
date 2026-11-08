@@ -58,6 +58,15 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - Tests, build/runtime limitations, target status, and reviewed Seal source files are recorded in `docs/research/SEAL_FEATURE_ANALYSIS.md`.
 - Recommended next research item: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
 
+## Current Ridm-phase status
+
+- The supplied GitLab project path could not be inspected: `git ls-remote` reported that the project was not found or accessible, the GitLab project API returned 404, and the web page redirected to sign-in/was blocked by an access challenge. A GitHub search for `mremiyum ridm` returned no repositories, and guessed GitHub mirrors were not found. No Ridm revision, license, source, tests, or documentation could therefore be verified; no Ridm source was copied and no project-specific implementation claims are made.
+- FetchX previously extracted metadata/formats for one media URL at a time and extracted explicit HTTP(S) links from supplied text, but had no shared operation to admit a list of URLs with independent outcomes.
+- Added `CoreServices::enqueue_download_batch` for independent per-URL validation/admission, normalized intra-batch duplicate detection, safe package names, collision-free suggested filenames, and partial-success/cancellation semantics. It reuses the normal queue and persistence lifecycle and adds no schema migration or dependency.
+- The desktop Add dialog extracts explicit links from pasted text and calls the new Tauri batch command. The operation is not exposed through Android UniFFI/UI, local or remote CLI, authenticated JSON-RPC, remote UI, or browser RPC; these adapter surfaces remain deferred rather than being represented as integrated.
+- Core test/build results, exact files, and limitations are recorded in `docs/research/RIDM_FEATURE_ANALYSIS.md`.
+- Recommended next repository/work item in the established research order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

@@ -4,7 +4,9 @@ use std::{
 };
 
 use fetchx_core::StateMachineError;
-use fetchx_core_services::{ConfigService, CoreRepository, CoreServices, EngineRuntime};
+use fetchx_core_services::{
+    BatchDownloadRequest, ConfigService, CoreRepository, CoreServices, EngineRuntime,
+};
 use fetchx_downloader::validate_http_source_url;
 use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
@@ -548,28 +550,21 @@ pub struct AddDownloadRequest {
     pub cookies: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BatchDownloadResultDto {
+    pub input_url: String,
+    pub download_id: Option<String>,
+    pub error: Option<String>,
+}
+
 fn package_destination(downloads_dir: &Path, package_name: Option<&str>) -> PathBuf {
     let Some(package_name) = package_name else {
         return downloads_dir.to_path_buf();
     };
-    let package_name = package_name
-        .trim()
-        .chars()
-        .map(|character| match character {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\0'..='\u{001f}' => '_',
-            other => other,
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim_matches(|character| matches!(character, '.' | ' '))
-        .to_owned();
-    if package_name.is_empty() || package_name == "." || package_name == ".." {
-        downloads_dir.to_path_buf()
-    } else {
-        downloads_dir.join(package_name)
-    }
+    fetchx_core_services::sanitize_download_package_name(package_name).map_or_else(
+        || downloads_dir.to_path_buf(),
+        |name| downloads_dir.join(name),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1031,6 +1026,77 @@ pub async fn add_media_download(
         },
     );
     Ok(download)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn add_download_batch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    urls: Vec<String>,
+    package_name: Option<String>,
+    engine: EngineKind,
+    priority: DownloadPriority,
+    format_id: Option<String>,
+    extension: Option<String>,
+    audio_format: Option<YtDlpAudioFormat>,
+) -> Result<Vec<BatchDownloadResultDto>, IpcError> {
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let requests = urls
+        .iter()
+        .map(|url| BatchDownloadRequest {
+            url: url.clone(),
+            package_name: package_name.clone(),
+            engine,
+            format_id: format_id.clone(),
+            extension: extension.clone(),
+            audio_format,
+        })
+        .collect();
+    let outcomes = core_services
+        .enqueue_download_batch(requests, priority)
+        .await;
+    let mut results = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        let result = match outcome.result {
+            Ok(id) => {
+                let download_id = id.to_string();
+                match state.get(id).await {
+                    Ok(download) => {
+                        emit_event(
+                            &app,
+                            DOWNLOAD_UPDATED,
+                            &DownloadUpdatedEvent {
+                                download: download.clone(),
+                            },
+                        );
+                        BatchDownloadResultDto {
+                            input_url: outcome.input_url,
+                            download_id: Some(download_id),
+                            error: None,
+                        }
+                    }
+                    Err(_) => BatchDownloadResultDto {
+                        input_url: outcome.input_url,
+                        download_id: Some(download_id),
+                        error: Some(
+                            "Download was queued, but its details could not be loaded. Refresh the list."
+                                .to_owned(),
+                        ),
+                    },
+                }
+            }
+            Err(error) => BatchDownloadResultDto {
+                input_url: outcome.input_url,
+                download_id: None,
+                error: Some(error.to_string()),
+            },
+        };
+        results.push(result);
+    }
+    Ok(results)
 }
 
 fn extension_is_safe(extension: Option<&str>) -> bool {

@@ -4,6 +4,7 @@ import { getEngineStatus } from "../api/engine";
 import {
   addTorrentDownload,
   addDownload,
+  addDownloadBatch,
   addMediaDownload,
   discoverYtDlpFormats,
   extractDownloadLinks,
@@ -142,6 +143,54 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       // Omit engine_kind when Direct HTTP is selected to use the backend default.
       const bulkLinks = await extractDownloadLinks(url);
       const urlsToAdd = bulkLinks.length > 1 ? bulkLinks : [url];
+      if (urlsToAdd.length > 1) {
+        const results = await addDownloadBatch({
+          urls: urlsToAdd,
+          packageName: packageName.trim() || undefined,
+          engine: engineKind === "yt_dlp" ? "yt_dlp" : "direct_http",
+          priority,
+          formatId: audioFormat ? undefined : selectedFormatId || undefined,
+          extension:
+            audioFormat ||
+            formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+          audioFormat: audioFormat || undefined,
+        });
+        const failures = results
+          .filter((result) => result.error)
+          .map((result) => `${result.input_url}: ${result.error}`);
+        const failedUrls = results
+          .filter((result) => !result.download_id)
+          .map((result) => result.input_url);
+
+        if (scheduleEnabled) {
+          const ms = new Date(scheduledAt).getTime();
+          for (const result of results) {
+            if (!result.download_id) continue;
+            try {
+              await scheduleDownload(result.download_id, ms);
+            } catch (cause) {
+              failures.push(`${result.input_url}: scheduling failed (${errorMessage(cause)})`);
+            }
+          }
+        }
+
+        if (failures.length > 0) {
+          setUrl(failedUrls.join("\n"));
+          setSelectedFormatId("");
+          setAudioFormat("");
+          const queuedCount = results.filter((result) => result.download_id).length;
+          setError(
+            `${queuedCount} of ${results.length} downloads were queued. ` +
+              failures.slice(0, 5).join(" "),
+          );
+          setBusy(false);
+          return;
+        }
+
+        onAdded();
+        return;
+      }
+
       for (const targetUrl of urlsToAdd) {
         const download = isTorrentFile && torrentInspection
           ? await addTorrentDownload(url.trim(), selectedTorrentFiles)
