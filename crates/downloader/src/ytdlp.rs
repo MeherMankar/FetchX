@@ -929,19 +929,18 @@ async fn validate_version_cached(
     } else {
         None
     };
-    if let (Some(cache_path), Some((size, modified_ms))) = (cache_path, identity) {
-        if let Some(record) = read_version_cache(cache_path).await
-            && record.executable_path == executable
-            && record.executable_size == size
-            && record.executable_modified_unix_ms == modified_ms
-            && record.version.len() <= MAX_VERSION_OUTPUT_BYTES
-            && !record.version.trim().is_empty()
-            && unix_seconds()
-                .and_then(|now| now.checked_sub(record.validated_at_unix_secs))
-                .is_some_and(|age| age <= VERSION_CACHE_TTL.as_secs())
-        {
-            return Ok(record.version);
-        }
+    if let (Some(cache_path), Some((size, modified_ms))) = (cache_path, identity)
+        && let Some(record) = read_version_cache(cache_path).await
+        && record.executable_path == executable
+        && record.executable_size == size
+        && record.executable_modified_unix_ms == modified_ms
+        && record.version.len() <= MAX_VERSION_OUTPUT_BYTES
+        && !record.version.trim().is_empty()
+        && unix_seconds()
+            .and_then(|now| now.checked_sub(record.validated_at_unix_secs))
+            .is_some_and(|age| age <= VERSION_CACHE_TTL.as_secs())
+    {
+        return Ok(record.version);
     }
 
     let version = runner.validate_version(executable, timeout).await?;
@@ -983,10 +982,10 @@ async fn read_version_cache(path: &Path) -> Option<YtDlpVersionCacheRecord> {
 }
 
 fn unix_seconds() -> Option<u64> {
-    std::time::SystemTime::now()
+    let duration = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| u64::try_from(duration.as_secs()).ok())
+        .ok()?;
+    Some(duration.as_secs())
 }
 
 fn download_failure_diagnostic_code(error: &DownloadEngineError) -> &'static str {

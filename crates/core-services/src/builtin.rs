@@ -175,13 +175,12 @@ pub fn extract_download_links(text: &str) -> Vec<String> {
             .to_owned();
         if !candidate.is_empty() {
             candidate = candidate.trim_end_matches('/').to_owned();
-            if let Ok(url) = Url::parse(&candidate) {
-                if matches!(url.scheme(), "http" | "https")
-                    && url.host_str().is_some()
-                    && !links.iter().any(|existing: &String| existing == &candidate)
-                {
-                    links.push(candidate);
-                }
+            if let Ok(url) = Url::parse(&candidate)
+                && matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && !links.iter().any(|existing: &String| existing == &candidate)
+            {
+                links.push(candidate);
             }
         }
         let next = if candidate_end <= start {
@@ -234,7 +233,7 @@ pub fn normalize_download_url(url: &str) -> String {
         Ok(parsed) => parsed,
         Err(_) => return trimmed.to_owned(),
     };
-    let _ = parsed.set_fragment(None);
+    parsed.set_fragment(None);
     if let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) {
         let _ = parsed.set_host(Some(&host));
     }
@@ -333,14 +332,14 @@ fn decode_percent_bytes(value: String) -> String {
     let mut output = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) =
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                output.push(high * 16 + low);
-                index += 3;
-                continue;
-            }
+        {
+            output.push(high * 16 + low);
+            index += 3;
+            continue;
         }
         output.push(bytes[index]);
         index += 1;

@@ -104,6 +104,12 @@ struct ServiceInner {
     core: CoreServices,
 }
 
+struct DownloadFormatOptions {
+    engine: EngineKind,
+    format_id: Option<String>,
+    audio_format: Option<YtDlpAudioFormat>,
+}
+
 // ── Public DownloadService type exposed via UniFFI ────────────────────────
 
 /// The central Android bridge service. Wraps all core services and
@@ -381,7 +387,17 @@ impl DownloadService {
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
         let engine = engine_for_url(&url);
-        self.add_download_for_engine(url, filename, destination, priority, engine, None, None)
+        self.add_download_for_engine(
+            url,
+            filename,
+            destination,
+            priority,
+            DownloadFormatOptions {
+                engine,
+                format_id: None,
+                audio_format: None,
+            },
+        )
     }
 
     pub fn add_download_with_sha256(
@@ -392,16 +408,18 @@ impl DownloadService {
         priority: DownloadPriorityDto,
         expected_sha256: String,
     ) -> Result<String, MobileApiError> {
-        validate_sha256(&expected_sha256).map_err(|message| MobileApiError::Validation(message))?;
+        validate_sha256(&expected_sha256).map_err(MobileApiError::Validation)?;
         let engine = engine_for_url(&url);
         let result = self.add_download_for_engine(
             url,
             filename,
             destination.clone(),
             priority,
-            engine,
-            None,
-            None,
+            DownloadFormatOptions {
+                engine,
+                format_id: None,
+                audio_format: None,
+            },
         )?;
         let checksum_path = checksum_sidecar_path(Path::new(&destination));
         std::fs::write(checksum_path, expected_sha256.trim().to_ascii_lowercase()).map_err(
@@ -640,9 +658,11 @@ impl DownloadService {
             filename,
             destination,
             priority,
-            engine,
-            format_id,
-            audio_format,
+            DownloadFormatOptions {
+                engine,
+                format_id,
+                audio_format,
+            },
         )
     }
 
@@ -684,10 +704,13 @@ impl DownloadService {
         filename: String,
         destination: String,
         priority: DownloadPriorityDto,
-        engine: EngineKind,
-        format_id: Option<String>,
-        audio_format: Option<YtDlpAudioFormat>,
+        format_options: DownloadFormatOptions,
     ) -> Result<String, MobileApiError> {
+        let DownloadFormatOptions {
+            engine,
+            format_id,
+            audio_format,
+        } = format_options;
         // Validate inputs before locking the inner service.
         if url.trim().is_empty() {
             return Err(MobileApiError::Validation(

@@ -652,24 +652,22 @@ where
     let mut shutdown_waiters = Vec::<oneshot::Sender<Result<(), QueueError>>>::new();
 
     loop {
-        if !stopping {
-            if !dispatch_paused {
-                start_eligible(
-                    Arc::clone(&engine),
-                    &config,
-                    &mut entries,
-                    &deferred,
-                    &mut active,
-                    &mut workers,
-                    &mut task_downloads,
-                    &resource_sender,
-                    &resources,
-                    pressure,
-                    &mut last_priority,
-                    &mut consecutive_priority_starts,
-                )
-                .await?;
-            }
+        if !stopping && !dispatch_paused {
+            start_eligible(
+                Arc::clone(&engine),
+                &config,
+                &mut entries,
+                &deferred,
+                &mut active,
+                &mut workers,
+                &mut task_downloads,
+                &resource_sender,
+                &resources,
+                pressure,
+                &mut last_priority,
+                &mut consecutive_priority_starts,
+            )
+            .await?;
         }
         allocate_resources(
             &mut active,
