@@ -192,6 +192,19 @@ function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
             Enabled features: {result.enabled_features.join(", ") || "none reported"}
           </span>
         )}
+        {result.aria2_global_stat && (
+          <>
+            <span className="diagnostic-version">
+              aria2 activity: {result.aria2_global_stat.active_downloads} active,{" "}
+              {result.aria2_global_stat.waiting_downloads} waiting,{" "}
+              {result.aria2_global_stat.stopped_results} stopped results
+            </span>
+            <span className="diagnostic-version">
+              aria2 rate: ↓ {result.aria2_global_stat.download_speed_bytes_per_second} B/s,{" "}
+              ↑ {result.aria2_global_stat.upload_speed_bytes_per_second} B/s
+            </span>
+          </>
+        )}
         {result.executable && (
           <span className="diagnostic-path" title={result.executable}>
             {result.executable}

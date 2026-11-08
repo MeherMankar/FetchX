@@ -21,7 +21,7 @@ Capabilities have two independent states:
 | Metalink | Available | Core implementation; advertise from runtime status | Core implementation; advertise from runtime status | Available |
 | Native BitTorrent/torrent | Available | Available; Android selects native fallback | Available; desktop native-torrent route | Core implementation; host availability as configured |
 | aria2 engine adapter | Shared `Aria2Client`/`Aria2Engine`; `CoreServices` starts a configured local supervisor | Available only through the host's configured runtime; no remote endpoint UI in this phase | Local engine settings plus a non-persistent HTTPS remote RPC probe | Local configured engine; CLI remote commands target FetchX, not aria2 |
-| Remote aria2 endpoint preflight | Shared Rust JSON-RPC validation and `getVersion` parsing | Client code exists, but no UniFFI probe operation or Android UI | Test endpoint without saving it; show version and `enabledFeatures` | No CLI, FetchX remote RPC, remote UI, or browser-native-host probe |
+| Remote aria2 endpoint preflight | Shared Rust JSON-RPC validation and `getVersion` / `getGlobalStat` parsing | Client code exists, but no UniFFI probe operation or Android UI | Test endpoint without saving it; show version, `enabledFeatures`, activity counts, and transfer rates | No CLI, FetchX remote RPC, remote UI, or browser-native-host probe |
 | yt-dlp | Available with process runner | Android runtime adapter supplies implementation | Optional executable/helper adapter | Optional executable/configuration |
 | yt-dlp audio extraction (MP3/M4A) | Typed source option and shared argument/lifecycle handling | Browser picker via UniFFI; bundled FFmpeg is passed for extraction | Tauri Add dialog supports MP3/M4A | Local CLI `--audio-format`; remote API/UI and browser extension/native host do not expose media-specific selection |
 | FFmpeg/FFprobe | Available process orchestration | Android bundles statically linked FFmpeg runtime | Optional helper executable | Optional executable/configuration |
@@ -55,9 +55,10 @@ Android background recovery:
 Remote aria2 preflight:
 
 - The desktop probe reuses `Aria2Client`; HTTPS is required for remote hosts, while HTTP is accepted only for an IP loopback address. Embedded credentials, query strings, fragments, redirects, and proxy use are rejected or disabled.
-- A successful `aria2.getVersion` probe displays the daemon version and `enabledFeatures`; authentication and transport errors do not return the configured secret.
+- A successful `aria2.getVersion` probe displays the daemon version and `enabledFeatures`, then reads `aria2.getGlobalStat` for active, waiting, and stopped-result counts plus download/upload bytes per second. If the statistics call fails or is unsupported, the daemon remains reported as reachable and the UI explicitly notes that statistics could not be read.
+- Authentication and transport errors do not return the configured secret. Statistics are transient and are not persisted.
 - This is connectivity/capability discovery only. It does not configure remote aria2 as the download engine or expose arbitrary endpoint testing through FetchX's authenticated remote API.
-- No persistence or migration is involved.
+- The Tauri diagnostic response has an additive optional statistics field. Android, CLI, FetchX remote JSON-RPC, and browser/native-host surfaces are unchanged. No persistence or migration is involved.
 
 Remote engine runtime status:
 

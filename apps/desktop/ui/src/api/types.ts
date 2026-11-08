@@ -254,6 +254,13 @@ export interface DiagnosticResult {
   executable: string | null;
   version: string | null;
   enabled_features?: string[];
+  aria2_global_stat?: {
+    download_speed_bytes_per_second: number;
+    upload_speed_bytes_per_second: number;
+    active_downloads: number;
+    waiting_downloads: number;
+    stopped_results: number;
+  };
   message: string;
 }
 

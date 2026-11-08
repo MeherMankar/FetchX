@@ -525,6 +525,11 @@ impl Aria2Client {
         self.call("aria2.getVersion", Vec::new()).await
     }
 
+    pub async fn get_global_stat(&self) -> Result<Aria2GlobalStat, Aria2ClientError> {
+        let raw: RawGlobalStat = self.call("aria2.getGlobalStat", Vec::new()).await?;
+        raw.try_into()
+    }
+
     pub async fn shutdown(&self) -> Result<(), Aria2ClientError> {
         let _: String = self.call("aria2.shutdown", Vec::new()).await?;
         Ok(())
@@ -965,6 +970,43 @@ impl Aria2Version {
 
     pub fn enabled_features(&self) -> &[String] {
         &self.enabled_features
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Aria2GlobalStat {
+    pub download_speed_bytes_per_second: u64,
+    pub upload_speed_bytes_per_second: u64,
+    pub active_downloads: u64,
+    pub waiting_downloads: u64,
+    pub stopped_results: u64,
+}
+
+#[derive(Deserialize)]
+struct RawGlobalStat {
+    #[serde(rename = "downloadSpeed")]
+    download_speed: String,
+    #[serde(rename = "uploadSpeed")]
+    upload_speed: String,
+    #[serde(rename = "numActive")]
+    num_active: String,
+    #[serde(rename = "numWaiting")]
+    num_waiting: String,
+    #[serde(rename = "numStopped")]
+    num_stopped: String,
+}
+
+impl TryFrom<RawGlobalStat> for Aria2GlobalStat {
+    type Error = Aria2ClientError;
+
+    fn try_from(raw: RawGlobalStat) -> Result<Self, Self::Error> {
+        Ok(Self {
+            download_speed_bytes_per_second: parse_counter(&raw.download_speed)?,
+            upload_speed_bytes_per_second: parse_counter(&raw.upload_speed)?,
+            active_downloads: parse_counter(&raw.num_active)?,
+            waiting_downloads: parse_counter(&raw.num_waiting)?,
+            stopped_results: parse_counter(&raw.num_stopped)?,
+        })
     }
 }
 
@@ -2376,6 +2418,16 @@ mod tests {
         json!({"version":"1.37.0","enabledFeatures":["Async DNS","HTTPS"]})
     }
 
+    fn rpc_result_global_stat() -> Value {
+        json!({
+            "downloadSpeed":"1024",
+            "uploadSpeed":"128",
+            "numActive":"2",
+            "numWaiting":"3",
+            "numStopped":"4"
+        })
+    }
+
     fn raw_status(status: &str, completed: &str, total: &str) -> super::RawStatus {
         super::RawStatus {
             gid: "0123456789abcdef".to_owned(),
@@ -2426,6 +2478,66 @@ mod tests {
             )
             .contains(TEST_TOKEN)
         );
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn global_stat_parses_counters_and_authenticates_request() -> Result<(), Box<dyn Error>> {
+        let (endpoint, mut requests, server) =
+            start_server([MockReply::Result(rpc_result_global_stat())]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+
+        assert_eq!(
+            client.get_global_stat().await?,
+            super::Aria2GlobalStat {
+                download_speed_bytes_per_second: 1024,
+                upload_speed_bytes_per_second: 128,
+                active_downloads: 2,
+                waiting_downloads: 3,
+                stopped_results: 4,
+            }
+        );
+
+        let request = requests.recv().await.ok_or("missing global-stat request")?;
+        assert_eq!(request["method"], "aria2.getGlobalStat");
+        assert_eq!(request["params"][0], format!("token:{TEST_TOKEN}"));
+        assert_eq!(request["params"].as_array().map(Vec::len), Some(1));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn global_stat_rejects_malformed_counters() -> Result<(), Box<dyn Error>> {
+        let (endpoint, _requests, server) = start_server([MockReply::Result(json!({
+            "downloadSpeed":"-1",
+            "uploadSpeed":"0",
+            "numActive":"0",
+            "numWaiting":"0",
+            "numStopped":"0"
+        }))])
+        .await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+
+        assert!(matches!(
+            client.get_global_stat().await,
+            Err(Aria2ClientError::InvalidResponse)
+        ));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn global_stat_propagates_unsupported_method_error() -> Result<(), Box<dyn Error>> {
+        let (endpoint, mut requests, server) = start_server([MockReply::RpcError(-32601)]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+
+        assert!(matches!(
+            client.get_global_stat().await,
+            Err(Aria2ClientError::Rpc { code: -32601 })
+        ));
+        let request = requests.recv().await.ok_or("missing global-stat request")?;
+        assert_eq!(request["method"], "aria2.getGlobalStat");
         server.await?;
         Ok(())
     }

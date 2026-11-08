@@ -14,7 +14,7 @@ use std::{path::PathBuf, time::Duration};
 use fetchx_core_services::{
     Aria2Config, ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
 };
-use fetchx_downloader::{Aria2Client, Aria2ClientConfig};
+use fetchx_downloader::{Aria2Client, Aria2ClientConfig, Aria2GlobalStat};
 use fetchx_models::{ResourcePolicy, ResourceProfile};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -130,6 +130,9 @@ pub struct DiagnosticResult {
     /// Features reported by aria2's JSON-RPC `getVersion` method.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled_features: Option<Vec<String>>,
+    /// Read-only aggregate status returned by aria2's `getGlobalStat`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aria2_global_stat: Option<Aria2GlobalStat>,
     /// Human-readable status message.
     pub message: String,
 }
@@ -411,6 +414,7 @@ pub async fn test_aria2_config(
                 executable: None,
                 version: None,
                 enabled_features: None,
+                aria2_global_stat: None,
                 message: e.message,
             });
         }
@@ -435,6 +439,7 @@ pub async fn test_aria2_config(
                 executable: Some(executable.to_string_lossy().into_owned()),
                 version: Some(version),
                 enabled_features: None,
+                aria2_global_stat: None,
                 message: "aria2 is available.".to_owned(),
             })
         }
@@ -448,6 +453,7 @@ pub async fn test_aria2_config(
                 executable: Some(executable.to_string_lossy().into_owned()),
                 version: None,
                 enabled_features: None,
+                aria2_global_stat: None,
                 message: format!(
                     "aria2 exited with status {}.",
                     out.status
@@ -462,6 +468,7 @@ pub async fn test_aria2_config(
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
             enabled_features: None,
+            aria2_global_stat: None,
             message: format!("Could not start aria2: {io_err}"),
         }),
         Err(_timeout) => Ok(DiagnosticResult {
@@ -469,6 +476,7 @@ pub async fn test_aria2_config(
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
             enabled_features: None,
+            aria2_global_stat: None,
             message: "aria2 version check timed out.".to_owned(),
         }),
     }
@@ -493,24 +501,40 @@ pub async fn test_remote_aria2(
                 executable: None,
                 version: None,
                 enabled_features: None,
+                aria2_global_stat: None,
                 message: error.to_string(),
             });
         }
     };
 
     match client.get_version().await {
-        Ok(version) => Ok(DiagnosticResult {
-            available: true,
-            executable: None,
-            version: Some(version.version().to_owned()),
-            enabled_features: Some(version.enabled_features().to_vec()),
-            message: "Remote aria2 RPC is available.".to_owned(),
-        }),
+        Ok(version) => {
+            let (aria2_global_stat, message) = match client.get_global_stat().await {
+                Ok(stats) => (
+                    Some(stats),
+                    "Remote aria2 RPC and global statistics are available.".to_owned(),
+                ),
+                Err(_) => (
+                    None,
+                    "Remote aria2 RPC is available, but global statistics could not be read."
+                        .to_owned(),
+                ),
+            };
+            Ok(DiagnosticResult {
+                available: true,
+                executable: None,
+                version: Some(version.version().to_owned()),
+                enabled_features: Some(version.enabled_features().to_vec()),
+                aria2_global_stat,
+                message,
+            })
+        }
         Err(error) => Ok(DiagnosticResult {
             available: false,
             executable: None,
             version: None,
             enabled_features: None,
+            aria2_global_stat: None,
             message: format!("Remote aria2 RPC check failed: {error}"),
         }),
     }
@@ -536,6 +560,7 @@ pub async fn test_ytdlp_config(
                 executable: None,
                 version: None,
                 enabled_features: None,
+                aria2_global_stat: None,
                 message: e.message,
             });
         }
@@ -557,6 +582,7 @@ pub async fn test_ytdlp_config(
                 executable: Some(executable.to_string_lossy().into_owned()),
                 version: Some(version),
                 enabled_features: None,
+                aria2_global_stat: None,
                 message: "yt-dlp is available.".to_owned(),
             })
         }
@@ -565,6 +591,7 @@ pub async fn test_ytdlp_config(
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
             enabled_features: None,
+            aria2_global_stat: None,
             message: format!(
                 "yt-dlp exited with status {}.",
                 out.status
@@ -578,6 +605,7 @@ pub async fn test_ytdlp_config(
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
             enabled_features: None,
+            aria2_global_stat: None,
             message: format!("Could not start yt-dlp: {io_err}"),
         }),
         Err(_timeout) => Ok(DiagnosticResult {
@@ -585,6 +613,7 @@ pub async fn test_ytdlp_config(
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
             enabled_features: None,
+            aria2_global_stat: None,
             message: "yt-dlp version check timed out.".to_owned(),
         }),
     }
@@ -641,11 +670,20 @@ mod tests {
             executable: Some("/usr/bin/aria2c".to_owned()),
             version: Some("aria2 version 1.37.0".to_owned()),
             enabled_features: Some(vec!["HTTPS".to_owned()]),
+            aria2_global_stat: Some(Aria2GlobalStat {
+                download_speed_bytes_per_second: 1024,
+                upload_speed_bytes_per_second: 128,
+                active_downloads: 2,
+                waiting_downloads: 3,
+                stopped_results: 4,
+            }),
             message: "aria2 is available.".to_owned(),
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains(r#""available":true"#));
         assert!(json.contains(r#""version":"aria2 version 1.37.0""#));
         assert!(json.contains(r#""enabled_features":["HTTPS"]"#));
+        assert!(json.contains(r#""active_downloads":2"#));
+        assert!(json.contains(r#""stopped_results":4"#));
     }
 }

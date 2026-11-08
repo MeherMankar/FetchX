@@ -184,3 +184,12 @@ Implement **Milestone 0 and Milestone 1 together**:
 - add tests proving same-core behavior across Android and desktop bindings.
 
 This is low-risk and establishes the acceptance criterion before later lifecycle or capability migrations.
+
+## Current Persepolis-derived progress
+
+- Reviewed Persepolis revision `109e95261fa2827bf7bf1b24173328d90235a53e` (2025-08-10). Its root license is GNU GPL version 3; reviewed Python headers specify GPL version 3 or later. No source was copied.
+- The reviewed Persepolis transfer path is its own segmented downloader; no aria2 JSON-RPC frontend behavior was established in the inspected source. FetchX's existing Rust aria2 client/engine and desktop-only remote preflight were verified before selecting the feature.
+- Added `Aria2Client::get_global_stat` and a typed, validated result in the shared downloader crate. The existing desktop remote aria2 probe now reports activity counts and download/upload rates after `getVersion`. A failed or unsupported statistics request does not invalidate a successful connectivity/version probe.
+- Integration is intentionally limited to the existing desktop Tauri diagnostic and settings UI. No external endpoint execution, FetchX remote RPC, Android, CLI, or browser operation was added. No endpoint/token/statistic persistence, migration, or dependency was introduced.
+- Focused RPC tests, the downloader crate suite, desktop diagnostic serialization test, Rust formatting/whitespace checks, and desktop UI build results are recorded in `docs/research/PERSEPOLIS_FEATURE_ANALYSIS.md`. No live aria2 daemon or device/emulator test was run.
+- Recommended next research/work item in the established order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
