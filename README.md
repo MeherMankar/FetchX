@@ -233,11 +233,12 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
 
 GitHub Actions builds Android, Windows, Linux, and macOS packages plus CLI
 binaries. To create a draft release manually, run **Actions → Release → Run
-workflow** and enter an app version such as `alpha.0.0.1`, `1.2.3`, or `v1.2.3`.
-The workflow adds the `v` prefix for the release tag and uses the entered version
-for the Android APK's displayed version. Its Android version code is generated
-from the workflow run number. Desktop and CLI package versions still come from
-their project manifests.
+workflow** and enter an app version such as `alpha.0.0.1`, `a0.0.4`, `1.2.3`,
+or `v1.2.3`. The shorthand `a`, `b`, and `rc` prefixes are normalized to the
+corresponding alpha, beta, or release-candidate version. The workflow adds the
+`v` prefix for the release tag and uses the normalized display version for the
+Android APK. Its Android version code is generated from the workflow run number.
+Desktop and CLI package versions still come from their project manifests.
 
 The manual workflow lets you select which platform packages to build; all are
 enabled by default. Tag-triggered releases build every platform. See

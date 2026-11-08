@@ -100,13 +100,6 @@ function classifyByMime(mimeType: string | null | undefined): MediaKind | null {
   return null;
 }
 
-function classify(
-  url: string,
-  mimeType: string | null | undefined,
-): MediaKind | null {
-  return classifyByMime(mimeType) ?? classifyByUrl(url);
-}
-
 // ── Suggested filename ─────────────────────────────────────────────
 
 function suggestFilename(url: string, kind: MediaKind): string {

@@ -33,6 +33,14 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Set up Node.js for browser extension
+        if: runner.os == 'Windows'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/browser/extension/package-lock.json
+
       - name: Build browser extension (Windows CI includes fetchx-desktop)
         if: runner.os == 'Windows'
         run: |
@@ -173,7 +181,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: |
             apps/browser/extension/package-lock.json
