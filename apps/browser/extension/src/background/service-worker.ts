@@ -26,6 +26,12 @@ import {
   submitDownloadWithResolvedFilename,
   type DownloadSubmission,
 } from "./download-interception";
+import {
+  registerMediaInterception,
+  getMediaForTab,
+  clearMediaForTab,
+  type DetectedStream,
+} from "./media-interception";
 
 // ────────────────────────────────────────────────────────────
 // Settings (persisted in chrome.storage.local)
@@ -109,6 +115,49 @@ let taskCache: CachedDownload[] = [];
 const CLAIMED_DOWNLOAD_IDS_KEY = "interceptedBrowserDownloadIds";
 const MAX_CLAIMED_DOWNLOAD_IDS = 512;
 const claimingDownloadIds = new Set<number>();
+
+// ────────────────────────────────────────────────────────────
+// Network-level media interception (HLS, DASH, video/audio)
+// ────────────────────────────────────────────────────────────
+
+// Register webRequest listeners for media detection.
+// The onStreamDetected callback fires when a new stream is found on a tab.
+const webRequestApi = (browserApi as unknown as {
+  webRequest?: {
+    onSendHeaders: { addListener: (cb: Function, filter: object, extra: string[]) => void };
+    onResponseStarted: { addListener: (cb: Function, filter: object, extra: string[]) => void };
+  };
+}).webRequest;
+
+if (webRequestApi) {
+  registerMediaInterception(
+    webRequestApi,
+    (stream: DetectedStream) => {
+      // Optionally notify — we keep it silent unless user has notifications on
+      void getSettings().then((s) => {
+        if (s.showNotifications) {
+          const label =
+            stream.kind === "hls" ? "HLS stream"
+              : stream.kind === "dash" ? "DASH stream"
+              : stream.kind === "audio" ? "Audio"
+              : "Video";
+          notify(`Media detected on tab ${stream.tabId}`, `${label}: ${stream.suggestedFilename}`);
+        }
+      });
+    },
+  );
+}
+
+// Clear per-tab media when the tab navigates or is closed.
+browserApi.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) {
+    clearMediaForTab(tabId);
+  }
+});
+
+browserApi.tabs.onRemoved.addListener((tabId) => {
+  clearMediaForTab(tabId);
+});
 
 // ────────────────────────────────────────────────────────────
 // Context menus
@@ -330,6 +379,21 @@ browserApi.runtime.onMessage.addListener(
       case "target_changed":
         void refreshTasks().then(() => sendResponse({ ok: true }));
         return true;
+
+      case "get_media_for_tab":
+        if (typeof message.tabId === "number") {
+          sendResponse(getMediaForTab(message.tabId));
+        } else {
+          sendResponse([]);
+        }
+        return false;
+
+      case "clear_media_for_tab":
+        if (typeof message.tabId === "number") {
+          clearMediaForTab(message.tabId);
+        }
+        sendResponse({ ok: true });
+        return false;
     }
 
     sendResponse(null);

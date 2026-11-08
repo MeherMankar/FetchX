@@ -240,8 +240,20 @@ async function scanPage() {
   try {
     const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) throw new Error("No active tab");
-    const results = await browserApi.tabs.sendMessage(tab.id, { type: "scan_resources" }) as Resource[];
-    currentResources = Array.isArray(results) ? results : [];
+
+    // Run DOM scan (content script) + network media query (background) in parallel
+    const [domResults, networkMedia] = await Promise.all([
+      browserApi.tabs.sendMessage(tab.id, { type: "scan_resources" }) as Promise<Resource[]>,
+      sendRuntimeMessage<NetworkStream[]>({ type: "get_media_for_tab", tabId: tab.id }),
+    ]);
+
+    const domResources: Resource[] = Array.isArray(domResults) ? domResults : [];
+    const networkResources: Resource[] = (Array.isArray(networkMedia) ? networkMedia : []).map(streamToResource);
+    // Merge, deduplicating by URL (DOM-scan results take priority)
+    const seen = new Set(domResources.map((r) => r.url));
+    const merged = [...domResources, ...networkResources.filter((r) => !seen.has(r.url))];
+
+    currentResources = merged;
     selectedUrls.clear();
     scanEmpty.classList.add("hidden");
     resourceList.classList.remove("hidden");
@@ -251,6 +263,22 @@ async function scanPage() {
     scanBtn.disabled = false;
     scanEmpty.innerHTML = `<p>Could not scan this page.<br>Reload the page and try again.</p>`;
   }
+}
+
+interface NetworkStream {
+  kind: string;
+  url: string;
+  suggestedFilename: string;
+  mimeType: string | null;
+  contentLength: number | null;
+}
+
+function streamToResource(s: NetworkStream): Resource {
+  return {
+    url: s.url,
+    type: s.kind === "audio" ? "audio" : "video",
+    label: s.suggestedFilename || s.url.split("/").pop() || s.url.slice(0, 60),
+  };
 }
 
 function renderResources() {

@@ -17,7 +17,8 @@
     "storage",
     "notifications",
     "<all_urls>",
-    "cookies"
+    "cookies",
+    "webRequest"
   ],
   "background": {
     "scripts": [
