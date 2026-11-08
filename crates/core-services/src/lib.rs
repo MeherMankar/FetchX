@@ -419,6 +419,24 @@ impl CoreServices {
         &self.downloads_dir
     }
 
+    /// Admits a batch using a per-source package when no explicit package is set.
+    ///
+    /// This delegates validation, collision handling, partial results, and queue
+    /// lifecycle to [`Self::enqueue_download_batch`].
+    pub async fn enqueue_download_batch_by_source(
+        &self,
+        mut requests: Vec<BatchDownloadRequest>,
+        priority: DownloadPriority,
+    ) -> Vec<BatchDownloadOutcome> {
+        for request in &mut requests {
+            if request.package_name.is_none() {
+                let filename = suggest_download_filename(&request.url);
+                request.package_name = Some(suggest_download_package_name(&request.url, &filename));
+            }
+        }
+        self.enqueue_download_batch(requests, priority).await
+    }
+
     /// Returns only fields that change during download execution.
     ///
     /// Clients can poll this compact projection without transferring durable
@@ -2115,7 +2133,7 @@ mod tests {
 
     use super::{
         BatchDownloadError, BatchDownloadRequest, CoreServices, CoreServicesConfig,
-        EngineAvailability,
+        EngineAvailability, suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
 
@@ -2304,6 +2322,70 @@ mod tests {
         assert!(destinations.iter().any(|path| path.ends_with("file")));
         assert!(destinations.iter().any(|path| path.ends_with("file (2)")));
         assert!(destinations.iter().any(|path| path.ends_with("file (3)")));
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_admission_groups_links_by_source_unless_package_is_explicit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        services.pause_queue_dispatch().await?;
+        let requests = [
+            ("https://alpha.example.com/one.bin", None),
+            ("https://alpha.example.com/two.bin", None),
+            ("https://beta.example.org/three.bin", None),
+            ("https://gamma.example.net/four.bin", Some("Manual package")),
+        ]
+        .into_iter()
+        .map(|(url, package_name)| BatchDownloadRequest {
+            url: url.to_owned(),
+            package_name: package_name.map(str::to_owned),
+            engine: EngineKind::DirectHttp,
+            format_id: None,
+            extension: None,
+            audio_format: None,
+        })
+        .collect();
+
+        let results = services
+            .enqueue_download_batch_by_source(requests, DownloadPriority::Normal)
+            .await;
+        assert!(results.iter().all(|result| result.result.is_ok()));
+
+        let downloads = services.repository.list().await?;
+        for item in &downloads {
+            let package = item
+                .destination()
+                .parent()
+                .and_then(std::path::Path::file_name)
+                .and_then(std::ffi::OsStr::to_str)
+                .expect("package directory is present");
+            let expected = match item.source().url() {
+                "https://alpha.example.com/one.bin" | "https://alpha.example.com/two.bin" => {
+                    suggest_download_package_name(item.source().url(), "")
+                }
+                "https://beta.example.org/three.bin" => {
+                    suggest_download_package_name(item.source().url(), "")
+                }
+                "https://gamma.example.net/four.bin" => "Manual package".to_owned(),
+                url => panic!("unexpected batch URL: {url}"),
+            };
+            assert_eq!(package, expected);
+        }
+
+        let alpha_package = suggest_download_package_name("https://alpha.example.com/one.bin", "");
+        assert_eq!(
+            downloads
+                .iter()
+                .filter(|item| item
+                    .destination()
+                    .starts_with(root.path().join("downloads").join(&alpha_package)))
+                .count(),
+            2
+        );
 
         services.shutdown().await?;
         Ok(())

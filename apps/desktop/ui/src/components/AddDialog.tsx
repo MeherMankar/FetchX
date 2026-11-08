@@ -63,6 +63,7 @@ function engineUnavailableReason(kind: EngineKind, status: EngineStatus | null):
 export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps) {
   const [url, setUrl] = useState(initialUrl);
   const [packageName, setPackageName] = useState("");
+  const [packageNameEdited, setPackageNameEdited] = useState(false);
   const [priority, setPriority] = useState<DownloadPriority>("normal");
   const [engineKind, setEngineKind] = useState<EngineKind>("direct_http");
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
@@ -85,7 +86,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isTorrent = isMagnet || isTorrentFile;
 
   useEffect(() => {
-    if (packageName.trim() || !url.trim()) return;
+    if (packageNameEdited || packageName.trim() || !url.trim()) return;
     let cancelled = false;
     const firstUrl = extractDownloadLinks(url)
       .then((links) => links[0] ?? url.trim())
@@ -98,7 +99,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, [url, packageName]);
+  }, [url, packageName, packageNameEdited]);
 
   // Load engine availability once when the dialog opens.
   // No polling — one fetch on mount.
@@ -146,7 +147,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       if (urlsToAdd.length > 1) {
         const results = await addDownloadBatch({
           urls: urlsToAdd,
-          packageName: packageName.trim() || undefined,
+          packageName: packageNameEdited ? packageName.trim() || undefined : undefined,
           engine: engineKind === "yt_dlp" ? "yt_dlp" : "direct_http",
           priority,
           formatId: audioFormat ? undefined : selectedFormatId || undefined,
@@ -289,12 +290,16 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               id="add-package"
               className="field-input"
               value={packageName}
-              onChange={(event) => setPackageName(event.target.value)}
+              onChange={(event) => {
+                setPackageName(event.target.value);
+                setPackageNameEdited(true);
+              }}
               placeholder="FetchX Downloads"
               disabled={busy}
             />
             <p className="field-hint">
-              Related downloads are stored together in this package folder.
+              Related downloads are stored together in this package folder. For batches, leave the
+              suggested name unchanged to group links by source.
             </p>
           </div>
 

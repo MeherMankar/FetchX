@@ -1055,9 +1055,15 @@ pub async fn add_download_batch(
             audio_format,
         })
         .collect();
-    let outcomes = core_services
-        .enqueue_download_batch(requests, priority)
-        .await;
+    let outcomes = if package_name.is_some() {
+        core_services
+            .enqueue_download_batch(requests, priority)
+            .await
+    } else {
+        core_services
+            .enqueue_download_batch_by_source(requests, priority)
+            .await
+    };
     let mut results = Vec::with_capacity(outcomes.len());
     for outcome in outcomes {
         let result = match outcome.result {
