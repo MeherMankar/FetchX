@@ -29,6 +29,17 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - Focused queue/storage, adapter, frontend, and Android unit/build results are recorded in `docs/research/AB_DOWNLOAD_MANAGER_FEATURE_ANALYSIS.md`.
 - Next repository in the research order: Download Navi, focusing on Android background reliability rather than another queue-ordering feature.
 
+## Current Download Navi–derived progress
+
+- Reviewed Download Navi at revision `10c7f9e5b306f66b122782e4878446d0ff2ac9b9`; its README states GNU GPL version 3 or later and `LICENSE.md` contains GPLv3. No upstream source was copied.
+- Verified that FetchX Rust already requeues interrupted persisted downloads during queue initialization and preserves downloader partials.
+- Fixed the Android foreground service restart policy: when the bridge is available, a system restart (including a null start intent) is sticky; when the bridge is unavailable, the service stops and remains non-sticky.
+- The service and Android repository remain adapters. Rust continues to own recovery decisions, queue eligibility, retries, and transfer execution.
+- No schema migration, UniFFI contract change, dependency, or desktop/CLI/remote change was required.
+- `cargo test -p fetchx-queue --lib` passed all 42 tests. The focused Android restart-policy unit test passed with `.\gradlew.bat :app:testDebugUnitTest --tests 'dev.fetchx.app.service.DownloadForegroundServiceTest'`.
+- No Android emulator/device process-recreation test was run. Force-stop and boot-time autostart are not covered.
+- Next repository in the research order: Aria2App, focusing on remote-engine integration.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

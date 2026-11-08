@@ -101,10 +101,12 @@ class DownloadForegroundService : Service() {
         if (repo == null) {
             Log.w(TAG, "Bridge unavailable — stopping service")
             stopSelf(startId)
-            return START_NOT_STICKY
+            return downloadServiceRestartMode(repositoryAvailable = false)
         }
 
-        if (downloadsJob?.isActive == true) return START_NOT_STICKY
+        if (downloadsJob?.isActive == true) {
+            return downloadServiceRestartMode(repositoryAvailable = true)
+        }
 
         startForegroundCompat(0)
         downloadsJob = kotlinx.coroutines.flow.flow {
@@ -168,7 +170,7 @@ class DownloadForegroundService : Service() {
             }
             .launchIn(scope)
 
-        return START_NOT_STICKY
+        return downloadServiceRestartMode(repositoryAvailable = true)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -222,3 +224,6 @@ class DownloadForegroundService : Service() {
         }
     }
 }
+
+internal fun downloadServiceRestartMode(repositoryAvailable: Boolean): Int =
+    if (repositoryAvailable) Service.START_STICKY else Service.START_NOT_STICKY
