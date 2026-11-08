@@ -1038,7 +1038,7 @@ async fn install_with_native_package_manager(helper: HelperId) -> Result<(), Str
             Err(format!(
                 "The native package manager failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
-            ));
+            ))
         };
     }
 

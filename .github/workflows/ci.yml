@@ -48,6 +48,10 @@ jobs:
           npm run build
         working-directory: apps/browser/extension
 
+      - name: Build native messaging host for Tauri resources
+        if: runner.os == 'Windows'
+        run: cargo build --release -p fetchx-native-host
+
       - name: cargo fmt check
         run: cargo fmt --all -- --check
 
