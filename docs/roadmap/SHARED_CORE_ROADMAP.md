@@ -49,6 +49,15 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - Per-target status, upstream files, tests, and limitations are recorded in `docs/research/ARIA2APP_FEATURE_ANALYSIS.md`. Android `START_STICKY` remains covered by host-side policy tests only; no process-recreation test on a device/emulator was run.
 - Recommended next repository/work item in the established research order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
 
+## Current Seal-derived progress
+
+- Reviewed Seal revision `7677f61a20fda4210e84215fef9e9b51d25daa47` and its root GNU GPL version 3 license, dated 29 June 2007. No Seal source was copied.
+- Verified that FetchX already had Rust-owned yt-dlp extraction, video-format selection, progress/cancellation, and Android FFmpeg support for merged formats. Added the single missing capability: opt-in MP3/M4A audio extraction.
+- Rust owns the typed persisted option, validation, `bestaudio/best` selection, yt-dlp conversion arguments, lifecycle, progress, and output finalization. Android Kotlin exposes the browser choice and supplies bundled FFmpeg; desktop and local CLI expose the same shared-core operation.
+- Added the additive SQLite migration 12 and version-2 export handling. Remote JSON-RPC and the browser extension/native-host remain unchanged and do not expose media-specific extraction.
+- Tests, build/runtime limitations, target status, and reviewed Seal source files are recorded in `docs/research/SEAL_FEATURE_ANALYSIS.md`.
+- Recommended next research item: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

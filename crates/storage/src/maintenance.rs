@@ -14,7 +14,7 @@ use sqlx::{Row, SqlitePool};
 use crate::{Database, StorageError, database::MIGRATOR};
 
 pub const MIN_SUPPORTED_SCHEMA_VERSION: i64 = 1;
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const REQUIRED_TABLES: &[&str] = &[
@@ -840,10 +840,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(snapshots.len(), 1);
         let snapshot_check = Database::check_path(snapshots[0].path()).await;
-        assert_eq!(
-            snapshot_check.schema.database_schema_version,
-            Some(CURRENT_SCHEMA_VERSION - 1)
-        );
+        assert_eq!(snapshot_check.schema.database_schema_version, Some(10));
         assert_eq!(
             snapshot_check.schema.state,
             DatabaseSchemaState::MigrationRequired
@@ -879,15 +876,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(snapshots.len(), 1);
         let snapshot_check = Database::check_path(snapshots[0].path()).await;
-        assert_eq!(
-            snapshot_check.schema.database_schema_version,
-            Some(CURRENT_SCHEMA_VERSION - 1)
-        );
+        assert_eq!(snapshot_check.schema.database_schema_version, Some(10));
         let original_check = Database::check_path(&path).await;
-        assert_eq!(
-            original_check.schema.database_schema_version,
-            Some(CURRENT_SCHEMA_VERSION - 1)
-        );
+        assert_eq!(original_check.schema.database_schema_version, Some(10));
         assert!(path.exists());
         Ok(())
     }
@@ -897,7 +888,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("future.db");
         let database = Database::connect_path(&path).await?;
-        sqlx::query("UPDATE _sqlx_migrations SET version = 99 WHERE version = 11")
+        sqlx::query("UPDATE _sqlx_migrations SET version = 99 WHERE version = 12")
             .execute(&database.pool)
             .await?;
         database.pool.close().await;

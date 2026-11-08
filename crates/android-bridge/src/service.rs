@@ -16,7 +16,8 @@ use fetchx_downloader::{
 };
 use fetchx_models::{
     DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId, DownloadItem,
-    DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, global_diagnostics,
+    DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, YtDlpAudioFormat,
+    global_diagnostics,
 };
 use fetchx_plugin_api::{PluginPolicy, PluginTrustContext, PolicyEnvironment, parse_manifest};
 use fetchx_storage::DownloadRepository as _;
@@ -380,7 +381,7 @@ impl DownloadService {
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
         let engine = engine_for_url(&url);
-        self.add_download_for_engine(url, filename, destination, priority, engine, None)
+        self.add_download_for_engine(url, filename, destination, priority, engine, None, None)
     }
 
     pub fn add_download_with_sha256(
@@ -399,6 +400,7 @@ impl DownloadService {
             destination.clone(),
             priority,
             engine,
+            None,
             None,
         )?;
         let checksum_path = checksum_sidecar_path(Path::new(&destination));
@@ -608,10 +610,18 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
         format_id: Option<String>,
+        audio_format: Option<String>,
     ) -> Result<String, MobileApiError> {
+        let audio_format = audio_format
+            .as_deref()
+            .map(YtDlpAudioFormat::try_from)
+            .transpose()
+            .map_err(|error| MobileApiError::Validation(error.to_string()))?;
         // For direct media URLs (mp4, m3u8, webm, etc.) use the appropriate native engine
         // instead of routing through yt-dlp which is unavailable via subprocess on Android.
-        let engine = if format_id.is_none() && is_direct_media_url(&url) {
+        let engine = if audio_format.is_some() {
+            EngineKind::YtDlp
+        } else if format_id.is_none() && is_direct_media_url(&url) {
             if is_hls_url(&url) {
                 EngineKind::Hls
             } else {
@@ -620,7 +630,20 @@ impl DownloadService {
         } else {
             EngineKind::YtDlp
         };
-        self.add_download_for_engine(url, filename, destination, priority, engine, format_id)
+        if audio_format.is_some() && format_id.is_some() {
+            return Err(MobileApiError::Validation(
+                "audio extraction cannot be combined with a selected video format".to_owned(),
+            ));
+        }
+        self.add_download_for_engine(
+            url,
+            filename,
+            destination,
+            priority,
+            engine,
+            format_id,
+            audio_format,
+        )
     }
 
     pub fn discover_media_formats(
@@ -663,6 +686,7 @@ impl DownloadService {
         priority: DownloadPriorityDto,
         engine: EngineKind,
         format_id: Option<String>,
+        audio_format: Option<YtDlpAudioFormat>,
     ) -> Result<String, MobileApiError> {
         // Validate inputs before locking the inner service.
         if url.trim().is_empty() {
@@ -672,12 +696,29 @@ impl DownloadService {
         }
         let fname =
             FileName::new(&filename).map_err(|e| MobileApiError::Validation(e.to_string()))?;
+        if audio_format.is_some_and(|format| {
+            !Path::new(&filename)
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(format.extension()))
+                || !Path::new(&destination)
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case(format.extension()))
+        }) {
+            return Err(MobileApiError::Validation(
+                "audio extraction filename and destination must use the selected audio extension"
+                    .to_owned(),
+            ));
+        }
         let source = DownloadSource::new(&url, engine)
-            .and_then(|source| match format_id {
-                Some(format_id) if engine == EngineKind::YtDlp => {
+            .and_then(|source| match (format_id, audio_format) {
+                (Some(format_id), None) if engine == EngineKind::YtDlp => {
                     source.with_yt_dlp_format(format_id)
                 }
-                _ => Ok(source),
+                (None, Some(audio_format)) => source.with_yt_dlp_audio_format(audio_format),
+                (None, None) => Ok(source),
+                _ => Err(fetchx_models::DownloadSourceError::InvalidYtDlpAudioFormat),
             })
             .map_err(|e| MobileApiError::Validation(e.to_string()))?;
         let dest = PathBuf::from(&destination);
@@ -1430,12 +1471,66 @@ mod tests {
         let svc = DownloadService::new(config, None).expect("service creation failed");
         let result = svc.add_media_download(
             "https://www.youtube.com/watch?v=example".to_string(),
-            "video".to_string(),
-            "/tmp/downloads".to_string(),
+            "video.mp4".to_string(),
+            "/tmp/video.mp4".to_string(),
             DownloadPriorityDto::Normal,
+            None,
             None,
         );
         assert!(matches!(result, Err(MobileApiError::UnavailableEngine(_))));
+        let audio_result = svc.add_media_download(
+            "https://www.youtube.com/watch?v=example".to_string(),
+            "audio.mp3".to_string(),
+            "/tmp/audio.mp3".to_string(),
+            DownloadPriorityDto::Normal,
+            None,
+            Some("mp3".to_owned()),
+        );
+        assert!(matches!(
+            audio_result,
+            Err(MobileApiError::UnavailableEngine(_))
+        ));
+        svc.shutdown();
+    }
+
+    #[test]
+    fn add_media_download_validates_audio_format_and_destination() {
+        let (config, _dir) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+
+        assert!(matches!(
+            svc.add_media_download(
+                "https://www.youtube.com/watch?v=example".to_owned(),
+                "audio.mp3".to_owned(),
+                "/tmp/audio.mp3".to_owned(),
+                DownloadPriorityDto::Normal,
+                None,
+                Some("flac".to_owned()),
+            ),
+            Err(MobileApiError::Validation(_))
+        ));
+        assert!(matches!(
+            svc.add_media_download(
+                "https://www.youtube.com/watch?v=example".to_owned(),
+                "audio.mp3".to_owned(),
+                "/tmp/audio.m4a".to_owned(),
+                DownloadPriorityDto::Normal,
+                None,
+                Some("mp3".to_owned()),
+            ),
+            Err(MobileApiError::Validation(_))
+        ));
+        assert!(matches!(
+            svc.add_media_download(
+                "https://www.youtube.com/watch?v=example".to_owned(),
+                "audio.mp3".to_owned(),
+                "/tmp/audio.mp3".to_owned(),
+                DownloadPriorityDto::Normal,
+                Some("137".to_owned()),
+                Some("mp3".to_owned()),
+            ),
+            Err(MobileApiError::Validation(_))
+        ));
         svc.shutdown();
     }
 

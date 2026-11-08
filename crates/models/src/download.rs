@@ -14,6 +14,42 @@ pub struct DownloadSource {
     engine: EngineKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     yt_dlp_format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    yt_dlp_audio_format: Option<YtDlpAudioFormat>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YtDlpAudioFormat {
+    Mp3,
+    M4a,
+}
+
+impl YtDlpAudioFormat {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::M4a => "m4a",
+        }
+    }
+
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl TryFrom<&str> for YtDlpAudioFormat {
+    type Error = DownloadSourceError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "mp3" => Ok(Self::Mp3),
+            "m4a" => Ok(Self::M4a),
+            _ => Err(DownloadSourceError::InvalidYtDlpAudioFormat),
+        }
+    }
 }
 
 impl DownloadSource {
@@ -47,6 +83,7 @@ impl DownloadSource {
             url,
             engine,
             yt_dlp_format: None,
+            yt_dlp_audio_format: None,
         })
     }
 
@@ -73,10 +110,24 @@ impl DownloadSource {
         format_id: impl Into<String>,
     ) -> Result<Self, DownloadSourceError> {
         let format_id = format_id.into();
-        if self.engine != EngineKind::YtDlp || !Self::is_valid_yt_dlp_format_selector(&format_id) {
+        if self.engine != EngineKind::YtDlp
+            || self.yt_dlp_audio_format.is_some()
+            || !Self::is_valid_yt_dlp_format_selector(&format_id)
+        {
             return Err(DownloadSourceError::InvalidYtDlpFormat);
         }
         self.yt_dlp_format = Some(format_id);
+        Ok(self)
+    }
+
+    pub fn with_yt_dlp_audio_format(
+        mut self,
+        audio_format: YtDlpAudioFormat,
+    ) -> Result<Self, DownloadSourceError> {
+        if self.engine != EngineKind::YtDlp || self.yt_dlp_format.is_some() {
+            return Err(DownloadSourceError::InvalidYtDlpAudioFormat);
+        }
+        self.yt_dlp_audio_format = Some(audio_format);
         Ok(self)
     }
 
@@ -131,6 +182,11 @@ impl DownloadSource {
     #[must_use]
     pub fn yt_dlp_format(&self) -> Option<&str> {
         self.yt_dlp_format.as_deref()
+    }
+
+    #[must_use]
+    pub const fn yt_dlp_audio_format(&self) -> Option<YtDlpAudioFormat> {
+        self.yt_dlp_audio_format
     }
 
     #[must_use]
@@ -271,6 +327,10 @@ pub enum DownloadSourceError {
     EmptyUrl,
     #[error("yt-dlp format must be a valid format ID for a yt-dlp source")]
     InvalidYtDlpFormat,
+    #[error(
+        "yt-dlp audio format must be mp3 or m4a for a yt-dlp source without a selected video format"
+    )]
+    InvalidYtDlpAudioFormat,
     #[error("magnet URI must contain one valid BitTorrent info hash and safe optional trackers")]
     InvalidMagnetUri,
     #[error("torrent file source must be a local .torrent file using a torrent engine")]
@@ -285,6 +345,8 @@ struct DownloadSourceRepr {
     engine: EngineKind,
     #[serde(default)]
     yt_dlp_format: Option<String>,
+    #[serde(default)]
+    yt_dlp_audio_format: Option<YtDlpAudioFormat>,
 }
 
 impl TryFrom<DownloadSourceRepr> for DownloadSource {
@@ -292,9 +354,11 @@ impl TryFrom<DownloadSourceRepr> for DownloadSource {
 
     fn try_from(value: DownloadSourceRepr) -> Result<Self, Self::Error> {
         let source = Self::new(value.url, value.engine)?;
-        match value.yt_dlp_format {
-            Some(format_id) => source.with_yt_dlp_format(format_id),
-            None => Ok(source),
+        match (value.yt_dlp_format, value.yt_dlp_audio_format) {
+            (Some(format_id), None) => source.with_yt_dlp_format(format_id),
+            (None, Some(audio_format)) => source.with_yt_dlp_audio_format(audio_format),
+            (None, None) => Ok(source),
+            (Some(_), Some(_)) => Err(DownloadSourceError::InvalidYtDlpAudioFormat),
         }
     }
 }
@@ -601,7 +665,7 @@ mod tests {
 
     use super::{
         DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus,
-        FileName, parse_magnet_uri,
+        FileName, YtDlpAudioFormat, parse_magnet_uri,
     };
     use crate::{DownloadId, DownloadPriority, DownloadProgress, EngineKind, Timestamp};
 
@@ -769,6 +833,37 @@ mod tests {
                 "unexpectedly accepted selector: {selector}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn source_validates_and_round_trips_ytdlp_audio_format()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+            .with_yt_dlp_audio_format(YtDlpAudioFormat::Mp3)?;
+        let json = serde_json::to_string(&source)?;
+        let restored: DownloadSource = serde_json::from_str(&json)?;
+        assert_eq!(restored, source);
+        assert_eq!(restored.yt_dlp_audio_format(), Some(YtDlpAudioFormat::Mp3));
+
+        assert!(
+            DownloadSource::new("https://example.com/video", EngineKind::DirectHttp)?
+                .with_yt_dlp_audio_format(YtDlpAudioFormat::M4a)
+                .is_err()
+        );
+        assert!(
+            DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+                .with_yt_dlp_format("137")?
+                .with_yt_dlp_audio_format(YtDlpAudioFormat::M4a)
+                .is_err()
+        );
+        assert!(
+            DownloadSource::new("https://example.com/video", EngineKind::YtDlp)?
+                .with_yt_dlp_audio_format(YtDlpAudioFormat::Mp3)?
+                .with_yt_dlp_format("137")
+                .is_err()
+        );
+        assert!(YtDlpAudioFormat::try_from("flac").is_err());
         Ok(())
     }
 

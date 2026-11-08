@@ -877,6 +877,7 @@ class BrowserViewModel internal constructor(
         formatLabel: String? = null,
         videoTitle: String? = null,
         platformName: String? = null,
+        audioFormat: String? = null,
     ) {
         val repo = dev.fetchx.bridge.BridgeInitializer.repositoryOrNull() ?: run {
             Log.w(TAG, "downloadDetectedVideo: bridge not initialized")
@@ -895,6 +896,7 @@ class BrowserViewModel internal constructor(
             pageUrl = pageUrl,
             formatId = formatId,
             hasDiscoveredFormats = _uiState.value.mediaFormats.isNotEmpty(),
+            audioFormat = audioFormat,
         )
         val isDirectMedia = route.isDirectMedia
         val downloadUrl = route.url
@@ -920,7 +922,7 @@ class BrowserViewModel internal constructor(
             title = title,
             quality = formatLabel,
             platform = platform,
-            extension = extension,
+            extension = audioFormat ?: extension,
         )
         val fileName = generateUniqueFileName(destDir, desiredName)
         val destPath = java.io.File(destDir, fileName).absolutePath
@@ -934,8 +936,15 @@ class BrowserViewModel internal constructor(
                     destinationPath = destPath,
                     priority = dev.fetchx.core.download.DownloadPriority.NORMAL,
                     formatId = formatId,
+                    audioFormat = audioFormat,
                 )
-                val engineLabel = if (isDirectMedia) "native engine" else "yt-dlp"
+                val engineLabel = if (audioFormat != null) {
+                    "yt-dlp audio extraction"
+                } else if (isDirectMedia) {
+                    "native engine"
+                } else {
+                    "yt-dlp"
+                }
                 Log.i(TAG, "Queuing media download via $engineLabel: url=$downloadUrl fileName=$fileName")
                 withContext(Dispatchers.Main) { closeMediaFormatPicker() }
             } catch (cancelled: CancellationException) {
@@ -1798,9 +1807,11 @@ class BrowserViewModel internal constructor(
             pageUrl: String?,
             formatId: String?,
             hasDiscoveredFormats: Boolean,
+            audioFormat: String? = null,
         ): MediaDownloadRoute {
-            val isDirectMedia = formatId == null && isDirectMediaUrl(videoUrl)
+            val isDirectMedia = audioFormat == null && formatId == null && isDirectMediaUrl(videoUrl)
             val url = when {
+                audioFormat != null && pageUrl != null -> pageUrl
                 isDirectMedia -> videoUrl
                 pageUrl != null && (formatId != null || hasDiscoveredFormats) -> pageUrl
                 else -> videoUrl.takeIf { it.isNotBlank() } ?: pageUrl.orEmpty()

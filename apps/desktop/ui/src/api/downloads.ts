@@ -82,11 +82,13 @@ export function addMediaDownload(
   url: string,
   formatId?: string,
   extension?: string | null,
+  audioFormat?: "mp3" | "m4a",
 ): Promise<Download> {
   return invoke<Download>("add_media_download", {
     url,
     format_id: formatId ?? null,
     extension: extension ?? null,
+    audio_format: audioFormat ?? null,
   });
 }
 

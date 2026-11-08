@@ -31,4 +31,13 @@ class AndroidYtDlpRuntimeTest {
             ),
         )
     }
+
+    @Test
+    fun `requires ffmpeg for audio extraction`() {
+        assertTrue(
+            AndroidYtDlpRuntime.requiresFfmpeg(
+                listOf("--format", "bestaudio/best", "--extract-audio", "--audio-format", "mp3"),
+            ),
+        )
+    }
 }

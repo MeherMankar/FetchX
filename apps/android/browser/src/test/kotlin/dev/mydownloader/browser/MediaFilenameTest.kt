@@ -100,4 +100,18 @@ class MediaFilenameTest {
         assertEquals("https://cdn.example.test/video.mp4?token=abc", route.url)
         assertTrue(route.isDirectMedia)
     }
+
+    @Test
+    fun `audio extraction prefers page url and routes through yt-dlp`() {
+        val route = BrowserViewModel.resolveMediaDownloadRoute(
+            videoUrl = "https://cdn.example.test/video.mp4?token=abc",
+            pageUrl = "https://example.test/watch?v=example",
+            formatId = null,
+            hasDiscoveredFormats = false,
+            audioFormat = "mp3",
+        )
+
+        assertEquals("https://example.test/watch?v=example", route.url)
+        assertFalse(route.isDirectMedia)
+    }
 }

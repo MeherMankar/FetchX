@@ -73,6 +73,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [busy, setBusy] = useState(false);
   const [formats, setFormats] = useState<YtDlpFormat[] | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState("");
+  const [audioFormat, setAudioFormat] = useState<"" | "mp3" | "m4a">("");
   const [torrentInspection, setTorrentInspection] = useState<Awaited<ReturnType<typeof inspectTorrentFile>> | null>(null);
   const [selectedTorrentFiles, setSelectedTorrentFiles] = useState<number[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(false);
@@ -147,8 +148,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
           : engineKind === "yt_dlp" && !isTorrent
           ? await addMediaDownload(
               targetUrl,
-              selectedFormatId || undefined,
-              formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+              audioFormat ? undefined : selectedFormatId || undefined,
+              audioFormat || formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+              audioFormat || undefined,
             )
           : await addDownload({
               url: targetUrl.trim(),
@@ -377,6 +379,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   setEngineKind(e.target.value as EngineKind);
                   setFormats(null);
                   setSelectedFormatId("");
+                  setAudioFormat("");
                 }}
                 disabled={busy || formatsLoading || isTorrent}
                 aria-describedby="add-engine-hint"
@@ -401,10 +404,29 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
           {engineKind === "yt_dlp" && (
             <div className="field">
-              <label htmlFor="add-format" className="field-label">
-                Video format
+              <label htmlFor="add-audio-format" className="field-label">
+                Media output
               </label>
-              {formats === null ? (
+              <select
+                id="add-audio-format"
+                className="field-select"
+                value={audioFormat || "video"}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setAudioFormat(value === "mp3" || value === "m4a" ? value : "");
+                }}
+                disabled={busy}
+              >
+                <option value="video">Video (select quality)</option>
+                <option value="mp3">Extract audio as MP3</option>
+                <option value="m4a">Extract audio as M4A</option>
+              </select>
+              {audioFormat ? (
+                <p className="field-hint">
+                  FetchX selects the best available audio stream and converts it to {audioFormat.toUpperCase()}.
+                  FFmpeg must be available to yt-dlp.
+                </p>
+              ) : formats === null ? (
                 <button
                   type="button"
                   className="button button-secondary"
@@ -414,6 +436,10 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   {formatsLoading ? "Loading formats…" : "Load available formats"}
                 </button>
               ) : (
+                <>
+                  <label htmlFor="add-format" className="field-label">
+                    Video format
+                  </label>
                 <select
                   id="add-format"
                   className="field-select"
@@ -428,14 +454,17 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                     </option>
                   ))}
                 </select>
+                </>
               )}
-              <p className="field-hint">
-                {formats === null
-                  ? "Discover formats before selecting a specific quality."
-                  : formats.length === 0
-                    ? "No selectable video formats were found; automatic selection remains available."
-                    : "Choose a discovered format, or keep automatic best quality."}
-              </p>
+              {!audioFormat && (
+                <p className="field-hint">
+                  {formats === null
+                    ? "Discover formats before selecting a specific quality."
+                    : formats.length === 0
+                      ? "No selectable video formats were found; automatic selection remains available."
+                      : "Choose a discovered format, or keep automatic best quality."}
+                </p>
+              )}
             </div>
           )}
 

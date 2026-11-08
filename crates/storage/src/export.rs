@@ -7,7 +7,8 @@ use std::{
 
 use fetchx_models::{
     DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, DownloadItem,
-    DownloadSchedule, DownloadSource, DownloadStatus, Timestamp, global_diagnostics,
+    DownloadSchedule, DownloadSource, DownloadStatus, Timestamp, YtDlpAudioFormat,
+    global_diagnostics,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, Transaction};
@@ -18,7 +19,7 @@ use crate::{
     TorrentSeedState, TorrentSourceType, maintenance::CURRENT_SCHEMA_VERSION,
 };
 
-pub const EXPORT_FORMAT_VERSION: u32 = 1;
+pub const EXPORT_FORMAT_VERSION: u32 = 2;
 const MAX_EXPORT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EXPORTED_DOWNLOADS: usize = 50_000;
 
@@ -296,7 +297,10 @@ fn validate_export_shape(value: &serde_json::Value) -> Result<(), StorageError> 
         let source = item
             .get("source")
             .ok_or_else(|| invalid_export_shape("download source is missing"))?;
-        object_has_only(source, &["url", "engine", "yt_dlp_format"])?;
+        object_has_only(
+            source,
+            &["url", "engine", "yt_dlp_format", "yt_dlp_audio_format"],
+        )?;
         let progress = item
             .get("progress")
             .ok_or_else(|| invalid_export_shape("download progress is missing"))?;
@@ -404,13 +408,15 @@ fn validate_export(
     document: &mut DatabaseExport,
     allowed_download_root: &Path,
 ) -> Result<(), StorageError> {
-    if document.export_format_version != EXPORT_FORMAT_VERSION {
+    if !matches!(document.export_format_version, 1 | EXPORT_FORMAT_VERSION) {
         return Err(StorageError::Maintenance(format!(
             "unsupported export format version {}",
             document.export_format_version
         )));
     }
-    if document.schema_version != CURRENT_SCHEMA_VERSION {
+    let supports_previous_schema = document.export_format_version == 1
+        && document.schema_version == CURRENT_SCHEMA_VERSION - 1;
+    if document.schema_version != CURRENT_SCHEMA_VERSION && !supports_previous_schema {
         return Err(StorageError::Maintenance(format!(
             "unsupported export schema version {}",
             document.schema_version
@@ -847,16 +853,21 @@ async fn activate_export(
         let error = item.error();
         sqlx::query(
             "INSERT INTO downloads (
-                id, source_url, engine_kind, yt_dlp_format, filename, destination, status, priority,
+                id, source_url, engine_kind, yt_dlp_format, yt_dlp_audio_format, filename, destination, status, priority,
                 downloaded_bytes, total_bytes, speed_bytes_per_second,
                 estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
                 queue_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(item.id().to_string())
         .bind(item.source().url())
         .bind(enum_text(item.source().engine())?)
         .bind(item.source().yt_dlp_format())
+        .bind(
+            item.source()
+                .yt_dlp_audio_format()
+                .map(YtDlpAudioFormat::as_str),
+        )
         .bind(item.filename().as_str())
         .bind(destination)
         .bind(enum_text(item.status())?)
@@ -1024,7 +1035,7 @@ mod tests {
 
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSchedule,
-        DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+        DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, YtDlpAudioFormat,
     };
 
     use super::validate_import_path;
@@ -1136,6 +1147,45 @@ mod tests {
                 true,
                 active.created_at(),
             ))
+        );
+        close(target_database).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn export_import_preserves_ytdlp_audio_format() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let downloads = directory.path().join("downloads");
+        std::fs::create_dir(&downloads)?;
+        let source_database = Database::connect_path(directory.path().join("source.db")).await?;
+        let created_at = Timestamp::now()?;
+        let id = DownloadId::new();
+        let source = DownloadSource::new("https://example.test/watch", EngineKind::YtDlp)?
+            .with_yt_dlp_audio_format(YtDlpAudioFormat::Mp3)?;
+        let audio_item = DownloadItem::new(
+            id,
+            source,
+            FileName::new("audio.mp3")?,
+            downloads.join("audio.mp3"),
+            created_at,
+        );
+        source_database.downloads().create(&audio_item).await?;
+        let export_path = directory.path().join("audio-export.json");
+        source_database.export_to(&export_path).await?;
+        close(source_database).await;
+
+        let target_database = Database::connect_path(directory.path().join("target.db")).await?;
+        target_database
+            .import_from(&export_path, &downloads)
+            .await?;
+        let imported = target_database
+            .downloads()
+            .get(id)
+            .await?
+            .ok_or("imported audio download is missing")?;
+        assert_eq!(
+            imported.source().yt_dlp_audio_format(),
+            Some(YtDlpAudioFormat::Mp3)
         );
         close(target_database).await;
         Ok(())
@@ -1289,6 +1339,46 @@ mod tests {
                 .await?
                 .is_some()
         );
+        close(target_database).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn imports_previous_schema_v1_exports_with_default_audio_mode()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let downloads = directory.path().join("downloads");
+        std::fs::create_dir(&downloads)?;
+        let source_database = Database::connect_path(directory.path().join("source.db")).await?;
+        let source_item = item(
+            downloads.join("payload.bin"),
+            "https://example.test/payload.bin",
+            DownloadStatus::Queued,
+        )?;
+        source_database.downloads().create(&source_item).await?;
+        let export_path = directory.path().join("export.json");
+        source_database.export_to(&export_path).await?;
+        close(source_database).await;
+
+        let mut export: serde_json::Value = serde_json::from_slice(&std::fs::read(&export_path)?)?;
+        export["export_format_version"] = serde_json::json!(1);
+        export["schema_version"] =
+            serde_json::json!(crate::maintenance::CURRENT_SCHEMA_VERSION - 1);
+        if let Some(source) = export["downloads"][0]["source"].as_object_mut() {
+            source.remove("yt_dlp_audio_format");
+        }
+        std::fs::write(&export_path, serde_json::to_vec(&export)?)?;
+
+        let target_database = Database::connect_path(directory.path().join("target.db")).await?;
+        target_database
+            .import_from(&export_path, &downloads)
+            .await?;
+        let imported = target_database
+            .downloads()
+            .get(source_item.id())
+            .await?
+            .ok_or("imported download is missing")?;
+        assert_eq!(imported.source().yt_dlp_audio_format(), None);
         close(target_database).await;
         Ok(())
     }

@@ -64,14 +64,14 @@ The lifecycle is already canonical in Rust. Host adapters should not mutate stat
 
 ## Persistence boundary
 
-SQLite schema compatibility is centralized in `crates/storage/database.rs` and `migrations/`. Eleven embedded migrations are currently registered. Android, desktop, CLI, and remote hosts all use the same migration implementation, although each host supplies a separate physical database path.
+SQLite schema compatibility is centralized in `crates/storage/database.rs` and `migrations/`. Twelve embedded migrations are currently registered. Android, desktop, CLI, and remote hosts all use the same migration implementation, although each host supplies a separate physical database path.
 
 Logical schema ownership:
 
 - downloads and queue order;
 - schedules;
 - engine configuration;
-- yt-dlp selection;
+- yt-dlp video/audio selection;
 - torrent metadata and selection;
 - native torrent and FTP/SFTP/Metalink support.
 

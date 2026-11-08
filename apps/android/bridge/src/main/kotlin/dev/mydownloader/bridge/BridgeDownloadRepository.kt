@@ -238,7 +238,7 @@ class BridgeDownloadRepository(
         } else if (isMediaUrl(url)) {
             val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) destinationPath else "$destinationPath.mp4"
             val stagingPath = publicDownloadStorage.stageDestinationIfPublic(safeDestination)
-            service.addMediaDownload(url, fileName, stagingPath, mapPriorityToDto(priority), null)
+            service.addMediaDownload(url, fileName, stagingPath, mapPriorityToDto(priority), null, null)
         } else {
             val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
             service.addDownload(url, fileName, stagingPath, mapPriorityToDto(priority))
@@ -268,6 +268,7 @@ class BridgeDownloadRepository(
         destinationPath: String,
         priority: DownloadPriority,
         formatId: String?,
+        audioFormat: String?,
     ): String = withContext(Dispatchers.IO) {
         val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
         service.addMediaDownload(
@@ -276,6 +277,7 @@ class BridgeDownloadRepository(
             stagingPath,
             mapPriorityToDto(priority),
             formatId,
+            audioFormat,
         )
     }
 

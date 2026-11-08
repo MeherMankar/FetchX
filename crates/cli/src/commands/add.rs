@@ -4,7 +4,7 @@ use fetchx_core_services::CoreServices;
 use fetchx_downloader::validate_http_source_url;
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, EngineKind, FileName, Timestamp,
-    parse_magnet_uri,
+    YtDlpAudioFormat, parse_magnet_uri,
 };
 use reqwest::Url;
 
@@ -83,16 +83,44 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
 
     // ── Engine resolution ────────────────────────────────────────────────
 
-    let engine_kind = match resolve_engine(
-        magnet.is_some(),
-        torrent_path.is_some(),
-        opts.engine.as_deref(),
-        if magnet.is_none() && torrent_path.is_none() {
-            Some(&canonical_url)
-        } else {
-            None
-        },
-    ) {
+    let audio_format = match opts.audio_format.as_deref() {
+        Some("mp3") => Some(YtDlpAudioFormat::Mp3),
+        Some("m4a") => Some(YtDlpAudioFormat::M4a),
+        Some(_) => {
+            output::print_error(json, "--audio-format must be mp3 or m4a");
+            return exit::INVALID_ARGS;
+        }
+        None => None,
+    };
+    if audio_format.is_some()
+        && (magnet.is_some()
+            || torrent_path.is_some()
+            || opts
+                .engine
+                .as_deref()
+                .is_some_and(|engine| !matches!(parse_engine(Some(engine)), Ok(EngineKind::YtDlp))))
+    {
+        output::print_error(
+            json,
+            "--audio-format requires an HTTP(S) URL and the yt-dlp engine",
+        );
+        return exit::INVALID_ARGS;
+    }
+
+    let engine_kind = match if audio_format.is_some() {
+        Ok(EngineKind::YtDlp)
+    } else {
+        resolve_engine(
+            magnet.is_some(),
+            torrent_path.is_some(),
+            opts.engine.as_deref(),
+            if magnet.is_none() && torrent_path.is_none() {
+                Some(&canonical_url)
+            } else {
+                None
+            },
+        )
+    } {
         Ok(e) => e,
         Err(msg) => {
             output::print_error(json, &msg);
@@ -153,6 +181,14 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             .as_ref()
             .map(filename_for_url)
             .unwrap_or_else(|| "download".to_owned());
+        let filename = audio_format.map_or(filename.clone(), |format| {
+            Path::new(&filename)
+                .with_extension(format.extension())
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("audio")
+                .to_owned()
+        });
         let filename = match FileName::new(&filename) {
             Ok(f) => f,
             Err(e) => {
@@ -163,8 +199,25 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         let destination = opts
             .destination
             .unwrap_or_else(|| svc.downloads_dir().join(filename.as_str()));
+        if audio_format.is_some_and(|format| {
+            !destination
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case(format.extension()))
+        }) {
+            output::print_error(
+                json,
+                "--destination must use the extension selected by --audio-format",
+            );
+            return exit::INVALID_ARGS;
+        }
         let id = DownloadId::new();
-        let source = match DownloadSource::new(canonical_url, engine_kind) {
+        let source = match DownloadSource::new(canonical_url, engine_kind).and_then(|source| {
+            match audio_format {
+                Some(format) => source.with_yt_dlp_audio_format(format),
+                None => Ok(source),
+            }
+        }) {
             Ok(s) => s,
             Err(e) => {
                 output::print_error(json, &format!("invalid source: {e}"));

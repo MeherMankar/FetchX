@@ -309,6 +309,10 @@ pub struct AddOpts {
     #[arg(short = 'e', long, value_name = "ENGINE")]
     pub engine: Option<String>,
 
+    /// Extract audio with yt-dlp and convert it to mp3 or m4a.
+    #[arg(long, value_parser = ["mp3", "m4a"], requires = "url", conflicts_with = "magnet")]
+    pub audio_format: Option<String>,
+
     /// Destination file for HTTP downloads or destination directory for torrents.
     #[arg(long, value_name = "PATH")]
     pub destination: Option<std::path::PathBuf>,
@@ -462,6 +466,44 @@ mod tests {
         };
         assert_eq!(options.url.as_deref(), Some("fixture.torrent"));
         assert!(options.magnet.is_none());
+    }
+
+    #[test]
+    fn add_accepts_only_supported_audio_formats_for_url_sources() {
+        let cli = Cli::try_parse_from([
+            "fetchx",
+            "add",
+            "https://example.test/video",
+            "--audio-format",
+            "mp3",
+        ])
+        .expect("MP3 audio extraction should parse");
+        let Command::Add(options) = cli.command else {
+            panic!("expected add command");
+        };
+        assert_eq!(options.audio_format.as_deref(), Some("mp3"));
+
+        assert!(
+            Cli::try_parse_from([
+                "fetchx",
+                "add",
+                "https://example.test/video",
+                "--audio-format",
+                "flac",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "fetchx",
+                "add",
+                "--magnet",
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                "--audio-format",
+                "m4a",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

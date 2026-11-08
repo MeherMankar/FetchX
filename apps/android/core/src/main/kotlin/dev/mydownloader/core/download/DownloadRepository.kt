@@ -114,8 +114,9 @@ interface DownloadRepository {
         destinationPath: String,
         priority: DownloadPriority = DownloadPriority.DEFAULT,
         formatId: String? = null,
+        audioFormat: String? = null,
     ): String {
-        if (formatId != null) {
+        if (formatId != null || audioFormat != null) {
             throw UnsupportedOperationException("This repository cannot apply a yt-dlp format")
         }
         return addDownload(url, fileName, destinationPath, priority)

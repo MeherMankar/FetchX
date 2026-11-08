@@ -9,7 +9,7 @@ use fetchx_downloader::validate_http_source_url;
 use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
-    EngineKind, FileName, Timestamp, parse_magnet_uri,
+    EngineKind, FileName, Timestamp, YtDlpAudioFormat, parse_magnet_uri,
 };
 use fetchx_queue::{QueueError, QueueManager};
 use fetchx_scheduler::{ScheduleError, Scheduler};
@@ -94,7 +94,7 @@ impl AppState {
     }
 
     async fn add(&self, request: AddDownloadRequest) -> Result<DownloadDto, IpcError> {
-        self.add_with_ytdlp_format(request, None, None).await
+        self.add_with_ytdlp_format(request, None, None, None).await
     }
 
     async fn add_with_ytdlp_format(
@@ -102,6 +102,7 @@ impl AppState {
         request: AddDownloadRequest,
         format_id: Option<String>,
         extension: Option<String>,
+        audio_format: Option<YtDlpAudioFormat>,
     ) -> Result<DownloadDto, IpcError> {
         let magnet = if request.url.starts_with("magnet:") {
             Some(parse_magnet_uri(&request.url).map_err(|_| IpcError::invalid_request())?)
@@ -127,10 +128,16 @@ impl AppState {
             None
         };
         if extension.is_some()
-            && (format_id.is_none()
+            && (format_id.is_none() && audio_format.is_none()
                 || magnet.is_some()
                 || torrent_path.is_some()
                 || !extension_is_safe(extension.as_deref()))
+        {
+            return Err(IpcError::invalid_request());
+        }
+        if audio_format.is_some()
+            && (format_id.is_some()
+                || extension.as_deref() != audio_format.map(YtDlpAudioFormat::extension))
         {
             return Err(IpcError::invalid_request());
         }
@@ -191,9 +198,13 @@ impl AppState {
         let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
         let id = DownloadId::new();
         let source = DownloadSource::new(canonical_url.clone(), engine_kind)
-            .and_then(|source| match format_id {
-                Some(format_id) => source.with_yt_dlp_format(format_id),
-                None => Ok(source),
+            .and_then(|source| match (format_id, audio_format) {
+                (Some(format_id), None) => source.with_yt_dlp_format(format_id),
+                (None, Some(audio_format)) => source.with_yt_dlp_audio_format(audio_format),
+                (None, None) => Ok(source),
+                (Some(_), Some(_)) => {
+                    Err(fetchx_models::DownloadSourceError::InvalidYtDlpAudioFormat)
+                }
             })
             .map_err(|_| IpcError::invalid_request())?;
         let destination = package_destination(&self.downloads_dir, request.package_name.as_deref())
@@ -998,6 +1009,7 @@ pub async fn add_media_download(
     url: String,
     format_id: Option<String>,
     extension: Option<String>,
+    audio_format: Option<YtDlpAudioFormat>,
 ) -> Result<DownloadDto, IpcError> {
     let download = state
         .add_with_ytdlp_format(
@@ -1008,6 +1020,7 @@ pub async fn add_media_download(
             },
             format_id,
             extension,
+            audio_format,
         )
         .await?;
     emit_event(

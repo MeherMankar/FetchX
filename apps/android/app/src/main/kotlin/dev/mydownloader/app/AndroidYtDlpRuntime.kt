@@ -80,8 +80,9 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         }
 
         internal fun requiresFfmpeg(arguments: List<String>): Boolean =
-            arguments.windowed(2).any { (option, value) ->
-                option == "--format" && '+' in value
-            }
+                    "--extract-audio" in arguments ||
+                        arguments.windowed(2).any { (option, value) ->
+                            option == "--format" && '+' in value
+                        }
         }
 }

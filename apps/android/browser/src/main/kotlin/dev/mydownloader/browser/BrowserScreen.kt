@@ -1303,6 +1303,26 @@ fun BrowserScreen(
                         ) {
                             Text(if (uiState.isQueueingMedia) "Adding download…" else "Automatic best quality")
                         }
+                        Text(
+                            "Extract audio",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        )
+                        listOf("mp3" to "MP3 audio", "m4a" to "M4A audio").forEach { (format, label) ->
+                            TextButton(
+                                onClick = {
+                                    viewModel.downloadDetectedVideo(
+                                        video = video,
+                                        formatLabel = label,
+                                        audioFormat = format,
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !uiState.isQueueingMedia,
+                            ) {
+                                Text(label)
+                            }
+                        }
                         uiState.mediaFormats.forEach { format ->
                             TextButton(
                                 onClick = {

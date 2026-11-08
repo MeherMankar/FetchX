@@ -4,7 +4,7 @@ use std::{error::Error, path::Path, path::PathBuf, time::Duration};
 use fetchx_models::{
     DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadProgress,
     DownloadSchedule, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp, TorrentFile,
-    TorrentMetadata,
+    TorrentMetadata, YtDlpAudioFormat,
 };
 
 use crate::{
@@ -214,6 +214,65 @@ async fn repository_persists_merged_ytdlp_format_selector() -> Result<(), Box<dy
             .yt_dlp_format(),
         Some("160+bestaudio/160")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn repository_persists_ytdlp_audio_format_on_create_and_update() -> Result<(), Box<dyn Error>>
+{
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let id = DownloadId::new();
+    let mut download = DownloadItem::new(
+        id,
+        DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?
+            .with_yt_dlp_audio_format(YtDlpAudioFormat::M4a)?,
+        FileName::new("audio.m4a")?,
+        PathBuf::from("downloads/audio.m4a"),
+        Timestamp::now()?,
+    );
+
+    repository.create(&download).await?;
+    assert_eq!(
+        repository
+            .get(id)
+            .await?
+            .expect("audio download exists")
+            .source()
+            .yt_dlp_audio_format(),
+        Some(YtDlpAudioFormat::M4a)
+    );
+
+    download.set_priority_at(DownloadPriority::High, Timestamp::now()?)?;
+    repository.update(&download).await?;
+    assert_eq!(
+        repository
+            .get(id)
+            .await?
+            .expect("updated audio download exists")
+            .source()
+            .yt_dlp_audio_format(),
+        Some(YtDlpAudioFormat::M4a)
+    );
+
+    let error = sqlx::query("UPDATE downloads SET yt_dlp_audio_format = ? WHERE id = ?")
+        .bind("flac")
+        .bind(id.to_string())
+        .execute(database.pool())
+        .await
+        .expect_err("SQLite must reject audio formats outside the supported allowlist");
+    assert!(error.to_string().contains("CHECK constraint failed"));
+
+    for (column, value) in [("engine_kind", "direct_http"), ("yt_dlp_format", "137")] {
+        let query = format!("UPDATE downloads SET {column} = ? WHERE id = ?");
+        let error = sqlx::query(&query)
+            .bind(value)
+            .bind(id.to_string())
+            .execute(database.pool())
+            .await
+            .expect_err("SQLite must reject incompatible yt-dlp audio source state");
+        assert!(error.to_string().contains("CHECK constraint failed"));
+    }
     Ok(())
 }
 

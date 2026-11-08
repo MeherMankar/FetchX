@@ -245,7 +245,8 @@ interface DownloadService {
         string filename,
         string destination,
         DownloadPriorityDto priority,
-        string? format_id
+        string? format_id,
+        string? audio_format
     );
 
     [Throws=MobileApiError]

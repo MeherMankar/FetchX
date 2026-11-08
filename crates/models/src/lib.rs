@@ -23,7 +23,7 @@ pub use diagnostics::{
 };
 pub use download::{
     DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus, FileName,
-    FileNameError, MagnetInfo, parse_magnet_uri,
+    FileNameError, MagnetInfo, YtDlpAudioFormat, parse_magnet_uri,
 };
 pub use duplicate::DuplicateDownloadMatch;
 pub use engine::EngineKind;

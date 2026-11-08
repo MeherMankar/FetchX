@@ -12,6 +12,7 @@ use std::{
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
+    YtDlpAudioFormat,
 };
 use fetchx_storage::DownloadRepository;
 use serde::{Deserialize, Serialize};
@@ -189,6 +190,8 @@ pub enum YtDlpError {
     FormatOutputTooLarge,
     #[error("yt-dlp format discovery returned invalid data")]
     InvalidFormatOutput,
+    #[error("yt-dlp audio extraction destination must use the selected audio extension")]
+    AudioDestinationExtensionMismatch,
 }
 
 impl YtDlpError {
@@ -217,6 +220,7 @@ impl YtDlpError {
             Self::FormatDiscoveryTimeout => "format_discovery_timeout",
             Self::FormatOutputTooLarge => "format_output_too_large",
             Self::InvalidFormatOutput => "invalid_format_output",
+            Self::AudioDestinationExtensionMismatch => "audio_destination_extension_mismatch",
         }
     }
 }
@@ -397,15 +401,19 @@ where
         if control.bandwidth.external_download_rate_bytes_per_second == Some(0) {
             return Err(DownloadEngineError::InvalidConfiguration);
         }
+        let audio_format = item.source().yt_dlp_audio_format();
+        validate_audio_destination(item.destination(), audio_format)?;
         let arguments = build_arguments(
             &workspace,
             url.as_str(),
             item.source().yt_dlp_format(),
+            audio_format,
             control.bandwidth.external_download_rate_bytes_per_second,
         );
-        let allows_component_reset = format_selector(item.source().yt_dlp_format())
-            .split('/')
-            .any(|alternative| alternative.contains('+'));
+        let allows_component_reset = audio_format.is_some()
+            || format_selector(item.source().yt_dlp_format())
+                .split('/')
+                .any(|alternative| alternative.contains('+'));
         report_resource_demand(control, id, 1, 0).await?;
 
         if item.status() == DownloadStatus::Preparing {
@@ -533,14 +541,19 @@ where
             .await?
             .sync_all()
             .await?;
+        let final_downloaded_bytes = if audio_format.is_some() {
+            item.progress().downloaded_bytes().max(output_size)
+        } else {
+            output_size
+        };
         let final_progress = YtDlpProgress {
             percentage_basis_points: Some(10_000),
-            downloaded_bytes: Some(output_size),
-            total_bytes: Some(output_size),
+            downloaded_bytes: Some(final_downloaded_bytes),
+            total_bytes: Some(final_downloaded_bytes),
             speed_bytes_per_second: None,
             estimated_remaining_seconds: Some(0),
         };
-        if output_size < item.progress().downloaded_bytes() {
+        if audio_format.is_none() && output_size < item.progress().downloaded_bytes() {
             self.runner.report_diagnostic_details(format!(
                 "final output smaller than reported progress; process_exit_code={:?}; output_size_bytes={output_size}; reported_downloaded_bytes={}; reported_total_bytes={:?}; automatic_selection={}",
                 exit.code,
@@ -1169,9 +1182,14 @@ fn build_arguments(
     workspace: &Path,
     url: &str,
     selected_format: Option<&str>,
+    audio_format: Option<YtDlpAudioFormat>,
     max_download_rate_bytes_per_second: Option<u64>,
 ) -> Vec<OsString> {
-    let selected_format = format_selector(selected_format);
+    let selected_format = if audio_format.is_some() {
+        "bestaudio/best"
+    } else {
+        format_selector(selected_format)
+    };
     let mut arguments = vec![
         "--ignore-config".into(),
         "--no-plugin-dirs".into(),
@@ -1196,6 +1214,13 @@ fn build_arguments(
     let mut home_path = OsString::from("home:");
     home_path.push(workspace.as_os_str());
     arguments.push(home_path);
+    if let Some(audio_format) = audio_format {
+        arguments.extend([
+            "--extract-audio".into(),
+            "--audio-format".into(),
+            audio_format.as_str().into(),
+        ]);
+    }
     if let Some(rate) = max_download_rate_bytes_per_second {
         arguments.push("--limit-rate".into());
         arguments.push(rate.to_string().into());
@@ -1207,6 +1232,21 @@ fn build_arguments(
         url.into(),
     ]);
     arguments
+}
+
+fn validate_audio_destination(
+    destination: &Path,
+    audio_format: Option<YtDlpAudioFormat>,
+) -> Result<(), YtDlpError> {
+    if audio_format.is_some_and(|format| {
+        !destination
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case(format.extension()))
+    }) {
+        return Err(YtDlpError::AudioDestinationExtensionMismatch);
+    }
+    Ok(())
 }
 
 fn format_selector(selected_format: Option<&str>) -> &str {
@@ -2121,6 +2161,37 @@ mod tests {
         ),
         Box<dyn Error>,
     > {
+        fixture_with_source_options(url, runner, format, None).await
+    }
+
+    async fn fixture_with_audio_format(
+        url: &str,
+        runner: FakeRunner,
+        audio_format: YtDlpAudioFormat,
+    ) -> Result<
+        (
+            YtDlpEngine<fetchx_storage::SqliteDownloadRepository>,
+            PathBuf,
+            DownloadId,
+        ),
+        Box<dyn Error>,
+    > {
+        fixture_with_source_options(url, runner, None, Some(audio_format)).await
+    }
+
+    async fn fixture_with_source_options(
+        url: &str,
+        runner: FakeRunner,
+        format: Option<&str>,
+        audio_format: Option<YtDlpAudioFormat>,
+    ) -> Result<
+        (
+            YtDlpEngine<fetchx_storage::SqliteDownloadRepository>,
+            PathBuf,
+            DownloadId,
+        ),
+        Box<dyn Error>,
+    > {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let id = DownloadId::new();
@@ -2131,11 +2202,19 @@ mod tests {
             Some(format) => source.with_yt_dlp_format(format)?,
             None => source,
         };
+        let source = match audio_format {
+            Some(audio_format) => source.with_yt_dlp_audio_format(audio_format)?,
+            None => source,
+        };
+        let filename = format!(
+            "video.{}",
+            audio_format.map_or("webm", YtDlpAudioFormat::extension)
+        );
         let item = DownloadItem::new(
             id,
             source,
-            FileName::new("video.webm")?,
-            base.join("video.webm"),
+            FileName::new(&filename)?,
+            base.join(&filename),
             Timestamp::now()?,
         );
         repository.create(&item).await?;
@@ -2447,6 +2526,7 @@ mod tests {
             Path::new("workspace"),
             "https://example.test/video",
             Some("137+bestaudio/137"),
+            None,
             Some(4096),
         );
         let format_index = args
@@ -2468,6 +2548,7 @@ mod tests {
             "https://example.test/video",
             None,
             None,
+            None,
         );
         let format_index = args
             .iter()
@@ -2477,6 +2558,45 @@ mod tests {
             args[format_index + 1],
             OsStr::new("bestvideo*+bestaudio/best")
         );
+    }
+
+    #[test]
+    fn audio_extraction_uses_audio_only_source_and_allowlisted_conversion_flags() {
+        let args = build_arguments(
+            Path::new("workspace"),
+            "https://example.test/video",
+            Some("137"),
+            Some(YtDlpAudioFormat::Mp3),
+            None,
+        );
+        let format_index = args
+            .iter()
+            .position(|argument| argument == OsStr::new("--format"))
+            .expect("format option is present");
+        assert_eq!(args[format_index + 1], OsStr::new("bestaudio/best"));
+        let extract_index = args
+            .iter()
+            .position(|argument| argument == OsStr::new("--extract-audio"))
+            .expect("audio extraction is enabled");
+        assert_eq!(args[extract_index + 1], OsStr::new("--audio-format"));
+        assert_eq!(args[extract_index + 2], OsStr::new("mp3"));
+        assert_eq!(args[args.len() - 2], OsStr::new("--"));
+        assert_eq!(
+            args[args.len() - 1],
+            OsStr::new("https://example.test/video")
+        );
+    }
+
+    #[test]
+    fn audio_extraction_requires_matching_destination_extension() {
+        assert!(
+            validate_audio_destination(Path::new("track.MP3"), Some(YtDlpAudioFormat::Mp3)).is_ok()
+        );
+        assert!(
+            validate_audio_destination(Path::new("track.mp4"), Some(YtDlpAudioFormat::Mp3))
+                .is_err()
+        );
+        assert!(validate_audio_destination(Path::new("track.mp4"), None).is_ok());
     }
 
     #[tokio::test]
@@ -2707,7 +2827,9 @@ mod tests {
             state.wait_for_stop = true;
             state.started = Some(Arc::clone(&started));
         }
-        let (engine, base, id) = fixture("https://example.test/video", runner).await?;
+        let (engine, base, id) =
+            fixture_with_audio_format("https://example.test/video", runner, YtDlpAudioFormat::Mp3)
+                .await?;
         let (cancel_sender, cancellation) = watch::channel(false);
         let (pause_sender, pause) = watch::channel(false);
         let (limit_sender, connection_limit) = watch::channel(1);
@@ -2737,7 +2859,7 @@ mod tests {
             .await?
             .ok_or("download not found")?;
         assert_eq!(persisted.status(), DownloadStatus::Cancelled);
-        assert!(workspace_path(&base.join("video.webm"), id).is_dir());
+        assert!(workspace_path(&base.join("video.mp3"), id).is_dir());
         drop((pause_sender, limit_sender));
         tokio::fs::remove_dir_all(base).await?;
         Ok(())

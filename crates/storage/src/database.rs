@@ -110,6 +110,15 @@ pub(crate) static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             )),
             false,
         ),
+        Migration::new(
+            12,
+            Cow::Borrowed("add_ytdlp_audio_format"),
+            MigrationType::Simple,
+            Cow::Borrowed(include_str!(
+                "../../../migrations/0012_add_ytdlp_audio_format.sql"
+            )),
+            false,
+        ),
     ]),
     ..Migrator::DEFAULT
 });
