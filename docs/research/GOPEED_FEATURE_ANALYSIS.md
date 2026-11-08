@@ -113,4 +113,4 @@ Selected capability: **persisted normalized-URL duplicate lookup**. It is the sm
 
 A first broad parallel Rust test/build attempt exhausted the Windows environment's paging file while linking examples and test targets. The focused suites above passed with Cargo jobs and test threads bounded.
 
-No Gopeed functionality beyond the documented workflow pattern was copied. The full Gopeed `resolve_task` behavior—including protocol-specific metadata and file selection—is the recommended next Gopeed-derived feature after this focused lookup is shipped and adopted.
+No Gopeed functionality beyond the documented workflow pattern was copied. Prompt 16 has since verified the full Gopeed `resolve_task` source contract and compared it with FetchX's protocol flows. The broader pre-creation resolver remains a meaningful gap, but implementation is deferred pending a bounded protocol/adapter scope; see [`GOPEED_RESOLVE_TASK_ANALYSIS.md`](GOPEED_RESOLVE_TASK_ANALYSIS.md).

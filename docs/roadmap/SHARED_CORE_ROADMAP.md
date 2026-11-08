@@ -10,7 +10,8 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - A repository-backed normalized-URL duplicate lookup is exposed through CoreServices and existing Android, desktop, CLI, remote, and browser-RPC boundaries. It reports a match without enforcing duplicate policy.
 - A missing-download cancellation no longer terminates the queue actor; shutdown is idempotent. Focused queue and remote restart regression tests cover this lifecycle fix.
 - The repository remains schema-compatible; no migration or new dependency was introduced.
-- Next: assess a full pre-creation `resolve_task` contract for protocol-specific metadata and file selection, building on Gopeed's separate resolve/create workflow. Do not equate this with the narrower duplicate lookup.
+- Prompt 16 verified Gopeed's pinned `resolve_task` contract and compared it with FetchX protocol-by-protocol. FetchX has specialized media and local-torrent inspection, but no common pre-creation resolver; duplicate lookup is not a substitute.
+- A common resolver is useful, but implementation is deferred rather than partially adding HTTP-only or adapter-specific behavior. The proposed typed contract, transient-handle constraints, compatibility requirements, and acceptance criteria are in [`GOPEED_RESOLVE_TASK_ANALYSIS.md`](../research/GOPEED_RESOLVE_TASK_ANALYSIS.md).
 
 ## Current Ketch-derived progress
 
@@ -201,23 +202,23 @@ This is low-risk and establishes the acceptance criterion before later lifecycle
 - Added `CoreServices::enqueue_download_batch_by_source`, an additive operation that derives and sanitizes a package per URL with the existing helper, then delegates to the existing batch validation and queue lifecycle. The original `BatchDownloadRequest` shape and `enqueue_download_batch` behavior are preserved. The desktop batch dialog activates grouping when the suggested value has not been manually edited; an explicit name remains a shared override.
 - At the JDownloader 2 phase, only the existing desktop Tauri/React batch surface was wired; Android, CLI, FetchX remote JSON-RPC/UI, and browser/native-host did not yet expose batch operations. No migration, dependency, page crawl, credential flow, or plugin framework was added.
 - Focused test and desktop build outcomes, plus the official source/license limitation, are recorded in `docs/research/JDOWNLOADER2_FEATURE_ANALYSIS.md`.
-- Recommended next work: continue Gopeed's deferred full `resolve_task` contract investigation; keep deep page crawling and an unverified hoster-plugin architecture out of scope.
+- Recommended next work: define and review a first supported-protocol slice against the resolver acceptance criteria before implementation; keep deep page crawling and an unverified hoster-plugin architecture out of scope.
 
-## Cross-phase shared-core integration audit and Android batch admission (Prompts 13–14)
+## Cross-phase shared-core integration audit and Android batch admission (Prompts 13–15)
 
 - The verified target-by-target capability matrix and current commit/worktree state are recorded in [`CROSS_PHASE_INTEGRATION_AUDIT.md`](../research/CROSS_PHASE_INTEGRATION_AUDIT.md).
 - Android now consumes the persisted Rust duplicate lookup before Add. Matching downloads produce a confirmation warning, while **Add anyway** preserves intentional duplicate creation. Rust remains responsible for URL normalization and persisted lookup; no schema or UniFFI change was needed.
 - Android bulk Add now uses the additive `CoreServices::enqueue_download_batch_with_destinations` API through UniFFI. Per-item requests carry URL, filename, absolute destination, engine/media options, and optional checksum; Android preserves package paths and owns public-storage staging/publication, while Rust validates and admits items independently, resolves duplicates/collisions, and returns one outcome per input. The existing CoreServices batch methods and desktop caller remain compatible.
 - Rust creates checksum sidecars before enqueuing checked batch items, avoiding a dispatch-before-sidecar race. No migration or dependency was added. Cancellation does not roll back items already accepted by the persisted queue.
 - Focused Rust core/Android bridge tests and Android bridge/downloads unit tests pass. These are host tests and Kotlin compilation; no device/emulator, live media transfer, or public-storage publication test was performed.
-- Persisted `download.runtimeStatus` is available through adapters but is not consumed by the audited desktop, Android, or remote UI call sites. Decide whether to integrate it or retain the additive API for downstream clients.
+- Prompt 15 verified that persisted `download.runtimeStatus` is a compact projection of fields already delivered through normal download-list/event paths. Android, desktop, remote UI, and CLI already consume persisted status through those paths. The separate adapters remain available for downstream clients; no duplicate UI polling was added. Focused Rust projection/RPC tests, 60 desktop Tauri tests, Android downloads host tests, and desktop/remote UI checks passed; no device/runtime validation was performed.
 - Preserve the reported limitations: no Android device process-restart test; Seal's earlier Gradle `net.dll` JVM crash; this audit's Chaquopy `yt-dlp==2026.8.19` provisioning failure (Kotlin compilation succeeded when provisioning was skipped); XDM's browser `TS6133`; two untouched desktop Clippy warnings; unavailable Ridm source/license; and unverified authoritative JDownloader source/license.
 - Prompt 13 introduced no Rust business logic, persistence, migration, or dependency change. The Android warning is a presentation/adapter integration of existing shared-core behavior. Its tests and the compilation/runtime distinction are in the audit report.
 
 Prioritized next work:
 
 1. Validate Android batch media routing, checksum verification, public-storage staging/publication, and restart behavior on an emulator/device.
-2. Wire persisted download runtime status to intended UI consumers or document it as downstream-only.
+2. Keep the compact persisted download-runtime-status API available to downstream clients; existing application surfaces consume the same status through their normal list/event flow, so no additional UI integration is needed.
 3. Add batch operations to CLI, remote, or browser only if those product surfaces require them; they remain intentionally unexposed.
 4. Fix the browser `TS6133` and desktop Clippy warnings in separately scoped changes.
-5. Continue the previously deferred Gopeed `resolve_task` research after the integration gaps above.
+5. Before implementing resource resolution, select a bounded protocol/adapter slice and settle probe security, transient-handle lifetime, and older-remote-server fallback as specified in [`GOPEED_RESOLVE_TASK_ANALYSIS.md`](../research/GOPEED_RESOLVE_TASK_ANALYSIS.md).

@@ -25,7 +25,7 @@ Legend: **Consumed** means there is a concrete UI/command caller; **exposed** me
 
 | Capability | Canonical Rust/API | Android | Desktop | CLI | Remote server/UI | Browser/native host |
 |---|---|---|---|---|---|---|
-| Download runtime status | `CoreServices::download_runtime_statuses`; persisted projection | UniFFI method exposed; no repository/UI consumer found | Tauri and TypeScript wrappers exposed; no UI consumer found | No dedicated local status command found | RPC and typed client helper exposed; remote UI does not call `download.runtimeStatus` | Browser RPC allowlist permits read-only status; no extension caller found |
+| Download runtime status | `CoreServices::download_runtime_statuses` projects `id`, `status`, `progress`, and `updated_at` from each persisted `DownloadItem` | Status/progress are consumed through the existing list/event flow; the separate UniFFI projection has no repository/UI caller | Status/progress/update time are consumed through the existing list/event flow; the separate Tauri/TypeScript wrapper has no UI caller | No separate runtime-status command; standard list/monitor commands consume persisted download state | Status/progress/update time are consumed through `download.list`; the separate RPC/helper is not called, so older servers need no new capability | Read-only RPC method is allowlisted, but no extension caller was found |
 | Persisted duplicate lookup | `CoreServices::find_duplicate_download`; normalized persisted-source query | **Consumed** by the Add dialog warning; explicit Add anyway preserves intentional duplicates | Tauri/TypeScript API exposed; no UI caller found | Local and remote duplicate commands available | Authenticated `download.findDuplicate` available; no remote UI caller found | Browser RPC allowlist permits lookup; no extension caller found |
 | Queue ordering and dispatch | Rust queue actor, priority-first dispatch, persisted `queue_order` | UniFFI methods and queued-row controls consumed; restart policy is Android-specific | Tauri commands and queue controls consumed | Local and remote queue move commands available | Authenticated operations and remote UI controls consumed | Queue mutations unsupported by the read-only browser method allowlist |
 | Android sticky service recovery | Rust state recovery plus Android foreground-service policy | Implemented; host-side policy tests passed; process recreation on a real device is unverified | Not applicable; Rust persisted recovery applies | Not applicable; Rust persisted recovery applies | Not applicable | Not applicable |
@@ -61,6 +61,16 @@ This matrix describes code paths and known consumers. A shared Rust API or passi
 **Validation:** `cargo test -p fetchx-core-services --lib` passed (31 tests), including explicit destinations, partial success, duplicate URLs, collision resolution, and checksum sidecar creation. `cargo test -p fetchx-android-bridge --lib` passed (25 tests), including UniFFI service result/destination/checksum coverage. `Set-Location apps\android; .\gradlew.bat :bridge:testDebugUnitTest` passed, and `Set-Location apps\android; .\gradlew.bat :downloads:testDebugUnitTest` passed. These are host unit tests and Kotlin compilation, not a device or live-download test. Public-storage publication remains covered by the existing Android storage tests, not by a real-device batch run.
 
 **Remaining boundary:** bulk admission is consumed by Android UI and desktop UI only. CLI, remote JSON-RPC/UI, and browser/native-host still lack batch operations; browser bulk selection continues to submit individual requests. Android media engine availability and public-storage publication for an admitted batch remain dependent on platform runtime and device permissions.
+
+### Persisted download runtime-status audit (Prompt 15)
+
+**Verified contract:** `DownloadRuntimeStatus` contains only `id`, `status`, `progress`, and `updated_at`, and `From<&DownloadItem>` copies those fields without additional derivation. `CoreServices::download_runtime_statuses()` obtains the same persisted records as the ordinary download-list APIs and projects that subset; it does not report independent engine-observed or fresher state.
+
+**Existing consumers:** Android's `listDownloads()` and Rust event snapshots map the ordinary `DownloadInfoDto` status/progress into `DownloadItem`, and `DownloadItemRow` renders lifecycle/progress details. Android's DTO also carries `updated_at`, but the Kotlin UI model currently omits that timestamp; if the UI needs it later, it can be mapped from the existing list response rather than fetched separately. Desktop's `listDownloads()` plus download-change events populate `DownloadRow`, which renders status, progress, speed/ETA, and `updated_at`. The remote UI refreshes `download.list` on connection, events, and its existing periodic refresh; the table renders status and progress, while the dashboard sorts recent downloads by `updated_at`. CLI list/monitor commands also read persisted `DownloadItem` status. The runtime-specific UniFFI/Tauri/RPC methods and client wrappers remain exposed but have no direct UI callers.
+
+**Decision and compatibility:** no additional UI integration or polling was added. The regular download-list record already contains every runtime-status field; fetching and merging the projection would duplicate state, add a second read path, and risk mismatches without supplying missing status information. Existing list/event refresh and error behavior remains unchanged; no separate missing/stale runtime-status state is introduced. In particular, remote UI does not require `download.runtimeStatus`, preserving compatibility with older servers. The additive runtime-status APIs remain available to downstream clients that need the compact projection. No public contract, migration, or dependency changed.
+
+**Validation:** `cargo test -p fetchx-models projection_preserves_every_lifecycle_status` passed (1 test); `cargo test -p fetchx-remote-server runtime_status_rpc_shape_includes_shared_progress_fields` passed (1 test); `cargo test -p fetchx-desktop` passed (60 tests); `Set-Location apps\android; .\gradlew.bat :downloads:testDebugUnitTest` passed; `Set-Location apps\desktop\ui; npm run build` passed; `Set-Location apps\remote-ui; npm test` passed (5 tests); and `Set-Location apps\remote-ui; npm run build` passed. No UI/adapter code changed, so no UI-specific test was added; no device/runtime behavior is claimed.
 
 ## Unresolved limitations and phase claims
 
@@ -98,7 +108,7 @@ Earlier cross-phase test/build evidence remains in the linked research reports, 
 ## Remaining work, in priority order
 
 1. Validate Android batch media routing, checksum verification, public-storage staging/publication, and process recovery on a supported device/emulator.
-2. Consume persisted `download.runtimeStatus` in the intended desktop/Android/remote UI surfaces, or document it as downstream-only after confirming API compatibility needs.
+2. Keep the compact persisted download-runtime-status API available to downstream clients; existing app surfaces already consume the same status through their ordinary list/event flows.
 3. Add batch operations to CLI/remote/browser only if product requirements justify those transport surfaces; browser bulk selection still submits individual calls.
 4. Resolve the pre-existing browser `TS6133` issue separately and keep the two desktop Clippy warnings tracked.
 5. Continue the documented Gopeed `resolve_task` investigation; do not infer missing JDownloader or Ridm behavior from inaccessible sources.
@@ -130,5 +140,11 @@ Earlier cross-phase test/build evidence remains in the linked research reports, 
 - `apps/android/downloads/src/main/kotlin/dev/mydownloader/downloads/ui/DownloadsScreen.kt`
 - `apps/android/downloads/src/test/kotlin/dev/mydownloader/downloads/ui/DownloadsViewModelTest.kt`
 - `docs/architecture/CROSS_PLATFORM_API.md`
+- `docs/architecture/CAPABILITY_MATRIX.md`
+- `docs/roadmap/SHARED_CORE_ROADMAP.md`
+
+## Files changed in Prompt 15
+
+- `docs/research/CROSS_PHASE_INTEGRATION_AUDIT.md`
 - `docs/architecture/CAPABILITY_MATRIX.md`
 - `docs/roadmap/SHARED_CORE_ROADMAP.md`

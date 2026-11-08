@@ -26,11 +26,12 @@ Capabilities have two independent states:
 | yt-dlp audio extraction (MP3/M4A) | Typed source option and shared argument/lifecycle handling | Browser picker via UniFFI; bundled FFmpeg is passed for extraction | Tauri Add dialog supports MP3/M4A | Local CLI `--audio-format`; remote API/UI and browser extension/native host do not expose media-specific selection |
 | FFmpeg/FFprobe | Available process orchestration | Android bundles statically linked FFmpeg runtime | Optional helper executable | Optional executable/configuration |
 | Media format extraction | Available in media-extractor | Android runtime adapter | Shared Rust plus process adapter | Shared Rust plus process adapter |
+| Pre-creation resource resolution | No general resolver; media extraction and local torrent inspection are specialized operations | UniFFI exposes media formats and local `.torrent` inspection; magnet selection follows metadata acquisition | Tauri exposes media formats and local `.torrent` inspection; magnet selection follows metadata acquisition | CLI supports local torrent selection and post-admission magnet selection; FetchX remote has no resolve operation; browser capture routes URLs without resource inspection |
 | Queue/scheduler/recovery | Available | Available | Available | Available |
 | SQLite persistence | Available | App-private database | OS app-data database | Caller-selected database |
 | Remote JSON-RPC | Available server transport | Android browser-RPC transport exists | Desktop IPC should remain separate unless exposed | Available HTTP/WebSocket |
 | Engine runtime status | CoreServices projection of all nine engine kinds | No engine-status operation or UI consumer | Local settings consume Tauri engine status; remote engine status is a separate API | Authenticated `engine.runtimeStatus` is consumed by the remote UI; not exposed to the CLI or browser/native-host allowlist |
-| Persisted download runtime status | CoreServices projection of persisted download progress/status | UniFFI method exposed, no Android UI/repository consumer found | Tauri and TypeScript wrappers exposed, no UI consumer found | Remote RPC and TypeScript helper exposed, no remote UI consumer found; browser RPC allowlist permits read-only calls but no extension consumer found |
+| Persisted download runtime status | Compact projection of persisted `DownloadItem` fields: `id`, `status`, `progress`, and `updated_at` | Status/progress already consumed via list/events; separate UniFFI method has no caller | Status/progress/update time already consumed via list/events; separate Tauri/TypeScript wrapper has no UI caller | CLI list/monitor commands consume persisted status; no separate runtime-status command | Status/progress/update time already consumed via `download.list`; separate RPC/helper has no remote UI caller; older servers need no new capability |
 | Background execution | Platform adapter responsibility | Foreground service/Android lifecycle | OS application lifecycle | Long-running process |
 | Browser integration | Protocol/native host/modules | GeckoView/browser module | Desktop browser IPC/native host | Browser extension client via server |
 | Plugins | Policy/API crates; Android service has no execution adapter | Policy evaluation only, no execution capability | Depends on future/host adapter | Policy/manager if wired |
@@ -140,12 +141,18 @@ When desktop batch admission is invoked without an explicit package name, CoreSe
 
 Detection is based on the URL path only; opaque manifest URLs without an `.mpd` suffix are not detected. Browser-captured request headers and cookies are not forwarded by this change. See `docs/research/XDM_FEATURE_ANALYSIS.md` for source review, tests, and runtime limitations.
 
+## Pre-creation resource resolution
+
+Prompt 16 verified Gopeed's separate resolve/create workflow against revision `8ef3b63e8d93f34e9f6c161823ff2bdfe50f1f0b`. FetchX has specialized media-format discovery and local torrent-file inspection, while ordinary HTTP/FTP/SFTP/HLS/Metalink jobs generally discover metadata after admission and magnet file selection is post-admission. Batch admission and duplicate lookup do not inspect remote resources. There is no shared `resolve_download` API in Rust or the host adapters.
+
+A common resolver would provide pre-add metadata and file selection without replacing existing direct-add behavior. Its protocol probes, reusable transient handles, security/lifetime policy, and Android/desktop/CLI/remote boundaries are too broad for a safe partial implementation in this phase. No API or runtime behavior was changed. The verified source contract, per-protocol comparison, proposed contract, acceptance criteria, and tests reviewed are in [`GOPEED_RESOLVE_TASK_ANALYSIS.md`](../research/GOPEED_RESOLVE_TASK_ANALYSIS.md). Gopeed's GPL-3.0 source was not copied.
+
 ## Cross-phase integration audit
 
 The Prompt 13 target-by-target audit is recorded in [`CROSS_PHASE_INTEGRATION_AUDIT.md`](../research/CROSS_PHASE_INTEGRATION_AUDIT.md). It distinguishes a Rust/API implementation from a target that actually consumes it. In particular:
 
 - Android now consumes persisted duplicate lookup as a pre-add warning; duplicate creation remains allowed after explicit confirmation.
-- Persisted download-runtime-status wrappers remain exposed but have no Android, desktop, or remote UI consumer found in the audited call sites.
+- Persisted download-runtime-status wrappers remain exposed but have no direct Android, desktop, or remote UI consumer. Their fields duplicate the ordinary download records already consumed by those UIs; adding another fetch would not provide additional status information.
 - Android, CLI, FetchX remote UI, and browser/native-host still do not call the shared Rust batch-admission API. Browser bulk submission issues individual requests.
 - Per-source batch package grouping remains consumed only by the desktop batch UI.
 - Engine runtime status is consumed by desktop settings and the authenticated remote UI; it is not exposed through the browser/native-host allowlist.
