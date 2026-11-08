@@ -5,6 +5,11 @@ import java.util.Locale
 
 internal const val UBLOCK_ORIGIN_EXTENSION_ID = "uBlock0@raymondhill.net"
 
+/** Extension IDs that are internal plumbing and must never appear in the user-facing UI. */
+internal val INTERNAL_EXTENSION_IDS = setOf(
+    "video-interceptor@fetchx.dev",
+)
+
 @JvmInline
 value class ExtensionId private constructor(val value: String) {
     companion object {

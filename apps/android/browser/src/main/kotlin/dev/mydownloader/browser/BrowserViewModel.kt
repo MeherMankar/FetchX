@@ -1288,7 +1288,13 @@ class BrowserViewModel internal constructor(
     private fun syncExtensionManagerState() {
         val manager = extensionManager ?: return
         val state = manager.state.value
-        _uiState.update { it.copy(extensionManagerState = state) }
+        // Strip internal/silent extensions so they never surface in the user-facing UI.
+        val userVisibleState = state.copy(
+            extensions = state.extensions.filter { ext ->
+                ext.id.value !in INTERNAL_EXTENSION_IDS
+            },
+        )
+        _uiState.update { it.copy(extensionManagerState = userVisibleState) }
         syncUBlockWithAdBlockingSetting()
     }
 
