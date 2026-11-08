@@ -76,6 +76,15 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - Exact source review, capability comparison, implementation, adapter status, validation, and limitations are recorded in `docs/research/XDM_FEATURE_ANALYSIS.md`. The prior Seal Android Gradle limitation remains: its wrapper JVM crashed in native `net.dll`; no Kotlin/device validation is claimed here.
 - Recommended next research item in the established order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
 
+## Current Motrix-derived progress
+
+- Reviewed Motrix revision `057662a00598e4c7447469cabf53c6924209eb43`; its root license is MIT, with separate third-party asset licensing noted by the project. No Motrix source or assets were copied.
+- Motrix provides a customizable dashboard with engine status and persisted transfer statistics. FetchX already had current queue summaries, authenticated remote authorization, queue controls, and local engine status, but did not expose shared engine availability to remote clients.
+- Added the CoreServices engine-status projection and authenticated, capability-discovered `engine.runtimeStatus` RPC. The remote UI shows all nine engine kinds and refreshes them through its existing polling. Operator and ReadOnly roles may read status; the endpoint omits failure reasons, executable paths, and configuration.
+- No migration, persistence, dependency, token change, desktop Tauri change, Android/UniFFI change, CLI change, or browser RPC permission was added. The new method is excluded from the restricted browser/native-host allowlist.
+- Focused Rust tests, workspace Clippy, remote UI tests/build, and browser extension tests passed as recorded in `docs/research/MOTRIX_FEATURE_ANALYSIS.md`. The browser extension build itself was not rerun; its prior `TS6133` issue remains reported by the XDM phase. The Seal Android Gradle JVM limitation is also unchanged.
+- Recommended next research item: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

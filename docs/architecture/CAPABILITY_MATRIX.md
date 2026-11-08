@@ -7,7 +7,7 @@ Capabilities have two independent states:
 - **implementation availability**: the Rust engine or adapter can run;
 - **platform availability**: current OS, permissions, executable runtime, and bundled resources support it.
 
-`engine_status.rs` is the existing runtime-status source for aria2, yt-dlp, native torrent, FTP, SFTP, and Metalink. Capability reporting should be unified and extended rather than inferred from UI lists or `EngineKind`.
+`engine_status.rs` is the runtime-status source for aria2, yt-dlp, native torrent, FTP, SFTP, and Metalink. `EngineRuntimeStatus::entries()` projects all nine `EngineKind` values, including built-in Direct HTTP/HLS and shared FTP/FTPS status. Capability reporting should continue to extend this shared projection rather than infer status from UI lists.
 
 ## Repository-evidenced capabilities
 
@@ -29,6 +29,7 @@ Capabilities have two independent states:
 | Queue/scheduler/recovery | Available | Available | Available | Available |
 | SQLite persistence | Available | App-private database | OS app-data database | Caller-selected database |
 | Remote JSON-RPC | Available server transport | Android browser-RPC transport exists | Desktop IPC should remain separate unless exposed | Available HTTP/WebSocket |
+| Remote engine runtime status | CoreServices projection of all nine engine kinds | No Android-specific status surface added | Existing local desktop status remains separate | Additive authenticated `engine.runtimeStatus` RPC and remote UI; omitted from browser/native-host RPC allowlist |
 | Background execution | Platform adapter responsibility | Foreground service/Android lifecycle | OS application lifecycle | Long-running process |
 | Browser integration | Protocol/native host/modules | GeckoView/browser module | Desktop browser IPC/native host | Browser extension client via server |
 | Plugins | Policy/API crates; Android service has no execution adapter | Policy evaluation only, no execution capability | Depends on future/host adapter | Policy/manager if wired |
@@ -57,6 +58,13 @@ Remote aria2 preflight:
 - A successful `aria2.getVersion` probe displays the daemon version and `enabledFeatures`; authentication and transport errors do not return the configured secret.
 - This is connectivity/capability discovery only. It does not configure remote aria2 as the download engine or expose arbitrary endpoint testing through FetchX's authenticated remote API.
 - No persistence or migration is involved.
+
+Remote engine runtime status:
+
+- `CoreServices::engine_runtime_statuses()` projects every engine as `available`, `disabled`, or `unavailable`, with an optional version. The authenticated `engine.runtimeStatus` RPC is advertised through capability discovery and is readable by Operator and ReadOnly roles.
+- The remote UI requests the method only when the server advertises the capability and refreshes it with the existing polling cycle. Older servers continue to display the unavailable state.
+- The response omits internal failure reasons, executable paths, and configuration. This read-only status does not add persistence, migration, or a new credential flow.
+- The method is deliberately excluded from `BROWSER_RPC_METHODS`; it is a remote management view, not a browser page-submission operation.
 
 Availability notes:
 

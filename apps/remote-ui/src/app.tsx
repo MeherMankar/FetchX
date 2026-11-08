@@ -7,6 +7,7 @@ import {
   protocolVersion,
   type DownloadPriority,
   type DownloadStatus,
+  type EngineRuntimeStatusEntry,
   type HealthInfo,
   type ProtocolInfo,
   type RemoteDownload,
@@ -41,8 +42,8 @@ const unavailable: Record<Exclude<Section, "dashboard" | "downloads" | "queue" |
   detail: string;
 }> = {
   engines: {
-    title: "Engine management is not available in the current protocol.",
-    detail: "The server exposes the engine used by each download, but no engine status or configuration RPC.",
+    title: "Engine runtime status is not available in the current protocol.",
+    detail: "This server does not advertise engine.runtimeStatus.",
   },
   scheduler: {
     title: "Scheduler controls are not available in the current protocol.",
@@ -66,6 +67,10 @@ interface DownloadListResult {
   downloads: RemoteDownload[];
 }
 
+interface EngineRuntimeStatusResponse {
+  engines: EngineRuntimeStatusEntry[];
+}
+
 interface CreateResult {
   id: string;
 }
@@ -77,6 +82,7 @@ export function App() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [protocol, setProtocol] = useState<ProtocolInfo | null>(null);
   const [downloads, setDownloads] = useState<RemoteDownload[]>([]);
+  const [engineStatuses, setEngineStatuses] = useState<EngineRuntimeStatusEntry[] | null>(null);
   const [section, setSection] = useState<Section>("dashboard");
   const [search, setSearch] = useState("");
   const [newUrl, setNewUrl] = useState("");
@@ -101,6 +107,7 @@ export function App() {
     setHealth(null);
     setProtocol(null);
     setDownloads([]);
+    setEngineStatuses(null);
     setEventState("Disconnected");
     setTokenInput("");
     if (clearMessage) setError("");
@@ -110,6 +117,20 @@ export function App() {
     const result = await activeClient.call<DownloadListResult>("download.list");
     if (clientRef.current === activeClient && Array.isArray(result.downloads)) {
       setDownloads(result.downloads);
+    }
+  }, []);
+
+  const refreshEngineStatuses = useCallback(async (
+    activeClient: RemoteClient,
+    currentCapabilities: string[],
+  ) => {
+    if (!currentCapabilities.includes("engine.runtimeStatus")) {
+      setEngineStatuses(null);
+      return;
+    }
+    const result = await activeClient.call<EngineRuntimeStatusResponse>("engine.runtimeStatus");
+    if (clientRef.current === activeClient && Array.isArray(result.engines)) {
+      setEngineStatuses(result.engines);
     }
   }, []);
 
@@ -154,9 +175,13 @@ export function App() {
       const rows = canList
         ? await activeClient.call<DownloadListResult>("download.list")
         : { downloads: [] };
+      const currentEngineStatuses = currentProtocol.capabilities.includes("engine.runtimeStatus")
+        ? await activeClient.call<EngineRuntimeStatusResponse>("engine.runtimeStatus")
+        : null;
       setHealth(currentHealth);
       setProtocol(currentProtocol);
       setDownloads(rows.downloads);
+      setEngineStatuses(currentEngineStatuses?.engines ?? null);
       clientRef.current = activeClient;
       setClient(activeClient);
       setTokenInput("");
@@ -210,13 +235,16 @@ export function App() {
   useEffect(() => {
     if (!client) return;
     const timer = window.setInterval(() => {
-      void refreshDownloads(client).catch((cause: unknown) => {
+      void Promise.all([
+        refreshDownloads(client),
+        refreshEngineStatuses(client, protocol?.capabilities ?? []),
+      ]).catch((cause: unknown) => {
         if (cause instanceof RemoteError && cause.kind === "authentication") return;
         handleError(cause);
       });
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [client, handleError, refreshDownloads]);
+  }, [client, handleError, protocol?.capabilities, refreshDownloads, refreshEngineStatuses]);
 
   useEffect(() => () => {
     socketRef.current?.close();
@@ -249,7 +277,10 @@ export function App() {
         throw new RemoteError(`download.${action} is not available in the current protocol.`, "protocol");
       }
       await client.call(`download.${action}`, { id: download.id });
-      await refreshDownloads(client);
+      await Promise.all([
+        refreshDownloads(client),
+        refreshEngineStatuses(client, protocol?.capabilities ?? []),
+      ]);
       setNotice(action === "remove" ? "Download record removed. Files on disk are preserved." : `Download ${action} request completed.`);
     } catch (cause) {
       handleError(cause);
@@ -345,7 +376,7 @@ export function App() {
     } finally {
       setRefreshing(false);
     }
-  }, [client, handleError, refreshDownloads, refreshing]);
+  }, [client, handleError, protocol?.capabilities, refreshDownloads, refreshEngineStatuses, refreshing]);
 
   if (!client) {
     return (
@@ -516,7 +547,10 @@ export function App() {
           {section === "system" && (
             <SystemView health={health} protocol={protocol} eventState={eventState} />
           )}
-          {section !== "dashboard" && section !== "downloads" && section !== "queue" && section !== "system" && (
+          {section === "engines" && (
+            <EngineRuntimeView engines={engineStatuses} />
+          )}
+          {section !== "dashboard" && section !== "downloads" && section !== "queue" && section !== "engines" && section !== "system" && (
             <UnavailableView section={section} />
           )}
         </div>
@@ -534,12 +568,45 @@ function isSectionAvailable(section: Section, capabilities: Set<string>): boolea
     case "queue":
       return capabilities.has("download.list");
     case "engines":
+      return capabilities.has("engine.runtimeStatus");
     case "scheduler":
     case "settings":
     case "devices":
     case "plugins":
       return false;
   }
+}
+
+function EngineRuntimeView({ engines }: { engines: EngineRuntimeStatusEntry[] | null }) {
+  if (!engines) {
+    return <UnavailableView section="engines" />;
+  }
+  return (
+    <div className="page-stack">
+      <section className="welcome-panel">
+        <div>
+          <p className="eyebrow">ENGINE RUNTIME</p>
+          <h2>Download engines</h2>
+          <p className="muted">Live availability from the shared FetchX runtime. This view does not expose executable paths, configuration, or failure details.</p>
+        </div>
+      </section>
+      <section className="panel" aria-label="Engine runtime status">
+        <div className="engine-status-list">
+          {engines.map((engine) => (
+            <div className="engine-status-row" key={engine.engine}>
+              <div>
+                <strong>{engine.engine.replaceAll("_", " ")}</strong>
+                {engine.version && <span>{engine.version}</span>}
+              </div>
+              <span className={`pill ${engine.state === "available" ? "pill-green" : engine.state === "unavailable" ? "pill-red" : "pill-muted"}`}>
+                {engine.state}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function Dashboard(props: {

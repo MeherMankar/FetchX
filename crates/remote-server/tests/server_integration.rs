@@ -47,6 +47,21 @@ async fn remote_http_auth_and_security_limits_survive_restart()
     assert_eq!(missing_body["error"]["code"], -32001);
     assert!(!missing_body.to_string().contains(&token));
 
+    let unauthenticated_engine_status = send_rpc(
+        &public_client,
+        address,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "missing-engine-token",
+            "method": "engine.runtimeStatus"
+        }),
+    )
+    .await?;
+    assert_eq!(
+        unauthenticated_engine_status.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+
     let invalid_client = reqwest::Client::builder()
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
@@ -146,6 +161,11 @@ async fn remote_http_auth_and_security_limits_survive_restart()
         capabilities
             .iter()
             .any(|capability| capability.as_str() == Some("queue.moveDown"))
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| capability.as_str() == Some("engine.runtimeStatus"))
     );
     let unsupported = post_rpc(
         &client,
@@ -361,6 +381,11 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
         }),
         json!({
             "jsonrpc": "2.0",
+            "id": "read-engine-runtime-status",
+            "method": "engine.runtimeStatus"
+        }),
+        json!({
+            "jsonrpc": "2.0",
             "id": "read-duplicate",
             "method": "download.findDuplicate",
             "params": { "url": "https://example.test/file.bin" }
@@ -372,6 +397,23 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
         assert!(body.get("result").is_some());
         if request["method"] == "download.runtimeStatus" {
             assert!(body["result"]["statuses"].as_array().is_some());
+        }
+        if request["method"] == "engine.runtimeStatus" {
+            let engines = body["result"]["engines"]
+                .as_array()
+                .ok_or_else(|| std::io::Error::other("engine status omitted engine list"))?;
+            assert_eq!(engines.len(), 9);
+            assert!(engines.iter().any(|engine| {
+                engine["engine"] == "direct_http" && engine["state"] == "available"
+            }));
+            assert!(engines.iter().all(|engine| {
+                engine.get("reason").is_none()
+                    && engine.get("executable_path").is_none()
+                    && matches!(
+                        engine["state"].as_str(),
+                        Some("available" | "disabled" | "unavailable")
+                    )
+            }));
         }
     }
     let read_get = post_rpc(

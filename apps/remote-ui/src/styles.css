@@ -262,6 +262,12 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
 .pill-muted { color: #657384; background: #f0f2f5; }
 .pill .status-dot { width: 6px; height: 6px; }
 .detail-list { display: grid; }
+.engine-status-list { display: grid; }
+.engine-status-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 5px; border-bottom: 1px solid #eff1f4; }
+.engine-status-row:last-child { border-bottom: 0; }
+.engine-status-row > div { display: grid; gap: 5px; min-width: 0; }
+.engine-status-row strong { color: #354252; font-size: 12px; font-weight: 650; text-transform: capitalize; }
+.engine-status-row > div > span { color: var(--text-muted); font-size: 10px; }
 .detail-row { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 12px 0; border-bottom: 1px solid #eff1f4; font-size: 11px; }
 .detail-row:last-child { border-bottom: 0; }
 .detail-row > span { color: #84909e; }

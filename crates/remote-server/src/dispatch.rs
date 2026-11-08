@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use fetchx_core_services::{CoreServices, CoreServicesError};
+use fetchx_core_services::{
+    CoreServices, CoreServicesError, EngineRuntimeState as CoreEngineRuntimeState,
+};
 use fetchx_downloader::{save_initial_context_headers, validate_http_source_url};
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadRuntimeStatus, DownloadSource, EngineKind,
@@ -11,6 +13,7 @@ use fetchx_remote_protocol::{
     CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_GET,
     DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
     DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY, DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams,
+    ENGINE_RUNTIME_STATUS, EngineRuntimeState, EngineRuntimeStatusEntry, EngineRuntimeStatusResult,
     JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo, QUEUE_MOVE_DOWN,
     QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RemoteCommand, RpcErrorCode,
     RpcFailure, RpcId, RpcSuccess, SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
@@ -97,6 +100,23 @@ pub(crate) async fn dispatch(
                 )
             })?;
             json!({ "ticket": ticket, "expires_in_seconds": 30 })
+        }
+        RemoteCommand::EngineRuntimeStatus => {
+            let engines = services
+                .engine_runtime_statuses()
+                .into_iter()
+                .map(|entry| EngineRuntimeStatusEntry {
+                    engine: entry.engine,
+                    state: match entry.state {
+                        CoreEngineRuntimeState::Available => EngineRuntimeState::Available,
+                        CoreEngineRuntimeState::Disabled => EngineRuntimeState::Disabled,
+                        CoreEngineRuntimeState::Unavailable => EngineRuntimeState::Unavailable,
+                    },
+                    version: entry.version,
+                })
+                .collect();
+            serde_json::to_value(EngineRuntimeStatusResult { engines })
+                .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?
         }
         RemoteCommand::DownloadCreate(params) => {
             let priority = params.priority.unwrap_or_default();
@@ -232,6 +252,7 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
     let supported = [
         "system.discover",
         SYSTEM_WEBSOCKET_TICKET,
+        ENGINE_RUNTIME_STATUS,
         DOWNLOAD_CREATE,
         DOWNLOAD_GET,
         DOWNLOAD_LIST,

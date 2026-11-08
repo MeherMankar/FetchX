@@ -33,6 +33,7 @@ impl Role {
             Self::Operator => matches!(
                 permission,
                 Permission::ServerRead
+                    | Permission::EngineRead
                     | Permission::DownloadsRead
                     | Permission::DownloadsCreate
                     | Permission::DownloadsControl
@@ -42,7 +43,7 @@ impl Role {
             Self::ReadOnly => {
                 matches!(
                     permission,
-                    Permission::ServerRead | Permission::DownloadsRead
+                    Permission::ServerRead | Permission::EngineRead | Permission::DownloadsRead
                 )
             }
         }
@@ -52,6 +53,7 @@ impl Role {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Permission {
     ServerRead,
+    EngineRead,
     DownloadsRead,
     DownloadsCreate,
     DownloadsControl,
@@ -97,6 +99,7 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
     match command {
         RemoteCommand::Discover => Permission::ServerRead,
         RemoteCommand::WebSocketTicket => Permission::EventsRead,
+        RemoteCommand::EngineRuntimeStatus => Permission::EngineRead,
         RemoteCommand::DownloadGet(_)
         | RemoteCommand::DownloadList
         | RemoteCommand::DownloadRuntimeStatus
@@ -129,6 +132,7 @@ mod tests {
         let id = DownloadId::new();
         vec![
             (RemoteCommand::Discover, Permission::ServerRead),
+            (RemoteCommand::EngineRuntimeStatus, Permission::EngineRead),
             (RemoteCommand::WebSocketTicket, Permission::EventsRead),
             (
                 RemoteCommand::DownloadCreate(DownloadCreateParams {
@@ -201,7 +205,7 @@ mod tests {
 
     #[test]
     fn every_protocol_command_has_an_explicit_permission() {
-        assert_eq!(commands().len(), 17);
+        assert_eq!(commands().len(), 18);
         for (command, expected) in commands() {
             assert_eq!(required_permission(&command), expected);
         }
@@ -217,6 +221,7 @@ mod tests {
         for (role, can_read, can_create, can_events, can_remove) in cases {
             let principal = AuthenticatedPrincipal::primary(role);
             assert_eq!(principal.allows(Permission::DownloadsRead), can_read);
+            assert_eq!(principal.allows(Permission::EngineRead), can_read);
             assert_eq!(principal.allows(Permission::DownloadsCreate), can_create);
             assert_eq!(principal.allows(Permission::EventsRead), can_events);
             assert_eq!(principal.allows(Permission::DownloadsRemove), can_remove);

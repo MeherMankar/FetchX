@@ -37,6 +37,7 @@ pub const NAMESPACES: &[&str] = &[
 
 pub const SYSTEM_DISCOVER: &str = "system.discover";
 pub const SYSTEM_WEBSOCKET_TICKET: &str = "system.websocketTicket";
+pub const ENGINE_RUNTIME_STATUS: &str = "engine.runtimeStatus";
 pub const DOWNLOAD_CREATE: &str = "download.create";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
@@ -141,6 +142,7 @@ pub struct ValidatedRequest {
 pub enum RemoteCommand {
     Discover,
     WebSocketTicket,
+    EngineRuntimeStatus,
     DownloadCreate(DownloadCreateParams),
     DownloadGet(DownloadId),
     DownloadList,
@@ -222,6 +224,28 @@ pub struct DownloadSetSpeedLimitParams {
     pub bytes_per_second: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineRuntimeState {
+    Available,
+    Disabled,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineRuntimeStatusEntry {
+    pub engine: EngineKind,
+    pub state: EngineRuntimeState,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineRuntimeStatusResult {
+    pub engines: Vec<EngineRuntimeStatusEntry>,
+}
+
 /// Version and feature discovery response returned by `system.discover`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -249,6 +273,7 @@ impl ProtocolInfo {
 pub const CAPABILITIES: &[&str] = &[
     SYSTEM_DISCOVER,
     SYSTEM_WEBSOCKET_TICKET,
+    ENGINE_RUNTIME_STATUS,
     DOWNLOAD_CREATE,
     DOWNLOAD_GET,
     DOWNLOAD_LIST,
@@ -420,6 +445,9 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
         SYSTEM_DISCOVER => parse_empty_params(&request).map(|()| RemoteCommand::Discover),
         SYSTEM_WEBSOCKET_TICKET => {
             parse_empty_params(&request).map(|()| RemoteCommand::WebSocketTicket)
+        }
+        ENGINE_RUNTIME_STATUS => {
+            parse_empty_params(&request).map(|()| RemoteCommand::EngineRuntimeStatus)
         }
         DOWNLOAD_CREATE => parse_params::<DownloadCreateParams>(&request).and_then(|params| {
             if params.url.trim().is_empty()
@@ -630,6 +658,10 @@ mod tests {
             RemoteCommand::WebSocketTicket
         );
         assert_eq!(
+            parse_request(&encoded(&request(ENGINE_RUNTIME_STATUS, None))?)?.command,
+            RemoteCommand::EngineRuntimeStatus
+        );
+        assert_eq!(
             parse_request(&encoded(&request(
                 DOWNLOAD_FIND_DUPLICATE,
                 Some(serde_json::json!({ "url": "https://example.test/file.bin" })),
@@ -640,6 +672,7 @@ mod tests {
             })
         );
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_RUNTIME_STATUS));
+        assert!(!BROWSER_RPC_METHODS.contains(&ENGINE_RUNTIME_STATUS));
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_FIND_DUPLICATE));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_UP));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_DOWN));
@@ -661,6 +694,20 @@ mod tests {
                 Err(ProtocolError::InvalidParams { .. })
             ));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn engine_runtime_status_rejects_unexpected_parameters()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let body = request(
+            ENGINE_RUNTIME_STATUS,
+            Some(serde_json::json!({ "include_paths": true })),
+        );
+        assert!(matches!(
+            parse_request(&encoded(&body)?),
+            Err(ProtocolError::InvalidParams { .. })
+        ));
         Ok(())
     }
 

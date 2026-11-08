@@ -90,6 +90,18 @@ export interface RemoteDownloadRuntimeStatus {
   updated_at: number;
 }
 
+export type EngineRuntimeState = "available" | "disabled" | "unavailable";
+
+export interface EngineRuntimeStatusEntry {
+  engine: EngineKind;
+  state: EngineRuntimeState;
+  version: string | null;
+}
+
+export interface EngineRuntimeStatusResult {
+  engines: EngineRuntimeStatusEntry[];
+}
+
 export interface ProtocolInfo {
   protocol_version: string;
   server_version: string;
@@ -110,6 +122,7 @@ export interface RemoteEvent {
 export type RemoteMethod =
   | "system.discover"
   | "system.websocketTicket"
+  | "engine.runtimeStatus"
   | "download.create"
   | "download.get"
   | "download.list"

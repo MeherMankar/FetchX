@@ -66,7 +66,9 @@ pub use config::{
     Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, FtpConfig,
     MetalinkConfig, NativeTorrentConfig, SftpConfig, YtDlpConfig,
 };
-pub use engine_status::{EngineAvailability, EngineRuntimeStatus};
+pub use engine_status::{
+    EngineAvailability, EngineRuntimeState, EngineRuntimeStatus, EngineStatusEntry,
+};
 
 mod builtin;
 pub mod config;
@@ -375,6 +377,11 @@ impl CoreServices {
     #[must_use]
     pub fn queue(&self) -> &QueueManager {
         &self.queue
+    }
+
+    /// Returns runtime engine availability without exposing executable paths.
+    pub fn engine_runtime_statuses(&self) -> Vec<EngineStatusEntry> {
+        self.engine_runtime.status.entries()
     }
 
     /// Prevents new queued downloads from starting without interrupting active transfers.
