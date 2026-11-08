@@ -36,7 +36,7 @@ impl DownloadRuntimeStatus {
 impl From<&DownloadItem> for DownloadRuntimeStatus {
     fn from(item: &DownloadItem) -> Self {
         Self {
-            id: item.id().clone(),
+            id: item.id(),
             status: item.status(),
             progress: item.progress().clone(),
             updated_at: item.updated_at(),

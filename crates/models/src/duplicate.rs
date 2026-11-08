@@ -35,7 +35,7 @@ impl DuplicateDownloadMatch {
 impl From<&DownloadItem> for DuplicateDownloadMatch {
     fn from(item: &DownloadItem) -> Self {
         Self {
-            id: item.id().clone(),
+            id: item.id(),
             filename: item.filename().as_str().to_owned(),
             status: item.status(),
             updated_at: item.updated_at(),
