@@ -159,6 +159,33 @@ impl DownloadService {
         fetchx_core_services::extract_download_links(&text)
     }
 
+    pub fn is_queue_dispatch_paused(&self) -> Result<bool, MobileApiError> {
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.is_queue_dispatch_paused())
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))
+        })
+    }
+
+    pub fn pause_queue_dispatch(&self) -> Result<(), MobileApiError> {
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.pause_queue_dispatch())
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))
+        })
+    }
+
+    pub fn resume_queue_dispatch(&self) -> Result<(), MobileApiError> {
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.resume_queue_dispatch())
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))
+        })
+    }
+
     pub fn suggest_download_filename(&self, url: String) -> String {
         fetchx_core_services::suggest_download_filename(&url)
     }

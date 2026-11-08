@@ -150,6 +150,14 @@ export function getQueueSnapshot(): Promise<QueueSnapshot> {
   return invoke<QueueSnapshot>("get_queue_snapshot");
 }
 
+export function pauseQueueDispatch(): Promise<QueueSnapshot> {
+  return invoke<QueueSnapshot>("pause_queue_dispatch");
+}
+
+export function resumeQueueDispatch(): Promise<QueueSnapshot> {
+  return invoke<QueueSnapshot>("resume_queue_dispatch");
+}
+
 export function findDuplicateDownload(url: string): Promise<DuplicateDownloadMatch | null> {
   return invoke<DuplicateDownloadMatch | null>("find_duplicate_download", { url });
 }

@@ -12,7 +12,8 @@ use fetchx_remote_protocol::{
     DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
     DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY, DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams,
     JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo, QUEUE_MOVE_DOWN,
-    QUEUE_MOVE_UP, RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess,
+    QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RemoteCommand, RpcErrorCode,
+    RpcFailure, RpcId, RpcSuccess,
     SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
@@ -190,6 +191,22 @@ pub(crate) async fn dispatch(
             queue_command(services.queue().move_down(id).await)?;
             json!({ "id": id })
         }
+        RemoteCommand::QueuePauseDispatch => {
+            services
+                .queue()
+                .pause_dispatch()
+                .await
+                .map_err(map_queue_error)?;
+            json!({ "dispatch_paused": true })
+        }
+        RemoteCommand::QueueResumeDispatch => {
+            services
+                .queue()
+                .resume_dispatch()
+                .await
+                .map_err(map_queue_error)?;
+            json!({ "dispatch_paused": false })
+        }
         RemoteCommand::DownloadRetry(_) => {
             return Err(unsupported("download.retry"));
         }
@@ -228,6 +245,8 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         DOWNLOAD_SET_PRIORITY,
         QUEUE_MOVE_UP,
         QUEUE_MOVE_DOWN,
+        QUEUE_PAUSE_DISPATCH,
+        QUEUE_RESUME_DISPATCH,
         "download.created",
         "download.updated",
         "download.progress",

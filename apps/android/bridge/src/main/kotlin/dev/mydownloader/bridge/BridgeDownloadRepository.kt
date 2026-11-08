@@ -449,6 +449,18 @@ class BridgeDownloadRepository(
             _downloads.value = loadDownloadsAndReconcile()
         }
 
+    override suspend fun pauseQueueDispatch() = withContext(Dispatchers.IO) {
+        service.pauseQueueDispatch()
+    }
+
+    override suspend fun resumeQueueDispatch() = withContext(Dispatchers.IO) {
+        service.resumeQueueDispatch()
+    }
+
+    override suspend fun isQueueDispatchPaused(): Boolean = withContext(Dispatchers.IO) {
+        service.isQueueDispatchPaused()
+    }
+
     override suspend fun scheduleDownload(downloadId: String, startAtMillis: Long) =
         withContext(Dispatchers.IO) {
             service.scheduleDownload(downloadId, startAtMillis)

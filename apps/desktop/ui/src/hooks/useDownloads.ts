@@ -59,7 +59,9 @@ export function useDownloads() {
               const existingIndex = current.findIndex((item) => item.id === download.id);
               if (existingIndex < 0) return [...current, download];
               return current.map((item, index) =>
-                index === existingIndex ? download : item,
+                index === existingIndex
+                  ? { ...download, queue_position: download.queue_position ?? item.queue_position }
+                  : item,
               );
             });
           },

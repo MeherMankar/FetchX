@@ -152,6 +152,15 @@ interface DownloadService {
     sequence<DownloadInfoDto> list_downloads();
 
     [Throws=MobileApiError]
+    boolean is_queue_dispatch_paused();
+
+    [Throws=MobileApiError]
+    void pause_queue_dispatch();
+
+    [Throws=MobileApiError]
+    void resume_queue_dispatch();
+
+    [Throws=MobileApiError]
     sequence<DownloadRuntimeStatusDto> list_runtime_statuses();
 
     [Throws=MobileApiError]

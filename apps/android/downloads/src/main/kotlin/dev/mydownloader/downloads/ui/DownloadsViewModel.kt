@@ -67,6 +67,9 @@ class DownloadsViewModel(
     private val _downloadSnapshotState = MutableStateFlow(DownloadSnapshotState.Loading)
     val downloadSnapshotState: StateFlow<DownloadSnapshotState> = _downloadSnapshotState.asStateFlow()
 
+    private val _queueDispatchPaused = MutableStateFlow(false)
+    val queueDispatchPaused: StateFlow<Boolean> = _queueDispatchPaused.asStateFlow()
+
     // ── Reactive download lists ────────────────────────────────────────────
 
     /** Reactive list of all downloads. Updated on every Rust event. */
@@ -162,10 +165,12 @@ class DownloadsViewModel(
         viewModelScope.launch {
             try {
                 repository.awaitInitialSnapshot()
+                _queueDispatchPaused.value = repository.isQueueDispatchPaused()
                 _downloadSnapshotState.value = DownloadSnapshotState.Ready
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                _uiState.update { it.copy(error = "Could not read queue status.") }
                 _downloadSnapshotState.value = DownloadSnapshotState.Failed
             }
         }
@@ -300,6 +305,17 @@ class DownloadsViewModel(
 
     fun moveDownInQueue(downloadId: String) {
         performAction("move download in queue") { repository.moveDownInQueue(downloadId) }
+    }
+
+    fun toggleQueueDispatch() {
+        performAction("change queue dispatch") {
+            if (_queueDispatchPaused.value) {
+                repository.resumeQueueDispatch()
+            } else {
+                repository.pauseQueueDispatch()
+            }
+            _queueDispatchPaused.value = repository.isQueueDispatchPaused()
+        }
     }
 
     fun setTorrentFileSelected(downloadId: String, fileIndex: Int, selected: Boolean) {

@@ -85,7 +85,9 @@ impl AppState {
                 items
                     .into_iter()
                     .enumerate()
-                    .map(|(position, item)| DownloadDto::from_with_queue_position(item, position as u64))
+                    .map(|(position, item)| {
+                        DownloadDto::from_with_queue_position(item, Some(position as u64))
+                    })
                     .collect()
             })
             .map_err(|_| IpcError::internal())
@@ -450,7 +452,21 @@ impl AppState {
             paused_count: snap.paused.len(),
             used_connections,
             total_connections: snap.global_connection_limit,
+            dispatch_paused: snap.dispatch_paused,
         })
+    }
+
+    async fn set_queue_dispatch_paused(
+        &self,
+        paused: bool,
+    ) -> Result<QueueSnapshotDto, IpcError> {
+        if paused {
+            self.queue.pause_dispatch().await
+        } else {
+            self.queue.resume_dispatch().await
+        }
+        .map_err(IpcError::from_queue)?;
+        self.snapshot().await
     }
 
     async fn set_priority(
@@ -579,7 +595,8 @@ pub struct DownloadDto {
     pub engine: EngineKind,
     pub progress: DownloadProgressDto,
     pub error: Option<DownloadErrorDto>,
-    pub queue_position: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queue_position: Option<u64>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -672,10 +689,11 @@ pub struct QueueSnapshotDto {
     pub paused_count: usize,
     pub used_connections: usize,
     pub total_connections: usize,
+    pub dispatch_paused: bool,
 }
 
 impl DownloadDto {
-    fn from_with_queue_position(item: DownloadItem, queue_position: u64) -> Self {
+    fn from_with_queue_position(item: DownloadItem, queue_position: Option<u64>) -> Self {
         let progress = item.progress();
         Self {
             id: item.id().to_string(),
@@ -705,7 +723,7 @@ impl DownloadDto {
 
 impl From<DownloadItem> for DownloadDto {
     fn from(item: DownloadItem) -> Self {
-        Self::from_with_queue_position(item, 0)
+        Self::from_with_queue_position(item, None)
     }
 }
 
@@ -1223,6 +1241,20 @@ pub async fn retry_download(
 #[tauri::command]
 pub async fn get_queue_snapshot(state: State<'_, AppState>) -> Result<QueueSnapshotDto, IpcError> {
     state.snapshot().await
+}
+
+#[tauri::command]
+pub async fn pause_queue_dispatch(
+    state: State<'_, AppState>,
+) -> Result<QueueSnapshotDto, IpcError> {
+    state.set_queue_dispatch_paused(true).await
+}
+
+#[tauri::command]
+pub async fn resume_queue_dispatch(
+    state: State<'_, AppState>,
+) -> Result<QueueSnapshotDto, IpcError> {
+    state.set_queue_dispatch_paused(false).await
 }
 
 /// Torrent metadata transfer object for the desktop frontend.
@@ -2107,10 +2139,12 @@ mod tests {
             paused_count: 1,
             used_connections: 8,
             total_connections: 16,
+            dispatch_paused: true,
         };
         let s = serde_json::to_string(&dto)?;
         assert!(s.contains(r#""active_count":2"#));
         assert!(s.contains(r#""total_connections":16"#));
+        assert!(s.contains(r#""dispatch_paused":true"#));
         Ok(())
     }
 

@@ -291,6 +291,23 @@ export function App() {
     }
   }, [busy, client, handleError, refreshDownloads]);
 
+  const setQueueDispatchPaused = useCallback(async (paused: boolean) => {
+    if (!client || busy) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await client.call(paused ? "queue.pauseDispatch" : "queue.resumeDispatch");
+      setNotice(paused
+        ? "Queue dispatch held. Active downloads will continue."
+        : "Queue dispatch resumed.");
+    } catch (cause) {
+      handleError(cause);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, client, handleError]);
+
   const addDownload = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!client || busy || !newUrl.trim()) return;
@@ -491,6 +508,7 @@ export function App() {
               allCount={downloads.length}
               onAction={(download, action) => void operate(download, action)}
               onQueueMove={(download, direction) => void moveInQueue(download, direction)}
+              onQueueDispatchChange={(paused) => void setQueueDispatchPaused(paused)}
               busy={busy}
               capabilities={capabilities}
             />
@@ -672,6 +690,7 @@ function QueueView(props: {
   allCount: number;
   onAction: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
   onQueueMove: (download: RemoteDownload, direction: "up" | "down") => void;
+  onQueueDispatchChange: (paused: boolean) => void;
   busy: boolean;
   capabilities: Set<string>;
 }) {
@@ -682,6 +701,24 @@ function QueueView(props: {
           <p className="eyebrow">QUEUE SNAPSHOT</p>
           <h2>{props.downloads.length} queued or active records</h2>
           <p className="muted">Reorder queued downloads within their priority group. Active downloads cannot be moved.</p>
+          <div className="toolbar-actions">
+            {props.capabilities.has("queue.pauseDispatch") && (
+              <button
+                disabled={props.busy}
+                onClick={() => props.onQueueDispatchChange(true)}
+              >
+                Hold queue
+              </button>
+            )}
+            {props.capabilities.has("queue.resumeDispatch") && (
+              <button
+                disabled={props.busy}
+                onClick={() => props.onQueueDispatchChange(false)}
+              >
+                Resume queue
+              </button>
+            )}
+          </div>
         </div>
       </section>
       <section className="panel">

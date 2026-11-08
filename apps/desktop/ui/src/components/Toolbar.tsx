@@ -11,6 +11,8 @@ interface ToolbarProps {
   onSearchChange: (value: string) => void;
   onSortChange: (sort: SortKey) => void;
   onRefresh: () => void;
+  dispatchPaused: boolean;
+  onToggleQueueDispatch: () => void;
   onAddClick: () => void;
   appVersion: string | undefined;
 }
@@ -24,6 +26,8 @@ export function Toolbar({
   onSearchChange,
   onSortChange,
   onRefresh,
+  dispatchPaused,
+  onToggleQueueDispatch,
   onAddClick,
   appVersion,
 }: ToolbarProps) {
@@ -66,6 +70,15 @@ export function Toolbar({
           <option value="priority">Priority</option>
           <option value="queue">Queue position</option>
         </select>
+
+        <button
+          className="button button-secondary"
+          onClick={onToggleQueueDispatch}
+          aria-label={dispatchPaused ? "Resume queued downloads" : "Hold queued downloads"}
+          title={dispatchPaused ? "Resume queue" : "Hold queue"}
+        >
+          {dispatchPaused ? "Resume queue" : "Hold queue"}
+        </button>
 
         <button
           className="button button-secondary"

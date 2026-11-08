@@ -149,6 +149,15 @@ interface DownloadRepository {
     /** Move a queued download later among downloads with the same priority. */
     suspend fun moveDownInQueue(downloadId: String)
 
+    /** Hold new queue dispatch without interrupting active transfers. */
+    suspend fun pauseQueueDispatch() = Unit
+
+    /** Resume starting eligible queued downloads. */
+    suspend fun resumeQueueDispatch() = Unit
+
+    /** Read whether new queue dispatch is currently held. */
+    suspend fun isQueueDispatchPaused(): Boolean = false
+
     /** Schedule a download to start at a specific wall-clock time (epoch millis). */
     suspend fun scheduleDownload(downloadId: String, startAtMillis: Long)
 

@@ -208,6 +208,10 @@ pub enum RemoteCommand {
         /// Download ID.
         id: String,
     },
+    /// Hold starting new downloads in the remote queue.
+    QueueStop,
+    /// Resume starting eligible downloads in the remote queue.
+    QueueStart,
 }
 
 #[derive(Args, Debug)]

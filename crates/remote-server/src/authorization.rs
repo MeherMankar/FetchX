@@ -106,7 +106,10 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
         | RemoteCommand::DownloadResume(_)
         | RemoteCommand::DownloadCancel(_)
         | RemoteCommand::DownloadRetry(_) => Permission::DownloadsControl,
-        RemoteCommand::QueueMoveUp(_) | RemoteCommand::QueueMoveDown(_) => {
+        RemoteCommand::QueueMoveUp(_)
+        | RemoteCommand::QueueMoveDown(_)
+        | RemoteCommand::QueuePauseDispatch
+        | RemoteCommand::QueueResumeDispatch => {
             Permission::DownloadsControl
         }
         RemoteCommand::DownloadRemove(_) => Permission::DownloadsRemove,
@@ -166,6 +169,14 @@ mod tests {
                 Permission::DownloadsControl,
             ),
             (
+                RemoteCommand::QueuePauseDispatch,
+                Permission::DownloadsControl,
+            ),
+            (
+                RemoteCommand::QueueResumeDispatch,
+                Permission::DownloadsControl,
+            ),
+            (
                 RemoteCommand::DownloadRemove(id),
                 Permission::DownloadsRemove,
             ),
@@ -195,7 +206,7 @@ mod tests {
 
     #[test]
     fn every_protocol_command_has_an_explicit_permission() {
-        assert_eq!(commands().len(), 15);
+        assert_eq!(commands().len(), 17);
         for (command, expected) in commands() {
             assert_eq!(required_permission(&command), expected);
         }

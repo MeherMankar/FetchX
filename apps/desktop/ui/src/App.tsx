@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getAppInfo } from "./api/app";
-import { getQueueSnapshot, stopTorrentSeeding } from "./api/downloads";
+import {
+  getQueueSnapshot,
+  pauseQueueDispatch,
+  resumeQueueDispatch,
+  stopTorrentSeeding,
+} from "./api/downloads";
 import type { Download, DownloadPriority, QueueSnapshot } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
 import { BulkActionBar } from "./components/BulkActionBar";
@@ -14,6 +19,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { ToastStack, useToasts } from "./components/Toast";
 import { Toolbar } from "./components/Toolbar";
 import { useDownloads } from "./hooks/useDownloads";
+import { errorMessage } from "./lib/format";
 import { canCancel, canPause, countStatuses } from "./lib/status";
 
 // ---------------------------------------------------------------------------
@@ -220,6 +226,18 @@ export function App() {
       .then(setSnapshot)
       .catch(() => { /* non-critical */ });
   }, []);
+
+  const toggleQueueDispatch = useCallback(async () => {
+    try {
+      const next = snapshot?.dispatch_paused
+        ? await resumeQueueDispatch()
+        : await pauseQueueDispatch();
+      setSnapshot(next);
+      setGlobalError(null);
+    } catch (cause) {
+      setGlobalError(errorMessage(cause));
+    }
+  }, [snapshot?.dispatch_paused]);
 
   useEffect(() => {
     refreshSnapshot();
@@ -569,6 +587,8 @@ export function App() {
           onSearchChange={setSearch}
           onSortChange={setSort}
           onRefresh={() => { void load(); refreshSnapshot(); }}
+          dispatchPaused={snapshot?.dispatch_paused ?? false}
+          onToggleQueueDispatch={() => { void toggleQueueDispatch(); }}
           onAddClick={() => openAddDialog()}
           appVersion={appVersion}
         />

@@ -174,6 +174,7 @@ export interface QueueSnapshot {
   paused_count: number;
   used_connections: number;
   total_connections: number;
+  dispatch_paused: boolean;
 }
 
 // ---------------------------------------------------------------------------

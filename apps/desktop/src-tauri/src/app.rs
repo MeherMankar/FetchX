@@ -207,6 +207,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_download_schedule,
             commands::retry_download,
             commands::get_queue_snapshot,
+            commands::pause_queue_dispatch,
+            commands::resume_queue_dispatch,
             commands::get_torrent_metadata,
             commands::get_torrent_download_metadata,
             commands::select_torrent_files,

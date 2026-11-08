@@ -59,6 +59,8 @@ pub const DOWNLOAD_SET_ENGINE: &str = "download.setEngine";
 pub const DOWNLOAD_SET_SPEED_LIMIT: &str = "download.setSpeedLimit";
 pub const QUEUE_MOVE_UP: &str = "queue.moveUp";
 pub const QUEUE_MOVE_DOWN: &str = "queue.moveDown";
+pub const QUEUE_PAUSE_DISPATCH: &str = "queue.pauseDispatch";
+pub const QUEUE_RESUME_DISPATCH: &str = "queue.resumeDispatch";
 
 /// A JSON-RPC request envelope before method-specific parameter validation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -163,6 +165,8 @@ pub enum RemoteCommand {
     },
     QueueMoveUp(DownloadId),
     QueueMoveDown(DownloadId),
+    QueuePauseDispatch,
+    QueueResumeDispatch,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -260,6 +264,8 @@ pub const CAPABILITIES: &[&str] = &[
     DOWNLOAD_SET_SPEED_LIMIT,
     QUEUE_MOVE_UP,
     QUEUE_MOVE_DOWN,
+    QUEUE_PAUSE_DISPATCH,
+    QUEUE_RESUME_DISPATCH,
     "download.created",
     "download.updated",
     "download.progress",
@@ -476,6 +482,12 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
             .map(|params| RemoteCommand::QueueMoveUp(params.id)),
         QUEUE_MOVE_DOWN => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::QueueMoveDown(params.id)),
+        QUEUE_PAUSE_DISPATCH => {
+            parse_empty_params(&request).map(|()| RemoteCommand::QueuePauseDispatch)
+        }
+        QUEUE_RESUME_DISPATCH => {
+            parse_empty_params(&request).map(|()| RemoteCommand::QueueResumeDispatch)
+        }
         _ => return Err(ProtocolError::MethodNotFound),
     }?;
 
@@ -596,6 +608,8 @@ mod tests {
             ),
             (QUEUE_MOVE_UP, serde_json::json!({ "id": ID })),
             (QUEUE_MOVE_DOWN, serde_json::json!({ "id": ID })),
+            (QUEUE_PAUSE_DISPATCH, serde_json::json!({})),
+            (QUEUE_RESUME_DISPATCH, serde_json::json!({})),
         ];
         for (method, params) in cases {
             assert!(
@@ -629,6 +643,8 @@ mod tests {
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_FIND_DUPLICATE));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_UP));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_DOWN));
+        assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_PAUSE_DISPATCH));
+        assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_RESUME_DISPATCH));
         Ok(())
     }
 

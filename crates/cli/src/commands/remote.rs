@@ -3,7 +3,8 @@ use std::{env, sync::atomic::AtomicU64, time::Duration};
 use fetchx_remote_protocol::{
     DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
     DOWNLOAD_RESUME, JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ProtocolInfo,
-    QUEUE_MOVE_DOWN, QUEUE_MOVE_UP, RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
+    QUEUE_MOVE_DOWN, QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RpcFailure,
+    RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
 };
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
@@ -141,6 +142,12 @@ pub async fn run(options: RemoteOpts, json_output: bool) -> ExitCode {
         RemoteCommand::QueueDown { id } => {
             run_lifecycle(&client, QUEUE_MOVE_DOWN, id, json_output).await
         }
+        RemoteCommand::QueueStop => {
+            run_queue_dispatch(&client, QUEUE_PAUSE_DISPATCH, true, json_output).await
+        }
+        RemoteCommand::QueueStart => {
+            run_queue_dispatch(&client, QUEUE_RESUME_DISPATCH, false, json_output).await
+        }
     };
 
     match result {
@@ -150,6 +157,33 @@ pub async fn run(options: RemoteOpts, json_output: bool) -> ExitCode {
             exit::GENERAL_ERROR
         }
     }
+}
+
+async fn run_queue_dispatch(
+    client: &RemoteClient,
+    method: &'static str,
+    paused: bool,
+    json_output: bool,
+) -> Result<(), String> {
+    let result = client.call(method, None).await?;
+    let dispatch_paused = result["dispatch_paused"]
+        .as_bool()
+        .ok_or_else(|| "remote server returned an invalid queue state".to_owned())?;
+    if dispatch_paused != paused {
+        return Err("remote server did not apply the requested queue state".to_owned());
+    }
+    if json_output {
+        output::print_json_ok(&json!({
+            "ok": true,
+            "dispatch_paused": dispatch_paused,
+        }));
+    } else {
+        println!(
+            "Remote queue dispatch {}.",
+            if paused { "held" } else { "resumed" }
+        );
+    }
+    Ok(())
 }
 
 async fn run_lifecycle(

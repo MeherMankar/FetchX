@@ -27,6 +27,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -74,6 +75,7 @@ fun DownloadsScreen(
     val torrentTelemetry by viewModel.torrentTelemetry.collectAsStateWithLifecycle()
     val torrentMetadata by viewModel.torrentMetadata.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val queueDispatchPaused by viewModel.queueDispatchPaused.collectAsStateWithLifecycle()
     val downloadSnapshotState by viewModel.downloadSnapshotState.collectAsStateWithLifecycle()
     val reservedFileNames = remember(allDownloads) {
         allDownloads.flatMap { item ->
@@ -95,7 +97,17 @@ fun DownloadsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Downloads") })
+            TopAppBar(
+                title = { Text("Downloads") },
+                actions = {
+                    TextButton(
+                        onClick = viewModel::toggleQueueDispatch,
+                        enabled = uiState.bridgeAvailable,
+                    ) {
+                        Text(if (queueDispatchPaused) "Resume queue" else "Hold queue")
+                    }
+                },
+            )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {

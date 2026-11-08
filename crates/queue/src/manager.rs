@@ -69,6 +69,7 @@ pub struct QueueSnapshot {
     pub queued: Vec<DownloadId>,
     pub paused: Vec<DownloadId>,
     pub active: Vec<ActiveDownload>,
+    pub dispatch_paused: bool,
     pub max_active_downloads: usize,
     pub global_connection_limit: usize,
     pub resource_pressure: ResourcePressure,
@@ -270,6 +271,24 @@ impl QueueManager {
     pub async fn release_downloads(&self, ids: Vec<DownloadId>) -> Result<(), QueueError> {
         self.request(|reply| Command::ReleaseMany { ids, reply })
             .await
+    }
+
+    /// Holds new queue dispatch. Active downloads continue until they finish.
+    pub async fn pause_dispatch(&self) -> Result<(), QueueError> {
+        self.request(|reply| Command::SetDispatchPaused {
+            paused: true,
+            reply,
+        })
+        .await
+    }
+
+    /// Resumes dispatch of eligible queued downloads.
+    pub async fn resume_dispatch(&self) -> Result<(), QueueError> {
+        self.request(|reply| Command::SetDispatchPaused {
+            paused: false,
+            reply,
+        })
+        .await
     }
 
     pub async fn pause(&self, id: DownloadId) -> Result<(), QueueError> {
@@ -581,6 +600,10 @@ enum Command {
         id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
+    SetDispatchPaused {
+        paused: bool,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
     SetConnectionLimit {
         limit: usize,
         reply: oneshot::Sender<Result<(), QueueError>>,
@@ -623,27 +646,30 @@ where
     let mut task_downloads = HashMap::<TaskId, DownloadId>::new();
     let mut last_priority = None;
     let mut consecutive_priority_starts = 0_u8;
+    let mut dispatch_paused = false;
     let mut stopping = false;
     let mut pressure = ResourcePressure::Normal;
     let mut shutdown_waiters = Vec::<oneshot::Sender<Result<(), QueueError>>>::new();
 
     loop {
         if !stopping {
-            start_eligible(
-                Arc::clone(&engine),
-                &config,
-                &mut entries,
-                &deferred,
-                &mut active,
-                &mut workers,
-                &mut task_downloads,
-                &resource_sender,
-                &resources,
-                pressure,
-                &mut last_priority,
-                &mut consecutive_priority_starts,
-            )
-            .await?;
+            if !dispatch_paused {
+                start_eligible(
+                    Arc::clone(&engine),
+                    &config,
+                    &mut entries,
+                    &deferred,
+                    &mut active,
+                    &mut workers,
+                    &mut task_downloads,
+                    &resource_sender,
+                    &resources,
+                    pressure,
+                    &mut last_priority,
+                    &mut consecutive_priority_starts,
+                )
+                .await?;
+            }
         }
         allocate_resources(
             &mut active,
@@ -679,6 +705,7 @@ where
                     &mut active,
                     &mut stopping,
                     &mut pressure,
+                    &mut dispatch_paused,
                     &mut shutdown_waiters,
                     &mut next_sequence,
                 ).await?;
@@ -971,6 +998,7 @@ async fn handle_command<R, E>(
     active: &mut HashMap<DownloadId, ActiveWorker>,
     stopping: &mut bool,
     pressure: &mut ResourcePressure,
+    dispatch_paused: &mut bool,
     shutdown_waiters: &mut Vec<oneshot::Sender<Result<(), QueueError>>>,
     next_sequence: &mut u64,
 ) -> Result<(), QueueError>
@@ -1306,6 +1334,10 @@ where
             let result = move_queued_download(id, false, repository, entries, active).await;
             let _ = reply.send(result);
         }
+        Command::SetDispatchPaused { paused, reply } => {
+            *dispatch_paused = paused;
+            let _ = reply.send(Ok(()));
+        }
         Command::SetConnectionLimit { limit, reply } => {
             let result = if limit == 0 || limit > MAX_GLOBAL_CONNECTIONS {
                 Err(QueueError::InvalidConfiguration)
@@ -1369,6 +1401,7 @@ where
                     max_active_downloads: config.max_active_downloads,
                     global_connection_limit: config.global_connection_limit,
                     resource_pressure: *pressure,
+                    dispatch_paused: *dispatch_paused,
                 })
             }
             .await;
@@ -3444,6 +3477,77 @@ mod tests {
                 .collect::<Vec<_>>(),
             [high_id, normal_id]
         );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_hold_keeps_active_work_running_and_blocks_queued_work()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, release) = setup_engine().await?;
+        let manager = QueueManager::new(
+            repository.clone(),
+            engine,
+            QueueConfig {
+                max_active_downloads: 1,
+                global_connection_limit: 2,
+            },
+        )
+        .await?;
+        let first = item()?;
+        let first_id = first.id();
+        manager.enqueue(first).await?;
+        wait_for_active(&manager, 1).await?;
+
+        manager.pause_dispatch().await?;
+        let second = item()?;
+        let second_id = second.id();
+        manager.enqueue(second).await?;
+        let held = manager.snapshot().await?;
+        assert!(held.dispatch_paused);
+        assert_eq!(held.active.len(), 1);
+        assert_eq!(held.queued, [second_id]);
+
+        release.send_replace(true);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if repository
+                    .get(first_id)
+                    .await?
+                    .is_some_and(|item| item.status() == DownloadStatus::Completed)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        assert_eq!(
+            repository
+                .get(second_id)
+                .await?
+                .ok_or("held download disappeared")?
+                .status(),
+            DownloadStatus::Queued
+        );
+
+        manager.resume_dispatch().await?;
+        assert!(!manager.snapshot().await?.dispatch_paused);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if repository
+                    .get(second_id)
+                    .await?
+                    .is_some_and(|item| item.status() == DownloadStatus::Completed)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await??;
         manager.shutdown().await?;
         Ok(())
     }

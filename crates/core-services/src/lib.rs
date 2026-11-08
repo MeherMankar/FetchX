@@ -272,6 +272,31 @@ impl CoreServices {
         &self.queue
     }
 
+    /// Prevents new queued downloads from starting without interrupting active transfers.
+    pub async fn pause_queue_dispatch(&self) -> Result<(), CoreServicesError> {
+        self.queue
+            .pause_dispatch()
+            .await
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))
+    }
+
+    /// Allows eligible queued downloads to start again.
+    pub async fn resume_queue_dispatch(&self) -> Result<(), CoreServicesError> {
+        self.queue
+            .resume_dispatch()
+            .await
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))
+    }
+
+    /// Reports whether new queue dispatch is currently held.
+    pub async fn is_queue_dispatch_paused(&self) -> Result<bool, CoreServicesError> {
+        self.queue
+            .snapshot()
+            .await
+            .map(|snapshot| snapshot.dispatch_paused)
+            .map_err(|error| CoreServicesError::Queue(error.to_string()))
+    }
+
     #[must_use]
     pub fn scheduler(&self) -> &Scheduler<CoreRepository> {
         &self.scheduler
