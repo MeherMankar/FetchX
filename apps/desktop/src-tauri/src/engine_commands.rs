@@ -14,6 +14,7 @@ use std::{path::PathBuf, time::Duration};
 use fetchx_core_services::{
     Aria2Config, ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
 };
+use fetchx_downloader::{Aria2Client, Aria2ClientConfig};
 use fetchx_models::{ResourcePolicy, ResourceProfile};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -128,6 +129,13 @@ pub struct DiagnosticResult {
     pub version: Option<String>,
     /// Human-readable status message.
     pub message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteAria2ProbeRequest {
+    pub endpoint: String,
+    pub secret: Option<String>,
 }
 
 // ============================================================
@@ -454,6 +462,45 @@ pub async fn test_aria2_config(
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
             message: "aria2 version check timed out.".to_owned(),
+        }),
+    }
+}
+
+/// Checks an explicitly supplied remote aria2 endpoint without saving its
+/// address or credentials. Remote endpoints require HTTPS; HTTP is accepted
+/// only for loopback endpoints.
+#[tauri::command]
+pub async fn test_remote_aria2(
+    request: RemoteAria2ProbeRequest,
+) -> Result<DiagnosticResult, EngineIpcError> {
+    let client = match Aria2Client::new(Aria2ClientConfig::new(
+        request.endpoint,
+        request.secret,
+        Duration::from_secs(5),
+    )) {
+        Ok(client) => client,
+        Err(error) => {
+            return Ok(DiagnosticResult {
+                available: false,
+                executable: None,
+                version: None,
+                message: error.to_string(),
+            });
+        }
+    };
+
+    match client.get_version().await {
+        Ok(version) => Ok(DiagnosticResult {
+            available: true,
+            executable: None,
+            version: Some(version.version().to_owned()),
+            message: "Remote aria2 RPC is available.".to_owned(),
+        }),
+        Err(error) => Ok(DiagnosticResult {
+            available: false,
+            executable: None,
+            version: None,
+            message: format!("Remote aria2 RPC check failed: {error}"),
         }),
     }
 }

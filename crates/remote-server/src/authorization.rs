@@ -109,9 +109,7 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
         RemoteCommand::QueueMoveUp(_)
         | RemoteCommand::QueueMoveDown(_)
         | RemoteCommand::QueuePauseDispatch
-        | RemoteCommand::QueueResumeDispatch => {
-            Permission::DownloadsControl
-        }
+        | RemoteCommand::QueueResumeDispatch => Permission::DownloadsControl,
         RemoteCommand::DownloadRemove(_) => Permission::DownloadsRemove,
         RemoteCommand::DownloadSetPriority { .. } => Permission::DownloadsPriority,
         RemoteCommand::DownloadSetEngine { .. } | RemoteCommand::DownloadSetSpeedLimit { .. } => {
@@ -160,10 +158,7 @@ mod tests {
                 RemoteCommand::DownloadRetry(id),
                 Permission::DownloadsControl,
             ),
-            (
-                RemoteCommand::QueueMoveUp(id),
-                Permission::DownloadsControl,
-            ),
+            (RemoteCommand::QueueMoveUp(id), Permission::DownloadsControl),
             (
                 RemoteCommand::QueueMoveDown(id),
                 Permission::DownloadsControl,

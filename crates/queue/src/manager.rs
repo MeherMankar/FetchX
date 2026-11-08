@@ -1433,7 +1433,11 @@ where
     if item.status() != DownloadStatus::Queued || active.contains_key(&id) {
         return Err(QueueError::InvalidStatus {
             id,
-            action: if move_up { "move up in queue" } else { "move down in queue" },
+            action: if move_up {
+                "move up in queue"
+            } else {
+                "move down in queue"
+            },
             status: item.status(),
         });
     }
@@ -1477,7 +1481,10 @@ where
         .position(|(entry_id, _)| *entry_id == neighbor_id)
         .ok_or(QueueError::ResourceInvariant)?;
     order.swap(current_position, neighbor_position);
-    let ordered_ids = order.iter().map(|(entry_id, _)| *entry_id).collect::<Vec<_>>();
+    let ordered_ids = order
+        .iter()
+        .map(|(entry_id, _)| *entry_id)
+        .collect::<Vec<_>>();
     repository.set_queue_order(&ordered_ids).await?;
 
     for (position, (entry_id, _)) in order.into_iter().enumerate() {
@@ -3432,16 +3439,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_reordering_rejects_nonqueued_downloads()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn queue_reordering_rejects_nonqueued_downloads() -> Result<(), Box<dyn std::error::Error>>
+    {
         let (repository, engine, _release) = setup_engine().await?;
         let paused_id = persist_item_in_status(&repository, DownloadStatus::Paused).await?;
-        let manager = QueueManager::new(
-            repository.clone(),
-            engine,
-            QueueConfig::default(),
-        )
-        .await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
 
         assert!(manager.move_up(paused_id).await.is_err());
         assert!(manager.move_down(DownloadId::new()).await.is_err());
@@ -3453,12 +3455,7 @@ mod tests {
     async fn queue_reordering_does_not_cross_priority_groups()
     -> Result<(), Box<dyn std::error::Error>> {
         let (repository, engine, _release) = setup_engine().await?;
-        let manager = QueueManager::new(
-            repository.clone(),
-            engine,
-            QueueConfig::default(),
-        )
-        .await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
         let mut high = item()?;
         high.set_priority_at(DownloadPriority::High, high.updated_at())?;
         let high_id = high.id();

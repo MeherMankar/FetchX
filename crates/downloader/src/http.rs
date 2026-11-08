@@ -24,6 +24,7 @@ use reqwest::{
     },
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom},
@@ -32,7 +33,6 @@ use tokio::{
     time::interval,
 };
 use tracing::{info, warn};
-use sha2::{Digest, Sha256};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
@@ -2554,11 +2554,16 @@ async fn verify_expected_sha256(
         return Err(DownloadEngineError::InvalidConfiguration);
     }
 
-    let mut file = File::open(temporary).await.map_err(DownloadEngineError::Io)?;
+    let mut file = File::open(temporary)
+        .await
+        .map_err(DownloadEngineError::Io)?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024];
     loop {
-        let read = file.read(&mut buffer).await.map_err(DownloadEngineError::Io)?;
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(DownloadEngineError::Io)?;
         if read == 0 {
             break;
         }
@@ -2566,10 +2571,7 @@ async fn verify_expected_sha256(
     }
     let actual = hex::encode(hasher.finalize());
     if actual != expected {
-        return Err(DownloadEngineError::Sha256Mismatch {
-            expected,
-            actual,
-        });
+        return Err(DownloadEngineError::Sha256Mismatch { expected, actual });
     }
     let _ = fs::remove_file(sidecar).await;
     Ok(())

@@ -456,10 +456,7 @@ impl AppState {
         })
     }
 
-    async fn set_queue_dispatch_paused(
-        &self,
-        paused: bool,
-    ) -> Result<QueueSnapshotDto, IpcError> {
+    async fn set_queue_dispatch_paused(&self, paused: bool) -> Result<QueueSnapshotDto, IpcError> {
         if paused {
             self.queue.pause_dispatch().await
         } else {

@@ -70,7 +70,7 @@ impl fmt::Debug for Aria2ClientConfig {
 
 #[derive(Debug, Error)]
 pub enum Aria2ClientError {
-    #[error("aria2 RPC endpoint must use HTTP and resolve to loopback")]
+    #[error("aria2 RPC endpoint must use HTTP on loopback or HTTPS")]
     InvalidEndpoint,
     #[error("aria2 RPC timeout must be greater than zero")]
     InvalidTimeout,
@@ -139,8 +139,9 @@ impl Aria2Client {
             .host_str()
             .and_then(|host| host.parse::<std::net::IpAddr>().ok())
             .is_some_and(|address| address.is_loopback());
-        if endpoint.scheme() != "http"
-            || !loopback_host
+        let secure_transport = endpoint.scheme() == "https";
+        let loopback_http = endpoint.scheme() == "http" && loopback_host;
+        if !(secure_transport || loopback_http)
             || endpoint.username() != ""
             || endpoint.password().is_some()
             || endpoint.fragment().is_some()
@@ -2577,6 +2578,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_rpc_authentication_failure_is_reported_without_exposing_credentials()
+    -> Result<(), Box<dyn Error>> {
+        let (endpoint, mut requests, server) = start_server([MockReply::RpcError(1)]).await?;
+        let client = make_client(endpoint, Duration::from_secs(1))?;
+        let error = client.get_version().await.unwrap_err();
+        let request = requests
+            .recv()
+            .await
+            .ok_or("missing authenticated request")?;
+
+        assert_eq!(request["params"][0], format!("token:{TEST_TOKEN}"));
+        assert!(matches!(error, Aria2ClientError::Rpc { code: 1 }));
+        assert!(!error.to_string().contains(TEST_TOKEN));
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn malformed_json_protocol_and_mismatched_ids_are_rejected() -> Result<(), Box<dyn Error>>
     {
         for response in [
@@ -2636,6 +2655,43 @@ mod tests {
             "unexpected connection-refused error: {error:?}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn remote_rpc_requires_https_and_rejects_embedded_credentials() {
+        let timeout = Duration::from_secs(1);
+        assert!(
+            Aria2Client::new(Aria2ClientConfig::new(
+                "https://aria2.example.test/jsonrpc",
+                Some(TEST_TOKEN.to_owned()),
+                timeout,
+            ))
+            .is_ok()
+        );
+        assert!(matches!(
+            Aria2Client::new(Aria2ClientConfig::new(
+                "http://aria2.example.test/jsonrpc",
+                Some(TEST_TOKEN.to_owned()),
+                timeout,
+            )),
+            Err(Aria2ClientError::InvalidEndpoint)
+        ));
+        assert!(matches!(
+            Aria2Client::new(Aria2ClientConfig::new(
+                "https://user:password@aria2.example.test/jsonrpc",
+                Some(TEST_TOKEN.to_owned()),
+                timeout,
+            )),
+            Err(Aria2ClientError::InvalidEndpoint)
+        ));
+        assert!(matches!(
+            Aria2Client::new(Aria2ClientConfig::new(
+                "https://aria2.example.test/jsonrpc?token=leaked",
+                Some(TEST_TOKEN.to_owned()),
+                timeout,
+            )),
+            Err(Aria2ClientError::InvalidEndpoint)
+        ));
     }
 
     #[tokio::test]

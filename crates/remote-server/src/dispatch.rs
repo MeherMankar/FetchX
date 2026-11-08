@@ -13,8 +13,7 @@ use fetchx_remote_protocol::{
     DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY, DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams,
     JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo, QUEUE_MOVE_DOWN,
     QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RemoteCommand, RpcErrorCode,
-    RpcFailure, RpcId, RpcSuccess,
-    SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
+    RpcFailure, RpcId, RpcSuccess, SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use serde_json::{Value, json};

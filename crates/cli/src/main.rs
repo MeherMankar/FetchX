@@ -109,13 +109,8 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
         }
         QueueMove(opts) => {
             let svc = bootstrap::start().await?;
-            let code = commands::lifecycle::move_in_queue(
-                &svc,
-                opts.id,
-                opts.direction,
-                cli.json,
-            )
-            .await;
+            let code =
+                commands::lifecycle::move_in_queue(&svc, opts.id, opts.direction, cli.json).await;
             svc.shutdown().await?;
             Ok(code)
         }

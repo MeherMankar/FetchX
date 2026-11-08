@@ -222,6 +222,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             engine_commands::save_engine_config,
             engine_commands::reset_engine_config,
             engine_commands::test_aria2_config,
+            engine_commands::test_remote_aria2,
             engine_commands::test_ytdlp_config,
             engine_commands::get_engine_status,
             helper_manager::get_helper_status,

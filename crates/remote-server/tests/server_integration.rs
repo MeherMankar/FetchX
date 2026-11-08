@@ -137,12 +137,16 @@ async fn remote_http_auth_and_security_limits_survive_restart()
             Some("download.retry" | "download.setEngine" | "download.setSpeedLimit")
         )
     }));
-    assert!(capabilities
-        .iter()
-        .any(|capability| capability.as_str() == Some("queue.moveUp")));
-    assert!(capabilities
-        .iter()
-        .any(|capability| capability.as_str() == Some("queue.moveDown")));
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| capability.as_str() == Some("queue.moveUp"))
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| capability.as_str() == Some("queue.moveDown"))
+    );
     let unsupported = post_rpc(
         &client,
         address,

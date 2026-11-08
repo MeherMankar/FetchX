@@ -14,6 +14,7 @@ import {
   resetEngineConfig,
   saveEngineConfig,
   testAria2Config,
+  testRemoteAria2,
   testYtDlpConfig,
 } from "../api/engine";
 import type {
@@ -215,6 +216,10 @@ function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProp
   const [busy, setBusy] = useState(false);
   const [diagnostic, setDiagnostic] = useState<DiagnosticResult | null>(null);
   const [testBusy, setTestBusy] = useState(false);
+  const [remoteEndpoint, setRemoteEndpoint] = useState("");
+  const [remoteSecret, setRemoteSecret] = useState("");
+  const [remoteDiagnostic, setRemoteDiagnostic] = useState<DiagnosticResult | null>(null);
+  const [remoteTestBusy, setRemoteTestBusy] = useState(false);
 
   // Sync if parent config changes (e.g. after reset).
   useEffect(() => {
@@ -265,6 +270,20 @@ function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProp
       onError(errorMessage(cause));
     } finally {
       setTestBusy(false);
+    }
+  };
+
+  const testRemote = async () => {
+    setRemoteTestBusy(true);
+    setRemoteDiagnostic(null);
+    try {
+      setRemoteDiagnostic(
+        await testRemoteAria2(remoteEndpoint.trim(), remoteSecret.trim() || null),
+      );
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setRemoteTestBusy(false);
     }
   };
 
@@ -380,18 +399,67 @@ function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProp
 
       <DiagnosticDisplay result={diagnostic} />
 
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="aria2-remote-endpoint">
+          Remote RPC endpoint
+        </label>
+        <div className="settings-control">
+          <input
+            id="aria2-remote-endpoint"
+            type="url"
+            className="settings-input"
+            placeholder="https://aria2.example/jsonrpc"
+            value={remoteEndpoint}
+            onChange={(e) => setRemoteEndpoint(e.target.value)}
+            disabled={remoteTestBusy}
+            autoComplete="url"
+          />
+          <p className="settings-hint">
+            Remote connections require HTTPS. HTTP is allowed only on loopback.
+            Address and secret are used for this test only and are not saved.
+          </p>
+        </div>
+      </div>
+
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="aria2-remote-secret">
+          Remote RPC secret
+        </label>
+        <div className="settings-control">
+          <input
+            id="aria2-remote-secret"
+            type="password"
+            className="settings-input"
+            placeholder="Optional aria2 RPC token"
+            value={remoteSecret}
+            onChange={(e) => setRemoteSecret(e.target.value)}
+            disabled={remoteTestBusy}
+            autoComplete="off"
+          />
+        </div>
+      </div>
+
+      <DiagnosticDisplay result={remoteDiagnostic} />
+
       <div className="settings-actions">
         <button
           className="button button-secondary"
           onClick={() => void test()}
-          disabled={busy || testBusy}
+          disabled={busy || testBusy || remoteTestBusy}
         >
           {testBusy ? "Testing…" : "Test configuration"}
         </button>
         <button
+          className="button button-secondary"
+          onClick={() => void testRemote()}
+          disabled={busy || testBusy || remoteTestBusy}
+        >
+          {remoteTestBusy ? "Testing…" : "Test remote connection"}
+        </button>
+        <button
           className="button button-primary"
           onClick={() => void save()}
-          disabled={busy || testBusy}
+          disabled={busy || testBusy || remoteTestBusy}
         >
           {busy ? "Saving…" : "Save"}
         </button>
