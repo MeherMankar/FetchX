@@ -1094,11 +1094,15 @@ where
         }
         Command::Pause { id, reply } => {
             if active.contains_key(&id) {
+                let active_pause_supported = entries.get(&id).map_or_else(
+                    || engine.supports_active_pause(EngineKind::DirectHttp),
+                    |entry| engine.supports_active_pause_for(&entry.item),
+                );
                 let engine_kind = entries
                     .get(&id)
                     .map(|entry| entry.item.source().engine())
                     .unwrap_or(EngineKind::DirectHttp);
-                if !engine.supports_active_pause(engine_kind) {
+                if !active_pause_supported {
                     let _ = reply.send(Err(QueueError::UnsupportedEngineOperation {
                         engine: engine_kind,
                         operation: "active pause",
@@ -1506,11 +1510,11 @@ fn stop_workers_for_shutdown<E>(
         if worker.cancelling {
             continue;
         }
-        let engine_kind = entries
-            .get(id)
-            .map(|entry| entry.item.source().engine())
-            .unwrap_or(EngineKind::DirectHttp);
-        if engine.supports_active_pause(engine_kind) {
+        let active_pause_supported = entries.get(id).map_or_else(
+            || engine.supports_active_pause(EngineKind::DirectHttp),
+            |entry| engine.supports_active_pause_for(&entry.item),
+        );
+        if active_pause_supported {
             worker.pausing = true;
             let _ = worker.pause.send(true);
         } else {

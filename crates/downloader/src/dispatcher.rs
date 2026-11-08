@@ -102,6 +102,9 @@ where
         {
             return Ok(EngineKind::Hls);
         }
+        if source.engine() == EngineKind::DirectHttp && is_dash_url(source.url()) {
+            return Ok(EngineKind::YtDlp);
+        }
         if source.engine() != EngineKind::DirectHttp {
             return Ok(source.engine());
         }
@@ -123,6 +126,14 @@ where
             Ok(EngineKind::DirectHttp)
         }
     }
+}
+
+/// Returns whether an HTTP(S) URL points to a DASH MPD manifest.
+pub fn is_dash_url(url: &str) -> bool {
+    let Ok(url) = Url::parse(url) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https") && url.path().to_ascii_lowercase().ends_with(".mpd")
 }
 
 fn is_hls_content_type(content_type: &str) -> bool {
@@ -236,6 +247,13 @@ where
         }
     }
 
+    fn supports_active_pause_for(&self, item: &DownloadItem) -> bool {
+        if item.source().engine() == EngineKind::DirectHttp && is_dash_url(item.source().url()) {
+            return self.supports_active_pause(EngineKind::YtDlp);
+        }
+        self.supports_active_pause(item.source().engine())
+    }
+
     #[allow(clippy::manual_async_fn)]
     fn cancel_inactive(
         &self,
@@ -284,8 +302,18 @@ mod tests {
         Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
         DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, SftpEngine,
         YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner,
-        YtDlpRunnerEvent, YtDlpRunnerFuture,
+        YtDlpRunnerEvent, YtDlpRunnerFuture, is_dash_url,
     };
+
+    #[test]
+    fn is_dash_url_matches_manifest_paths_without_matching_query_values() {
+        assert!(is_dash_url("https://cdn.example/stream.mpd"));
+        assert!(is_dash_url("https://cdn.example/stream.MPD?token=redacted"));
+        assert!(!is_dash_url("https://cdn.example/video.mp4?next=.mpd"));
+        assert!(!is_dash_url("https://cdn.example/stream.mpd/segment.m4s"));
+        assert!(!is_dash_url("ftp://cdn.example/stream.mpd"));
+        assert!(!is_dash_url("not a URL"));
+    }
 
     struct CountingRunner(Arc<AtomicUsize>);
 
@@ -335,7 +363,12 @@ mod tests {
         let aria2_id = aria2_item.id();
         let unsupported_item = item(EngineKind::YtDlp, "https://example.test/video")?;
         let unsupported_id = unsupported_item.id();
-        for download in [&direct_item, &aria2_item, &unsupported_item] {
+        let dash_item = item(
+            EngineKind::DirectHttp,
+            "https://example.test/stream.mpd?token=redacted",
+        )?;
+        let dash_id = dash_item.id();
+        for download in [&direct_item, &aria2_item, &unsupported_item, &dash_item] {
             repository.create(download).await?;
         }
         let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
@@ -350,6 +383,8 @@ mod tests {
         let dispatcher = EngineDispatcher::new(repository.clone(), direct, aria2);
 
         assert_eq!(dispatcher.engine_for(aria2_id).await?, EngineKind::Aria2);
+        assert!(!dispatcher.supports_active_pause_for(&dash_item));
+        assert!(dispatcher.supports_active_pause_for(&direct_item));
         let (_cancel_sender, cancellation) = watch::channel(false);
         let (_pause_sender, pause) = watch::channel(false);
         let (_limit_sender, connection_limit) = watch::channel(1);
@@ -380,6 +415,11 @@ mod tests {
         let (_cancel_sender, cancellation) = watch::channel(false);
         assert!(matches!(
             dispatcher.download(unsupported_id, cancellation).await,
+            Err(DownloadEngineError::EngineNotAvailable)
+        ));
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        assert!(matches!(
+            dispatcher.download(dash_id, cancellation).await,
             Err(DownloadEngineError::EngineNotAvailable)
         ));
         Ok(())
@@ -479,6 +519,66 @@ mod tests {
                 .get(id)
                 .await?
                 .ok_or("missing dispatched item")?
+                .status(),
+            DownloadStatus::Failed
+        );
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatcher_routes_direct_dash_manifest_to_configured_ytdlp_runner()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let base =
+            std::env::temp_dir().join(format!("fetchx-dispatcher-dash-test-{}", DownloadId::new()));
+        tokio::fs::create_dir_all(&base).await?;
+        let dash = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(
+                "https://example.test/stream.mpd?token=redacted",
+                EngineKind::DirectHttp,
+            )?,
+            FileName::new("stream.mp4")?,
+            base.join("stream.mp4"),
+            Timestamp::now()?,
+        );
+        let id = dash.id();
+        repository.create(&dash).await?;
+
+        let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
+        let aria2 = Arc::new(Aria2Engine::new(
+            repository.clone(),
+            Aria2Client::new(Aria2ClientConfig::new(
+                "http://127.0.0.1:6800/jsonrpc",
+                None,
+                Duration::from_millis(50),
+            ))?,
+        ));
+        let run_count = Arc::new(AtomicUsize::new(0));
+        let yt_dlp = Arc::new(
+            YtDlpEngine::initialize_with_runner(
+                repository.clone(),
+                YtDlpConfig::new().with_executable(std::env::current_exe()?),
+                Arc::new(CountingRunner(Arc::clone(&run_count))),
+            )
+            .await?,
+        );
+        let dispatcher =
+            EngineDispatcher::new(repository.clone(), direct, aria2).with_yt_dlp(yt_dlp);
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        assert!(matches!(
+            dispatcher.download(id, cancellation).await,
+            Err(DownloadEngineError::YtDlp(YtDlpError::OutputUnavailable))
+        ));
+        assert_eq!(run_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .ok_or("missing DASH item")?
                 .status(),
             DownloadStatus::Failed
         );

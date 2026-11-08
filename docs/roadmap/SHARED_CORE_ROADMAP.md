@@ -67,6 +67,15 @@ FetchX already has the strongest part of the architecture in place: canonical Ru
 - Core test/build results, exact files, and limitations are recorded in `docs/research/RIDM_FEATURE_ANALYSIS.md`.
 - Recommended next repository/work item in the established research order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
 
+## Current XDM-derived progress
+
+- Reviewed XDM `master` at `0b361b2badd8690b3fae482a4b5e60673977b4e5`. Its root license is GNU GPL-3.0 (29 June 2007); reviewed DASH/HLS source files also carry Apache-2.0 SPDX headers. No XDM source was copied.
+- Verified that FetchX already has native HLS downloads and yt-dlp-backed DASH extraction, but direct `.mpd` downloads entered as Direct HTTP were not routed through either media path.
+- Added shared-core `.mpd` URL detection and dispatcher routing to the existing yt-dlp engine, including acceptance of direct MPD sources by that engine. Queue pause handling now uses the effective source route, preserving yt-dlp's unsupported-active-pause behavior and cancel/requeue shutdown policy. No new native DASH engine, model, migration, dependency, or adapter API was added.
+- Android, desktop, CLI, remote, and browser submissions continue through the shared dispatcher. The browser source already detects `.mpd` URLs; browser runtime behavior and authenticated request-header forwarding remain unverified/deferred.
+- Exact source review, capability comparison, implementation, adapter status, validation, and limitations are recorded in `docs/research/XDM_FEATURE_ANALYSIS.md`. The prior Seal Android Gradle limitation remains: its wrapper JVM crashed in native `net.dll`; no Kotlin/device validation is claimed here.
+- Recommended next research item in the established order: Gopeed's deferred full `resolve_task` contract for protocol-specific metadata and file selection.
+
 ## Milestone 0 — contract freeze
 
 1. Create one versioned core operation/error/event contract in Rust.

@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::{
     BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
-    ManagedDownloadEngine, ResourceDemand,
+    ManagedDownloadEngine, ResourceDemand, is_dash_url,
 };
 
 // Cold Python/packaged-runtime startup can exceed five seconds on Windows and
@@ -326,7 +326,10 @@ where
             .get(id)
             .await?
             .ok_or(DownloadEngineError::NotFound(id))?;
-        if current.source().engine() != EngineKind::YtDlp {
+        if current.source().engine() != EngineKind::YtDlp
+            && !(current.source().engine() == EngineKind::DirectHttp
+                && is_dash_url(current.source().url()))
+        {
             return Err(DownloadEngineError::EngineMismatch);
         }
 

@@ -25,7 +25,7 @@ pub use aria2::{
     Aria2Status, Aria2Version,
 };
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
-pub use dispatcher::EngineDispatcher;
+pub use dispatcher::{EngineDispatcher, is_dash_url};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use ffmpeg::{

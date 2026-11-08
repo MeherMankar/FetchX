@@ -46,6 +46,12 @@ pub trait ManagedDownloadEngine: DownloadEngine {
         true
     }
 
+    /// Reports pause support for a specific source. Dispatchers may override
+    /// this when the effective engine depends on source details.
+    fn supports_active_pause_for(&self, item: &DownloadItem) -> bool {
+        self.supports_active_pause(item.source().engine())
+    }
+
     /// Stops backend work for an item that has no active queue worker, if any exists.
     ///
     /// Engines without independently persistent jobs may keep the default no-op.
