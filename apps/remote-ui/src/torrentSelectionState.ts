@@ -27,6 +27,18 @@ export type TorrentSelectionAction =
   | { type: "confirmed" }
   | { type: "failed"; message: string; stale?: boolean };
 
+export type TorrentEngineChoice = "automatic" | "aria2" | "native_torrent";
+
+export function supportsNativeMagnetSelection(capabilities: Iterable<string>): boolean {
+  const advertised = new Set(capabilities);
+  return advertised.has("download.torrentMetadata")
+    && advertised.has("download.selectTorrentFiles");
+}
+
+export function defaultTorrentEngineChoice(capabilities: Iterable<string>): TorrentEngineChoice {
+  return supportsNativeMagnetSelection(capabilities) ? "native_torrent" : "automatic";
+}
+
 export const initialTorrentSelectionState: TorrentSelectionState = { kind: "loading" };
 
 export function reduceTorrentSelection(

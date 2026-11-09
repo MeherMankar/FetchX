@@ -352,6 +352,7 @@ pub struct EngineStatusDto {
     pub direct_http: EngineInstanceStatusDto,
     pub aria2: EngineInstanceStatusDto,
     pub yt_dlp: EngineInstanceStatusDto,
+    pub native_torrent: EngineInstanceStatusDto,
 }
 
 pub(crate) fn engine_instance_dto(avail: &EngineAvailability) -> EngineInstanceStatusDto {
@@ -394,6 +395,7 @@ pub async fn get_engine_status(
         },
         aria2: engine_instance_dto(&status.aria2),
         yt_dlp: engine_instance_dto(&status.yt_dlp),
+        native_torrent: engine_instance_dto(&status.native_torrent),
     })
 }
 #[tauri::command]

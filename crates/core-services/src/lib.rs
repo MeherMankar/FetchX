@@ -1182,10 +1182,11 @@ impl CoreServices {
         Ok(id)
     }
 
-    /// Validates and queues a magnet job through the shared torrent runtime.
+    /// Validates and queues a magnet job through the native Rust torrent runtime.
     ///
     /// Magnet output is isolated in a per-job directory unless the caller
-    /// explicitly supplies a destination directory.
+    /// explicitly supplies a destination directory. aria2 remains available
+    /// through [`Self::enqueue_magnet_with_engine`].
     pub async fn enqueue_magnet(
         &self,
         uri: &str,
@@ -1194,21 +1195,25 @@ impl CoreServices {
     ) -> Result<DownloadId, CoreServicesError> {
         let magnet = parse_magnet_uri(uri)
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
-        let torrent_engine = if self.engine_runtime.is_available(EngineKind::Aria2) {
-            EngineKind::Aria2
-        } else if self.engine_runtime.is_available(EngineKind::NativeTorrent) {
-            EngineKind::NativeTorrent
-        } else {
-            return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
-        };
-        self.enqueue_magnet_with_metadata(uri, magnet, torrent_engine, priority, destination)
-            .await
+        if !self.engine_runtime.is_available(EngineKind::NativeTorrent) {
+            return Err(CoreServicesError::UnavailableEngine(
+                EngineKind::NativeTorrent,
+            ));
+        }
+        self.enqueue_magnet_with_metadata(
+            uri,
+            magnet,
+            EngineKind::NativeTorrent,
+            priority,
+            destination,
+        )
+        .await
     }
 
     /// Validates and queues a magnet job with the explicitly selected backend.
     ///
-    /// This keeps platform engine selection authoritative while preserving
-    /// [`Self::enqueue_magnet`] as the compatibility path for existing callers.
+    /// This keeps explicit platform engine selection authoritative while
+    /// [`Self::enqueue_magnet`] uses native Rust for new downloads by default.
     pub async fn enqueue_magnet_with_engine(
         &self,
         uri: &str,
@@ -1379,11 +1384,12 @@ impl CoreServices {
                 return Err(CoreServicesError::UnavailableEngine(engine));
             }
             Some(engine) => engine,
-            None if self.engine_runtime.is_available(EngineKind::Aria2) => EngineKind::Aria2,
-            None if self.engine_runtime.is_available(EngineKind::NativeTorrent) => {
-                EngineKind::NativeTorrent
+            None if !self.engine_runtime.is_available(EngineKind::NativeTorrent) => {
+                return Err(CoreServicesError::UnavailableEngine(
+                    EngineKind::NativeTorrent,
+                ));
             }
-            None => return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2)),
+            None => EngineKind::NativeTorrent,
         };
         let source = DownloadSource::new_torrent_file(&torrent_path, torrent_engine)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
@@ -2599,6 +2605,27 @@ mod tests {
         }
     }
 
+    async fn start_without_native_torrent(
+        root: &std::path::Path,
+    ) -> Result<CoreServices, Box<dyn std::error::Error>> {
+        use super::{ConfigService, EngineConfig, NativeTorrentConfig};
+        use fetchx_storage::Database;
+
+        let paths = config(root);
+        let database = Database::connect_path(&paths.database_path).await?;
+        ConfigService::new(database.config())
+            .save(&EngineConfig {
+                native_torrent: NativeTorrentConfig {
+                    enabled: false,
+                    ..NativeTorrentConfig::default()
+                },
+                ..EngineConfig::default()
+            })
+            .await?;
+        drop(database);
+        Ok(CoreServices::start(paths).await?)
+    }
+
     #[tokio::test]
     async fn starts_shared_graph_and_shutdown_is_idempotent()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -3144,14 +3171,7 @@ mod tests {
     async fn shared_magnet_enqueue_validates_before_engine_availability()
     -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempdir()?;
-        let services = CoreServices::start(CoreServicesConfig {
-            database_path: dir.path().join("fetchx.db"),
-            downloads_dir: dir.path().join("downloads"),
-            runtime_dir: dir.path().join("runtime"),
-            bundled_engines_dir: None,
-            defer_queued_on_start: false,
-        })
-        .await?;
+        let services = start_without_native_torrent(dir.path()).await?;
 
         assert!(matches!(
             services
@@ -3168,7 +3188,7 @@ mod tests {
                 )
                 .await,
             Err(super::CoreServicesError::UnavailableEngine(
-                EngineKind::Aria2
+                EngineKind::NativeTorrent
             ))
         ));
         services.shutdown().await?;
@@ -3556,7 +3576,7 @@ mod tests {
     async fn shared_torrent_enqueue_validates_metainfo_before_engine_availability()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_without_native_torrent(root.path()).await?;
         let malformed = root.path().join("malformed.torrent");
         tokio::fs::write(&malformed, b"not bencode").await?;
         assert!(matches!(
@@ -3578,10 +3598,109 @@ mod tests {
                 .enqueue_torrent_file(valid, DownloadPriority::Normal, None)
                 .await,
             Err(super::CoreServicesError::UnavailableEngine(
-                EngineKind::Aria2
+                EngineKind::NativeTorrent
             ))
         ));
         assert!(services.queue().snapshot().await?.items.is_empty());
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_torrent_admissions_default_to_native_and_magnets_wait_for_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{ConfigService, EngineConfig, NativeTorrentConfig};
+        use fetchx_storage::Database;
+
+        let root = tempdir()?;
+        let paths = config(root.path());
+        let database = Database::connect_path(&paths.database_path).await?;
+        ConfigService::new(database.config())
+            .save(&EngineConfig {
+                native_torrent: NativeTorrentConfig {
+                    enabled: true,
+                    listen_port: 0,
+                    session_dir: Some(root.path().join("native-torrent-session")),
+                },
+                ..EngineConfig::default()
+            })
+            .await?;
+        drop(database);
+
+        let services = CoreServices::start(paths).await?;
+        services.pause_queue_dispatch().await?;
+        let magnet =
+            "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=native-default";
+        let magnet_id = services
+            .enqueue_magnet(magnet, DownloadPriority::Normal, None)
+            .await?;
+        let magnet_item = services
+            .repository
+            .get(magnet_id)
+            .await?
+            .ok_or("default magnet should be persisted")?;
+        assert_eq!(magnet_item.source().engine(), EngineKind::NativeTorrent);
+        assert_eq!(magnet_item.status(), DownloadStatus::Queued);
+        let magnet_metadata = services
+            .torrent_download_metadata(magnet_id)
+            .await?
+            .ok_or("default magnet metadata row should be persisted")?;
+        assert_eq!(magnet_metadata.metadata_state, "pending");
+        assert!(!magnet_metadata.selection_confirmed);
+        assert!(magnet_metadata.selected_file_indexes.is_empty());
+
+        let torrent_path = root.path().join("native-default.torrent");
+        tokio::fs::write(
+            &torrent_path,
+            b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:\
+              01234567890123456789ee",
+        )
+        .await?;
+        let torrent_id = services
+            .enqueue_torrent_file(torrent_path.clone(), DownloadPriority::Normal, None)
+            .await?;
+        let torrent_item = services
+            .repository
+            .get(torrent_id)
+            .await?
+            .ok_or("default torrent file should be persisted")?;
+        assert_eq!(torrent_item.source().engine(), EngineKind::NativeTorrent);
+        let torrent_metadata = services
+            .torrent_download_metadata(torrent_id)
+            .await?
+            .ok_or("default torrent metadata row should be persisted")?;
+        assert!(torrent_metadata.selection_confirmed);
+        assert_eq!(torrent_metadata.selected_file_indexes, [0]);
+
+        assert!(matches!(
+            services
+                .enqueue_torrent_file_with_selection_and_engine(
+                    torrent_path,
+                    EngineKind::Aria2,
+                    DownloadPriority::Normal,
+                    None,
+                    Some(vec![0]),
+                )
+                .await,
+            Err(super::CoreServicesError::UnavailableEngine(
+                EngineKind::Aria2
+            ))
+        ));
+        assert!(matches!(
+            services
+                .enqueue_magnet_with_engine(
+                    "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234568",
+                    EngineKind::Aria2,
+                    DownloadPriority::Normal,
+                    None,
+                )
+                .await,
+            Err(super::CoreServicesError::UnavailableEngine(
+                EngineKind::Aria2
+            ))
+        ));
+        assert_eq!(services.queue().snapshot().await?.items.len(), 2);
+
         services.shutdown().await?;
         Ok(())
     }

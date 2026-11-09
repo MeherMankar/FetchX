@@ -123,7 +123,7 @@ pub struct NativeTorrentConfig {
 impl Default for NativeTorrentConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             listen_port: 6881,
             session_dir: None,
         }
@@ -307,6 +307,7 @@ mod tests {
         assert_eq!(defaults.version, 1);
         assert!(!defaults.aria2.enabled);
         assert!(!defaults.yt_dlp.enabled);
+        assert!(defaults.native_torrent.enabled);
 
         let mut changed = defaults;
         changed.aria2.enabled = true;
@@ -318,6 +319,14 @@ mod tests {
                 .await
                 .expect("reset config loads")
                 .aria2
+                .enabled
+        );
+        assert!(
+            service
+                .load()
+                .await
+                .expect("reset config loads")
+                .native_torrent
                 .enabled
         );
     }

@@ -88,10 +88,12 @@ export function matchDownloadCategory(
 export function addTorrentDownload(
   torrentPath: string,
   selectedFileIndexes?: number[],
+  engineKind?: "aria2" | "native_torrent",
 ): Promise<Download> {
   return invoke<Download>("add_torrent_download", {
     torrent_path: torrentPath,
     selected_file_indexes: selectedFileIndexes ?? null,
+    engine_kind: engineKind ?? null,
   });
 }
 

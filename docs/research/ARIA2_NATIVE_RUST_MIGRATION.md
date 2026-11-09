@@ -54,12 +54,27 @@ The implementation reuses `crates/downloader` (`DirectHttpEngine`, `Aria2Engine`
 
 | Surface | Status |
 |---|---|
-| Android | Native magnet metadata polling and file selection are exposed through the existing bridge/UI when the shared core routes the magnet to native torrent (including the existing fallback); there is no explicit Android engine chooser. Host tests exist; no device run was performed. |
-| Desktop | Tauri exposes metadata lookup and file-selection commands; the DetailPanel now recognizes `native_torrent` jobs and presents its selection flow. aria2 settings/helper management remain. UI/build checks are reported below. |
-| CLI | Explicit `--engine native-torrent` magnet admission can be followed by torrent metadata inspection and file selection; the default remains aria2. |
-| Remote server | Authenticated `download.torrentMetadata` (`DownloadsRead`) and `download.selectTorrentFiles` (`DownloadsControl`) operations expose safe metadata and explicit selection confirmation for native magnets. Both are advertised through discovery, omitted from the restricted browser/native-host allowlist, and capability-gated in the remote UI for older servers. |
-| Browser/native host | No protocol or RPC contract change; no new native engine-selection UI was added. |
-| Existing data/settings | Preserved. There is no migration away from aria2 GIDs or aria2-specific configuration, and no existing download is rewritten. |
+| Android | Native torrent is the default and is enabled with an app-private librqbit session directory. Magnet selection and local `.torrent` selection are supported. aria2 is not packaged and there is no Android engine chooser, so explicit aria2 is not a supported Android fallback. No device run was performed. |
+| Desktop (Windows/macOS/Linux) | Native torrent is the CoreServices default and is exposed by Tauri/UI for magnet metadata selection and local `.torrent` selection. The add UI offers aria2 as an explicit fallback when its runtime is available. |
+| CLI | Native torrent is the default for magnet and local `.torrent` additions; `--engine aria2` remains an explicit fallback. Torrent inspection/file-selection commands remain available. |
+| Remote server/UI | The current remote UI selects native torrent by default only when discovery advertises both metadata and selection RPCs; aria2 remains selectable. On older servers it leaves the engine unspecified and preserves legacy server routing. Older clients that omit `engine` retain the server's aria2-first compatibility route. |
+| Browser/native host | Torrent admission is not supported: browser capture accepts HTTP(S) only and local browser RPC validation rejects magnets. HTTP behavior is unchanged; torrent default is not applicable. |
+| Existing data/settings | Persisted downloads retain their stored `EngineKind` and are dispatched through that engine; no task rewrite or aria2 GID migration occurs. aria2 configuration, helper packaging, and RPC remain. New/missing engine configurations enable native torrent by default; an existing explicit `native_torrent.enabled = false` is preserved. |
+
+Prompt 21 changes the default only for new torrent admissions. CoreServices' no-engine magnet and local `.torrent` APIs now choose native Rust and return `UnavailableEngine(NativeTorrent)` rather than silently switching to aria2 when native is disabled/unavailable. Explicit `*_with_engine(..., Aria2, ...)` calls remain authoritative. HTTP, FTP/FTPS, SFTP, HLS/DASH, yt-dlp, Metalink, and other routing rules are unchanged.
+
+### Prompt 21 target compatibility decision
+
+| Target | Previous default for magnet / `.torrent` | Current default | Native selection available | Explicit aria2 | Existing records/settings |
+|---|---|---|---|---|---|
+| CoreServices | aria2 first, native fallback | Native for new admissions without an engine | Magnet waits for metadata and an explicit valid selection; local `.torrent` indexes are persisted and revalidated | Yes, explicit engine API | Each task's persisted engine is unchanged; settings are not rewritten |
+| Android | Native only when aria2 was absent; local torrent path used native | Native | Yes, Android bridge/UI exposes magnet and local file selection | No product-level chooser; aria2 is not bundled because Android execution is restricted | Persisted engine and user data unchanged; Android uses private session storage |
+| Desktop | Native was hardcoded for torrent creation | Native default via CoreServices; user can explicitly choose aria2 | Yes, Tauri and DetailPanel | Yes, add-form fallback when available | Stored engine choices/retry paths remain unchanged; aria2 settings/helper manager retained |
+| CLI | aria2 | Native | Yes, torrent inspection/selection | Yes, `--engine aria2` | Stored downloads unchanged |
+| Remote UI/server | Automatic server routing (aria2 first, native fallback) | Current UI selects native when both selection RPC capabilities are advertised; older servers keep legacy routing | Yes, capability-gated metadata and confirmation | Yes, UI selection | Older clients omitting `engine` retain the legacy server route; stored records/settings unchanged |
+| Browser/native host | Not applicable; HTTP(S)-only | Not applicable | No torrent intake by design | Not applicable | HTTP browser capture unchanged |
+
+An existing persisted `native_torrent.enabled = false` remains disabled. In that case the shared default does not silently select aria2: admission fails clearly unless the caller explicitly selects an available aria2 runtime. Aria2 defaults, credentials, helpers, and settings are not modified.
 
 ## Prompt 18 — native torrent runtime evidence
 
@@ -132,11 +147,28 @@ The Android bridge was covered by its Rust tests in the multi-package command; n
 
 These are automated unit/integration tests and a local controlled-peer test. No live remote network/server, Android device, or packaged desktop runtime was tested. The UI was not connected to an older or current live server; compatibility is covered by capability-gated behavior and UI/protocol tests.
 
+## Prompt 21 — native torrent defaults and validation
+
+New magnet and local `.torrent` admissions now default to native Rust at the shared CoreServices boundary. Desktop exposes aria2 as an explicit fallback when available; CLI retains `--engine aria2`; Android has no aria2 runtime or selector; and the current remote UI chooses native only when both metadata and selection capabilities are advertised. Older remote clients that omit the engine retain the server's existing aria2-first route. Browser/native-host admission remains HTTP(S)-only. Existing download rows continue to use their persisted engine and existing explicit `native_torrent.enabled = false` configuration is preserved. No non-torrent routing, aria2 settings, packaging, RPC, or records were changed.
+
+The new-magnet regression asserts that admission persists a native-engine queued record with `metadata_state = pending`, no selected indexes, and `selection_confirmed = false`. When queue dispatch is paused by the test, the record correctly remains `Queued`; once dispatched, metadata acquisition precedes selection, and transfer requires an explicit valid selection. The CoreServices tests also cover native local torrent defaulting and explicit aria2 non-substitution when unavailable.
+
+Exact validation:
+
+- `cargo test -j 1 -p fetchx-models -p fetchx-downloader -p fetchx-storage -p fetchx-queue -p fetchx-core-services -p fetchx -p fetchx-remote-protocol -p fetchx-remote-server -p fetchx-android-bridge -p fetchx-desktop` — passed. Includes 293 downloader unit tests (3 ignored), 2 downloader integration tests, 36 CoreServices tests, 26 CLI tests, 25 Android bridge tests, 60 desktop Tauri tests, remote protocol/server, storage, queue, models, and doctests; no failures.
+- `cargo clippy -j 1 --all-targets -p fetchx-models -p fetchx-downloader -p fetchx-storage -p fetchx-queue -p fetchx-core-services -p fetchx -p fetchx-remote-protocol -p fetchx-remote-server -p fetchx-android-bridge -p fetchx-desktop` — passed. The desktop target reports two existing warnings: `collapsible_if` in `apps\desktop\src-tauri\src\app.rs` and `too_many_arguments` in `commands.rs`; no new warning was reported.
+- `cargo fmt --all -- --check` and `git diff --check` — passed.
+- `npm test` and `npm run build` in `apps\remote-ui` — passed (2 test files, 10 tests; TypeScript and Vite production build).
+- `npm run build` in `apps\desktop\ui` — passed TypeScript and Vite production build; there is no desktop UI test script.
+- `.\gradlew.bat :downloads:test` in `apps\android` — passed. This is Android host-side Gradle test/build validation, not a device/emulator run.
+
+The controlled torrent evidence remains the synthetic loopback-peer test described under Prompt 19; no real swarm, live remote server/older-server interoperability, aria2 daemon, Android device, or packaged desktop runtime was exercised. The test verifies explicit selected-only transfer, pause and session recreation, interruption, cancellation cleanup, retry, and completion, but not exact piece reuse before peer data arrives or process/device restart recovery. Native torrent remains a partial aria2 replacement; aria2 RPC, supervision, settings, helper packaging, and persisted aria2 jobs remain supported.
+
 ## Migration phases still outstanding
 
-1. **Phase A — coverage and acceptance**: retain this table as the baseline; strengthen exact piece-reuse and process-restart tests, and validate destination collision behavior before changing defaults.
-2. **Phase B — parity**: implement the next missing native behavior only when a FetchX workflow needs it; the loopback tests cover the supported magnet lifecycle slice, while arbitrary peer-failure policy and broader aria2 option parity remain open.
-3. **Phase C — adapters**: migrate each adapter only after its explicit selection, fallback, settings, and backward-compatibility behavior is tested. Do not silently change the current default.
+1. **Phase A — coverage and acceptance**: strengthen exact piece-reuse and process/device-restart tests, and validate explicit destination-collision behavior after the default change.
+2. **Phase B — parity**: implement the next missing native behavior only when a FetchX workflow needs it; arbitrary peer-failure policy and broader aria2 option parity remain open.
+3. **Phase C — adapters**: validate live platform runtimes and old/new remote-server interoperability for the new native defaults without changing persisted engine choices.
 4. **Phase D — removal**: remove aria2 RPC, process supervision, helper packaging, and settings only after native acceptance tests cover existing downloads, recovery, controls, diagnostics, and every supported target.
 
-**Status:** aria2 is partially supplemented by native Rust, not fully replaced. Remote magnet metadata/selection is now implemented through the authenticated JSON-RPC/UI boundary; the next slice is runtime compatibility/recovery validation, especially exact partial-piece reuse, process/device recovery, collision behavior, and live old/new remote-server compatibility before any default change.
+**Status:** native Rust is the default for new torrent admissions on supported FetchX targets; aria2 remains an explicit compatibility backend and is not removed. Remote magnet metadata/selection is implemented through the authenticated JSON-RPC/UI boundary. The next slice is runtime compatibility/recovery validation: exact partial-piece reuse, process/device recovery, collision behavior, and live old/new remote-server compatibility.

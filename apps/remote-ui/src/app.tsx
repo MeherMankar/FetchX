@@ -14,6 +14,11 @@ import {
   type RemoteEvent,
 } from "./protocol";
 import { TorrentSelectionPanel } from "./TorrentSelectionPanel";
+import {
+  defaultTorrentEngineChoice,
+  supportsNativeMagnetSelection,
+  type TorrentEngineChoice,
+} from "./torrentSelectionState";
 
 type Section =
   | "dashboard"
@@ -25,8 +30,6 @@ type Section =
   | "devices"
   | "plugins"
   | "system";
-
-type TorrentEngineChoice = "automatic" | "aria2" | "native_torrent";
 
 const navigation: Array<{ id: Section; label: string; icon: string }> = [
   { id: "dashboard", label: "Dashboard", icon: "⌂" },
@@ -186,6 +189,7 @@ export function App() {
       setProtocol(currentProtocol);
       setDownloads(rows.downloads);
       setEngineStatuses(currentEngineStatuses?.engines ?? null);
+      setTorrentEngine(defaultTorrentEngineChoice(currentProtocol.capabilities));
       clientRef.current = activeClient;
       setClient(activeClient);
       setTokenInput("");
@@ -747,9 +751,14 @@ function DownloadsView(props: {
               onChange={(event) => props.onTorrentEngine(event.target.value as TorrentEngineChoice)}
               disabled={!canCreate || props.busy}
             >
-              <option value="automatic">Automatic (server default)</option>
+              <option value="automatic">Automatic (legacy server default)</option>
               <option value="aria2">aria2</option>
-              <option value="native_torrent">Native torrent</option>
+              <option
+                value="native_torrent"
+                disabled={!supportsNativeMagnetSelection(props.capabilities)}
+              >
+                Native torrent (default)
+              </option>
             </select>
           )}
           <button className="primary-button" type="submit" disabled={!canCreate || props.busy}>

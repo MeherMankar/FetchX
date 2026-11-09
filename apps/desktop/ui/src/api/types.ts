@@ -285,6 +285,7 @@ export interface EngineStatus {
   direct_http: EngineInstanceStatus;
   aria2: EngineInstanceStatus;
   yt_dlp: EngineInstanceStatus;
+  native_torrent: EngineInstanceStatus;
 }
 
 export type ManagedHelperId = "aria2c" | "yt_dlp" | "ffmpeg" | "ffprobe";

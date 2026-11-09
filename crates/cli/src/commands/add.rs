@@ -150,10 +150,14 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
     };
 
     let id = if magnet.is_some() {
-        match svc
-            .enqueue_magnet_with_engine(&canonical_url, engine_kind, priority, opts.destination)
-            .await
-        {
+        let result = if opts.engine.is_some() {
+            svc.enqueue_magnet_with_engine(&canonical_url, engine_kind, priority, opts.destination)
+                .await
+        } else {
+            svc.enqueue_magnet(&canonical_url, priority, opts.destination)
+                .await
+        };
+        match result {
             Ok(id) => id,
             Err(error) => {
                 output::print_error(json, &format!("failed to enqueue magnet: {error}"));
@@ -161,8 +165,8 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             }
         }
     } else if let Some(torrent_path) = torrent_path {
-        match svc
-            .enqueue_torrent_file_with_selection_and_engine(
+        let result = if opts.engine.is_some() {
+            svc.enqueue_torrent_file_with_selection_and_engine(
                 torrent_path,
                 engine_kind,
                 priority,
@@ -170,7 +174,16 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
                 selected_file_indexes,
             )
             .await
-        {
+        } else {
+            svc.enqueue_torrent_file_with_selection(
+                torrent_path,
+                priority,
+                opts.destination,
+                selected_file_indexes,
+            )
+            .await
+        };
+        match result {
             Ok(id) => id,
             Err(error) => {
                 output::print_error(json, &format!("failed to enqueue torrent: {error}"));
@@ -308,7 +321,7 @@ fn resolve_engine(
 ) -> Result<EngineKind, String> {
     if is_magnet || is_torrent_file {
         if engine.is_none() {
-            return Ok(EngineKind::Aria2);
+            return Ok(EngineKind::NativeTorrent);
         }
         return match parse_engine(engine) {
             Ok(engine @ (EngineKind::Aria2 | EngineKind::NativeTorrent)) => Ok(engine),
@@ -381,14 +394,14 @@ mod tests {
     use fetchx_models::{EngineKind, parse_magnet_uri};
 
     #[test]
-    fn magnet_defaults_to_aria2_and_allows_native_torrent_when_selected() {
+    fn magnet_defaults_to_native_and_allows_aria2_fallback_when_selected() {
         assert_eq!(
             resolve_engine(true, false, None, None),
-            Ok(EngineKind::Aria2)
+            Ok(EngineKind::NativeTorrent)
         );
         assert_eq!(
             resolve_engine(false, true, None, None),
-            Ok(EngineKind::Aria2)
+            Ok(EngineKind::NativeTorrent)
         );
         let metadata = parse_magnet_uri(
             "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=..%5C..%5Cunsafe%3Aname%3F.torrent",
@@ -397,7 +410,11 @@ mod tests {
         assert_eq!(metadata.suggested_filename(), "unsafename.torrent");
         assert!(resolve_engine(true, false, Some("direct-http"), None).is_err());
         assert_eq!(
-            resolve_engine(true, false, Some("native-torrent"), None),
+            resolve_engine(true, false, Some("aria2"), None),
+            Ok(EngineKind::Aria2)
+        );
+        assert_eq!(
+            resolve_engine(false, true, Some("native-torrent"), None),
             Ok(EngineKind::NativeTorrent)
         );
 

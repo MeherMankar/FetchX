@@ -280,20 +280,15 @@ impl DownloadService {
                 engine_config.aria2.enabled = true;
                 engine_config.aria2.executable_path = Some(PathBuf::from(path));
             }
-            // Enable native torrent engine on Android when no aria2 binary is
-            // configured — aria2c cannot be bundled due to OOM on startup.
-            if !engine_config.aria2.enabled {
-                engine_config.native_torrent.enabled = true;
-                // Set the session dir to the app's private files directory.
-                // std::env::temp_dir() returns /data/local/tmp on Android which
-                // is not writable by the app sandbox.
-                let runtime_parent = PathBuf::from(&config.runtime_dir)
-                    .parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from(&config.runtime_dir));
-                engine_config.native_torrent.session_dir =
-                    Some(runtime_parent.join("native-torrent-session"));
-            }
+            engine_config.native_torrent.enabled = true;
+            // Use app-private storage; std::env::temp_dir() may resolve to
+            // /data/local/tmp, which is not writable by the app sandbox.
+            let runtime_parent = PathBuf::from(&config.runtime_dir)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from(&config.runtime_dir));
+            engine_config.native_torrent.session_dir =
+                Some(runtime_parent.join("native-torrent-session"));
             engine_config
         };
 
@@ -1533,7 +1528,7 @@ mod tests {
     }
 
     #[test]
-    fn magnet_add_validates_uri_before_reporting_aria2_availability() {
+    fn magnet_add_defaults_to_native_when_aria2_is_unavailable() {
         let (mut config, dir) = make_config();
         config.aria2_executable_path = Some(
             dir.path()
@@ -1550,13 +1545,24 @@ mod tests {
             ),
             Err(MobileApiError::Validation(_))
         ));
-        assert!(matches!(
-            svc.add_magnet_download(
+        let id = svc
+            .add_magnet_download(
                 "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567".to_owned(),
-                DownloadPriorityDto::Normal
-            ),
-            Err(MobileApiError::UnavailableEngine(_))
-        ));
+                DownloadPriorityDto::Normal,
+            )
+            .expect("native torrent should be the default");
+        let download = svc
+            .get_download(id.clone())
+            .expect("download lookup should succeed")
+            .expect("native magnet should be persisted");
+        assert_eq!(download.engine, "native_torrent");
+        let metadata = svc
+            .get_torrent_download_metadata(id)
+            .expect("torrent metadata lookup should succeed")
+            .expect("native magnet metadata row should exist");
+        assert_eq!(metadata.metadata_state, "pending");
+        assert!(!metadata.selection_confirmed);
+        assert!(metadata.selected_file_indexes.is_empty());
         svc.shutdown();
     }
 

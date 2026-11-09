@@ -149,7 +149,7 @@ impl AppState {
             request.engine_kind,
         ) {
             (true, None) => EngineKind::NativeTorrent,
-            (true, Some(EngineKind::NativeTorrent)) => EngineKind::NativeTorrent,
+            (true, Some(engine @ (EngineKind::NativeTorrent | EngineKind::Aria2))) => engine,
             (true, Some(_)) => return Err(IpcError::invalid_request()),
             (false, Some(engine)) => engine,
             (false, None) => EngineKind::DirectHttp,
@@ -163,30 +163,48 @@ impl AppState {
 
         if magnet.is_some() {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
-            let id = core_services
-                .enqueue_magnet_with_engine(
-                    &canonical_url,
-                    engine_kind,
-                    DownloadPriority::Normal,
-                    None,
-                )
-                .await
-                .map_err(|_| IpcError::internal())?;
+            let id = match request.engine_kind {
+                Some(engine) => {
+                    core_services
+                        .enqueue_magnet_with_engine(
+                            &canonical_url,
+                            engine,
+                            DownloadPriority::Normal,
+                            None,
+                        )
+                        .await
+                }
+                None => {
+                    core_services
+                        .enqueue_magnet(&canonical_url, DownloadPriority::Normal, None)
+                        .await
+                }
+            }
+            .map_err(|_| IpcError::internal())?;
             return self.get(id).await;
         }
 
         if let Some(torrent_path) = torrent_path {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
-            let id = core_services
-                .enqueue_torrent_file_with_selection_and_engine(
-                    torrent_path,
-                    engine_kind,
-                    DownloadPriority::Normal,
-                    None,
-                    None,
-                )
-                .await
-                .map_err(|_| IpcError::internal())?;
+            let id = match request.engine_kind {
+                Some(engine) => {
+                    core_services
+                        .enqueue_torrent_file_with_selection_and_engine(
+                            torrent_path,
+                            engine,
+                            DownloadPriority::Normal,
+                            None,
+                            None,
+                        )
+                        .await
+                }
+                None => {
+                    core_services
+                        .enqueue_torrent_file(torrent_path, DownloadPriority::Normal, None)
+                        .await
+                }
+            }
+            .map_err(|_| IpcError::internal())?;
             return self.get(id).await;
         }
 
@@ -984,21 +1002,37 @@ pub async fn add_torrent_download(
     state: State<'_, AppState>,
     torrent_path: String,
     selected_file_indexes: Option<Vec<u32>>,
+    engine_kind: Option<fetchx_models::EngineKind>,
 ) -> Result<DownloadDto, IpcError> {
     let core_services = state
         .core_services
         .as_ref()
         .ok_or_else(IpcError::internal)?;
-    let id = core_services
-        .enqueue_torrent_file_with_selection_and_engine(
-            Path::new(&torrent_path).to_path_buf(),
-            fetchx_models::EngineKind::NativeTorrent,
-            DownloadPriority::Normal,
-            None,
-            selected_file_indexes,
-        )
-        .await
-        .map_err(|_| IpcError::internal())?;
+    let torrent_path = Path::new(&torrent_path).to_path_buf();
+    let id = match engine_kind {
+        Some(engine) => {
+            core_services
+                .enqueue_torrent_file_with_selection_and_engine(
+                    torrent_path,
+                    engine,
+                    DownloadPriority::Normal,
+                    None,
+                    selected_file_indexes,
+                )
+                .await
+        }
+        None => {
+            core_services
+                .enqueue_torrent_file_with_selection(
+                    torrent_path,
+                    DownloadPriority::Normal,
+                    None,
+                    selected_file_indexes,
+                )
+                .await
+        }
+    }
+    .map_err(|_| IpcError::internal())?;
     let download = state.get(id).await?;
     emit_event(
         &app,
@@ -1769,11 +1803,10 @@ mod tests {
         let repository = EventRepository::new(inner_repository.clone(), event_bus);
         let config_service = ConfigService::new(database.config());
 
-        // Use the default config (all optional engines disabled) to build an
-        // EngineRuntime with only DirectHttp.  The runtime provides the dispatcher
-        // reference stored in AppState, but the test scheduler uses WaitingEngine
-        // so the existing test behaviour (wait for Downloading, then act) is preserved.
-        let engine_config = EngineConfig::default();
+        // Keep optional engines disabled in this isolated adapter harness; the
+        // test scheduler uses WaitingEngine to preserve lifecycle assertions.
+        let mut engine_config = EngineConfig::default();
+        engine_config.native_torrent.enabled = false;
         let engine_runtime =
             EngineRuntime::initialize(repository.clone(), &engine_config, &std::env::temp_dir())
                 .await?;
