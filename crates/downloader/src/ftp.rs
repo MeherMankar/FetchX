@@ -63,9 +63,13 @@ pub struct FtpEngineConfig {
     /// Password for FTP authentication. Never logged. `None` uses an empty password (anonymous).
     pub password: Option<String>,
     /// Timeout that bounds the FTPS TLS handshake. Default: 30 s.
-    /// Applied as the TCP read timeout on the underlying stream before calling
-    /// `into_secure`; the data-phase `read_timeout` takes over afterward.
+    /// Applied to control and passive data sockets before TLS handshakes. Since
+    /// suppaftp does not expose a post-handshake timeout reset, the shorter of
+    /// this value and `read_timeout` also bounds FTPS data reads.
     pub tls_handshake_timeout: Duration,
+    /// Additional DER-encoded CA certificates trusted for FTPS control and data
+    /// connections. System WebPKI roots are always retained.
+    pub additional_root_certificates: Vec<Vec<u8>>,
 }
 
 impl Default for FtpEngineConfig {
@@ -77,6 +81,7 @@ impl Default for FtpEngineConfig {
             username: None,
             password: None,
             tls_handshake_timeout: Duration::from_secs(30),
+            additional_root_certificates: Vec::new(),
         }
     }
 }
@@ -228,13 +233,28 @@ where
             .map(|m| m.len())
             .unwrap_or(0);
 
-        // Transition to Downloading.
-        let mut tracked = if item.status() == DownloadStatus::Preparing {
-            self.state_machine
-                .transition(id, DownloadStatus::Downloading)
-                .await?
-        } else {
-            item.clone()
+        // A retry starts with the original input item, while the repository may
+        // already contain Downloading status and progress from the prior attempt.
+        let current = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let mut tracked = match current.status() {
+            DownloadStatus::Preparing => {
+                self.state_machine
+                    .transition(id, DownloadStatus::Downloading)
+                    .await?
+            }
+            DownloadStatus::Downloading => current,
+            status => {
+                return Err(DownloadEngineError::StateMachine(
+                    StateMachineError::InvalidTransition {
+                        from: status,
+                        to: DownloadStatus::Downloading,
+                    },
+                ));
+            }
         };
 
         // Persist initial progress.
@@ -259,6 +279,7 @@ where
         let connect_timeout = self.config.connect_timeout;
         let read_timeout = self.config.read_timeout;
         let tls_handshake_timeout = self.config.tls_handshake_timeout;
+        let additional_root_certificates = self.config.additional_root_certificates.clone();
         // Username from URL takes priority; fall back to config username.
         let effective_username = username.or_else(|| self.config.username.clone());
         let password = self.config.password.clone();
@@ -274,6 +295,7 @@ where
                 connect_timeout,
                 read_timeout,
                 tls_handshake_timeout,
+                additional_root_certificates,
                 resume_offset,
                 temporary_path: tmp_sync,
                 destination: dest_sync,
@@ -527,6 +549,7 @@ struct BlockingParams {
     read_timeout: Duration,
     /// Timeout applied to the TCP stream before the TLS handshake in FTPS.
     tls_handshake_timeout: Duration,
+    additional_root_certificates: Vec<Vec<u8>>,
     resume_offset: u64,
     temporary_path: PathBuf,
     destination: PathBuf,
@@ -550,6 +573,8 @@ fn ftp_blocking(p: BlockingParams) -> Result<(), DownloadEngineError> {
     if p.use_tls {
         // Re-apply the (potentially shorter) handshake timeout before TLS upgrade.
         tcp.set_read_timeout(Some(p.tls_handshake_timeout))
+            .map_err(DownloadEngineError::Io)?;
+        tcp.set_write_timeout(Some(p.tls_handshake_timeout))
             .map_err(DownloadEngineError::Io)?;
         ftp_blocking_tls(tcp, p)
     } else {
@@ -616,6 +641,13 @@ where
     file.flush().map_err(DownloadEngineError::Io)?;
     drop(file);
 
+    if let Some(expected) = total_bytes.filter(|expected| downloaded != *expected) {
+        return Err(DownloadEngineError::FtpIntegrityError {
+            expected,
+            actual: downloaded,
+        });
+    }
+
     // Finalise the RETR command (sends the FTP 226 acknowledgement).
     finalise_fn(data)?;
 
@@ -679,21 +711,49 @@ fn ftp_blocking_tls(tcp: TcpStream, p: BlockingParams) -> Result<(), DownloadEng
     let root_store = {
         let mut store = suppaftp::rustls::RootCertStore::empty();
         store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        for certificate in &p.additional_root_certificates {
+            store
+                .add(suppaftp::rustls::pki_types::CertificateDer::from(
+                    certificate.clone(),
+                ))
+                .map_err(|error| {
+                    DownloadEngineError::FtpTlsError(format!(
+                        "invalid additional FTPS root certificate: {error}"
+                    ))
+                })?;
+        }
         store
     };
-    let tls_config = suppaftp::rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let tls_config = suppaftp::rustls::ClientConfig::builder_with_provider(Arc::new(
+        suppaftp::rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|error| DownloadEngineError::FtpTlsError(error.to_string()))?
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
     let connector = RustlsConnector::from(std::sync::Arc::new(tls_config));
 
     // RustlsFtpStream = ImplFtpStream<RustlsStream>, so into_secure with
     // RustlsConnector (Stream = RustlsStream) satisfies the TlsConnector<Stream=T> bound.
+    let data_timeout = p.read_timeout.min(p.tls_handshake_timeout);
+    let connect_timeout = p.connect_timeout;
     let plain = RustlsFtpStream::connect_with_stream(tcp)
-        .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
+        .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?
+        .passive_stream_builder(move |addr| {
+            let stream = TcpStream::connect_timeout(&addr, connect_timeout)
+                .map_err(suppaftp::FtpError::ConnectionError)?;
+            stream
+                .set_read_timeout(Some(data_timeout))
+                .map_err(suppaftp::FtpError::ConnectionError)?;
+            stream
+                .set_write_timeout(Some(data_timeout))
+                .map_err(suppaftp::FtpError::ConnectionError)?;
+            Ok(stream)
+        });
 
     let mut stream = plain
         .into_secure(connector, &p.host)
-        .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
+        .map_err(map_ftp_tls_error)?;
 
     // Restore data-phase read timeout after TLS handshake completes.
     // suppaftp 6.3.0 does not expose a way to reset the underlying stream's
@@ -716,17 +776,11 @@ fn ftp_blocking_tls(tcp: TcpStream, p: BlockingParams) -> Result<(), DownloadEng
             .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
     }
 
-    let data = stream
-        .retr_as_stream(&p.path)
-        .map_err(|e| DownloadEngineError::FtpError(e.to_string()))?;
+    let data = stream.retr_as_stream(&p.path).map_err(map_ftp_tls_error)?;
 
     let result = transfer_loop(
         data,
-        |d| {
-            stream
-                .finalize_retr_stream(d)
-                .map_err(|e| DownloadEngineError::FtpError(e.to_string()))
-        },
+        |d| stream.finalize_retr_stream(d).map_err(map_ftp_tls_error),
         &p,
         total_bytes,
     );
@@ -852,6 +906,10 @@ fn map_ftp_login_error(e: suppaftp::FtpError) -> DownloadEngineError {
     DownloadEngineError::FtpError(e.to_string())
 }
 
+fn map_ftp_tls_error(e: suppaftp::FtpError) -> DownloadEngineError {
+    DownloadEngineError::FtpTlsError(e.to_string())
+}
+
 /// Returns `true` for transient FTP errors that warrant a retry.
 /// Authentication failures and permanent errors are NOT retried.
 fn is_retryable_ftp_error(e: &DownloadEngineError) -> bool {
@@ -862,6 +920,8 @@ fn is_retryable_ftp_error(e: &DownloadEngineError) -> bool {
         DownloadEngineError::Io(_) => true,
         // These are permanent or require human intervention.
         DownloadEngineError::FtpCredentialRequired
+        | DownloadEngineError::FtpTlsError(_)
+        | DownloadEngineError::FtpIntegrityError { .. }
         | DownloadEngineError::EmbeddedCredentials
         | DownloadEngineError::FtpPathTraversal
         | DownloadEngineError::InvalidUrl

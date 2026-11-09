@@ -95,6 +95,10 @@ pub enum DownloadEngineError {
     NativeTorrent(String),
     #[error("FTP error: {0}")]
     FtpError(String),
+    #[error("FTPS TLS error: {0}")]
+    FtpTlsError(String),
+    #[error("FTP transfer size mismatch: received {actual} bytes, expected {expected}")]
+    FtpIntegrityError { expected: u64, actual: u64 },
     #[error("FTP path contains directory traversal sequence")]
     FtpPathTraversal,
     #[error("FTP authentication requires credentials not stored in URL")]
@@ -192,7 +196,11 @@ impl DownloadEngineError {
                 DownloadErrorCode::Engine,
                 "The native torrent download could not be completed safely.".to_owned(),
             ),
-            Self::FtpError(_) | Self::FtpPathTraversal | Self::FtpCredentialRequired => (
+            Self::FtpError(_)
+            | Self::FtpTlsError(_)
+            | Self::FtpIntegrityError { .. }
+            | Self::FtpPathTraversal
+            | Self::FtpCredentialRequired => (
                 DownloadErrorCode::Engine,
                 "The FTP download could not be completed.".to_owned(),
             ),

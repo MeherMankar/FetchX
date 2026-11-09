@@ -875,6 +875,237 @@ pub(crate) async fn start_ftp_server(
     Ok((addr, handle))
 }
 
+struct FtpsServer {
+    address: std::net::SocketAddr,
+    certificate: Vec<u8>,
+    task: JoinHandle<()>,
+    data_ready: oneshot::Receiver<()>,
+}
+
+async fn read_ftp_line<S>(stream: &mut S) -> Result<String, std::io::Error>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
+    let mut line = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).await?;
+        if byte[0] == b'\n' {
+            break;
+        }
+        if byte[0] != b'\r' {
+            line.push(byte[0]);
+        }
+    }
+    Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
+async fn start_ftps_server(
+    content: Vec<u8>,
+    advertised_size: Option<u64>,
+    username: &'static str,
+    password: &'static str,
+    handshake_delay: Duration,
+    data_delay: Duration,
+) -> Result<FtpsServer, Box<dyn Error>> {
+    use std::{net::IpAddr, sync::Arc};
+
+    use rcgen::{CertificateParams, KeyPair, SanType};
+    use tokio_rustls::{
+        TlsAcceptor,
+        rustls::{
+            ServerConfig,
+            pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+        },
+    };
+
+    let mut certificate_params = CertificateParams::new(Vec::new())?;
+    certificate_params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(
+        std::net::Ipv4Addr::LOCALHOST,
+    ))];
+    let key_pair = KeyPair::generate()?;
+    let certificate = certificate_params.self_signed(&key_pair)?;
+    let certificate_der = certificate.der().to_vec();
+    let tls_config = ServerConfig::builder_with_provider(Arc::new(
+        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![CertificateDer::from(certificate_der.clone())],
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der())),
+    )?;
+    let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (data_ready_sender, data_ready) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut data_ready_tx = Some(data_ready_sender);
+        let Ok((mut control, _)) = listener.accept().await else {
+            return;
+        };
+        if control
+            .write_all(b"220 FetchX hermetic FTPS fixture\r\n")
+            .await
+            .is_err()
+        {
+            return;
+        }
+        if !matches!(
+            read_ftp_line(&mut control).await,
+            Ok(command) if command.eq_ignore_ascii_case("AUTH TLS")
+        ) {
+            return;
+        }
+        if control
+            .write_all(b"234 Proceed with TLS\r\n")
+            .await
+            .is_err()
+        {
+            return;
+        }
+        tokio::time::sleep(handshake_delay).await;
+        let Ok(mut control) = tls_acceptor.accept(control).await else {
+            return;
+        };
+
+        let mut rest_offset = 0_usize;
+        let mut data_listener = None;
+        loop {
+            let Ok(command) = read_ftp_line(&mut control).await else {
+                return;
+            };
+            let mut fields = command.split_whitespace();
+            let verb = fields.next().unwrap_or_default().to_ascii_uppercase();
+            let argument = fields.next().unwrap_or_default();
+            match verb.as_str() {
+                "PBSZ" | "PROT" | "TYPE" => {
+                    if control
+                        .write_all(b"200 Command accepted\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                "USER" => {
+                    let response = if argument == username {
+                        b"331 Password required\r\n".as_slice()
+                    } else {
+                        b"530 Login incorrect\r\n".as_slice()
+                    };
+                    if control.write_all(response).await.is_err() {
+                        return;
+                    }
+                }
+                "PASS" => {
+                    let response = if argument == password {
+                        b"230 Logged in\r\n".as_slice()
+                    } else {
+                        b"530 Login incorrect\r\n".as_slice()
+                    };
+                    if control.write_all(response).await.is_err() {
+                        return;
+                    }
+                }
+                "SIZE" => {
+                    let size = advertised_size.unwrap_or(content.len() as u64);
+                    if control
+                        .write_all(format!("213 {size}\r\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                "REST" => {
+                    rest_offset = argument.parse().unwrap_or(0);
+                    if control
+                        .write_all(b"350 Restart accepted\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                "PASV" => {
+                    let Ok(listener) = TcpListener::bind("127.0.0.1:0").await else {
+                        let _ = control.write_all(b"425 Data listener failed\r\n").await;
+                        continue;
+                    };
+                    let Ok(data_address) = listener.local_addr() else {
+                        return;
+                    };
+                    let port = data_address.port();
+                    let response = format!(
+                        "227 Entering Passive Mode (127,0,0,1,{},{})\r\n",
+                        port >> 8,
+                        port & 0xff
+                    );
+                    if control.write_all(response.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    data_listener = Some(listener);
+                }
+                "RETR" => {
+                    if control
+                        .write_all(b"150 Opening protected data connection\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let Some(data_listener) = data_listener.take() else {
+                        let _ = control.write_all(b"425 No passive listener\r\n").await;
+                        continue;
+                    };
+                    let Ok((data_stream, _)) = data_listener.accept().await else {
+                        return;
+                    };
+                    let Ok(mut data_stream) = tls_acceptor.accept(data_stream).await else {
+                        return;
+                    };
+                    if let Some(data_ready_tx) = data_ready_tx.take() {
+                        let _ = data_ready_tx.send(());
+                    }
+                    tokio::time::sleep(data_delay).await;
+                    let bytes = content.get(rest_offset..).unwrap_or_default();
+                    if data_stream.write_all(bytes).await.is_err()
+                        || data_stream.shutdown().await.is_err()
+                        || control
+                            .write_all(b"226 Transfer complete\r\n")
+                            .await
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
+                "QUIT" => {
+                    let _ = control.write_all(b"221 Goodbye\r\n").await;
+                    return;
+                }
+                _ => {
+                    if control
+                        .write_all(b"502 Command not implemented\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(FtpsServer {
+        address,
+        certificate: certificate_der,
+        task,
+        data_ready,
+    })
+}
+
 async fn serve_connection(mut stream: TcpStream, response: &mut ServerResponse) -> bool {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -3030,6 +3261,379 @@ async fn ftp_cancellation_returns_cancelled_error() -> Result<(), Box<dyn Error>
         "expected Cancelled, got: {result:?}"
     );
     assert!(!dest.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_explicit_tls_authenticates_and_verifies_transfer() -> Result<(), Box<dyn Error>> {
+    use crate::{FtpEngine, ftp::FtpEngineConfig};
+
+    let content = b"hermetic explicit FTPS transfer".to_vec();
+    let server = start_ftps_server(
+        content.clone(),
+        None,
+        "fetchx",
+        "test-secret",
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-success.bin");
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-success.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            username: Some("fetchx".to_owned()),
+            password: Some("test-secret".to_owned()),
+            additional_root_certificates: vec![server.certificate],
+            ..FtpEngineConfig::default()
+        },
+    );
+    let (_cancel_tx, cancellation) = watch::channel(false);
+    let completed = crate::DownloadEngine::download(&engine, id, cancellation).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, content);
+    server.task.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_rejects_untrusted_certificate_without_retry_or_publication()
+-> Result<(), Box<dyn Error>> {
+    use crate::{FtpEngine, ftp::FtpEngineConfig};
+
+    let server = start_ftps_server(
+        b"must remain private".to_vec(),
+        None,
+        "fetchx",
+        "secret",
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-untrusted.bin");
+    let temporary_path = dir.path().join("ftps-untrusted.bin.part");
+    tokio::fs::write(&destination, b"preserve destination").await?;
+    tokio::fs::write(&temporary_path, b"preserve partial").await?;
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-untrusted.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            tls_handshake_timeout: Duration::from_secs(2),
+            ..FtpEngineConfig::default()
+        },
+    );
+
+    let (_cancel_tx, cancellation) = watch::channel(false);
+    let result = crate::DownloadEngine::download(&engine, id, cancellation).await;
+
+    assert!(
+        matches!(result, Err(DownloadEngineError::FtpTlsError(_))),
+        "expected typed FTPS TLS failure, got {result:?}"
+    );
+    assert_eq!(tokio::fs::read(destination).await?, b"preserve destination");
+    assert_eq!(tokio::fs::read(temporary_path).await?, b"preserve partial");
+    server.task.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_tls_handshake_timeout_fails_without_plaintext_fallback() -> Result<(), Box<dyn Error>>
+{
+    use crate::{FtpEngine, ftp::FtpEngineConfig};
+
+    let server = start_ftps_server(
+        b"not published".to_vec(),
+        None,
+        "fetchx",
+        "secret",
+        Duration::from_millis(300),
+        Duration::ZERO,
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-handshake-timeout.bin");
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-handshake-timeout.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            tls_handshake_timeout: Duration::from_millis(75),
+            additional_root_certificates: vec![server.certificate],
+            ..FtpEngineConfig::default()
+        },
+    );
+
+    let (_cancel_tx, cancellation) = watch::channel(false);
+    let result = crate::DownloadEngine::download(&engine, id, cancellation).await;
+
+    assert!(
+        matches!(result, Err(DownloadEngineError::FtpTlsError(_))),
+        "expected typed FTPS TLS timeout, got {result:?}"
+    );
+    assert!(!destination.exists());
+    server.task.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_rejects_invalid_credentials() -> Result<(), Box<dyn Error>> {
+    use crate::{FtpEngine, ftp::FtpEngineConfig};
+
+    let server = start_ftps_server(
+        b"never transferred".to_vec(),
+        None,
+        "fetchx",
+        "right",
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-invalid-auth.bin");
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-invalid-auth.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            username: Some("fetchx".to_owned()),
+            password: Some("wrong".to_owned()),
+            additional_root_certificates: vec![server.certificate],
+            ..FtpEngineConfig::default()
+        },
+    );
+
+    let (_cancel_tx, cancellation) = watch::channel(false);
+    let result = crate::DownloadEngine::download(&engine, id, cancellation).await;
+
+    assert!(matches!(
+        result,
+        Err(DownloadEngineError::FtpCredentialRequired)
+    ));
+    assert!(!destination.exists());
+    server.task.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_cancellation_preserves_existing_destination_and_partial() -> Result<(), Box<dyn Error>>
+{
+    use crate::{FtpEngine, ManagedDownloadControl, ManagedDownloadEngine, ftp::FtpEngineConfig};
+
+    let content = b"existing bytes followed by a delayed FTPS transfer".to_vec();
+    let server = start_ftps_server(
+        content.clone(),
+        None,
+        "fetchx",
+        "secret",
+        Duration::ZERO,
+        Duration::from_secs(1),
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-cancel.bin");
+    let temporary_path = dir.path().join("ftps-cancel.bin.part");
+    tokio::fs::write(&destination, b"preserve destination").await?;
+    tokio::fs::write(&temporary_path, &content[..12]).await?;
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-cancel.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            username: Some("fetchx".to_owned()),
+            password: Some("secret".to_owned()),
+            read_timeout: Duration::from_millis(150),
+            tls_handshake_timeout: Duration::from_millis(150),
+            additional_root_certificates: vec![server.certificate],
+            ..FtpEngineConfig::default()
+        },
+    );
+    let (cancel_tx, cancellation) = watch::channel(false);
+    let (_pause_tx, pause) = watch::channel(false);
+    let (_limit_tx, connection_limit) = watch::channel(1_usize);
+    let control = ManagedDownloadControl {
+        cancellation,
+        pause,
+        connection_limit,
+        resource_demand: None,
+        bandwidth: BandwidthControl::default(),
+    };
+    let download = tokio::spawn(async move { engine.download_managed(id, control).await });
+    server.data_ready.await?;
+    cancel_tx.send(true)?;
+
+    assert!(matches!(
+        download.await?,
+        Err(DownloadEngineError::Cancelled)
+    ));
+    assert_eq!(tokio::fs::read(destination).await?, b"preserve destination");
+    assert_eq!(tokio::fs::read(temporary_path).await?, &content[..12]);
+    server.task.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_resume_uses_rest_and_preserves_partial_until_complete() -> Result<(), Box<dyn Error>>
+{
+    use crate::{FtpEngine, ftp::FtpEngineConfig};
+
+    let content = b"resume FTPS data without rewriting the prefix".to_vec();
+    let prefix_size = 12;
+    let server = start_ftps_server(
+        content.clone(),
+        None,
+        "fetchx",
+        "secret",
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-resume.bin");
+    let temporary_path = dir.path().join("ftps-resume.bin.part");
+    tokio::fs::write(&temporary_path, &content[..prefix_size]).await?;
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-resume.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            username: Some("fetchx".to_owned()),
+            password: Some("secret".to_owned()),
+            additional_root_certificates: vec![server.certificate],
+            ..FtpEngineConfig::default()
+        },
+    );
+
+    let (_cancel_tx, cancellation) = watch::channel(false);
+    let completed = crate::DownloadEngine::download(&engine, id, cancellation).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, content);
+    assert!(!temporary_path.exists());
+    server.task.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ftps_size_mismatch_preserves_destination_and_partial_data() -> Result<(), Box<dyn Error>> {
+    use crate::{FtpEngine, ftp::FtpEngineConfig};
+
+    let actual_content = b"changed remote content".to_vec();
+    let prefix = b"old prefix";
+    let server = start_ftps_server(
+        actual_content.clone(),
+        Some((actual_content.len() + 8) as u64),
+        "fetchx",
+        "secret",
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("ftps-mismatch.bin");
+    let temporary_path = dir.path().join("ftps-mismatch.bin.part");
+    tokio::fs::write(&destination, b"existing destination").await?;
+    tokio::fs::write(&temporary_path, prefix).await?;
+    let url = format!("ftps://{}/file.bin", server.address);
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&url, EngineKind::Ftps)?,
+        FileName::new("ftps-mismatch.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    repository.create(&item).await?;
+    let engine = FtpEngine::with_config(
+        repository,
+        FtpEngineConfig {
+            username: Some("fetchx".to_owned()),
+            password: Some("secret".to_owned()),
+            additional_root_certificates: vec![server.certificate],
+            ..FtpEngineConfig::default()
+        },
+    );
+
+    let (_cancel_tx, cancellation) = watch::channel(false);
+    let result = crate::DownloadEngine::download(&engine, id, cancellation).await;
+
+    assert!(matches!(
+        result,
+        Err(DownloadEngineError::FtpIntegrityError { .. })
+    ));
+    assert_eq!(tokio::fs::read(destination).await?, b"existing destination");
+    let mut expected_partial = prefix.to_vec();
+    expected_partial.extend_from_slice(&actual_content[prefix.len()..]);
+    assert_eq!(tokio::fs::read(temporary_path).await?, expected_partial);
+    server.task.await?;
     Ok(())
 }
 

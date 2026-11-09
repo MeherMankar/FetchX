@@ -41,3 +41,5 @@ workspace = true
 [dev-dependencies]
 tempfile = "3"
 rand = "0.10"
+rcgen = "0.13.2"
+tokio-rustls.workspace = true
