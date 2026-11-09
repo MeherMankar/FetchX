@@ -119,6 +119,15 @@ pub enum DownloadEngineError {
         expected: String,
         actual: String,
     },
+    #[error(
+        "Metalink chunk checksum mismatch: algorithm={algorithm} chunk={chunk_index} expected={expected} actual={actual}"
+    )]
+    MetalinkChunkChecksumMismatch {
+        algorithm: String,
+        chunk_index: usize,
+        expected: String,
+        actual: String,
+    },
     #[error("SHA-256 mismatch: expected={expected} actual={actual}")]
     Sha256Mismatch { expected: String, actual: String },
 }
@@ -210,7 +219,9 @@ impl DownloadEngineError {
                 DownloadErrorCode::Engine,
                 "The SFTP download could not be completed.".to_owned(),
             ),
-            Self::MetalinkError(_) | Self::MetalinkChecksumMismatch { .. } => (
+            Self::MetalinkError(_)
+            | Self::MetalinkChecksumMismatch { .. }
+            | Self::MetalinkChunkChecksumMismatch { .. } => (
                 DownloadErrorCode::Engine,
                 "The Metalink download could not be completed.".to_owned(),
             ),

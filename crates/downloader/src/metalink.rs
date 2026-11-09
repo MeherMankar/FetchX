@@ -32,6 +32,7 @@ use fetchx_storage::DownloadRepository;
 use md5::Md5;
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::{fs, sync::watch};
 use tracing::{info, warn};
 
@@ -58,8 +59,18 @@ pub struct MetalinkFile {
     pub size: Option<u64>,
     /// `(algorithm_lowercase, hex_digest)` pairs (e.g. `"sha-256"`, `"aabb…"`).
     pub hashes: Vec<(String, String)>,
+    /// Ordered chunk hashes from a Metalink `<pieces>` element.
+    pub chunk_checksums: Vec<MetalinkChunkChecksum>,
     /// Mirrors sorted by ascending priority (priority 1 is highest).
     pub mirrors: Vec<MetalinkMirror>,
+}
+
+/// Hashes for consecutive fixed-size pieces of one Metalink file.
+#[derive(Clone, Debug)]
+pub struct MetalinkChunkChecksum {
+    pub algorithm: String,
+    pub chunk_length: u64,
+    pub hashes: Vec<String>,
 }
 
 // ── Engine ─────────────────────────────────────────────────────────────────────
@@ -309,6 +320,16 @@ where
     ) -> Result<(), DownloadEngineError> {
         // Use a unique staging path per file.
         let staging_path = temp_dir.join(format!("{}-{}", parent_id, sanitize_filename(&mf.name)));
+        let chunk_dir = temp_dir.join(format!(
+            "{}-{}-verified-chunks",
+            parent_id,
+            sanitize_filename(&mf.name)
+        ));
+        if !mf.chunk_checksums.is_empty() {
+            fs::create_dir_all(&chunk_dir)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
 
         let mut last_error: Option<DownloadEngineError> = None;
 
@@ -393,38 +414,82 @@ where
                     continue;
                 }
                 Ok(_completed_transient) => {
-                    // Verify checksum of staged file.
-                    let checksum_result = verify_checksums(&staging_path, &mf.hashes).await;
+                    let publication_path = if mf.chunk_checksums.is_empty() {
+                        staging_path.clone()
+                    } else {
+                        match stage_verified_chunks(
+                            &staging_path,
+                            mf.size,
+                            &mf.chunk_checksums,
+                            &chunk_dir,
+                        )
+                        .await
+                        {
+                            Ok(()) => match assemble_verified_chunks(
+                                &chunk_dir,
+                                &staging_path.with_extension("assembled"),
+                                &mf.chunk_checksums[0],
+                            )
+                            .await
+                            {
+                                Ok(path) => path,
+                                Err(error) => {
+                                    let _ = self.repository.delete(transient_id).await;
+                                    let _ = fs::remove_file(&staging_path).await;
+                                    last_error = Some(error);
+                                    continue;
+                                }
+                            },
+                            Err(error) => {
+                                warn!(
+                                    "Metalink: chunk verification failed for '{}' via '{}': {}",
+                                    mf.name, mirror.url, error
+                                );
+                                let _ = self.repository.delete(transient_id).await;
+                                let _ = fs::remove_file(&staging_path).await;
+                                last_error = Some(error);
+                                continue;
+                            }
+                        }
+                    };
+                    let chunk_validation =
+                        verify_chunk_checksums(&publication_path, mf.size, &mf.chunk_checksums)
+                            .await;
+                    let checksum_result = match chunk_validation {
+                        Ok(()) => verify_checksums(&publication_path, &mf.hashes).await,
+                        Err(error) => Err(error),
+                    };
                     match checksum_result {
-                        Err(DownloadEngineError::MetalinkChecksumMismatch {
-                            algorithm,
-                            expected,
-                            actual,
-                        }) => {
+                        Err(
+                            error @ (DownloadEngineError::MetalinkChecksumMismatch { .. }
+                            | DownloadEngineError::MetalinkChunkChecksumMismatch { .. }),
+                        ) => {
                             warn!(
-                                "Metalink: checksum mismatch for '{}' via '{}': {} expected={} actual={}",
-                                mf.name, mirror.url, algorithm, expected, actual
+                                "Metalink: checksum mismatch for '{}' via '{}': {}",
+                                mf.name, mirror.url, error
                             );
                             let _ = self.repository.delete(transient_id).await;
                             let _ = fs::remove_file(&staging_path).await;
-                            last_error = Some(DownloadEngineError::MetalinkChecksumMismatch {
-                                algorithm,
-                                expected,
-                                actual,
-                            });
+                            if publication_path != staging_path {
+                                let _ = fs::remove_file(&publication_path).await;
+                            }
+                            last_error = Some(error);
                             // Try next mirror.
                             continue;
                         }
                         Err(e) => {
                             let _ = self.repository.delete(transient_id).await;
                             let _ = fs::remove_file(&staging_path).await;
+                            if publication_path != staging_path {
+                                let _ = fs::remove_file(&publication_path).await;
+                            }
                             last_error = Some(e);
                             continue;
                         }
                         Ok(()) => {
                             // Checksum OK. Move staged file to final destination.
                             let _ = self.repository.delete(transient_id).await;
-                            if let Err(e) = fs::rename(&staging_path, final_path).await {
+                            if let Err(e) = fs::rename(&publication_path, final_path).await {
                                 return Err(DownloadEngineError::Io(e));
                             }
                             // Update tracked progress on parent item.
@@ -660,6 +725,7 @@ fn parse_v4_file(node: roxmltree::Node<'_, '_>) -> Result<MetalinkFile, Download
 
     let mut size: Option<u64> = None;
     let mut hashes: Vec<(String, String)> = Vec::new();
+    let mut chunk_checksums = Vec::new();
     let mut mirrors: Vec<MetalinkMirror> = Vec::new();
 
     for child in node.children().filter(|n| n.is_element()) {
@@ -674,6 +740,7 @@ fn parse_v4_file(node: roxmltree::Node<'_, '_>) -> Result<MetalinkFile, Download
                     hashes.push((alg.to_ascii_lowercase(), text.trim().to_ascii_lowercase()));
                 }
             }
+            "pieces" => chunk_checksums.push(parse_chunk_checksum(child)?),
             "url" => {
                 if let Some(text) = child.text() {
                     let url = text.trim().to_owned();
@@ -690,10 +757,12 @@ fn parse_v4_file(node: roxmltree::Node<'_, '_>) -> Result<MetalinkFile, Download
         }
     }
 
+    validate_chunk_metadata(size, &chunk_checksums)?;
     Ok(MetalinkFile {
         name,
         size,
         hashes,
+        chunk_checksums,
         mirrors,
     })
 }
@@ -723,6 +792,7 @@ fn parse_v3_files(root: roxmltree::Node<'_, '_>) -> Result<Vec<MetalinkFile>, Do
 
         let mut size: Option<u64> = None;
         let mut hashes: Vec<(String, String)> = Vec::new();
+        let mut chunk_checksums = Vec::new();
         let mut mirrors: Vec<MetalinkMirror> = Vec::new();
 
         for child in node.children().filter(|n| n.is_element()) {
@@ -741,6 +811,8 @@ fn parse_v3_files(root: roxmltree::Node<'_, '_>) -> Result<Vec<MetalinkFile>, Do
                         {
                             hashes
                                 .push((alg.to_ascii_lowercase(), text.trim().to_ascii_lowercase()));
+                        } else if hash_node.tag_name().name() == "pieces" {
+                            chunk_checksums.push(parse_chunk_checksum(hash_node)?);
                         }
                     }
                 }
@@ -765,15 +837,114 @@ fn parse_v3_files(root: roxmltree::Node<'_, '_>) -> Result<Vec<MetalinkFile>, Do
             }
         }
 
+        validate_chunk_metadata(size, &chunk_checksums)?;
         files.push(MetalinkFile {
             name,
             size,
             hashes,
+            chunk_checksums,
             mirrors,
         });
     }
 
     Ok(files)
+}
+
+const MAX_METALINK_CHUNK_HASHES: usize = 1_000_000;
+
+fn parse_chunk_checksum(
+    node: roxmltree::Node<'_, '_>,
+) -> Result<MetalinkChunkChecksum, DownloadEngineError> {
+    let algorithm = node
+        .attribute("type")
+        .ok_or_else(|| DownloadEngineError::MetalinkError("<pieces> missing 'type'".to_owned()))?
+        .trim()
+        .to_ascii_lowercase();
+    let chunk_length = node
+        .attribute("length")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|length| *length > 0)
+        .ok_or_else(|| {
+            DownloadEngineError::MetalinkError("<pieces> has an invalid 'length'".to_owned())
+        })?;
+
+    let mut hashes = Vec::new();
+    for child in node.children().filter(|child| child.is_element()) {
+        if child.tag_name().name() != "hash" {
+            continue;
+        }
+        let hash = child
+            .text()
+            .map(str::trim)
+            .filter(|hash| !hash.is_empty())
+            .ok_or_else(|| {
+                DownloadEngineError::MetalinkError("<pieces> contains an empty hash".to_owned())
+            })?
+            .to_ascii_lowercase();
+        validate_hash_value(&algorithm, &hash)?;
+        hashes.push(hash);
+        if hashes.len() > MAX_METALINK_CHUNK_HASHES {
+            return Err(DownloadEngineError::MetalinkError(
+                "<pieces> contains too many hashes".to_owned(),
+            ));
+        }
+    }
+
+    if hashes.is_empty() {
+        return Err(DownloadEngineError::MetalinkError(
+            "<pieces> contains no hashes".to_owned(),
+        ));
+    }
+
+    Ok(MetalinkChunkChecksum {
+        algorithm,
+        chunk_length,
+        hashes,
+    })
+}
+
+fn validate_hash_value(algorithm: &str, hash: &str) -> Result<(), DownloadEngineError> {
+    let digest_length = compute_hash(algorithm, &[])?.len();
+    if hash.len() != digest_length || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DownloadEngineError::MetalinkError(format!(
+            "invalid {algorithm} checksum value"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_chunk_metadata(
+    size: Option<u64>,
+    checksums: &[MetalinkChunkChecksum],
+) -> Result<(), DownloadEngineError> {
+    let Some(first) = checksums.first() else {
+        return Ok(());
+    };
+    if checksums
+        .iter()
+        .any(|checksum| checksum.chunk_length != first.chunk_length)
+    {
+        return Err(DownloadEngineError::MetalinkError(
+            "Metalink chunk checksum algorithms use conflicting chunk lengths".to_owned(),
+        ));
+    }
+    if let Some(size) = size {
+        let expected_count = if size == 0 {
+            0
+        } else {
+            (size - 1) / first.chunk_length + 1
+        };
+        if expected_count > MAX_METALINK_CHUNK_HASHES as u64
+            || checksums
+                .iter()
+                .any(|checksum| checksum.hashes.len() as u64 != expected_count)
+        {
+            return Err(DownloadEngineError::MetalinkError(
+                "chunk hashes do not match the manifest file boundaries".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 // ── Path traversal guard ───────────────────────────────────────────────────────
@@ -850,6 +1021,261 @@ async fn verify_checksums(
     }
 
     Ok(())
+}
+
+async fn stage_verified_chunks(
+    path: &Path,
+    expected_size: Option<u64>,
+    checksums: &[MetalinkChunkChecksum],
+    chunk_dir: &Path,
+) -> Result<(), DownloadEngineError> {
+    let file_size = fs::metadata(path)
+        .await
+        .map_err(DownloadEngineError::Io)?
+        .len();
+    if let Some(expected_size) = expected_size.filter(|expected| *expected != file_size) {
+        return Err(DownloadEngineError::MetalinkError(format!(
+            "downloaded file size {file_size} does not match manifest size {expected_size}"
+        )));
+    }
+
+    let first = checksums.first().ok_or_else(|| {
+        DownloadEngineError::MetalinkError("no chunk checksum metadata".to_owned())
+    })?;
+    if checksums
+        .iter()
+        .any(|checksum| checksum.chunk_length != first.chunk_length)
+    {
+        return Err(DownloadEngineError::MetalinkError(
+            "Metalink chunk checksum algorithms use conflicting chunk lengths".to_owned(),
+        ));
+    }
+
+    let chunk_count = if file_size == 0 {
+        0
+    } else {
+        (file_size - 1) / first.chunk_length + 1
+    };
+    if chunk_count > MAX_METALINK_CHUNK_HASHES as u64
+        || checksums
+            .iter()
+            .any(|checksum| usize::try_from(chunk_count).ok() != Some(checksum.hashes.len()))
+    {
+        return Err(DownloadEngineError::MetalinkError(
+            "chunk hashes do not match the downloaded file boundaries".to_owned(),
+        ));
+    }
+
+    let mut first_mismatch = None;
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    for index in 0..chunk_count {
+        let piece_path = chunk_dir.join(format!("{index:08}.piece"));
+        match fs::metadata(&piece_path).await {
+            Ok(metadata) if metadata.is_file() => continue,
+            Ok(_) => {
+                return Err(DownloadEngineError::MetalinkError(
+                    "verified chunk path is not a regular file".to_owned(),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+
+        let offset = index.checked_mul(first.chunk_length).ok_or_else(|| {
+            DownloadEngineError::MetalinkError("chunk checksum offset overflow".to_owned())
+        })?;
+        let chunk_size = (file_size - offset).min(first.chunk_length);
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let mut hashers = checksums
+            .iter()
+            .map(|checksum| new_chunk_hasher(&checksum.algorithm))
+            .collect::<Result<Vec<_>, _>>()?;
+        let attempt_path = piece_path.with_extension("attempt");
+        let mut attempt = fs::File::create(&attempt_path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let mut remaining = chunk_size;
+        let mut buffer = [0_u8; 16 * 1024];
+        while remaining > 0 {
+            let read_limit =
+                usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+            let read = file
+                .read(&mut buffer[..read_limit])
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            if read == 0 {
+                let _ = fs::remove_file(&attempt_path).await;
+                return Err(DownloadEngineError::MetalinkError(
+                    "downloaded file ended inside a checksummed chunk".to_owned(),
+                ));
+            }
+            for hasher in &mut hashers {
+                hasher.update(&buffer[..read]);
+            }
+            attempt
+                .write_all(&buffer[..read])
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            remaining -= read as u64;
+        }
+        attempt.flush().await.map_err(DownloadEngineError::Io)?;
+        drop(attempt);
+
+        let mut mismatch = None;
+        for (checksum, hasher) in checksums.iter().zip(hashers) {
+            let actual = hex::encode(hasher.finalize());
+            let expected = &checksum.hashes[index as usize];
+            if actual != *expected {
+                mismatch = Some(DownloadEngineError::MetalinkChunkChecksumMismatch {
+                    algorithm: checksum.algorithm.clone(),
+                    chunk_index: index as usize,
+                    expected: expected.clone(),
+                    actual,
+                });
+                break;
+            }
+        }
+        if let Some(error) = mismatch {
+            let _ = fs::remove_file(&attempt_path).await;
+            if first_mismatch.is_none() {
+                first_mismatch = Some(error);
+            }
+        } else {
+            fs::rename(&attempt_path, &piece_path)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
+    }
+
+    let mut all_chunks_staged = true;
+    for index in 0..chunk_count {
+        match fs::metadata(chunk_dir.join(format!("{index:08}.piece"))).await {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => {
+                return Err(DownloadEngineError::MetalinkError(
+                    "verified chunk path is not a regular file".to_owned(),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                all_chunks_staged = false;
+                break;
+            }
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+    }
+    if !all_chunks_staged {
+        return Err(first_mismatch.unwrap_or_else(|| {
+            DownloadEngineError::MetalinkError(
+                "one or more checksummed chunks are unavailable from this mirror".to_owned(),
+            )
+        }));
+    }
+
+    Ok(())
+}
+
+async fn assemble_verified_chunks(
+    chunk_dir: &Path,
+    output_path: &Path,
+    checksum: &MetalinkChunkChecksum,
+) -> Result<PathBuf, DownloadEngineError> {
+    let mut output = fs::File::create(output_path)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    for index in 0..checksum.hashes.len() {
+        let mut piece = fs::File::open(chunk_dir.join(format!("{index:08}.piece")))
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        tokio::io::copy(&mut piece, &mut output)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+    }
+    output.flush().await.map_err(DownloadEngineError::Io)?;
+    Ok(output_path.to_path_buf())
+}
+
+async fn verify_chunk_checksums(
+    path: &Path,
+    expected_size: Option<u64>,
+    checksums: &[MetalinkChunkChecksum],
+) -> Result<(), DownloadEngineError> {
+    if checksums.is_empty() {
+        return Ok(());
+    }
+
+    let file_size = fs::metadata(path)
+        .await
+        .map_err(DownloadEngineError::Io)?
+        .len();
+    if let Some(expected_size) = expected_size.filter(|expected| *expected != file_size) {
+        return Err(DownloadEngineError::MetalinkError(format!(
+            "downloaded file size {file_size} does not match manifest size {expected_size}"
+        )));
+    }
+    validate_chunk_metadata(Some(file_size), checksums)?;
+
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    for checksum in checksums {
+        for (index, expected) in checksum.hashes.iter().enumerate() {
+            let offset = (index as u64)
+                .checked_mul(checksum.chunk_length)
+                .ok_or_else(|| {
+                    DownloadEngineError::MetalinkError("chunk checksum offset overflow".to_owned())
+                })?;
+            let chunk_size = (file_size - offset).min(checksum.chunk_length);
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            let mut hasher = new_chunk_hasher(&checksum.algorithm)?;
+            let mut remaining = chunk_size;
+            let mut buffer = [0_u8; 16 * 1024];
+            while remaining > 0 {
+                let read_limit =
+                    usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+                let read = file
+                    .read(&mut buffer[..read_limit])
+                    .await
+                    .map_err(DownloadEngineError::Io)?;
+                if read == 0 {
+                    return Err(DownloadEngineError::MetalinkError(
+                        "downloaded file ended inside a checksummed chunk".to_owned(),
+                    ));
+                }
+                hasher.update(&buffer[..read]);
+                remaining -= read as u64;
+            }
+            let actual = hex::encode(hasher.finalize());
+            if actual != *expected {
+                return Err(DownloadEngineError::MetalinkChunkChecksumMismatch {
+                    algorithm: checksum.algorithm.clone(),
+                    chunk_index: index,
+                    expected: expected.clone(),
+                    actual,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn new_chunk_hasher(
+    algorithm: &str,
+) -> Result<Box<dyn digest::DynDigest + Send>, DownloadEngineError> {
+    match algorithm {
+        "md5" => Ok(Box::new(Md5::new())),
+        "sha-1" | "sha1" => Ok(Box::new(Sha1::new())),
+        "sha-256" | "sha256" => Ok(Box::new(Sha256::new())),
+        "sha-512" | "sha512" => Ok(Box::new(Sha512::new())),
+        other => Err(DownloadEngineError::MetalinkError(format!(
+            "unsupported checksum algorithm '{other}'"
+        ))),
+    }
 }
 
 /// Computes the named hash of `data`, returning lowercase hex.
@@ -963,6 +1389,62 @@ mod tests {
     }
 
     #[test]
+    fn metalink_parse_chunk_hashes_in_v3_and_v4() {
+        let abc = compute_hash("sha-256", b"abc").unwrap();
+        let def = compute_hash("sha-256", b"def").unwrap();
+        let v4 = format!(
+            r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="chunks.bin">
+<pieces type="sha-256" length="3"><hash>{abc}</hash><hash>{def}</hash></pieces>
+</file></metalink>"#
+        );
+        let parsed = parse_metalink(&v4).unwrap();
+        assert_eq!(parsed[0].chunk_checksums.len(), 1);
+        assert_eq!(parsed[0].chunk_checksums[0].chunk_length, 3);
+        assert_eq!(
+            parsed[0].chunk_checksums[0].hashes,
+            [abc.clone(), def.clone()]
+        );
+
+        let v3 = format!(
+            r#"<metalink xmlns="http://www.metalinker.org/"><files><file name="chunks.bin">
+<verification><pieces type="sha-256" length="3"><hash>{abc}</hash><hash>{def}</hash></pieces></verification>
+</file></files></metalink>"#
+        );
+        let parsed = parse_metalink(&v3).unwrap();
+        assert_eq!(parsed[0].chunk_checksums.len(), 1);
+        assert_eq!(parsed[0].chunk_checksums[0].hashes, [abc, def]);
+    }
+
+    #[test]
+    fn metalink_rejects_malformed_chunk_hash_metadata() {
+        let invalid = [
+            r#"<pieces type="sha-256" length="0"><hash>00</hash></pieces>"#,
+            r#"<pieces type="sha-256" length="2"><hash>not-hex</hash></pieces>"#,
+            r#"<pieces type="blake3" length="2"><hash>00</hash></pieces>"#,
+            r#"<pieces type="sha-256" length="2"></pieces>"#,
+        ];
+        for pieces in invalid {
+            let xml = format!(
+                r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="x">{pieces}</file></metalink>"#
+            );
+            assert!(matches!(
+                parse_metalink(&xml),
+                Err(DownloadEngineError::MetalinkError(_))
+            ));
+        }
+
+        let boundary_mismatch = format!(
+            r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="x"><size>5</size>
+<pieces type="sha-256" length="3"><hash>{}</hash></pieces></file></metalink>"#,
+            compute_hash("sha-256", b"abc").unwrap()
+        );
+        assert!(matches!(
+            parse_metalink(&boundary_mismatch),
+            Err(DownloadEngineError::MetalinkError(_))
+        ));
+    }
+
+    #[test]
     fn metalink_malformed_xml() {
         let xml = read_fixture("malformed.xml");
         let result = parse_metalink(&xml);
@@ -1053,6 +1535,27 @@ mod tests {
             compute_hash("blake3", b"data"),
             Err(DownloadEngineError::MetalinkError(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn metalink_chunk_checksums_verify_all_supported_algorithms() -> Result<(), Box<dyn Error>>
+    {
+        let bytes = b"abcdefg";
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(file.path(), bytes)?;
+        for algorithm in ["md5", "sha-1", "sha-256", "sha-512"] {
+            let checksums = super::MetalinkChunkChecksum {
+                algorithm: algorithm.to_owned(),
+                chunk_length: 3,
+                hashes: [b"abc".as_slice(), b"def", b"g"]
+                    .into_iter()
+                    .map(|chunk| compute_hash(algorithm, chunk))
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            super::verify_chunk_checksums(file.path(), Some(bytes.len() as u64), &[checksums])
+                .await?;
+        }
+        Ok(())
     }
 
     // ── Engine integration tests ──────────────────────────────────────────────
@@ -1217,6 +1720,7 @@ mod tests {
 
         let body = b"hello".to_vec();
         let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let chunk_hash = compute_hash("sha-256", &body)?;
 
         let responses = vec![crate::tests::scripted_response(200, &[], &body)];
         let (url, server) = start_scripted_server(responses).await?;
@@ -1231,6 +1735,7 @@ mod tests {
   <file name="bad.bin">
     <size>5</size>
     <hash type="sha-256">{wrong_hash}</hash>
+    <pieces type="sha-256" length="5"><hash>{chunk_hash}</hash></pieces>
     <url priority="1">{url}</url>
   </file>
 </metalink>"#
@@ -1254,6 +1759,92 @@ mod tests {
             "expected MetalinkChecksumMismatch or MetalinkError, got: {result:?}"
         );
         server.await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metalink_corrupt_chunk_retries_next_mirror() -> Result<(), Box<dyn Error>> {
+        use crate::tests::{scripted_response, start_scripted_server};
+
+        let expected = b"abcdefgh";
+        let corrupt = b"abcdEFgh";
+        let chunk_hashes = expected
+            .chunks(4)
+            .map(|chunk| compute_hash("sha-256", chunk))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (bad_url, bad_server) =
+            start_scripted_server(vec![scripted_response(200, &[], corrupt)]).await?;
+        let (good_url, good_server) =
+            start_scripted_server(vec![scripted_response(200, &[], expected)]).await?;
+
+        let db = Database::connect("sqlite::memory:").await?;
+        let (engine, _) = make_engine(&db).await;
+        let dir = tempfile::tempdir()?;
+        let manifest = format!(
+            r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="chunked.bin">
+<size>8</size><pieces type="sha-256" length="4">
+<hash>{}</hash><hash>{}</hash></pieces>
+<url priority="1">{bad_url}</url><url priority="2">{good_url}</url>
+</file></metalink>"#,
+            chunk_hashes[0], chunk_hashes[1]
+        );
+        let manifest_path = dir.path().join("chunks.meta4");
+        std::fs::write(&manifest_path, manifest)?;
+        let destination = dir.path().join("chunked.bin");
+        let item = make_metalink_item(&manifest_path, &destination)?;
+        let id = item.id();
+        db.downloads().create(&item).await?;
+
+        let (_cancel_tx, cancellation) = watch::channel(false);
+        let result = DownloadEngine::download(&engine, id, cancellation).await;
+        assert!(result.is_ok(), "expected mirror retry, got {result:?}");
+        assert_eq!(std::fs::read(destination)?, expected);
+        bad_server.await?;
+        good_server.await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metalink_chunk_mismatch_preserves_existing_destination() -> Result<(), Box<dyn Error>>
+    {
+        use crate::tests::{scripted_response, start_scripted_server};
+
+        let expected = b"expected";
+        let corrupt = b"corrupt!";
+        let expected_hash = compute_hash("sha-256", expected)?;
+        let (url1, server1) =
+            start_scripted_server(vec![scripted_response(200, &[], corrupt)]).await?;
+        let (url2, server2) =
+            start_scripted_server(vec![scripted_response(200, &[], corrupt)]).await?;
+
+        let db = Database::connect("sqlite::memory:").await?;
+        let (engine, _) = make_engine(&db).await;
+        let dir = tempfile::tempdir()?;
+        let manifest = format!(
+            r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="chunked.bin">
+<size>8</size><pieces type="sha-256" length="8"><hash>{expected_hash}</hash></pieces>
+<url priority="1">{url1}</url><url priority="2">{url2}</url></file></metalink>"#
+        );
+        let manifest_path = dir.path().join("chunks.meta4");
+        std::fs::write(&manifest_path, manifest)?;
+        let destination = dir.path().join("chunked.bin");
+        std::fs::write(&destination, b"preserve")?;
+        let item = make_metalink_item(&manifest_path, &destination)?;
+        let id = item.id();
+        db.downloads().create(&item).await?;
+
+        let (_cancel_tx, cancellation) = watch::channel(false);
+        let result = DownloadEngine::download(&engine, id, cancellation).await;
+        assert!(
+            matches!(
+                result,
+                Err(DownloadEngineError::MetalinkChunkChecksumMismatch { .. })
+            ),
+            "expected chunk checksum mismatch, got {result:?}"
+        );
+        assert_eq!(std::fs::read(destination)?, b"preserve");
+        server1.await?;
+        server2.await?;
         Ok(())
     }
 
@@ -1365,19 +1956,26 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn metalink_cancel() -> Result<(), Box<dyn Error>> {
-        // Create a manifest pointing to a non-existent URL; cancel immediately.
+        use crate::tests::{scripted_response, start_scripted_server};
+
+        let body = b"hello";
+        let hash = compute_hash("sha-256", body)?;
+        let (url, server) = start_scripted_server(vec![scripted_response(200, &[], body)]).await?;
         let db = Database::connect("sqlite::memory:").await?;
         let (engine, _) = make_engine(&db).await;
         let dir = tempfile::tempdir()?;
 
-        let manifest = r#"<?xml version="1.0"?>
+        let manifest = format!(
+            r#"<?xml version="1.0"?>
 <metalink xmlns="urn:ietf:params:xml:ns:metalink">
   <file name="cancel.bin">
     <size>5</size>
-    <hash type="sha-256">2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824</hash>
-    <url priority="1">http://127.0.0.1:1/cancel.bin</url>
+    <hash type="sha-256">{hash}</hash>
+    <pieces type="sha-256" length="5"><hash>{hash}</hash></pieces>
+    <url priority="1">{url}</url>
   </file>
-</metalink>"#;
+</metalink>"#
+        );
         let manifest_path = dir.path().join("cancel.meta4");
         std::fs::write(&manifest_path, manifest)?;
 
@@ -1403,6 +2001,12 @@ mod tests {
             matches!(result, Err(DownloadEngineError::Cancelled)),
             "expected Cancelled, got: {result:?}"
         );
+        assert!(!dest.exists(), "cancelled download must not publish output");
+        let (_cancel_tx, cancellation) = watch::channel(false);
+        let resumed = DownloadEngine::download(&engine, id, cancellation).await;
+        assert!(resumed.is_ok(), "expected clean restart, got {resumed:?}");
+        assert_eq!(std::fs::read(dest)?, body);
+        server.await?;
         Ok(())
     }
 }
