@@ -101,9 +101,11 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
         RemoteCommand::WebSocketTicket => Permission::EventsRead,
         RemoteCommand::EngineRuntimeStatus => Permission::EngineRead,
         RemoteCommand::DownloadGet(_)
+        | RemoteCommand::DownloadTorrentMetadata(_)
         | RemoteCommand::DownloadList
         | RemoteCommand::DownloadRuntimeStatus
         | RemoteCommand::DownloadFindDuplicate(_) => Permission::DownloadsRead,
+        RemoteCommand::DownloadSelectTorrentFiles { .. } => Permission::DownloadsControl,
         RemoteCommand::DownloadCreate(_) => Permission::DownloadsCreate,
         RemoteCommand::DownloadPause(_)
         | RemoteCommand::DownloadResume(_)
@@ -145,6 +147,18 @@ mod tests {
                 Permission::DownloadsCreate,
             ),
             (RemoteCommand::DownloadGet(id), Permission::DownloadsRead),
+            (
+                RemoteCommand::DownloadTorrentMetadata(id),
+                Permission::DownloadsRead,
+            ),
+            (
+                RemoteCommand::DownloadSelectTorrentFiles {
+                    id,
+                    info_hash: "0123456789012345678901234567890123456789".to_owned(),
+                    selected_file_indexes: vec![0],
+                },
+                Permission::DownloadsControl,
+            ),
             (RemoteCommand::DownloadList, Permission::DownloadsRead),
             (
                 RemoteCommand::DownloadPause(id),
@@ -205,7 +219,7 @@ mod tests {
 
     #[test]
     fn every_protocol_command_has_an_explicit_permission() {
-        assert_eq!(commands().len(), 18);
+        assert_eq!(commands().len(), 20);
         for (command, expected) in commands() {
             assert_eq!(required_permission(&command), expected);
         }

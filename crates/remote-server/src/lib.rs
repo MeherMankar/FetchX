@@ -152,6 +152,19 @@ mod local_rpc_tests {
         .await?;
         assert_eq!(unsupported["error"]["code"], -32601);
 
+        let browser_torrent_metadata = dispatch_local_rpc(
+            &services,
+            br#"{"jsonrpc":"2.0","id":5,"method":"download.torrentMetadata","params":{"id":"00000000-0000-4000-8000-000000000000"}}"#,
+        )
+        .await?;
+        assert_eq!(browser_torrent_metadata["error"]["code"], -32601);
+        let browser_torrent_selection = dispatch_local_rpc(
+            &services,
+            br#"{"jsonrpc":"2.0","id":6,"method":"download.selectTorrentFiles","params":{"id":"00000000-0000-4000-8000-000000000000","info_hash":"0123456789012345678901234567890123456789","selected_file_indexes":[0]}}"#,
+        )
+        .await?;
+        assert_eq!(browser_torrent_selection["error"]["code"], -32601);
+
         let notification = dispatch_local_rpc(
             &services,
             br#"{"jsonrpc":"2.0","method":"download.create","params":{"url":"https://example.test/file.zip"}}"#,

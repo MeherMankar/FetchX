@@ -13,6 +13,7 @@ import {
   type RemoteDownload,
   type RemoteEvent,
 } from "./protocol";
+import { TorrentSelectionPanel } from "./TorrentSelectionPanel";
 
 type Section =
   | "dashboard"
@@ -24,6 +25,8 @@ type Section =
   | "devices"
   | "plugins"
   | "system";
+
+type TorrentEngineChoice = "automatic" | "aria2" | "native_torrent";
 
 const navigation: Array<{ id: Section; label: string; icon: string }> = [
   { id: "dashboard", label: "Dashboard", icon: "⌂" },
@@ -87,6 +90,7 @@ export function App() {
   const [search, setSearch] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [priority, setPriority] = useState<DownloadPriority>("normal");
+  const [torrentEngine, setTorrentEngine] = useState<TorrentEngineChoice>("automatic");
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -352,6 +356,8 @@ export function App() {
       const created = await client.call<CreateResult>("download.create", {
         url: newUrl.trim(),
         priority,
+        ...(newUrl.trim().toLowerCase().startsWith("magnet:")
+          && torrentEngine !== "automatic" ? { engine: torrentEngine } : {}),
       });
       setNewUrl("");
       await refreshDownloads(client);
@@ -361,7 +367,7 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, capabilities, client, handleError, newUrl, priority, refreshDownloads]);
+  }, [busy, capabilities, client, handleError, newUrl, priority, refreshDownloads, torrentEngine]);
 
   const refreshNow = useCallback(async () => {
     if (!client || refreshing) return;
@@ -525,10 +531,14 @@ export function App() {
               onNewUrl={setNewUrl}
               priority={priority}
               onPriority={setPriority}
+              torrentEngine={torrentEngine}
+              onTorrentEngine={setTorrentEngine}
               onAdd={(event) => void addDownload(event)}
               onAction={(download, action) => void operate(download, action)}
               onPriorityChange={(download, value) => void changePriority(download, value)}
               onQueueMove={(download, direction) => void moveInQueue(download, direction)}
+              client={client}
+              onRefreshDownloads={() => void refreshDownloads(client).catch(handleError)}
               busy={busy}
               capabilities={capabilities}
             />
@@ -674,6 +684,7 @@ function Dashboard(props: {
 }
 
 function DownloadsView(props: {
+  client: RemoteClient;
   downloads: RemoteDownload[];
   allDownloads: RemoteDownload[];
   search: string;
@@ -682,14 +693,24 @@ function DownloadsView(props: {
   onNewUrl: (value: string) => void;
   priority: DownloadPriority;
   onPriority: (value: DownloadPriority) => void;
+  torrentEngine: TorrentEngineChoice;
+  onTorrentEngine: (value: TorrentEngineChoice) => void;
   onAdd: (event: FormEvent<HTMLFormElement>) => void;
   onAction: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
   onPriorityChange: (download: RemoteDownload, value: DownloadPriority) => void;
   onQueueMove: (download: RemoteDownload, direction: "up" | "down") => void;
+  onRefreshDownloads: () => void;
   busy: boolean;
   capabilities: Set<string>;
 }) {
+  const [detailsId, setDetailsId] = useState<string | null>(null);
   const canCreate = props.capabilities.has("download.create");
+  const isMagnet = props.newUrl.trim().toLowerCase().startsWith("magnet:");
+  const waitingForSelection = props.downloads.find((download) =>
+    download.engine === "native_torrent" && download.status === "metadata_acquiring"
+  );
+  const detailsDownload = props.downloads.find((download) => download.id === detailsId)
+    ?? waitingForSelection;
   return (
     <div className="page-stack">
       <section className="panel add-panel">
@@ -719,6 +740,18 @@ function DownloadsView(props: {
             <option value="normal">Normal priority</option>
             <option value="high">High priority</option>
           </select>
+          {isMagnet && (
+            <select
+              aria-label="Torrent engine"
+              value={props.torrentEngine}
+              onChange={(event) => props.onTorrentEngine(event.target.value as TorrentEngineChoice)}
+              disabled={!canCreate || props.busy}
+            >
+              <option value="automatic">Automatic (server default)</option>
+              <option value="aria2">aria2</option>
+              <option value="native_torrent">Native torrent</option>
+            </select>
+          )}
           <button className="primary-button" type="submit" disabled={!canCreate || props.busy}>
             {props.busy ? "Sending…" : "Add download"}
           </button>
@@ -739,6 +772,7 @@ function DownloadsView(props: {
             onAction={props.onAction}
             onPriorityChange={props.onPriorityChange}
             onQueueMove={props.onQueueMove}
+            onTorrentDetails={(download) => setDetailsId((id) => id === download.id ? null : download.id)}
             busy={props.busy}
             canControl={props.capabilities.has("download.pause") && props.capabilities.has("download.resume")}
             canCancel={props.capabilities.has("download.cancel")}
@@ -747,6 +781,15 @@ function DownloadsView(props: {
             canMoveQueue={props.capabilities.has("queue.moveUp") && props.capabilities.has("queue.moveDown")}
           />
           : <EmptyState title={props.search ? "No matching downloads" : "No downloads yet"} detail={props.search ? "Try a different search." : "Add a URL or magnet URI above to start."} />}
+        {detailsDownload && (
+          <TorrentSelectionPanel
+            client={props.client}
+            download={detailsDownload}
+            capabilities={props.capabilities}
+            busy={props.busy}
+            onConfirmed={props.onRefreshDownloads}
+          />
+        )}
       </section>
     </div>
   );
@@ -875,6 +918,7 @@ function DownloadTable(props: {
   onAction?: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
   onPriorityChange?: (download: RemoteDownload, value: DownloadPriority) => void;
   onQueueMove?: (download: RemoteDownload, direction: "up" | "down") => void;
+  onTorrentDetails?: (download: RemoteDownload) => void;
   busy?: boolean;
   canControl?: boolean;
   canCancel?: boolean;
@@ -943,6 +987,9 @@ function DownloadTable(props: {
                     <div className="row-actions">
                       {props.onAction && props.canControl && canPause && <button disabled={props.busy} onClick={() => props.onAction?.(download, "pause")}>Pause</button>}
                       {props.onAction && props.canControl && canResume && <button disabled={props.busy} onClick={() => props.onAction?.(download, "resume")}>Resume</button>}
+                      {props.onTorrentDetails && download.engine === "native_torrent" && (
+                        <button disabled={props.busy} onClick={() => props.onTorrentDetails?.(download)}>Files</button>
+                      )}
                       {props.onQueueMove && props.canMoveQueue && download.status === "queued" && <>
                         <button disabled={props.busy} aria-label={`Move ${download.filename} earlier in queue`} onClick={() => props.onQueueMove?.(download, "up")}>↑</button>
                         <button disabled={props.busy} aria-label={`Move ${download.filename} later in queue`} onClick={() => props.onQueueMove?.(download, "down")}>↓</button>

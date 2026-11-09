@@ -67,6 +67,40 @@ describe("RemoteClient", () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
+  it("sends native torrent metadata and selection calls using the advertised RPC methods", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { id: string; method: string; params: unknown };
+      return Response.json({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: request.method === "download.torrentMetadata"
+          ? { metadata_state: "ready", files: [] }
+          : { selection_confirmed: true },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new RemoteClient("http://127.0.0.1:39800", fakeToken, vi.fn());
+
+    await client.call("download.torrentMetadata", { id: "download-id" });
+    await client.call("download.selectTorrentFiles", {
+      id: "download-id",
+      info_hash: "0123456789012345678901234567890123456789",
+      selected_file_indexes: [1, 3],
+    });
+    expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body))))
+      .toMatchObject([
+        { method: "download.torrentMetadata", params: { id: "download-id" } },
+        {
+          method: "download.selectTorrentFiles",
+          params: {
+            id: "download-id",
+            info_hash: "0123456789012345678901234567890123456789",
+            selected_file_indexes: [1, 3],
+          },
+        },
+      ]);
+  });
+
   it("uses a one-use ticket in the browser WebSocket URL", async () => {
     let connectedUrl = "";
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

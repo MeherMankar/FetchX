@@ -57,7 +57,7 @@ The implementation reuses `crates/downloader` (`DirectHttpEngine`, `Aria2Engine`
 | Android | Native magnet metadata polling and file selection are exposed through the existing bridge/UI when the shared core routes the magnet to native torrent (including the existing fallback); there is no explicit Android engine chooser. Host tests exist; no device run was performed. |
 | Desktop | Tauri exposes metadata lookup and file-selection commands; the DetailPanel now recognizes `native_torrent` jobs and presents its selection flow. aria2 settings/helper management remain. UI/build checks are reported below. |
 | CLI | Explicit `--engine native-torrent` magnet admission can be followed by torrent metadata inspection and file selection; the default remains aria2. |
-| Remote server | Explicit native or aria2 magnet admission is honored, but no remote torrent metadata/selection operation exists. Native remote magnets cannot be user-confirmed and remain unsupported beyond admission; no universal integration claim is made. |
+| Remote server | Authenticated `download.torrentMetadata` (`DownloadsRead`) and `download.selectTorrentFiles` (`DownloadsControl`) operations expose safe metadata and explicit selection confirmation for native magnets. Both are advertised through discovery, omitted from the restricted browser/native-host allowlist, and capability-gated in the remote UI for older servers. |
 | Browser/native host | No protocol or RPC contract change; no new native engine-selection UI was added. |
 | Existing data/settings | Preserved. There is no migration away from aria2 GIDs or aria2-specific configuration, and no existing download is rewritten. |
 
@@ -81,7 +81,18 @@ The controlled integration test uses a synthetic, non-private multi-file torrent
 
 The restart test is an engine/session recreation with the same destination, not a process-kill/device restart test; it does not assert exact piece reuse before new peer data arrives. Peer interruption/retry is covered by controlled seeder removal and restoration, not by an actual network failure or arbitrary retry policy. Destination collision behavior, Android process recovery, adapter runtime consistency, and long-term seeding lifecycle are not covered by this fixture. Synthetic private torrents are not used for magnet metadata exchange because this librqbit test setup rejects their `ut_metadata` requests; the non-private fixture is still private to the test because only a loopback peer is supplied and discovery is disabled.
 
-Adapter support is deliberately bounded: Android can inspect/poll and confirm a selection for native magnets when the existing routing chooses the native engine (no Android backend chooser); desktop exposes Tauri metadata and selection calls and now displays selection for `native_torrent`; CLI can inspect/select after explicit native admission. The remote server can admit a native magnet but exposes no metadata or selection API, so remote native magnet selection is not integrated. No global default, aria2 setting, packaging, RPC, or persisted-download behavior changed.
+Adapter support is deliberately bounded: Android can inspect/poll and confirm a selection for native magnets when the existing routing chooses the native engine (no Android backend chooser); desktop exposes Tauri metadata and selection calls and displays selection for `native_torrent`; CLI can inspect/select after explicit native admission; the remote server/UI now expose authenticated metadata and selection calls, as detailed in Prompt 20 below. No global default, aria2 setting, packaging, or persisted-download behavior changed.
+
+## Prompt 20 — remote native magnet metadata and selection
+
+The authenticated remote JSON-RPC contract adds:
+
+- `download.torrentMetadata` — read-only metadata projection for a native magnet. It returns the download ID/state, info hash, name, indexed file paths/sizes, and persisted selection state. It excludes the magnet URI, tracker URLs, and destination path.
+- `download.selectTorrentFiles` — explicit selection confirmation using download ID, displayed info hash, and file indexes. It routes through CoreServices, which revalidates the pending native-magnet state, info hash, and non-empty unique in-range indexes before persisting the confirmed selection. It does not start a separate remote transfer manager.
+
+Authorization maps metadata reads to `DownloadsRead` and selection mutation to `DownloadsControl` (operator/admin). Errors are typed and sanitized: missing downloads are not-found, malformed/empty input is invalid-params, and premature/stale confirmation is conflict. Discovery advertises both calls. They are intentionally not added to the restricted browser/native-host method allowlist. The remote Downloads detail surface polls while metadata is pending, lists selectable files when ready, confirms selected indexes, displays acquisition/confirmation/stale/failure/unavailable states, and checks server-advertised capabilities before calling either operation. Older servers continue to work; unsupported selection is shown as unavailable rather than calling an unknown method. The magnet-add engine selector is optional and defaults to automatic/server default, preserving prior routing.
+
+This makes remote selection available alongside Android's native fallback, desktop Tauri/UI, and CLI's explicit native admission. It does not alter global engine defaults, aria2 compatibility, stored download records, or schema. Automated RPC/CoreServices/UI tests and a UI production build are the validation boundary; no live remote server, device, or remote network runtime was tested. Exact post-change results are listed under Prompt 20 validation below.
 
 ## Tests and validation
 
@@ -109,6 +120,18 @@ These are compilation and automated test results, including a real transfer betw
 
 The Android bridge was covered by its Rust tests in the multi-package command; no Android Kotlin/Gradle device test was run because no Android source changed. No remote native-selection behavior was tested because the remote metadata/selection API does not exist. No device, process-kill, packaged desktop, public swarm, or live aria2 daemon validation was performed. `git diff --check` is run as a final worktree check.
 
+### Prompt 20 validation
+
+- `cargo fmt --all` — passed; `cargo fmt --all -- --check` — passed after formatting.
+- `cargo clippy -j 1 --all-targets -p fetchx-remote-protocol -p fetchx-core-services -p fetchx-remote-server` — passed without warnings after applying the `ok_or` simplification in the CoreServices selection path.
+- `cargo test -j 1 -p fetchx-remote-protocol -p fetchx-core-services -p fetchx-remote-server` — passed: CoreServices 35 unit tests plus 2 integration tests, remote protocol 11 unit tests, remote server 21 unit tests plus 3 integration tests, and the CoreServices doctest. No failures; 4 live extraction tests were ignored.
+- `cargo test -j 1 -p fetchx-downloader native_magnet -- --nocapture` — passed: 3 native magnet tests, including the controlled-loopback metadata, selection, selected-only transfer, pause/recovery/interruption/retry/cancellation lifecycle case and metadata cleanup cases.
+- `npm test` in `apps\remote-ui` — passed: 2 test files, 9 tests.
+- `npm run build` in `apps\remote-ui` — passed TypeScript checking and Vite production build.
+- `git diff --check` — passed. Git emitted only line-ending normalization warnings for Rust files.
+
+These are automated unit/integration tests and a local controlled-peer test. No live remote network/server, Android device, or packaged desktop runtime was tested. The UI was not connected to an older or current live server; compatibility is covered by capability-gated behavior and UI/protocol tests.
+
 ## Migration phases still outstanding
 
 1. **Phase A — coverage and acceptance**: retain this table as the baseline; strengthen exact piece-reuse and process-restart tests, and validate destination collision behavior before changing defaults.
@@ -116,4 +139,4 @@ The Android bridge was covered by its Rust tests in the multi-package command; n
 3. **Phase C — adapters**: migrate each adapter only after its explicit selection, fallback, settings, and backward-compatibility behavior is tested. Do not silently change the current default.
 4. **Phase D — removal**: remove aria2 RPC, process supervision, helper packaging, and settings only after native acceptance tests cover existing downloads, recovery, controls, diagnostics, and every supported target.
 
-**Status:** aria2 is partially supplemented by native Rust, not fully replaced. The next recommended slice is native magnet metadata/file selection, with a deterministic lifecycle test before any adapter default changes.
+**Status:** aria2 is partially supplemented by native Rust, not fully replaced. Remote magnet metadata/selection is now implemented through the authenticated JSON-RPC/UI boundary; the next slice is runtime compatibility/recovery validation, especially exact partial-piece reuse, process/device recovery, collision behavior, and live old/new remote-server compatibility before any default change.

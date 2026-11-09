@@ -68,6 +68,23 @@ export interface RemoteDownload {
   updated_at: number;
 }
 
+export interface RemoteTorrentFile {
+  index: number;
+  path: string[];
+  size: number;
+}
+
+export interface RemoteNativeMagnetMetadata {
+  id: string;
+  metadata_state: string;
+  info_hash: string;
+  name: string | null;
+  files: RemoteTorrentFile[];
+  selected_file_indexes: number[];
+  selected_total_bytes: number;
+  selection_confirmed: boolean;
+}
+
 export interface RemoteDuplicateDownloadMatch {
   id: string;
   filename: string;
@@ -126,6 +143,8 @@ export type RemoteMethod =
   | "download.create"
   | "download.get"
   | "download.list"
+  | "download.torrentMetadata"
+  | "download.selectTorrentFiles"
   | "download.runtimeStatus"
   | "download.findDuplicate"
   | "download.pause"

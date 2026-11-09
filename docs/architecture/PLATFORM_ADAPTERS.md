@@ -72,7 +72,7 @@ Maintenance commands must not start incompatible live runtime services while ope
 
 The remote server constructs shared services and exposes only JSON-RPC operations advertised by discovery. It owns authentication, role authorization, TLS, CORS, WebSocket ticket exchange, and listener binding.
 
-The remote UI owns presentation and protocol rendering only. It must remain a protocol client and not contain SQLite, engine, queue, or filesystem logic.
+The remote UI owns presentation and protocol rendering only. It must remain a protocol client and not contain SQLite, engine, queue, or filesystem logic. Native magnet metadata and file confirmation use capability-gated `download.torrentMetadata` and `download.selectTorrentFiles` calls. Read-only roles can inspect metadata; operator/admin roles can confirm a selection. The new mutation is intentionally excluded from the restricted browser/native-host RPC allowlist.
 
 ## Browser extension/native host
 

@@ -12,7 +12,8 @@ use fetchx_queue::QueueError;
 use fetchx_remote_protocol::{
     CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_GET,
     DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
-    DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY, DOWNLOAD_SET_SPEED_LIMIT, DownloadCreateParams,
+    DOWNLOAD_SELECT_TORRENT_FILES, DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY,
+    DOWNLOAD_SET_SPEED_LIMIT, DOWNLOAD_TORRENT_METADATA, DownloadCreateParams,
     ENGINE_RUNTIME_STATUS, EngineRuntimeState, EngineRuntimeStatusEntry, EngineRuntimeStatusResult,
     JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo, QUEUE_MOVE_DOWN,
     QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RemoteCommand, RpcErrorCode,
@@ -25,7 +26,7 @@ use tracing::warn;
 use crate::authorization::{AuthenticatedPrincipal, required_permission};
 use crate::tickets::WebSocketTickets;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct RpcError {
     code: RpcErrorCode,
     message: &'static str,
@@ -163,6 +164,38 @@ pub(crate) async fn dispatch(
                 .ok_or_else(not_found)?;
             safe_download(&item)
         }
+        RemoteCommand::DownloadTorrentMetadata(id) => {
+            let metadata = services
+                .native_magnet_metadata(id)
+                .await
+                .map_err(map_torrent_metadata_error)?
+                .ok_or_else(not_found)?;
+            json!({
+                "id": id,
+                "metadata_state": metadata.metadata_state,
+                "info_hash": metadata.info_hash,
+                "name": metadata.name,
+                "files": metadata.files.iter().map(|file| json!({
+                    "index": file.index,
+                    "path": file.path,
+                    "size": file.size,
+                })).collect::<Vec<_>>(),
+                "selected_file_indexes": metadata.selected_file_indexes,
+                "selected_total_bytes": metadata.selected_total_bytes,
+                "selection_confirmed": metadata.selection_confirmed,
+            })
+        }
+        RemoteCommand::DownloadSelectTorrentFiles {
+            id,
+            info_hash,
+            selected_file_indexes,
+        } => {
+            services
+                .select_native_magnet_files(id, &info_hash, selected_file_indexes)
+                .await
+                .map_err(map_torrent_metadata_error)?;
+            json!({ "id": id, "selection_confirmed": true })
+        }
         RemoteCommand::DownloadList => {
             let items = services
                 .repository
@@ -262,6 +295,8 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         DOWNLOAD_CREATE,
         DOWNLOAD_GET,
         DOWNLOAD_LIST,
+        DOWNLOAD_TORRENT_METADATA,
+        DOWNLOAD_SELECT_TORRENT_FILES,
         DOWNLOAD_RUNTIME_STATUS,
         DOWNLOAD_FIND_DUPLICATE,
         DOWNLOAD_PAUSE,
@@ -461,6 +496,29 @@ fn map_core_error(error: CoreServicesError) -> RpcError {
     }
 }
 
+fn map_torrent_metadata_error(error: CoreServicesError) -> RpcError {
+    match error {
+        CoreServicesError::TorrentDownloadNotFound => not_found(),
+        CoreServicesError::StaleTorrentMetadata | CoreServicesError::TorrentSelectionConflict => {
+            RpcError::new(
+                RpcErrorCode::Conflict,
+                "torrent metadata or selection state changed; refresh and try again",
+            )
+        }
+        CoreServicesError::InvalidTorrent(_) => RpcError::new(
+            RpcErrorCode::InvalidParams,
+            "invalid torrent metadata request",
+        ),
+        other => {
+            warn!(%other, "remote torrent metadata operation failed");
+            RpcError::new(
+                RpcErrorCode::ServiceUnavailable,
+                "torrent metadata operation failed",
+            )
+        }
+    }
+}
+
 fn not_found() -> RpcError {
     RpcError::new(RpcErrorCode::NotFound, "download not found")
 }
@@ -476,7 +534,188 @@ fn unsupported(method: &'static str) -> RpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fetchx_models::{DownloadProgress, DownloadStatus};
+    use crate::authorization::{AuthenticatedPrincipal, Role};
+    use fetchx_core_services::{CoreServices, CoreServicesConfig};
+    use fetchx_models::{
+        DownloadProgress, DownloadSource, DownloadStatus, FileName, TorrentFile, TorrentMetadata,
+    };
+    use fetchx_remote_protocol::{DOWNLOAD_SELECT_TORRENT_FILES, DOWNLOAD_TORRENT_METADATA};
+    use fetchx_storage::{
+        DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
+        TorrentSourceType,
+    };
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn native_magnet_rpc_is_authorized_sanitized_and_persists_selection()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let services = CoreServices::start(CoreServicesConfig {
+            database_path: directory.path().join("fetchx.db"),
+            downloads_dir: directory.path().join("downloads"),
+            runtime_dir: directory.path().join("runtime"),
+            bundled_engines_dir: None,
+            defer_queued_on_start: false,
+        })
+        .await?;
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let info_hash = "0123456789abcdef0123456789abcdef01234567";
+        let magnet = format!("magnet:?xt=urn:btih:{info_hash}&dn=bundle");
+        let item = DownloadItem::from_parts(
+            id,
+            DownloadSource::new(&magnet, EngineKind::NativeTorrent)?,
+            FileName::new("bundle")?,
+            directory.path().join("bundle"),
+            DownloadStatus::MetadataAcquiring,
+            DownloadPriority::default(),
+            DownloadProgress::new(0, None, None, None)?,
+            now,
+            now,
+            None,
+        )?;
+        services.repository.create(&item).await?;
+        let metadata = TorrentMetadata {
+            info_hash: info_hash.to_owned(),
+            name: "bundle".to_owned(),
+            total_size: 10,
+            files: vec![TorrentFile {
+                path: vec!["bundle".to_owned(), "selected.bin".to_owned()],
+                size: 10,
+            }],
+            trackers: vec!["https://secret.test/announce?token=hidden".to_owned()],
+            piece_length: 16_384,
+            piece_count: 1,
+        };
+        services
+            .database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet),
+                local_torrent_path: Some(directory.path().join("bundle.torrent")),
+                info_hash: info_hash.to_owned(),
+                torrent_name: metadata.name.clone(),
+                torrent_metadata: Some(metadata),
+                destination: item.destination().to_path_buf(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                selection_confirmed: false,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        let discovery = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::Operator),
+            fetchx_remote_protocol::parse_request(
+                br#"{"jsonrpc":"2.0","id":1,"method":"system.discover"}"#,
+            )?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect("discovery should succeed");
+        assert!(
+            discovery["capabilities"]
+                .as_array()
+                .is_some_and(|caps| caps.iter().any(|cap| cap == DOWNLOAD_TORRENT_METADATA))
+        );
+        assert!(
+            discovery["capabilities"].as_array().is_some_and(|caps| {
+                caps.iter().any(|cap| cap == DOWNLOAD_SELECT_TORRENT_FILES)
+            })
+        );
+
+        let metadata_request = format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"{DOWNLOAD_TORRENT_METADATA}","params":{{"id":"{id}"}}}}"#
+        );
+        let result = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::ReadOnly),
+            fetchx_remote_protocol::parse_request(metadata_request.as_bytes())?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect("metadata read should succeed");
+        assert_eq!(result["metadata_state"], "ready");
+        assert_eq!(result["files"][0]["index"], 0);
+        assert!(result["files"][0]["path"][1].as_str().is_some());
+        assert!(!result.to_string().contains("secret.test"));
+        assert!(!result.to_string().contains("token=hidden"));
+
+        let select_request = format!(
+            r#"{{"jsonrpc":"2.0","id":3,"method":"{DOWNLOAD_SELECT_TORRENT_FILES}","params":{{"id":"{id}","info_hash":"{info_hash}","selected_file_indexes":[0]}}}}"#
+        );
+        let denied = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::ReadOnly),
+            fetchx_remote_protocol::parse_request(select_request.as_bytes())?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect_err("read-only role must not confirm file selections");
+        assert_eq!(denied.code(), RpcErrorCode::Forbidden);
+
+        let empty_request = format!(
+            r#"{{"jsonrpc":"2.0","id":4,"method":"{DOWNLOAD_SELECT_TORRENT_FILES}","params":{{"id":"{id}","info_hash":"{info_hash}","selected_file_indexes":[]}}}}"#
+        );
+        let invalid = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::Operator),
+            fetchx_remote_protocol::parse_request(empty_request.as_bytes())?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect_err("empty selection must be rejected");
+        assert_eq!(invalid.code(), RpcErrorCode::InvalidParams);
+
+        let stale_request = format!(
+            r#"{{"jsonrpc":"2.0","id":5,"method":"{DOWNLOAD_SELECT_TORRENT_FILES}","params":{{"id":"{id}","info_hash":"abcdefabcdefabcdefabcdefabcdefabcdefabcd","selected_file_indexes":[0]}}}}"#
+        );
+        let stale = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::Operator),
+            fetchx_remote_protocol::parse_request(stale_request.as_bytes())?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect_err("stale metadata must require refresh");
+        assert_eq!(stale.code(), RpcErrorCode::Conflict);
+
+        let confirmed = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::Operator),
+            fetchx_remote_protocol::parse_request(select_request.as_bytes())?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect("confirmed selection should succeed");
+        assert_eq!(confirmed["selection_confirmed"], true);
+        let persisted = services
+            .torrent_download_metadata(id)
+            .await?
+            .ok_or("selection row is missing")?;
+        assert_eq!(persisted.selected_file_indexes, [0]);
+        assert!(persisted.selection_confirmed);
+
+        services.shutdown().await?;
+        Ok(())
+    }
 
     #[test]
     fn runtime_status_rpc_shape_includes_shared_progress_fields()

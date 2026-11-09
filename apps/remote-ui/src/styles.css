@@ -275,7 +275,7 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
 .system-link { margin-top: 13px; }
 
 .add-panel { padding-bottom: 18px; }
-.add-form { display: grid; grid-template-columns: minmax(180px, 1fr) 150px auto; gap: 9px; }
+.add-form { display: grid; grid-template-columns: minmax(180px, 1fr) 150px 180px auto; gap: 9px; }
 .add-form input { width: 100%; }
 .add-form select { width: 100%; }
 .capability-chip { display: inline-flex; align-items: center; width: fit-content; padding: 5px 8px; color: #5a6879; background: #f2f4f7; border-radius: 5px; font-size: 10px; }

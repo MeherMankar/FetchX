@@ -41,6 +41,8 @@ pub const ENGINE_RUNTIME_STATUS: &str = "engine.runtimeStatus";
 pub const DOWNLOAD_CREATE: &str = "download.create";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
+pub const DOWNLOAD_TORRENT_METADATA: &str = "download.torrentMetadata";
+pub const DOWNLOAD_SELECT_TORRENT_FILES: &str = "download.selectTorrentFiles";
 pub const DOWNLOAD_RUNTIME_STATUS: &str = "download.runtimeStatus";
 pub const DOWNLOAD_FIND_DUPLICATE: &str = "download.findDuplicate";
 pub const BROWSER_RPC_METHODS: &[&str] = &[
@@ -146,6 +148,12 @@ pub enum RemoteCommand {
     DownloadCreate(DownloadCreateParams),
     DownloadGet(DownloadId),
     DownloadList,
+    DownloadTorrentMetadata(DownloadId),
+    DownloadSelectTorrentFiles {
+        id: DownloadId,
+        info_hash: String,
+        selected_file_indexes: Vec<u32>,
+    },
     DownloadRuntimeStatus,
     DownloadFindDuplicate(DownloadUrlParams),
     DownloadPause(DownloadId),
@@ -193,6 +201,14 @@ pub struct DownloadCreateParams {
 #[serde(deny_unknown_fields)]
 pub struct DownloadIdParams {
     pub id: DownloadId,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadSelectTorrentFilesParams {
+    pub id: DownloadId,
+    pub info_hash: String,
+    pub selected_file_indexes: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -277,6 +293,8 @@ pub const CAPABILITIES: &[&str] = &[
     DOWNLOAD_CREATE,
     DOWNLOAD_GET,
     DOWNLOAD_LIST,
+    DOWNLOAD_TORRENT_METADATA,
+    DOWNLOAD_SELECT_TORRENT_FILES,
     DOWNLOAD_RUNTIME_STATUS,
     DOWNLOAD_FIND_DUPLICATE,
     DOWNLOAD_PAUSE,
@@ -464,6 +482,26 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
         DOWNLOAD_GET => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::DownloadGet(params.id)),
         DOWNLOAD_LIST => parse_empty_params(&request).map(|()| RemoteCommand::DownloadList),
+        DOWNLOAD_TORRENT_METADATA => parse_params::<DownloadIdParams>(&request)
+            .map(|params| RemoteCommand::DownloadTorrentMetadata(params.id)),
+        DOWNLOAD_SELECT_TORRENT_FILES => parse_params::<DownloadSelectTorrentFilesParams>(&request)
+            .and_then(|params| {
+                if params.info_hash.len() != 40
+                    || !params
+                        .info_hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    || params.selected_file_indexes.len() > 100_000
+                {
+                    Err(invalid_params(&request))
+                } else {
+                    Ok(RemoteCommand::DownloadSelectTorrentFiles {
+                        id: params.id,
+                        info_hash: params.info_hash,
+                        selected_file_indexes: params.selected_file_indexes,
+                    })
+                }
+            }),
         DOWNLOAD_RUNTIME_STATUS => {
             parse_empty_params(&request).map(|()| RemoteCommand::DownloadRuntimeStatus)
         }
@@ -617,6 +655,15 @@ mod tests {
     fn all_documented_download_operations_parse() -> Result<(), Box<dyn std::error::Error>> {
         let cases = [
             (DOWNLOAD_GET, serde_json::json!({ "id": ID })),
+            (DOWNLOAD_TORRENT_METADATA, serde_json::json!({ "id": ID })),
+            (
+                DOWNLOAD_SELECT_TORRENT_FILES,
+                serde_json::json!({
+                    "id": ID,
+                    "info_hash": "0123456789012345678901234567890123456789",
+                    "selected_file_indexes": [0, 2]
+                }),
+            ),
             (DOWNLOAD_PAUSE, serde_json::json!({ "id": ID })),
             (DOWNLOAD_RESUME, serde_json::json!({ "id": ID })),
             (DOWNLOAD_CANCEL, serde_json::json!({ "id": ID })),
@@ -672,6 +719,8 @@ mod tests {
             })
         );
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_RUNTIME_STATUS));
+        assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_TORRENT_METADATA));
+        assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_SELECT_TORRENT_FILES));
         assert!(!BROWSER_RPC_METHODS.contains(&ENGINE_RUNTIME_STATUS));
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_FIND_DUPLICATE));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_UP));
@@ -708,6 +757,34 @@ mod tests {
             parse_request(&encoded(&body)?),
             Err(ProtocolError::InvalidParams { .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn torrent_selection_rejects_malformed_hash_and_indexes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let invalid_hash = "g".repeat(40);
+        for (info_hash, selected_file_indexes) in [
+            ("bad", serde_json::json!([0])),
+            (invalid_hash.as_str(), serde_json::json!([0])),
+            (
+                "0123456789012345678901234567890123456789",
+                serde_json::json!([-1]),
+            ),
+        ] {
+            let body = request(
+                DOWNLOAD_SELECT_TORRENT_FILES,
+                Some(serde_json::json!({
+                    "id": ID,
+                    "info_hash": info_hash,
+                    "selected_file_indexes": selected_file_indexes
+                })),
+            );
+            assert!(matches!(
+                parse_request(&encoded(&body)?),
+                Err(ProtocolError::InvalidParams { .. })
+            ));
+        }
         Ok(())
     }
 
