@@ -42,6 +42,9 @@ use crate::{BandwidthControl, DownloadEngine, DownloadEngineError};
 
 const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
 const MAX_SEGMENT_ATTEMPTS: u8 = 4;
+const MAX_HTTP_SOURCE_URLS: usize = 16;
+const MAX_HTTP_SOURCE_URL_LENGTH: usize = 8192;
+const MAX_HTTP_SOURCE_SET_BYTES: u64 = 256 * 1024;
 
 #[cfg(any(test, feature = "phase30-queue-fault-injection"))]
 static INJECTED_WRITE_FAILURES: std::sync::Mutex<Vec<(String, std::io::ErrorKind)>> =
@@ -145,10 +148,18 @@ struct ResourceIdentity {
     finalizing: bool,
     #[serde(default)]
     total_size: Option<u64>,
+    #[serde(default)]
+    segment_count: Option<usize>,
     /// Optional context headers supplied by the browser extension.
     /// Stored so that they survive a pause/resume cycle.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     extra_headers: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct HttpMultiSourceSet {
+    version: u8,
+    urls: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -347,11 +358,25 @@ where
             }
         };
 
-        let result = self
-            .download_prepared(id, already_downloading, &mut control)
-            .await;
+        let current_item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let sources = load_http_multi_source_set(current_item.destination()).await?;
+        let is_multi_source = sources.is_some();
+        let result = if let Some(source_set) = sources {
+            Box::pin(self.download_multi_source(id, source_set, &mut control)).await
+        } else {
+            Box::pin(self.download_prepared(id, already_downloading, None, &mut control)).await
+        };
         match result {
-            Ok(item) => Ok(item),
+            Ok(item) => {
+                if is_multi_source {
+                    remove_http_multi_source_set(item.destination()).await?;
+                }
+                Ok(item)
+            }
             Err(error) if error.is_paused() => {
                 self.transition_to_paused(id).await?;
                 info!(download_id = %id, "download paused");
@@ -375,10 +400,92 @@ where
         }
     }
 
+    async fn download_multi_source(
+        &self,
+        id: DownloadId,
+        source_set: HttpMultiSourceSet,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<DownloadItem, DownloadEngineError> {
+        let mut last_error = None;
+        for (index, source) in source_set.urls.iter().enumerate() {
+            let url =
+                parse_http_url_with_private_policy(source, self.allow_loopback_benchmark_target())?;
+            if index > 0 {
+                self.reset_for_source_switch(id, &url).await?;
+            }
+            let current = self
+                .repository
+                .get(id)
+                .await?
+                .ok_or(DownloadEngineError::NotFound(id))?;
+            match Box::pin(self.download_prepared(
+                id,
+                current.status() == DownloadStatus::Downloading,
+                Some(&url),
+                control,
+            ))
+            .await
+            {
+                Ok(item) => return Ok(item),
+                Err(error)
+                    if error.is_cancelled() || error.is_paused() || !is_source_failure(&error) =>
+                {
+                    return Err(error);
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or(DownloadEngineError::InvalidConfiguration))
+    }
+
+    async fn reset_for_source_switch(
+        &self,
+        id: DownloadId,
+        next_url: &Url,
+    ) -> Result<(), DownloadEngineError> {
+        let item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let temporary_path = temporary_path(item.destination());
+        if let Some(identity) = load_resource_identity(&temporary_path).await? {
+            if let (Some(segment_count), Some(total_size)) =
+                (identity.segment_count, identity.total_size)
+            {
+                cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
+            }
+            match fs::symlink_metadata(&temporary_path).await {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    fs::remove_file(&temporary_path)
+                        .await
+                        .map_err(DownloadEngineError::Io)?;
+                }
+                Ok(_) => return Err(DownloadEngineError::InvalidPartialFile),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(DownloadEngineError::Io(error)),
+            }
+            save_resource_identity(
+                &temporary_path,
+                &ResourceIdentity {
+                    url: next_url.to_string(),
+                    validator: None,
+                    finalizing: false,
+                    total_size: None,
+                    segment_count: None,
+                    extra_headers: identity.extra_headers,
+                },
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     async fn download_prepared(
         &self,
         id: DownloadId,
         already_downloading: bool,
+        source_override: Option<&Url>,
         control: &mut ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
         let mut item = self
@@ -389,10 +496,13 @@ where
         if item.source().engine() != EngineKind::DirectHttp {
             return Err(DownloadEngineError::EngineMismatch);
         }
-        let url = parse_http_url_with_private_policy(
-            item.source().url(),
-            self.allow_loopback_benchmark_target(),
-        )?;
+        let url = match source_override {
+            Some(url) => url.clone(),
+            None => parse_http_url_with_private_policy(
+                item.source().url(),
+                self.allow_loopback_benchmark_target(),
+            )?,
+        };
         let destination = item.destination().to_path_buf();
         let temporary_path = temporary_path(&destination);
         if let Some(completed) = self
@@ -484,7 +594,8 @@ where
                     url: url.to_string(),
                     validator: initial_validator,
                     finalizing: false,
-                    total_size: None,
+                    total_size: Some(total_size),
+                    segment_count: Some(segment_count),
                     extra_headers: extra_headers.clone(),
                 },
             )
@@ -594,6 +705,7 @@ where
                     validator: current_validator,
                     finalizing: false,
                     total_size: None,
+                    segment_count: None,
                     extra_headers: extra_headers.clone(),
                 },
             )
@@ -1981,6 +2093,164 @@ pub(crate) fn response_validator(response: &Response) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn http_multi_source_set_path(destination: &Path) -> PathBuf {
+    let mut path = destination.as_os_str().to_os_string();
+    path.push(".fetchx.sources");
+    PathBuf::from(path)
+}
+
+/// Persists an ordered set of HTTP(S) sources for a single DirectHTTP queue row.
+///
+/// The engine downloads from one source at a time. It does not combine ranges
+/// across URLs, so validators or equal lengths are never treated as proof of
+/// cross-source object identity.
+pub async fn save_http_multi_source_set(
+    destination: &Path,
+    urls: &[String],
+) -> Result<(), DownloadEngineError> {
+    if !(2..=MAX_HTTP_SOURCE_URLS).contains(&urls.len()) {
+        return Err(DownloadEngineError::InvalidConfiguration);
+    }
+    let mut normalized = Vec::with_capacity(urls.len());
+    for source in urls {
+        if source.len() > MAX_HTTP_SOURCE_URL_LENGTH {
+            return Err(DownloadEngineError::InvalidConfiguration);
+        }
+        let canonical = validate_http_source_url(source)?;
+        if normalized.contains(&canonical) {
+            return Err(DownloadEngineError::InvalidConfiguration);
+        }
+        normalized.push(canonical);
+    }
+    let bytes = serde_json::to_vec(&HttpMultiSourceSet {
+        version: 1,
+        urls: normalized,
+    })
+    .map_err(|error| DownloadEngineError::InvalidPartialMetadata(error.to_string()))?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(http_multi_source_set_path(destination))
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    let write_result = async {
+        file.write_all(&bytes).await?;
+        file.flush().await?;
+        file.sync_all().await
+    }
+    .await;
+    if let Err(error) = write_result {
+        drop(file);
+        if let Err(cleanup_error) = fs::remove_file(http_multi_source_set_path(destination)).await
+            && cleanup_error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(DownloadEngineError::InvalidPartialMetadata(format!(
+                "multi-source metadata write failed ({error}) and cleanup failed ({cleanup_error})"
+            )));
+        }
+        return Err(DownloadEngineError::Io(error));
+    }
+    Ok(())
+}
+
+/// Removes the persisted source set after successful publication or failed admission.
+pub async fn remove_http_multi_source_set(destination: &Path) -> Result<(), DownloadEngineError> {
+    match fs::remove_file(http_multi_source_set_path(destination)).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DownloadEngineError::Io(error)),
+    }
+}
+
+async fn load_http_multi_source_set(
+    destination: &Path,
+) -> Result<Option<HttpMultiSourceSet>, DownloadEngineError> {
+    let path = http_multi_source_set_path(destination);
+    let metadata = match fs::symlink_metadata(&path).await {
+        Ok(metadata) if metadata.file_type().is_file() => metadata,
+        Ok(_) => {
+            return Err(DownloadEngineError::InvalidPartialMetadata(
+                "multi-source metadata is not a regular file".to_owned(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    };
+    if metadata.len() > MAX_HTTP_SOURCE_SET_BYTES {
+        return Err(DownloadEngineError::InvalidPartialMetadata(
+            "multi-source metadata exceeds its size limit".to_owned(),
+        ));
+    }
+    let bytes = fs::read(path).await.map_err(DownloadEngineError::Io)?;
+    let source_set: HttpMultiSourceSet = serde_json::from_slice(&bytes)
+        .map_err(|error| DownloadEngineError::InvalidPartialMetadata(error.to_string()))?;
+    if source_set.version != 1 || !(2..=MAX_HTTP_SOURCE_URLS).contains(&source_set.urls.len()) {
+        return Err(DownloadEngineError::InvalidPartialMetadata(
+            "multi-source metadata has an unsupported version or invalid URL list".to_owned(),
+        ));
+    }
+    let parsed_urls = source_set
+        .urls
+        .iter()
+        .map(|url| {
+            if url.len() > MAX_HTTP_SOURCE_URL_LENGTH {
+                Err(DownloadEngineError::InvalidUrl)
+            } else {
+                parse_http_source_structure(url)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            DownloadEngineError::InvalidPartialMetadata(
+                "multi-source metadata has an unsupported version or invalid URL list".to_owned(),
+            )
+        })?;
+    let mut unique_urls = parsed_urls
+        .into_iter()
+        .map(|url| url.to_string())
+        .collect::<Vec<_>>();
+    unique_urls.sort();
+    unique_urls.dedup();
+    if unique_urls.len() != source_set.urls.len() {
+        return Err(DownloadEngineError::InvalidPartialMetadata(
+            "multi-source metadata contains duplicate URLs".to_owned(),
+        ));
+    }
+    Ok(Some(source_set))
+}
+
+fn parse_http_source_structure(source: &str) -> Result<Url, DownloadEngineError> {
+    if source.trim().is_empty() {
+        return Err(DownloadEngineError::InvalidUrl);
+    }
+    let url = Url::parse(source).map_err(|_| DownloadEngineError::InvalidUrl)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(DownloadEngineError::InvalidUrl);
+    }
+    Ok(url)
+}
+
+fn is_source_failure(error: &DownloadEngineError) -> bool {
+    matches!(
+        error,
+        DownloadEngineError::Request(_)
+            | DownloadEngineError::HttpStatus(_)
+            | DownloadEngineError::InvalidContentLength
+            | DownloadEngineError::InvalidContentRange
+            | DownloadEngineError::RangeMismatch
+            | DownloadEngineError::RangeNotSatisfiable
+            | DownloadEngineError::UnexpectedPartialResponse
+            | DownloadEngineError::ContentLengthExceeded { .. }
+            | DownloadEngineError::IncompleteResponse { .. }
+            | DownloadEngineError::SegmentFailed { .. }
+            | DownloadEngineError::SegmentWorkerFailed
+            | DownloadEngineError::Sha256Mismatch { .. }
+    )
+}
+
 fn resource_identity_path(temporary: &Path) -> PathBuf {
     let mut path = temporary.as_os_str().to_os_string();
     path.push(".meta");
@@ -2065,6 +2335,7 @@ pub async fn save_initial_context_headers(
             validator: None,
             finalizing: false,
             total_size: None,
+            segment_count: None,
             extra_headers: safe_headers,
         },
     };

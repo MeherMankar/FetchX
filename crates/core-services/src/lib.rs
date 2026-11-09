@@ -38,7 +38,8 @@ use fetchx_downloader::{
     DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
     NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
     YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
-    YtDlpProcessRunnerAdapter, validate_http_source_url,
+    YtDlpProcessRunnerAdapter, is_dash_url, is_hls_url, remove_http_multi_source_set,
+    save_http_multi_source_set, validate_http_source_url,
 };
 use fetchx_media_extractor::{
     ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry,
@@ -67,6 +68,8 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 use url::Url;
+
+const MAX_HTTP_MULTI_SOURCE_URL_LENGTH: usize = 8192;
 
 pub use config::{
     Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, FtpConfig,
@@ -176,6 +179,18 @@ pub struct BatchDownloadDestinationRequest {
     pub expected_sha256: Option<String>,
 }
 
+/// Ordered HTTP(S) sources for one logical DirectHTTP download.
+///
+/// The downloader uses these as whole-source failover candidates. It never
+/// combines ranges across URLs unless a future implementation can establish
+/// strong cross-source object identity.
+#[derive(Clone, Debug)]
+pub struct HttpMultiSourceRequest {
+    pub urls: Vec<String>,
+    pub package_name: Option<String>,
+    pub expected_sha256: Option<String>,
+}
+
 struct BatchAdmissionRequest {
     request: BatchDownloadRequest,
     destination: Option<PathBuf>,
@@ -221,6 +236,10 @@ pub enum BatchDownloadError {
     InvalidFormat,
     #[error("expected SHA-256 must contain exactly 64 hexadecimal characters")]
     InvalidChecksum,
+    #[error("HTTP multi-source request must contain between 2 and 16 distinct sources")]
+    InvalidSourceSet,
+    #[error("HTTP multi-source inputs must be direct HTTP(S) file URLs")]
+    InvalidMultiSourceUrl,
     #[error("destination must be an absolute file path with a valid filename")]
     InvalidDestination,
     #[error("download engine is unavailable: {0:?}")]
@@ -943,6 +962,145 @@ impl CoreServices {
         opts: MediaExtractOptions,
     ) -> Result<fetchx_media_extractor::MediaInfo, ExtractionError> {
         self.engine_runtime.media_registry.extract(url, opts).await
+    }
+
+    /// Admits one DirectHTTP job with ordered, whole-source failover candidates.
+    ///
+    /// The first URL remains the persisted source for backward compatibility;
+    /// the ordered list is stored in a bounded sidecar next to the destination.
+    /// No bytes from different URLs are combined.
+    pub async fn enqueue_http_multi_source(
+        &self,
+        request: HttpMultiSourceRequest,
+        priority: DownloadPriority,
+    ) -> Result<DownloadId, BatchDownloadError> {
+        if !self.engine_runtime.is_available(EngineKind::DirectHttp) {
+            return Err(BatchDownloadError::UnavailableEngine(
+                EngineKind::DirectHttp,
+            ));
+        }
+        if !(2..=16).contains(&request.urls.len()) {
+            return Err(BatchDownloadError::InvalidSourceSet);
+        }
+        let mut urls = Vec::with_capacity(request.urls.len());
+        let mut seen = HashSet::new();
+        for source in request.urls {
+            if source.len() > MAX_HTTP_MULTI_SOURCE_URL_LENGTH {
+                return Err(BatchDownloadError::InvalidMultiSourceUrl);
+            }
+            let canonical = validate_http_source_url(&source)
+                .map_err(|_| BatchDownloadError::InvalidMultiSourceUrl)?;
+            let normalized = normalize_download_url(&canonical);
+            if !seen.insert(normalized) || is_hls_url(&canonical) || is_dash_url(&canonical) {
+                return Err(BatchDownloadError::InvalidMultiSourceUrl);
+            }
+            urls.push(canonical);
+        }
+        if request
+            .expected_sha256
+            .as_deref()
+            .is_some_and(|checksum| !is_valid_batch_sha256(checksum.trim()))
+        {
+            return Err(BatchDownloadError::InvalidChecksum);
+        }
+
+        let first_url = &urls[0];
+        let filename = FileName::new(suggest_download_filename(first_url))
+            .map_err(|_| BatchDownloadError::InvalidDestination)?;
+        let mut destination_dir = self.downloads_dir.clone();
+        if let Some(package_name) = request.package_name {
+            destination_dir.push(
+                sanitize_download_package_name(&package_name)
+                    .ok_or(BatchDownloadError::InvalidPackageName)?,
+            );
+        }
+        fs::create_dir_all(&destination_dir)
+            .await
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+        let mut reserved_destinations = HashSet::new();
+        let (destination, filename) = unique_batch_destination(
+            destination_dir.join(filename.as_str()),
+            filename,
+            &mut reserved_destinations,
+        )
+        .await?;
+
+        let temporary = append_path_suffix(&destination, ".part");
+        let identity = append_path_suffix(&temporary, ".meta");
+        let sources_path = append_path_suffix(&destination, ".fetchx.sources");
+        let checksum_path = append_path_suffix(&destination, ".fetchx.sha256");
+        for path in [&temporary, &identity, &sources_path, &checksum_path] {
+            if fs::try_exists(path)
+                .await
+                .map_err(|error| BatchDownloadError::Destination(error.to_string()))?
+            {
+                return Err(BatchDownloadError::DestinationCollision);
+            }
+        }
+
+        let created_at =
+            Timestamp::now().map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+        let source = DownloadSource::new(&urls[0], EngineKind::DirectHttp)
+            .map_err(|_| BatchDownloadError::InvalidMultiSourceUrl)?;
+        let mut item = DownloadItem::new(
+            DownloadId::new(),
+            source,
+            filename,
+            destination.clone(),
+            created_at,
+        );
+        item.set_priority_at(priority, created_at)
+            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+
+        if let Some(checksum) = request.expected_sha256 {
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&checksum_path)
+                .await
+                .map_err(|error| BatchDownloadError::Storage(error.to_string()))?;
+            let write_result = async {
+                file.write_all(checksum.trim().to_ascii_lowercase().as_bytes())
+                    .await?;
+                file.flush().await?;
+                file.sync_all().await
+            }
+            .await;
+            if let Err(error) = write_result {
+                drop(file);
+                let _ = fs::remove_file(&checksum_path).await;
+                return Err(BatchDownloadError::Storage(error.to_string()));
+            }
+        }
+        if let Err(error) = save_http_multi_source_set(&destination, &urls).await {
+            if let Err(cleanup_error) = fs::remove_file(&checksum_path).await
+                && cleanup_error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(BatchDownloadError::Storage(format!(
+                    "source metadata write failed ({error}) and checksum cleanup failed ({cleanup_error})"
+                )));
+            }
+            return Err(BatchDownloadError::Storage(error.to_string()));
+        }
+        let id = item.id();
+        if let Err(error) = self.queue.enqueue(item).await {
+            let source_cleanup = remove_http_multi_source_set(&destination).await;
+            let checksum_cleanup = fs::remove_file(&checksum_path).await;
+            if let Err(cleanup_error) = source_cleanup {
+                return Err(BatchDownloadError::Storage(format!(
+                    "queue admission failed ({error}) and source metadata cleanup failed: {cleanup_error}"
+                )));
+            }
+            if let Err(cleanup_error) = checksum_cleanup
+                && cleanup_error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(BatchDownloadError::Storage(format!(
+                    "queue admission failed ({error}) and checksum cleanup failed: {cleanup_error}"
+                )));
+            }
+            return Err(BatchDownloadError::Queue(error.to_string()));
+        }
+        Ok(id)
     }
 
     /// Validates and admits each URL independently, returning one result per input.
@@ -3106,7 +3264,8 @@ mod tests {
     use super::{
         BatchDownloadDestinationRequest, BatchDownloadError, BatchDownloadRequest, ConfigService,
         CoreServices, CoreServicesConfig, CoreServicesError, EngineAvailability, EngineConfig,
-        NativeTorrentConfig, append_path_suffix, suggest_download_package_name,
+        HttpMultiSourceRequest, NativeTorrentConfig, append_path_suffix,
+        suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
     use fetchx_storage::Database;
@@ -3130,6 +3289,41 @@ mod tests {
             bundled_engines_dir: None,
             defer_queued_on_start: false,
         }
+    }
+
+    #[tokio::test]
+    async fn http_multi_source_admission_rejects_ambiguous_source_sets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        let too_few = services
+            .enqueue_http_multi_source(
+                HttpMultiSourceRequest {
+                    urls: vec!["https://downloads.example/file.bin".to_owned()],
+                    package_name: None,
+                    expected_sha256: None,
+                },
+                DownloadPriority::Normal,
+            )
+            .await;
+        assert_eq!(too_few, Err(BatchDownloadError::InvalidSourceSet));
+
+        let duplicate = services
+            .enqueue_http_multi_source(
+                HttpMultiSourceRequest {
+                    urls: vec![
+                        "https://downloads.example/file.bin".to_owned(),
+                        "https://downloads.example/file.bin".to_owned(),
+                    ],
+                    package_name: None,
+                    expected_sha256: None,
+                },
+                DownloadPriority::Normal,
+            )
+            .await;
+        assert_eq!(duplicate, Err(BatchDownloadError::InvalidMultiSourceUrl));
+        services.shutdown().await?;
+        Ok(())
     }
 
     #[test]
