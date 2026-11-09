@@ -397,10 +397,28 @@ The test uses fixed multi-file metainfo, a loopback-only seeder, disabled DHT/tr
 
 Do not remove aria2 runtime, supervisor/RPC, helper installation, configuration/secrets, packaging/support, storage fields or legacy recovery until all of these are decided and evidenced:
 
-1. The file-backed child-process torrent harness passes selected-file integrity and measures aggregate reuse on supported desktop hosts; add piece/block-level evidence before claiming exact reuse, and validate Android process-death behavior on-device.
+1. The file-backed child-process engine and CoreServices/QueueManager startup-recovery harnesses pass selected-file integrity on supported Windows hosts; add piece/block-level evidence before claiming exact reuse and validate Android process-death behavior on-device.
 2. The parity matrix's required protocol cases have hermetic tests and targeted live interoperability evidence (HTTP multi-source/segment/range change, FTP/FTPS/SFTP resume/auth, Metalink mirror/hash failure, scheduler/limits and crash/finalization cases). Explicitly waive any aria2-only behavior the product will retire.
 3. A real supervised aria2 daemon test validates current/stale GIDs, sidecar present/absent, pause/resume, crash/restart and shutdown for existing records, with database and file preservation.
 4. Product defines an opt-in migration or retention/support policy for explicit aria2 users and every persisted aria2 row, including Android legacy records; prove rollback and destination/integrity safety. Never silently convert or delete them.
 5. Desktop/Android binary provenance, platform packaging, dependency licenses and distribution notices are reviewed. Only then can settings, credentials, helper/install flow and RPC be considered for removal.
 
-Prompt 27 changed the native downloader test module and these migration documents only; no dependency, database, adapter, binary, runtime setting, engine default or download behavior changed. The Windows OS-process kill/reopen harness passed. Android device, live aria2, desktop package, and queue-actor process-restart validation remain unperformed.
+As recorded at the end of Prompt 27, only the native downloader test module and migration documents had changed; no database, adapter, binary, runtime setting, engine default or download behavior changed. The engine-layer Windows OS-process kill/reopen harness passed, but queue-actor process-restart validation had not yet been performed. Prompt 28's additional CoreServices/QueueManager evidence is recorded below. Android device, live aria2 and desktop package validation remain unperformed.
+
+### Prompt 28 — CoreServices and QueueManager startup recovery
+
+The Prompt 28 end-to-end harness in `crates/core-services/src/lib.rs` admits a local `.torrent` through `CoreServices::enqueue_torrent_file_with_selection_and_engine` with an explicit native engine and selected-file index. A fixed multi-file, private torrent uses a single loopback HTTP tracker and a loopback seeder; librqbit 9.0.1 suppresses DHT and local discovery for private torrents. The seeder and both workers use temporary directories and file-backed SQLite.
+
+Worker A uses the production CoreServices and QueueManager, writes the generated download ID, and waits for persisted `Downloading` progress before the parent forcibly terminates the child. The parent confirms the row remains `Downloading`, with native engine identity and persisted torrent metadata/selection intact. Worker B then calls only `CoreServices::start` against the same database and directories: it does not enqueue, resume, or call the engine directly. Its queue snapshot must show the recovered download in `QueueManager`'s active set before it waits for `Seeding`/`Completed`. This distinguishes startup recovery plus queue dispatch from a direct engine restart. The terminal row and torrent metadata retain the same engine, info hash, destination, selected index `[1]`, confirmed selection and empty aria2 GID. The selected file's bytes and SHA-1 match; the unselected file is absent or empty.
+
+Validation passed on Windows four focused runs, plus one run as part of the full CoreServices library suite:
+
+```text
+cargo test -p fetchx-core-services core_services_queue_recovers_native_torrent_after_process_death -- --nocapture
+  1 passed per run; each parent test forcibly killed the admission worker and
+  observed the fresh CoreServices worker complete through QueueManager dispatch.
+```
+
+In the two explicit repeated runs, loopback peer-upload counters increased by 3,391,488 and 3,096,576 bytes after restart for a 4,194,304-byte selected file. This is aggregate network-byte evidence only: it is consistent with reuse of existing data, but it does not establish exact piece/block identity. No exact piece reuse claim is made. The test validates desktop Windows process recovery and shared startup logic only; Android device process-death, live aria2, public trackers and packaged application execution were not tested. No production recovery behavior needed a fix; no runtime defaults, database schema, persisted user data, aria2 compatibility, or aria2 code changed.
+
+Update the native-torrent removal gate accordingly: CoreServices/QueueManager startup recovery now has child-process Windows evidence, while exact piece/block reuse and Android device recovery remain open. All protocol parity, legacy aria2 runtime/GID/sidecar, explicit-user disposition, rollback, and packaging/license gates remain unchanged. No aria2 source was copied or translated; the existing pinned GPL-2.0-or-later source review remains reference-only.

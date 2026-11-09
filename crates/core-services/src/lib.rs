@@ -2669,10 +2669,22 @@ mod tests {
 
     use super::{
         Aria2RecoveryState, BatchDownloadDestinationRequest, BatchDownloadError,
-        BatchDownloadRequest, CoreServices, CoreServicesConfig, CoreServicesError,
-        EngineAvailability, suggest_download_package_name,
+        BatchDownloadRequest, ConfigService, CoreServices, CoreServicesConfig, CoreServicesError,
+        EngineAvailability, EngineConfig, NativeTorrentConfig, suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
+    use fetchx_storage::Database;
+    use sha1::{Digest, Sha1};
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        path::{Path, PathBuf},
+        process::{Command, Stdio},
+        time::Duration,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     fn config(root: &std::path::Path) -> CoreServicesConfig {
         CoreServicesConfig {
@@ -2681,6 +2693,289 @@ mod tests {
             runtime_dir: root.join("runtime"),
             bundled_engines_dir: None,
             defer_queued_on_start: false,
+        }
+    }
+
+    const QUEUE_RECOVERY_PHASE: &str = "FETCHX_QUEUE_RECOVERY_PHASE";
+
+    struct QueueRecoveryWorker(std::process::Child);
+
+    impl QueueRecoveryWorker {
+        fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, std::io::Error> {
+            self.0.try_wait()
+        }
+
+        fn kill(&mut self) -> Result<(), std::io::Error> {
+            self.0.kill()
+        }
+
+        fn wait(&mut self) -> Result<std::process::ExitStatus, std::io::Error> {
+            self.0.wait()
+        }
+    }
+
+    impl Drop for QueueRecoveryWorker {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    fn queue_recovery_paths(root: &Path) -> CoreServicesConfig {
+        CoreServicesConfig {
+            database_path: root.join("fetchx.sqlite"),
+            downloads_dir: root.join("downloads"),
+            runtime_dir: root.join("runtime"),
+            bundled_engines_dir: None,
+            defer_queued_on_start: false,
+        }
+    }
+
+    async fn run_queue_recovery_worker() -> Result<(), Box<dyn std::error::Error>> {
+        let phase = std::env::var(QUEUE_RECOVERY_PHASE)?;
+        let root = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_ROOT")?);
+        let torrent_path = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_TORRENT")?);
+        let destination = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_DESTINATION")?);
+        let id_path = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_ID_FILE")?);
+        let progress_path = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_PROGRESS_FILE")?);
+        let dispatch_path = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_DISPATCH_FILE")?);
+        let complete_path = PathBuf::from(std::env::var("FETCHX_QUEUE_RECOVERY_COMPLETE_FILE")?);
+        let paths = queue_recovery_paths(&root);
+
+        match phase.as_str() {
+            "admit" => {
+                let services = CoreServices::start(paths).await?;
+                let id = services
+                    .enqueue_torrent_file_with_selection_and_engine(
+                        torrent_path,
+                        EngineKind::NativeTorrent,
+                        DownloadPriority::default(),
+                        Some(destination),
+                        Some(vec![1]),
+                    )
+                    .await?;
+                tokio::fs::write(&id_path, id.to_string()).await?;
+
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+                loop {
+                    let item = services
+                        .repository
+                        .get(id)
+                        .await?
+                        .ok_or("CoreServices admission lost the native torrent record")?;
+                    if item.status() == DownloadStatus::Failed {
+                        return Err(
+                            "native torrent failed before the process-death checkpoint".into()
+                        );
+                    }
+                    if item.status() == DownloadStatus::Downloading
+                        && item.progress().downloaded_bytes() >= 128 * 1024
+                    {
+                        tokio::fs::write(
+                            &progress_path,
+                            item.progress().downloaded_bytes().to_string(),
+                        )
+                        .await?;
+                        std::future::pending::<()>().await;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err("CoreServices download did not reach partial progress".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+            "restart" => {
+                let id = DownloadId::parse(&tokio::fs::read_to_string(&id_path).await?)?;
+                let services = CoreServices::start(paths).await?;
+                let dispatch_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                loop {
+                    let snapshot = services.queue().snapshot().await?;
+                    if snapshot.active.iter().any(|active| active.item.id() == id) {
+                        tokio::fs::write(&dispatch_path, "QueueManager active").await?;
+                        break;
+                    }
+                    let item = services
+                        .repository
+                        .get(id)
+                        .await?
+                        .ok_or("QueueManager startup recovery lost the persisted record")?;
+                    if item.status() == DownloadStatus::Failed {
+                        return Err(
+                            "QueueManager startup dispatch failed the native torrent".into()
+                        );
+                    }
+                    if tokio::time::Instant::now() >= dispatch_deadline {
+                        return Err(
+                            "QueueManager did not dispatch the recovered native torrent".into()
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+
+                let completion_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+                loop {
+                    let item = services
+                        .repository
+                        .get(id)
+                        .await?
+                        .ok_or("recovered download disappeared before completion")?;
+                    match item.status() {
+                        DownloadStatus::Completed | DownloadStatus::Seeding => {
+                            tokio::fs::write(&complete_path, format!("{:?}", item.status()))
+                                .await?;
+                            services.shutdown().await?;
+                            return Ok(());
+                        }
+                        DownloadStatus::Failed => {
+                            return Err("QueueManager-dispatched native torrent failed".into());
+                        }
+                        _ => {}
+                    }
+                    if tokio::time::Instant::now() >= completion_deadline {
+                        return Err("QueueManager-dispatched torrent did not complete".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+            _ => Err(format!("invalid queue recovery phase: {phase}").into()),
+        }
+    }
+
+    fn spawn_queue_recovery_worker(
+        phase: &str,
+        root: &Path,
+        torrent_path: &Path,
+        destination: &Path,
+    ) -> Result<QueueRecoveryWorker, Box<dyn std::error::Error>> {
+        let executable = std::env::current_exe()?;
+        Ok(QueueRecoveryWorker(
+            Command::new(executable)
+                .args([
+                    "--exact",
+                    "tests::core_services_queue_recovers_native_torrent_after_process_death",
+                    "--nocapture",
+                ])
+                .env(QUEUE_RECOVERY_PHASE, phase)
+                .env("FETCHX_QUEUE_RECOVERY_ROOT", root)
+                .env("FETCHX_QUEUE_RECOVERY_TORRENT", torrent_path)
+                .env("FETCHX_QUEUE_RECOVERY_DESTINATION", destination)
+                .env(
+                    "FETCHX_QUEUE_RECOVERY_ID_FILE",
+                    root.join("download-id.txt"),
+                )
+                .env(
+                    "FETCHX_QUEUE_RECOVERY_PROGRESS_FILE",
+                    root.join("progress.txt"),
+                )
+                .env(
+                    "FETCHX_QUEUE_RECOVERY_DISPATCH_FILE",
+                    root.join("queue-dispatched.txt"),
+                )
+                .env(
+                    "FETCHX_QUEUE_RECOVERY_COMPLETE_FILE",
+                    root.join("completed.txt"),
+                )
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()?,
+        ))
+    }
+
+    fn bencode_bytes(bytes: &[u8], output: &mut Vec<u8>) {
+        output.extend_from_slice(bytes.len().to_string().as_bytes());
+        output.push(b':');
+        output.extend_from_slice(bytes);
+    }
+
+    fn core_services_torrent_bytes(
+        tracker_url: &str,
+        unselected: &[u8],
+        selected: &[u8],
+    ) -> Vec<u8> {
+        const PIECE_LENGTH: usize = 16_384;
+        let mut pieces = Vec::new();
+        for piece in unselected
+            .chunks(PIECE_LENGTH)
+            .chain(selected.chunks(PIECE_LENGTH))
+        {
+            pieces.extend_from_slice(&Sha1::digest(piece));
+        }
+
+        let mut info = b"d5:filesl".to_vec();
+        for (name, payload) in [("unselected.bin", unselected), ("selected.bin", selected)] {
+            info.extend_from_slice(b"d6:lengthi");
+            info.extend_from_slice(payload.len().to_string().as_bytes());
+            info.extend_from_slice(b"e4:pathl");
+            bencode_bytes(name.as_bytes(), &mut info);
+            info.extend_from_slice(b"ee");
+        }
+        info.extend_from_slice(b"e4:name6:bundle12:piece lengthi16384e6:pieces");
+        bencode_bytes(&pieces, &mut info);
+        info.extend_from_slice(b"7:privatei1ee");
+
+        let mut torrent = b"d8:announce".to_vec();
+        bencode_bytes(tracker_url.as_bytes(), &mut torrent);
+        torrent.extend_from_slice(b"4:info");
+        torrent.extend_from_slice(&info);
+        torrent.push(b'e');
+        torrent
+    }
+
+    async fn serve_loopback_tracker(
+        listener: TcpListener,
+        peer: SocketAddr,
+    ) -> Result<(), std::io::Error> {
+        loop {
+            let (mut stream, _) = listener.accept().await?;
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let Ok(count) = stream.read(&mut buffer).await else {
+                        return;
+                    };
+                    if count == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+
+                let mut body = b"d8:intervali60e5:peers6:".to_vec();
+                body.extend_from_slice(&Ipv4Addr::LOCALHOST.octets());
+                body.extend_from_slice(&peer.port().to_be_bytes());
+                body.push(b'e');
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.write_all(&body).await;
+            });
+        }
+    }
+
+    async fn wait_for_recovery_file(
+        path: &Path,
+        worker: &mut QueueRecoveryWorker,
+        timeout: Duration,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if tokio::fs::try_exists(path).await? {
+                return Ok(tokio::fs::read_to_string(path).await?);
+            }
+            if let Some(status) = worker.try_wait()? {
+                return Err(format!("queue recovery worker exited early: {status}").into());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err("timed out waiting for queue recovery worker evidence".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
@@ -2719,6 +3014,232 @@ mod tests {
         first?;
         second?;
         services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn core_services_queue_recovers_native_torrent_after_process_death()
+    -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os(QUEUE_RECOVERY_PHASE).is_some() {
+            run_queue_recovery_worker().await?;
+            return Ok(());
+        }
+
+        use librqbit::{AddTorrent, AddTorrentOptions, ListenerOptions, Session, SessionOptions};
+        use std::num::NonZeroU32;
+
+        let root = tempdir()?;
+        let root_path = root.path();
+        let paths = queue_recovery_paths(root_path);
+        let tracker_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let tracker_address = tracker_listener.local_addr()?;
+        let tracker_url = format!("http://{tracker_address}/announce");
+        let unselected = vec![b'u'; 16_384];
+        let selected = vec![b's'; 4 * 1024 * 1024];
+        let torrent_bytes = core_services_torrent_bytes(&tracker_url, &unselected, &selected);
+        let torrent_metadata = fetchx_models::parse_torrent_metainfo(&torrent_bytes)?;
+        assert_eq!(torrent_metadata.files.len(), 2);
+        assert_eq!(torrent_metadata.trackers, vec![tracker_url]);
+
+        let torrent_path = root_path.join("selected.torrent");
+        let seed_output = root_path.join("seed-output");
+        let destination = paths.downloads_dir.join("queue-recovery-output");
+        tokio::fs::create_dir_all(&seed_output).await?;
+        tokio::fs::write(&torrent_path, &torrent_bytes).await?;
+        tokio::fs::write(seed_output.join("unselected.bin"), &unselected).await?;
+        tokio::fs::write(seed_output.join("selected.bin"), &selected).await?;
+
+        let seeder_session = Session::new_with_opts(
+            root_path.join("seeder-session"),
+            SessionOptions {
+                dht: None,
+                persistence: None,
+                disable_trackers: true,
+                disable_local_service_discovery: true,
+                ipv4_only: true,
+                listen: Some(ListenerOptions {
+                    listen_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                    ipv4_only: true,
+                    ..ListenerOptions::default()
+                }),
+                ..SessionOptions::default()
+            },
+        )
+        .await?;
+        let seeder = seeder_session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent_bytes),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    output_folder: Some(seed_output.to_string_lossy().into_owned()),
+                    ratelimits: librqbit::limits::LimitsConfig {
+                        upload_bps: NonZeroU32::new(512 * 1024),
+                        download_bps: None,
+                    },
+                    ..AddTorrentOptions::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .ok_or("loopback seeder did not return a managed torrent")?;
+        tokio::time::timeout(Duration::from_secs(10), seeder.wait_until_initialized()).await??;
+        assert!(
+            seeder.stats().finished,
+            "loopback seeder payload did not verify"
+        );
+        let peer = seeder_session
+            .listen_addr()
+            .ok_or("loopback seeder did not bind a peer listener")?;
+        assert!(peer.ip().is_loopback());
+        let tracker_task = tokio::spawn(serve_loopback_tracker(tracker_listener, peer));
+
+        let database = Database::connect_path(&paths.database_path).await?;
+        let engine_config = EngineConfig {
+            native_torrent: NativeTorrentConfig {
+                enabled: true,
+                listen_port: 0,
+                session_dir: Some(paths.runtime_dir.join("librqbit-session")),
+            },
+            ..EngineConfig::default()
+        };
+        ConfigService::new(database.config())
+            .save(&engine_config)
+            .await?;
+        drop(database);
+
+        let mut admission_worker =
+            spawn_queue_recovery_worker("admit", root_path, &torrent_path, &destination)?;
+        let progress_path = root_path.join("progress.txt");
+        let progress = wait_for_recovery_file(
+            &progress_path,
+            &mut admission_worker,
+            Duration::from_secs(45),
+        )
+        .await?;
+        let progress_at_crash: u64 = progress.parse()?;
+        assert!(progress_at_crash >= 128 * 1024);
+        let id = DownloadId::parse(
+            &tokio::fs::read_to_string(root_path.join("download-id.txt")).await?,
+        )?;
+        admission_worker.kill()?;
+        let _ = admission_worker.wait()?;
+
+        let database_after_crash = Database::connect_path(&paths.database_path).await?;
+        let expected_destination = tokio::fs::canonicalize(&destination).await?;
+        let interrupted = database_after_crash
+            .downloads()
+            .get(id)
+            .await?
+            .ok_or("CoreServices admission record disappeared after worker death")?;
+        assert_eq!(interrupted.status(), DownloadStatus::Downloading);
+        assert!(interrupted.progress().downloaded_bytes() >= progress_at_crash);
+        assert_eq!(interrupted.source().engine(), EngineKind::NativeTorrent);
+        assert_eq!(interrupted.destination(), expected_destination.as_path());
+        let interrupted_metadata = database_after_crash
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("CoreServices torrent metadata disappeared after worker death")?;
+        assert_eq!(interrupted_metadata.info_hash, torrent_metadata.info_hash);
+        assert_eq!(
+            interrupted_metadata.destination,
+            expected_destination.as_path()
+        );
+        assert_eq!(interrupted_metadata.selected_file_indexes, vec![1]);
+        assert!(interrupted_metadata.selection_confirmed);
+        assert_eq!(interrupted_metadata.aria2_gid, None);
+        drop(database_after_crash);
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let uploaded_before_restart = seeder.stats().uploaded_bytes;
+        let mut restart_worker =
+            spawn_queue_recovery_worker("restart", root_path, &torrent_path, &destination)?;
+        let dispatched = wait_for_recovery_file(
+            &root_path.join("queue-dispatched.txt"),
+            &mut restart_worker,
+            Duration::from_secs(45),
+        )
+        .await?;
+        assert_eq!(dispatched, "QueueManager active");
+        let completion = wait_for_recovery_file(
+            &root_path.join("completed.txt"),
+            &mut restart_worker,
+            Duration::from_secs(75),
+        )
+        .await?;
+        assert!(completion == "Seeding" || completion == "Completed");
+        let exit_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = restart_worker.try_wait()? {
+                assert!(
+                    status.success(),
+                    "CoreServices restart worker failed: {status}"
+                );
+                break;
+            }
+            if tokio::time::Instant::now() >= exit_deadline {
+                restart_worker.kill()?;
+                let _ = restart_worker.wait()?;
+                return Err("CoreServices restart worker did not exit after completion".into());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let database_after_restart = Database::connect_path(&paths.database_path).await?;
+        let recovered = database_after_restart
+            .downloads()
+            .get(id)
+            .await?
+            .ok_or("QueueManager startup recovery removed the download record")?;
+        assert_eq!(recovered.source().engine(), EngineKind::NativeTorrent);
+        assert_eq!(recovered.destination(), expected_destination.as_path());
+        assert!(
+            recovered.status() == DownloadStatus::Seeding
+                || recovered.status() == DownloadStatus::Completed
+        );
+        assert_eq!(
+            recovered.progress().downloaded_bytes(),
+            selected.len() as u64
+        );
+        let recovered_metadata = database_after_restart
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("QueueManager startup recovery removed torrent metadata")?;
+        assert_eq!(recovered_metadata.info_hash, torrent_metadata.info_hash);
+        assert_eq!(
+            recovered_metadata.destination,
+            expected_destination.as_path()
+        );
+        assert_eq!(recovered_metadata.selected_file_indexes, vec![1]);
+        assert!(recovered_metadata.selection_confirmed);
+        assert_eq!(recovered_metadata.aria2_gid, None);
+        drop(database_after_restart);
+
+        let downloaded_selected = tokio::fs::read(destination.join("selected.bin")).await?;
+        assert_eq!(downloaded_selected, selected);
+        assert_eq!(
+            Sha1::digest(&downloaded_selected),
+            Sha1::digest(&selected),
+            "QueueManager-recovered selected file has the wrong SHA-1"
+        );
+        let unselected_path = destination.join("unselected.bin");
+        if tokio::fs::try_exists(&unselected_path).await? {
+            assert_eq!(
+                tokio::fs::metadata(unselected_path).await?.len(),
+                0,
+                "QueueManager recovery emitted bytes for the unselected torrent file"
+            );
+        }
+        let uploaded_after_restart = seeder.stats().uploaded_bytes;
+        eprintln!(
+            "CoreServices queue recovery peer upload after restart: {} bytes for a {}-byte selected file",
+            uploaded_after_restart.saturating_sub(uploaded_before_restart),
+            selected.len()
+        );
+
+        tracker_task.abort();
+        seeder_session.stop().await;
         Ok(())
     }
 
