@@ -10,9 +10,11 @@
 //! instance) and maps librqbit's progress API onto FetchX progress and status
 //! transitions.
 
-use std::{num::NonZeroU32, sync::Arc, time::Duration};
+use std::{net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
 
-use fetchx_models::{DownloadId, DownloadItem, DownloadStatus, EngineKind};
+use fetchx_models::{
+    DownloadId, DownloadItem, DownloadStatus, EngineKind, TorrentMetadata, parse_torrent_metainfo,
+};
 use fetchx_storage::{
     DownloadRepository, SqliteTorrentMetadataRepository, TorrentMetadataRepository,
     TorrentMetadataRow, TorrentSourceType,
@@ -294,6 +296,7 @@ where
         id: DownloadId,
         item: DownloadItem,
         control: ManagedDownloadControl,
+        initial_peers: Option<Vec<SocketAddr>>,
     ) -> Result<(), DownloadEngineError> {
         let source_url = item.source().url().to_owned();
         let destination = item.destination().to_path_buf();
@@ -309,8 +312,8 @@ where
                 .await?;
         }
 
-        let add_source = if is_magnet {
-            AddTorrent::from_url(source_url.as_str())
+        let (add_source, local_torrent_metadata) = if is_magnet {
+            (AddTorrent::from_url(source_url.as_str()), None)
         } else if source_url.starts_with("torrent+file:") {
             let file_path = item
                 .source()
@@ -319,7 +322,12 @@ where
             let torrent_bytes = tokio::fs::read(file_path)
                 .await
                 .map_err(DownloadEngineError::Io)?;
-            AddTorrent::from_bytes(torrent_bytes)
+            let metadata = parse_torrent_metainfo(&torrent_bytes).map_err(|error| {
+                DownloadEngineError::NativeTorrent(format!(
+                    "could not validate local torrent metadata: {error}"
+                ))
+            })?;
+            (AddTorrent::from_bytes(torrent_bytes), Some(metadata))
         } else {
             return Err(DownloadEngineError::UnsupportedScheme);
         };
@@ -336,13 +344,15 @@ where
                     .get_torrent_metadata(id)
                     .await
                     .map_err(DownloadEngineError::Storage)?,
+                local_torrent_metadata.as_ref(),
             )?,
-            None => None,
+            None => selected_files_from_metadata(None, local_torrent_metadata.as_ref())?,
         };
         let add_opts = AddTorrentOptions {
             overwrite: true,
             output_folder: Some(destination.to_string_lossy().into_owned()),
             only_files: selected_files,
+            initial_peers,
             ratelimits: LimitsConfig {
                 download_bps: rate_bps,
                 upload_bps: None,
@@ -452,7 +462,7 @@ where
             return Err(DownloadEngineError::EngineMismatch);
         }
 
-        match self.run_torrent(id, item, control).await {
+        match self.run_torrent(id, item, control, None).await {
             Ok(()) => self
                 .repository
                 .get(id)
@@ -509,6 +519,7 @@ where
 
 fn selected_files_from_metadata(
     metadata: Option<TorrentMetadataRow>,
+    local_torrent_metadata: Option<&TorrentMetadata>,
 ) -> Result<Option<Vec<usize>>, DownloadEngineError> {
     let Some(metadata) = metadata else {
         return Ok(None);
@@ -527,18 +538,39 @@ fn selected_files_from_metadata(
             "confirmed local torrent selection contains no files".to_owned(),
         ));
     }
+    let local_torrent_metadata = local_torrent_metadata.ok_or_else(|| {
+        DownloadEngineError::NativeTorrent("local torrent metadata is unavailable".to_owned())
+    })?;
+    if metadata.info_hash != local_torrent_metadata.info_hash
+        || metadata
+            .torrent_metadata
+            .as_ref()
+            .is_some_and(|stored| stored.info_hash != local_torrent_metadata.info_hash)
+    {
+        return Err(DownloadEngineError::NativeTorrent(
+            "local torrent file changed after its selection was saved".to_owned(),
+        ));
+    }
 
-    metadata
+    let selected_files = metadata
         .selected_file_indexes
         .into_iter()
         .map(usize::try_from)
         .collect::<Result<Vec<_>, _>>()
-        .map(Some)
         .map_err(|error| {
             DownloadEngineError::NativeTorrent(format!(
                 "selected torrent file index is unsupported on this platform: {error}"
             ))
-        })
+        })?;
+    if let Some(index) = selected_files
+        .iter()
+        .find(|index| **index >= local_torrent_metadata.files.len())
+    {
+        return Err(DownloadEngineError::NativeTorrent(format!(
+            "selected torrent file index {index} is out of range"
+        )));
+    }
+    Ok(Some(selected_files))
 }
 
 async fn wait_for_signal(receiver: &mut watch::Receiver<bool>) {
@@ -560,13 +592,36 @@ async fn wait_for_signal(receiver: &mut watch::Receiver<bool>) {
 mod tests {
     //! Deterministic unit tests for the native torrent engine.
     //!
-    //! These tests do NOT open network connections. They verify parsing,
-    //! security invariants, and engine wiring using in-memory fixtures.
+    //! Most tests use in-memory fixtures; the controlled peer test binds only
+    //! loopback sockets and never contacts a public tracker or swarm.
 
-    use super::{DownloadEngineError, NativeTorrentConfig, selected_files_from_metadata};
-    use fetchx_models::{DownloadSource, EngineKind, parse_magnet_uri};
+    use super::{
+        DownloadEngineError, NativeTorrentConfig, NativeTorrentEngine, selected_files_from_metadata,
+    };
+    use crate::ManagedDownloadControl;
+    use fetchx_models::{
+        DownloadSource, DownloadStatus, EngineKind, TorrentFile, TorrentMetadata, parse_magnet_uri,
+    };
     use fetchx_storage::{TorrentMetadataRow, TorrentSeedState, TorrentSourceType};
-    use std::path::PathBuf;
+    use sha1::{Digest, Sha1};
+    use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
+
+    fn local_torrent_metadata() -> TorrentMetadata {
+        TorrentMetadata {
+            info_hash: "0123456789012345678901234567890123456789".to_owned(),
+            name: "sample".to_owned(),
+            total_size: 4,
+            files: (0..4)
+                .map(|index| TorrentFile {
+                    path: vec![format!("file-{index}.bin")],
+                    size: 1,
+                })
+                .collect(),
+            trackers: Vec::new(),
+            piece_length: 16_384,
+            piece_count: 1,
+        }
+    }
 
     fn torrent_metadata_row(
         source_type: TorrentSourceType,
@@ -574,6 +629,8 @@ mod tests {
         selected_file_indexes: Vec<u32>,
     ) -> TorrentMetadataRow {
         let now = fetchx_models::Timestamp::from_unix_millis(1);
+        let torrent_metadata =
+            (source_type == TorrentSourceType::TorrentFile).then(local_torrent_metadata);
         TorrentMetadataRow {
             download_id: fetchx_models::DownloadId::new(),
             source_type,
@@ -581,7 +638,7 @@ mod tests {
             local_torrent_path: None,
             info_hash: "0123456789012345678901234567890123456789".to_owned(),
             torrent_name: "sample".to_owned(),
-            torrent_metadata: None,
+            torrent_metadata,
             destination: PathBuf::from("downloads"),
             metadata_state: "ready".to_owned(),
             selected_file_indexes,
@@ -600,11 +657,15 @@ mod tests {
 
     #[test]
     fn confirmed_local_torrent_selection_is_passed_as_native_file_indexes() {
-        let selected = selected_files_from_metadata(Some(torrent_metadata_row(
-            TorrentSourceType::TorrentFile,
-            true,
-            vec![1, 3],
-        )))
+        let torrent_metadata = local_torrent_metadata();
+        let selected = selected_files_from_metadata(
+            Some(torrent_metadata_row(
+                TorrentSourceType::TorrentFile,
+                true,
+                vec![1, 3],
+            )),
+            Some(&torrent_metadata),
+        )
         .expect("valid persisted indexes should convert");
 
         assert_eq!(selected, Some(vec![1, 3]));
@@ -613,34 +674,259 @@ mod tests {
     #[test]
     fn native_engine_requires_confirmed_local_selection_and_ignores_magnet_selection() {
         assert!(matches!(
-            selected_files_from_metadata(Some(torrent_metadata_row(
-                TorrentSourceType::TorrentFile,
-                false,
-                vec![1],
-            ))),
+            selected_files_from_metadata(
+                Some(torrent_metadata_row(
+                    TorrentSourceType::TorrentFile,
+                    false,
+                    vec![1],
+                )),
+                Some(&local_torrent_metadata())
+            ),
             Err(DownloadEngineError::NativeTorrent(_))
         ));
         assert!(matches!(
-            selected_files_from_metadata(Some(torrent_metadata_row(
-                TorrentSourceType::Magnet,
-                true,
-                vec![1],
-            ))),
+            selected_files_from_metadata(
+                Some(torrent_metadata_row(
+                    TorrentSourceType::Magnet,
+                    true,
+                    vec![1],
+                )),
+                None
+            ),
             Ok(None)
         ));
-        assert!(matches!(selected_files_from_metadata(None), Ok(None)));
+        assert!(matches!(
+            selected_files_from_metadata(None, Some(&local_torrent_metadata())),
+            Ok(None)
+        ));
     }
 
     #[test]
     fn native_engine_rejects_empty_confirmed_local_torrent_selection() {
         assert!(matches!(
-            selected_files_from_metadata(Some(torrent_metadata_row(
-                TorrentSourceType::TorrentFile,
-                true,
-                Vec::new(),
-            ))),
+            selected_files_from_metadata(
+                Some(torrent_metadata_row(
+                    TorrentSourceType::TorrentFile,
+                    true,
+                    Vec::new(),
+                )),
+                Some(&local_torrent_metadata())
+            ),
             Err(DownloadEngineError::NativeTorrent(_))
         ));
+    }
+
+    #[test]
+    fn native_engine_rejects_stale_local_torrent_selections() {
+        let metadata = local_torrent_metadata();
+        assert!(matches!(
+            selected_files_from_metadata(
+                Some(torrent_metadata_row(
+                    TorrentSourceType::TorrentFile,
+                    true,
+                    vec![4],
+                )),
+                Some(&metadata)
+            ),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+
+        let mut changed_torrent = metadata;
+        changed_torrent.info_hash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd".to_owned();
+        assert!(matches!(
+            selected_files_from_metadata(
+                Some(torrent_metadata_row(
+                    TorrentSourceType::TorrentFile,
+                    true,
+                    vec![1],
+                )),
+                Some(&changed_torrent)
+            ),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+    }
+
+    fn bencode_string(value: &[u8], output: &mut Vec<u8>) {
+        output.extend_from_slice(format!("{}:", value.len()).as_bytes());
+        output.extend_from_slice(value);
+    }
+
+    fn selected_files_torrent_bytes(first_file: &[u8], selected_file: &[u8]) -> Vec<u8> {
+        let mut bytes = b"d4:infod5:filesl".to_vec();
+        for (name, payload) in [("first.bin", first_file), ("selected.bin", selected_file)] {
+            bytes.extend_from_slice(b"d6:lengthi");
+            bytes.extend_from_slice(payload.len().to_string().as_bytes());
+            bytes.extend_from_slice(b"e4:pathl");
+            bencode_string(name.as_bytes(), &mut bytes);
+            bytes.extend_from_slice(b"ee");
+        }
+        bytes.extend_from_slice(b"e4:name6:bundle12:piece lengthi16384e6:pieces");
+        let mut piece_hashes = Vec::new();
+        for piece in first_file
+            .chunks(16_384)
+            .chain(selected_file.chunks(16_384))
+        {
+            piece_hashes.extend_from_slice(&Sha1::digest(piece));
+        }
+        bencode_string(&piece_hashes, &mut bytes);
+        bytes.extend_from_slice(b"7:privatei1eee");
+        bytes
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn downloads_only_selected_file_from_controlled_loopback_peer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use fetchx_storage::{Database, DownloadRepository, TorrentMetadataRepository};
+        use librqbit::{AddTorrent, AddTorrentOptions, ListenerOptions, Session, SessionOptions};
+        use tokio::sync::watch;
+
+        let directory = tempfile::tempdir()?;
+        let first_payload = vec![b'a'; 16_384];
+        let selected_payload = vec![b's'; 16_384];
+        let torrent_bytes = selected_files_torrent_bytes(&first_payload, &selected_payload);
+        let metadata = fetchx_models::parse_torrent_metainfo(&torrent_bytes)?;
+        assert_eq!(metadata.files.len(), 2);
+
+        let seed_output = directory.path().join("seed-output");
+        tokio::fs::create_dir_all(&seed_output).await?;
+        tokio::fs::write(seed_output.join("first.bin"), &first_payload).await?;
+        tokio::fs::write(seed_output.join("selected.bin"), &selected_payload).await?;
+        let seeder_session = Session::new_with_opts(
+            directory.path().join("seed-session"),
+            SessionOptions {
+                dht: None,
+                persistence: None,
+                disable_trackers: true,
+                disable_local_service_discovery: true,
+                ipv4_only: true,
+                listen: Some(ListenerOptions {
+                    listen_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                    ipv4_only: true,
+                    ..ListenerOptions::default()
+                }),
+                ..SessionOptions::default()
+            },
+        )
+        .await?;
+        let seeder = seeder_session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent_bytes.clone()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    output_folder: Some(seed_output.to_string_lossy().into_owned()),
+                    ..AddTorrentOptions::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .ok_or("seeder add did not return a managed torrent")?;
+        tokio::time::timeout(Duration::from_secs(10), seeder.wait_until_initialized()).await??;
+        assert!(
+            seeder.stats().finished,
+            "local seeder payload did not verify"
+        );
+        let seed_address = seeder_session
+            .listen_addr()
+            .ok_or("seeder did not bind a peer listener")?;
+
+        let database = Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let torrent_path = directory.path().join("selected.torrent");
+        tokio::fs::write(&torrent_path, &torrent_bytes).await?;
+        let id = fetchx_models::DownloadId::new();
+        let now = fetchx_models::Timestamp::now()?;
+        let destination = directory.path().join("download");
+        let item = fetchx_models::DownloadItem::new(
+            id,
+            fetchx_models::DownloadSource::new_torrent_file(
+                &torrent_path,
+                fetchx_models::EngineKind::NativeTorrent,
+            )?,
+            fetchx_models::FileName::new("bundle")?,
+            destination.clone(),
+            now,
+        );
+        repository.create(&item).await?;
+        database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::TorrentFile,
+                magnet_uri: None,
+                local_torrent_path: Some(torrent_path),
+                info_hash: metadata.info_hash.clone(),
+                torrent_name: metadata.name.clone(),
+                torrent_metadata: Some(metadata),
+                destination: destination.clone(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: vec![1],
+                selected_total_bytes: selected_payload.len() as u64,
+                selection_confirmed: true,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        let engine = NativeTorrentEngine::new(
+            repository.clone(),
+            NativeTorrentConfig {
+                listen_port: 0,
+                session_dir: Some(directory.path().join("download-session")),
+                ..NativeTorrentConfig::default()
+            },
+        )
+        .await?
+        .with_torrent_metadata_repository(database.torrent_metadata());
+        let cancellation_rx = watch::channel(false).1;
+        let pause_rx = watch::channel(false).1;
+        let control = ManagedDownloadControl {
+            cancellation: cancellation_rx,
+            pause: pause_rx,
+            connection_limit: watch::channel(1).1,
+            resource_demand: None,
+            bandwidth: crate::BandwidthControl::default(),
+        };
+        engine
+            .run_torrent(id, item, control, Some(vec![seed_address]))
+            .await?;
+
+        let completed = repository
+            .get(id)
+            .await?
+            .ok_or("native download disappeared after completion")?;
+        assert_eq!(completed.status(), DownloadStatus::Seeding);
+        assert_eq!(
+            completed.progress().downloaded_bytes(),
+            selected_payload.len() as u64
+        );
+        assert_eq!(
+            completed.progress().total_bytes(),
+            Some(selected_payload.len() as u64)
+        );
+        assert_eq!(
+            tokio::fs::read(destination.join("selected.bin")).await?,
+            selected_payload
+        );
+        let unselected_path = destination.join("first.bin");
+        if tokio::fs::try_exists(&unselected_path).await? {
+            assert_eq!(
+                tokio::fs::metadata(unselected_path).await?.len(),
+                0,
+                "native selected-file download wrote bytes for the unselected torrent file"
+            );
+        }
+
+        engine.stop_seeding(id).await?;
+        seeder_session
+            .delete(librqbit::api::TorrentIdOrHash::Id(seeder.id()), false)
+            .await?;
+        Ok(())
     }
 
     // ── Bencode test fixtures ─────────────────────────────────────────────

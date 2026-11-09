@@ -159,3 +159,13 @@ Earlier cross-phase test/build evidence remains in the linked research reports, 
 - The next bounded step is native magnet metadata and file selection, with restart/recovery acceptance tests before changing defaults or removing aria2.
 
 See the migration report for the aria2 revision/license, reviewed source files, exact per-capability status, adapter results, and remaining phases: [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md).
+
+## Prompt 18 — native torrent validation
+
+- Added a controlled local-peer test using synthetic multi-file metainfo. It verifies selected-file-only payload, completion progress, and transition to seeding without trackers, DHT, local discovery, or a public swarm.
+- CoreServices local inspection returns metadata without queue admission; duplicate admissions of the same torrent receive distinct generated default destinations.
+- Native execution reparses local `.torrent` bytes and rejects stale info hashes, unconfirmed/empty selections, and indexes outside the current file list.
+- Existing lifecycle tests cover pause then cancellation against a non-seeding fixture and stopping a completed seed without deleting its payload. The loopback transfer does not test pause/resume, retry, or cancellation while a peer transfer is active; torrent-specific restart recovery and magnet metadata selection remain open.
+- No global default change was made. Desktop local torrent admission explicitly selects native, while CLI and legacy CoreServices/remote routes retain aria2-first behavior. aria2 functionality, settings, and existing records remain intact.
+
+See [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md) for exact commands, runtime scope, and remaining acceptance criteria.

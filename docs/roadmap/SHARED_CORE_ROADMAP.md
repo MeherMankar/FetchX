@@ -228,7 +228,9 @@ Prioritized next work:
 - Pinned and reviewed aria2 source, manual/RPC behavior, license, and focused tests. No upstream source was copied.
 - Reused the existing Rust downloader, CoreServices, queue, storage, models, and `librqbit` engine. Added explicit torrent-backend admission paths and passed confirmed local torrent file indexes to native librqbit.
 - Desktop, CLI, and remote magnet adapters now preserve explicit backend choices. Existing aria2 defaults, supervision, settings, and persisted records remain in place.
-- The native migration is partial. Magnet file selection, broader aria2 restart/recovery and configuration parity, adapter runtime validation, and aria2 removal remain open.
-- Focused Rust tests passed for downloader, storage, CoreServices, CLI, remote-server, and Android bridge. Exact commands and the distinction between automated tests and unperformed runtime validation are recorded in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
+- Prompt 18 verified local `.torrent` inspection and a synthetic selected-file transfer between controlled loopback librqbit peers. The engine now rejects stale info hashes and invalid local selections; CoreServices confirms generated default destinations are distinct.
+- No global default change was made. Desktop torrent admission explicitly selects native, while CLI and legacy CoreServices/remote routes retain aria2-first behavior.
+- The native migration remains partial. Magnet metadata/file selection, live-transfer pause/resume/retry/cancel, torrent-specific restart recovery, explicit destination-collision behavior, broader aria2 configuration parity, and aria2 removal remain open. No Android device, packaged desktop, public swarm, or live aria2 daemon was tested.
+- Exact commands, test results, runtime scope, and unverified acceptance criteria are recorded in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
 
-Next: implement native magnet metadata/file selection as a separate tested slice. Do not change defaults or remove aria2 packaging/RPC until migration acceptance criteria pass across supported hosts.
+Next: extend native magnet metadata/file selection and lifecycle/recovery tests. Do not change global defaults or remove aria2 packaging/RPC until migration acceptance criteria pass across supported hosts.

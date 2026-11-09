@@ -3039,7 +3039,7 @@ mod tests {
         ));
         let torrent_id = services
             .enqueue_torrent_file_with_selection_and_engine(
-                torrent_path,
+                torrent_path.clone(),
                 EngineKind::NativeTorrent,
                 DownloadPriority::Normal,
                 None,
@@ -3058,6 +3058,25 @@ mod tests {
             .ok_or("native torrent metadata was not persisted")?;
         assert_eq!(metadata.selected_file_indexes, [0]);
         assert!(metadata.selection_confirmed);
+
+        let second_torrent_id = services
+            .enqueue_torrent_file_with_selection_and_engine(
+                torrent_path,
+                EngineKind::NativeTorrent,
+                DownloadPriority::Normal,
+                None,
+                Some(vec![0]),
+            )
+            .await?;
+        let second_torrent_item = services
+            .repository
+            .get(second_torrent_id)
+            .await?
+            .ok_or("second native torrent item was not persisted")?;
+        assert_ne!(
+            torrent_item.destination(),
+            second_torrent_item.destination()
+        );
 
         services.shutdown().await?;
         Ok(())
@@ -3222,6 +3241,30 @@ mod tests {
             ))
         ));
         assert!(services.queue().snapshot().await?.items.is_empty());
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_torrent_inspection_returns_metadata_without_queueing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        let torrent_path = root.path().join("inspect.torrent");
+        tokio::fs::write(
+            &torrent_path,
+            b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:\
+              01234567890123456789ee",
+        )
+        .await?;
+
+        let metadata = services.inspect_torrent_file(torrent_path).await?;
+        assert_eq!(metadata.name, "x");
+        assert_eq!(metadata.total_size, 1);
+        assert_eq!(metadata.files.len(), 1);
+        assert_eq!(metadata.files[0].path, ["x"]);
+        assert!(services.queue().snapshot().await?.items.is_empty());
+
         services.shutdown().await?;
         Ok(())
     }

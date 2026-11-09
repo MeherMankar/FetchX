@@ -165,8 +165,8 @@ At the Prompt 14 baseline, phase work was committed through `573c30b`; Prompt 13
 | Capability | Current status |
 |---|---|
 | Explicit torrent backend choice | CoreServices validates aria2/native-torrent selection; desktop, CLI, and remote magnet paths pass explicit choices. Legacy/default behavior remains aria2-first where previously used. |
-| Native local `.torrent` file selection | Confirmed persisted indexes are passed to librqbit `only_files`; metadata lookup is filtered by download ID. |
+| Native local `.torrent` file selection | Confirmed indexes are revalidated against current metainfo (info hash and file bounds) before librqbit `only_files`; stale, unconfirmed, empty, and out-of-range selections are rejected. Local peer transfer verifies selected-file progress/completion; generated default destinations are distinct per download. |
 | Native magnet file selection | Not implemented; native metadata selection remains a follow-up. |
 | Other aria2 RPC/process/settings behavior | Retained for compatibility; no removal or migration of existing records. |
 
-This migration has Rust unit and integration test coverage but no device, packaged-desktop, swarm, or live-daemon runtime proof. Detailed platform status and acceptance work are in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
+The deterministic Prompt 18 fixture transferred only the selected file between controlled loopback librqbit peers; it used no tracker, DHT, or public swarm. Mid-transfer pause/resume, retry, torrent-specific restart recovery, magnet selection, and explicit destination-collision behavior remain unverified. No device, packaged-desktop, public-swarm, or live-daemon runtime proof exists. Defaults remain adapter-specific; aria2 is not globally replaced. Detailed evidence is in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
