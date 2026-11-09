@@ -124,6 +124,23 @@ pub(super) async fn prepare_segment(segment: &mut Segment) -> Result<bool, Downl
     Ok(true)
 }
 
+pub(super) async fn reset_segment(segment: &mut Segment) -> Result<(), DownloadEngineError> {
+    match fs::symlink_metadata(&segment.path).await {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(&segment.path)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
+        Ok(_) => return Err(segment_error(segment)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    }
+    segment.current = 0;
+    segment.attempts = 0;
+    segment.state = SegmentState::Pending;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn download_segment(
     segment: &mut Segment,

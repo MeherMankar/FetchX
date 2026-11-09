@@ -181,13 +181,14 @@ pub struct BatchDownloadDestinationRequest {
 
 /// Ordered HTTP(S) sources for one logical DirectHTTP download.
 ///
-/// The downloader uses these as whole-source failover candidates. It never
-/// combines ranges across URLs unless a future implementation can establish
-/// strong cross-source object identity.
+/// Cross-source range assignment is enabled only with `expected_sha256` and
+/// after every source passes the shared downloader's range/length probes.
 #[derive(Clone, Debug)]
 pub struct HttpMultiSourceRequest {
     pub urls: Vec<String>,
     pub package_name: Option<String>,
+    /// Expected SHA-256; required before the downloader can combine byte ranges
+    /// from multiple sources.
     pub expected_sha256: Option<String>,
 }
 

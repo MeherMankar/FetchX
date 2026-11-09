@@ -60,6 +60,13 @@ async fn attach_http_multi_source_set(
     Ok(())
 }
 
+async fn attach_expected_sha256(destination: &Path, body: &[u8]) -> Result<(), Box<dyn Error>> {
+    let mut path = destination.as_os_str().to_os_string();
+    path.push(".fetchx.sha256");
+    tokio::fs::write(PathBuf::from(path), hex::encode(sha2::Sha256::digest(body))).await?;
+    Ok(())
+}
+
 struct ServerResponse {
     status: u16,
     body_chunks: Vec<Vec<u8>>,
@@ -84,6 +91,7 @@ enum SegmentServerMode {
     ShortBody,
     IgnoreRange,
     Fail,
+    FailAfterProbe,
     FailAboveConcurrency(usize),
     RateLimit,
 }
@@ -446,6 +454,7 @@ async fn start_segment_server(
         SegmentServerMode::Fail
             | SegmentServerMode::ShortBody
             | SegmentServerMode::FailAboveConcurrency(_)
+            | SegmentServerMode::FailAfterProbe
             | SegmentServerMode::WrongStart
             | SegmentServerMode::WrongEnd
             | SegmentServerMode::WrongTotal
@@ -522,6 +531,14 @@ async fn serve_segment_connection(
 
     let Some(range) = range else {
         let _ = no_range_requests.fetch_add(1, Ordering::AcqRel);
+        if matches!(mode, SegmentServerMode::FailAfterProbe) {
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            return;
+        }
         let validator = if matches!(mode, SegmentServerMode::NoValidator) {
             ""
         } else {
@@ -571,6 +588,10 @@ async fn serve_segment_connection(
         match mode {
             SegmentServerMode::IgnoreRange => (200, 0, 0, 0, body.clone(), body.len()),
             SegmentServerMode::Fail => (500, start, end, body.len(), Vec::new(), 0),
+            SegmentServerMode::FailAfterProbe if start == 0 && end == 0 => {
+                (206, 0, 0, body.len(), body[..1].to_vec(), 1)
+            }
+            SegmentServerMode::FailAfterProbe => (500, start, end, body.len(), Vec::new(), 0),
             SegmentServerMode::FailAboveConcurrency(limit) if current > limit => {
                 (503, start, end, body.len(), Vec::new(), 0)
             }
@@ -3208,6 +3229,400 @@ async fn multi_source_download_fails_over_then_covers_segments_without_overlap()
     }
     assert_eq!(ranged, 4);
     assert!(coverage.iter().all(|count| *count == 1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_ranges_are_assigned_across_validated_mirrors() -> Result<(), Box<dyn Error>> {
+    let body = (0..4096).map(|byte| (byte % 251) as u8).collect::<Vec<_>>();
+    let expected_sha256 = hex::encode(sha2::Sha256::digest(&body));
+    let (first_url, first_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 3, true).await?;
+    let (second_url, second_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 3, true).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("cross-source.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&first_url, EngineKind::DirectHttp)?,
+        FileName::new("cross-source.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[first_url, second_url]).await?;
+    attach_expected_sha256(&destination, &body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(repository, segmented_config(1))?;
+    let (_cancel_tx, cancellation) = watch::channel(false);
+
+    let completed = engine.download(id, cancellation).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    let reports = [first_server.await?, second_server.await?];
+    let mut coverage = vec![0_u8; body.len()];
+    let mut mirror_ranges = [0_usize; 2];
+    for (mirror_index, report) in reports.iter().enumerate() {
+        for request in &report.requests {
+            let Some(range) = range_header(request) else {
+                continue;
+            };
+            if range == "bytes=0-0" {
+                continue;
+            }
+            mirror_ranges[mirror_index] += 1;
+            let (start, end) = range
+                .strip_prefix("bytes=")
+                .and_then(|value| value.split_once('-'))
+                .ok_or("invalid range")?;
+            for byte in coverage
+                .get_mut(start.parse::<usize>()?..=end.parse::<usize>()?)
+                .ok_or("range outside file")?
+            {
+                *byte += 1;
+            }
+        }
+    }
+    assert!(mirror_ranges.iter().all(|count| *count > 0));
+    assert_eq!(mirror_ranges.iter().sum::<usize>(), 4);
+    assert!(coverage.iter().all(|count| *count == 1));
+    assert_eq!(expected_sha256, hex::encode(sha2::Sha256::digest(&body)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_reassigns_failed_active_ranges_to_another_valid_mirror()
+-> Result<(), Box<dyn Error>> {
+    let body = (0..4096).map(|byte| (byte % 233) as u8).collect::<Vec<_>>();
+    let (failing_url, failing_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::FailAfterProbe, 3, false).await?;
+    let (healthy_url, healthy_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 5, true).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("range-reassignment.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&failing_url, EngineKind::DirectHttp)?,
+        FileName::new("range-reassignment.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[failing_url, healthy_url]).await?;
+    attach_expected_sha256(&destination, &body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(repository, segmented_config(1))?;
+    let (_cancel_tx, cancellation) = watch::channel(false);
+
+    let completed = engine.download(id, cancellation).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    let failing_report = failing_server.await?;
+    let healthy_report = healthy_server.await?;
+    assert_eq!(
+        failing_report
+            .requests
+            .iter()
+            .filter(|request| range_header(request).is_some_and(|range| range != "bytes=0-0"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        healthy_report
+            .requests
+            .iter()
+            .filter(|request| range_header(request).is_some_and(|range| range != "bytes=0-0"))
+            .count(),
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_conflicting_probe_total_keeps_ordered_single_source_path()
+-> Result<(), Box<dyn Error>> {
+    let body = (0..4096).map(|byte| (byte % 241) as u8).collect::<Vec<_>>();
+    let (invalid_url, invalid_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::WrongTotal, 7, false).await?;
+    let (unused_url, unused_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 1, false).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("conflicting-source.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&invalid_url, EngineKind::DirectHttp)?,
+        FileName::new("conflicting-source.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[invalid_url, unused_url]).await?;
+    attach_expected_sha256(&destination, &body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(repository, segmented_config(1))?;
+    let (_cancel_tx, cancellation) = watch::channel(false);
+
+    let completed = engine.download(id, cancellation).await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    let invalid_report = invalid_server.await?;
+    let backup_report = unused_server.await?;
+    assert_eq!(range_header(&backup_report.requests[0]), Some("bytes=0-0"));
+    assert_eq!(
+        invalid_report
+            .requests
+            .iter()
+            .filter(|request| range_header(request).is_some_and(|range| range != "bytes=0-0"))
+            .count(),
+        4
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_same_size_different_bytes_never_publishes_bad_hash()
+-> Result<(), Box<dyn Error>> {
+    let expected_body = (0..4096).map(|byte| (byte % 239) as u8).collect::<Vec<_>>();
+    let first_body = expected_body
+        .iter()
+        .map(|byte| byte.wrapping_add(1))
+        .collect::<Vec<_>>();
+    let second_body = expected_body
+        .iter()
+        .map(|byte| byte.wrapping_add(2))
+        .collect::<Vec<_>>();
+    let (first_url, first_server) =
+        start_segment_server(first_body, 4, SegmentServerMode::Valid, 8, true).await?;
+    let (second_url, second_server) =
+        start_segment_server(second_body, 4, SegmentServerMode::Valid, 8, true).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("bad-cross-source.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&first_url, EngineKind::DirectHttp)?,
+        FileName::new("bad-cross-source.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[first_url, second_url]).await?;
+    attach_expected_sha256(&destination, &expected_body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(repository, segmented_config(1))?;
+    let (_cancel_tx, cancellation) = watch::channel(false);
+
+    let result = engine.download(id, cancellation).await;
+
+    assert!(matches!(
+        result,
+        Err(DownloadEngineError::Sha256Mismatch { .. })
+    ));
+    assert!(!tokio::fs::try_exists(&destination).await?);
+    first_server.abort();
+    second_server.abort();
+    let _ = first_server.await;
+    let _ = second_server.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_range_retry_exhaustion_preserves_destination() -> Result<(), Box<dyn Error>> {
+    let body = vec![63_u8; 4096];
+    let expected_body = vec![19_u8; 4096];
+    let (first_url, first_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::FailAfterProbe, 6, false).await?;
+    let (second_url, second_server) =
+        start_segment_server(body, 4, SegmentServerMode::FailAfterProbe, 6, false).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("range-exhaustion.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&first_url, EngineKind::DirectHttp)?,
+        FileName::new("range-exhaustion.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[first_url, second_url]).await?;
+    attach_expected_sha256(&destination, &expected_body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(repository, segmented_config(1))?;
+    let (_cancel_tx, cancellation) = watch::channel(false);
+
+    let result = engine.download(id, cancellation).await;
+
+    assert!(result.is_err());
+    assert!(!tokio::fs::try_exists(&destination).await?);
+    let first_report = first_server.await?;
+    let second_report = second_server.await?;
+    assert!(
+        first_report
+            .requests
+            .iter()
+            .any(|request| range_header(request) == Some("bytes=0-0"))
+    );
+    assert!(
+        second_report
+            .requests
+            .iter()
+            .any(|request| range_header(request) == Some("bytes=0-0"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_cross_range_destination_collision_is_not_overwritten()
+-> Result<(), Box<dyn Error>> {
+    let body = b"expected data".to_vec();
+    let (first_url, first_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 1, false).await?;
+    let (second_url, second_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 1, false).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("cross-collision.bin");
+    let original = b"existing user file";
+    tokio::fs::write(&destination, original).await?;
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&first_url, EngineKind::DirectHttp)?,
+        FileName::new("cross-collision.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[first_url, second_url]).await?;
+    attach_expected_sha256(&destination, &body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(repository, segmented_config(1))?;
+    let (_cancel_tx, cancellation) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, cancellation).await,
+        Err(DownloadEngineError::DestinationExists)
+    ));
+    assert_eq!(tokio::fs::read(destination).await?, original);
+    first_server.abort();
+    second_server.abort();
+    let _ = first_server.await;
+    let _ = second_server.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_source_cancelled_ranges_resume_with_the_same_digest_contract()
+-> Result<(), Box<dyn Error>> {
+    let body = vec![23_u8; 1024 * 1024];
+    let (first_url, first_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 12, true).await?;
+    let (second_url, second_server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 12, true).await?;
+    let database = Database::connect("sqlite::memory:").await?;
+    let repository = database.downloads();
+    let dir = tempfile::tempdir()?;
+    let destination = dir.path().join("cross-source-resume.bin");
+    let item = DownloadItem::new(
+        DownloadId::new(),
+        DownloadSource::new(&first_url, EngineKind::DirectHttp)?,
+        FileName::new("cross-source-resume.bin")?,
+        destination.clone(),
+        Timestamp::from_unix_millis(1),
+    );
+    let id = item.id();
+    attach_http_multi_source_set(&destination, &[first_url, second_url]).await?;
+    attach_expected_sha256(&destination, &body).await?;
+    repository.create(&item).await?;
+    let engine = DirectHttpEngine::with_config(
+        repository.clone(),
+        HttpEngineConfig {
+            progress_time_interval: Duration::from_millis(1),
+            progress_bytes_interval: 1,
+            ..segmented_config(1)
+        },
+    )?;
+    let (cancel_sender, cancellation) = watch::channel(false);
+    let download = tokio::spawn(async move { engine.download(id, cancellation).await });
+    let mut observed_progress = false;
+    for _ in 0..200 {
+        let current = database.downloads().get(id).await?;
+        if current.is_some_and(|item| {
+            item.progress().downloaded_bytes() > 0 && item.status() == DownloadStatus::Downloading
+        }) {
+            observed_progress = true;
+            break;
+        }
+        sleep(Duration::from_millis(5)).await;
+    }
+    assert!(
+        observed_progress,
+        "expected ranged bytes before cancellation"
+    );
+    cancel_sender.send(true)?;
+    assert!(matches!(
+        download.await?,
+        Err(DownloadEngineError::Cancelled)
+    ));
+
+    let (_resume_cancel, resume_cancellation) = watch::channel(false);
+    let cancelled_item = database
+        .downloads()
+        .get(id)
+        .await?
+        .ok_or("cancelled download disappeared")?;
+    assert_eq!(cancelled_item.status(), DownloadStatus::Cancelled);
+    let mut entries = tokio::fs::read_dir(dir.path()).await?;
+    let mut partial_segments = 0;
+    while let Some(entry) = entries.next_entry().await? {
+        if entry.file_name().to_string_lossy().contains(".segments-") {
+            partial_segments += 1;
+        }
+    }
+    assert!(partial_segments > 0, "expected resumable range files");
+    let engine = DirectHttpEngine::with_config(
+        repository,
+        HttpEngineConfig {
+            progress_time_interval: Duration::from_millis(1),
+            progress_bytes_interval: 1,
+            ..segmented_config(1)
+        },
+    )?;
+    let resumed = engine.download(id, resume_cancellation).await?;
+    assert_eq!(resumed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(resumed.id(), id);
+    assert_ne!(resumed.updated_at(), resumed.created_at());
+    drop(resumed);
+    let reports = [first_server.await?, second_server.await?];
+    let planned_starts = [0, 262_144, 524_288, 786_432];
+    assert!(
+        reports
+            .iter()
+            .flat_map(|report| &report.requests)
+            .filter_map(|request| range_header(request))
+            .filter(|range| *range != "bytes=0-0")
+            .filter_map(|range| {
+                range
+                    .strip_prefix("bytes=")
+                    .and_then(|value| value.split_once('-'))
+                    .and_then(|(start, _)| start.parse::<usize>().ok())
+            })
+            .any(|start| !planned_starts.contains(&start)),
+        "expected the resumed request to continue within a previously started segment"
+    );
     Ok(())
 }
 

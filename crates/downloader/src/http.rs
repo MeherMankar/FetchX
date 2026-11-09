@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     ffi::OsString,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
@@ -138,10 +138,19 @@ struct SegmentedContext {
     segment_count: usize,
     validator: String,
     extra_headers: Vec<(String, String)>,
+    sources: Option<Vec<HttpSegmentSource>>,
+}
+
+#[derive(Clone)]
+struct HttpSegmentSource {
+    url: Url,
+    client: Client,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct ResourceIdentity {
+    #[serde(default = "resource_identity_version")]
+    version: u8,
     url: String,
     validator: Option<String>,
     #[serde(default)]
@@ -154,6 +163,10 @@ struct ResourceIdentity {
     /// Stored so that they survive a pause/resume cycle.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     extra_headers: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    multi_source_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    multi_source_urls: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -406,8 +419,96 @@ where
         source_set: HttpMultiSourceSet,
         control: &mut ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
-        let mut last_error = None;
-        for (index, source) in source_set.urls.iter().enumerate() {
+        let current_item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let current_temporary = temporary_path(current_item.destination());
+        let stored_identity = load_resource_identity(&current_temporary).await?;
+        if stored_identity
+            .as_ref()
+            .is_some_and(|identity| identity.multi_source_sha256.is_some() && identity.finalizing)
+            && let Some(completed) = self
+                .recover_finalization(
+                    &current_item,
+                    &parse_http_url_with_private_policy(
+                        &source_set.urls[0],
+                        self.allow_loopback_benchmark_target(),
+                    )?,
+                    &current_temporary,
+                    current_item.destination(),
+                )
+                .await?
+        {
+            return Ok(completed);
+        }
+        let saved_cross_source_identity = stored_identity
+            .as_ref()
+            .is_some_and(|identity| identity.multi_source_sha256.is_some());
+        let expected_sha256 = load_expected_sha256(current_item.destination()).await?;
+        if saved_cross_source_identity && expected_sha256.is_none() {
+            return Err(DownloadEngineError::InvalidConfiguration);
+        }
+        if fs::try_exists(current_item.destination())
+            .await
+            .map_err(DownloadEngineError::Io)?
+        {
+            return Err(DownloadEngineError::DestinationExists);
+        }
+
+        if (2..=64).contains(&self.config.segment_count)
+            && self.config.minimum_segmented_file_size > 0
+            && self.config.minimum_segmented_file_size < u64::MAX
+            && let Some(expected_sha256) = expected_sha256
+            && let Some((sources, total_size)) = self
+                .probe_multi_source_ranges(&source_set.urls, &current_item, control)
+                .await?
+            && total_size >= 2
+            && total_size >= self.config.minimum_segmented_file_size
+        {
+            match self
+                .download_multi_source_segmented(
+                    id,
+                    source_set.urls.clone(),
+                    expected_sha256,
+                    sources,
+                    total_size,
+                    control,
+                )
+                .await
+            {
+                Ok(item) => return Ok(item),
+                Err(error)
+                    if error.is_cancelled() || error.is_paused() || !is_source_failure(&error) =>
+                {
+                    return Err(error);
+                }
+                Err(error) => {
+                    let first_url = parse_http_url_with_private_policy(
+                        &source_set.urls[0],
+                        self.allow_loopback_benchmark_target(),
+                    )?;
+                    self.reset_for_source_switch(id, &first_url).await?;
+                    return self
+                        .download_ordered_sources(id, &source_set.urls, control, Some(error))
+                        .await;
+                }
+            }
+        }
+
+        self.download_ordered_sources(id, &source_set.urls, control, None)
+            .await
+    }
+
+    async fn download_ordered_sources(
+        &self,
+        id: DownloadId,
+        urls: &[String],
+        control: &mut ManagedDownloadControl,
+        mut last_error: Option<DownloadEngineError>,
+    ) -> Result<DownloadItem, DownloadEngineError> {
+        for (index, source) in urls.iter().enumerate() {
             let url =
                 parse_http_url_with_private_policy(source, self.allow_loopback_benchmark_target())?;
             if index > 0 {
@@ -436,6 +537,236 @@ where
             }
         }
         Err(last_error.unwrap_or(DownloadEngineError::InvalidConfiguration))
+    }
+
+    async fn probe_multi_source_ranges(
+        &self,
+        urls: &[String],
+        item: &DownloadItem,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<Option<(Vec<HttpSegmentSource>, u64)>, DownloadEngineError> {
+        let temporary_path = temporary_path(item.destination());
+        let extra_headers = load_resource_identity(&temporary_path)
+            .await?
+            .map(|identity| identity.extra_headers)
+            .unwrap_or_default();
+        let primary_url = parse_http_url_with_private_policy(
+            item.source().url(),
+            self.allow_loopback_benchmark_target(),
+        )?;
+        let mut sources = Vec::with_capacity(urls.len());
+        let mut common_total = None;
+        let mut all_valid = true;
+
+        for source in urls {
+            if *control.cancellation.borrow_and_update() {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow() {
+                return Err(DownloadEngineError::Paused);
+            }
+            let url =
+                parse_http_url_with_private_policy(source, self.allow_loopback_benchmark_target())?;
+            let source_headers = context_headers_for_source(&extra_headers, &url, &primary_url);
+            let response = loop {
+                let probe = self.send_redirect_chain(&url, Some(0), Some(0), None, &source_headers);
+                tokio::select! {
+                    changed = control.cancellation.changed() => {
+                        if changed.is_err() || *control.cancellation.borrow_and_update() {
+                            return Err(DownloadEngineError::Cancelled);
+                        }
+                    }
+                    changed = control.pause.changed() => {
+                        if changed.is_err() || *control.pause.borrow_and_update() {
+                            return Err(DownloadEngineError::Paused);
+                        }
+                    }
+                    response = probe => match response {
+                        Ok(response) => break Some(response),
+                        Err(DownloadEngineError::InvalidUrl) => return Err(DownloadEngineError::InvalidUrl),
+                        Err(_) => {
+                            all_valid = false;
+                            break None;
+                        }
+                    }
+                }
+            };
+            let Some(response) = response else {
+                continue;
+            };
+
+            if response.status() != StatusCode::PARTIAL_CONTENT
+                || !same_http_target(response.url(), &url)
+            {
+                all_valid = false;
+                continue;
+            }
+            let range = match parse_content_range(&response) {
+                Ok(range) => range,
+                Err(_) => {
+                    all_valid = false;
+                    continue;
+                }
+            };
+            let length = match parse_content_length(&response) {
+                Ok(Some(length)) => length,
+                _ => {
+                    all_valid = false;
+                    continue;
+                }
+            };
+            if range.start != 0 || range.end != 0 || range.total.is_none() || length != 1 {
+                all_valid = false;
+                continue;
+            }
+            let total = range.total.unwrap_or_default();
+            if total == 0 || common_total.is_some_and(|known| known != total) {
+                all_valid = false;
+                continue;
+            }
+            common_total = Some(total);
+            let mut probe_response = response;
+            let mut probe_body_bytes = 0_usize;
+            let mut body_valid = true;
+            loop {
+                let chunk = tokio::select! {
+                    changed = control.cancellation.changed() => {
+                        if changed.is_err() || *control.cancellation.borrow_and_update() {
+                            return Err(DownloadEngineError::Cancelled);
+                        }
+                        continue;
+                    }
+                    changed = control.pause.changed() => {
+                        if changed.is_err() || *control.pause.borrow_and_update() {
+                            return Err(DownloadEngineError::Paused);
+                        }
+                        continue;
+                    }
+                    chunk = probe_response.chunk() => chunk,
+                };
+                match chunk {
+                    Ok(Some(bytes)) => {
+                        probe_body_bytes = probe_body_bytes.saturating_add(bytes.len());
+                        if probe_body_bytes > 1 {
+                            body_valid = false;
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        body_valid = false;
+                        break;
+                    }
+                }
+            }
+            if !body_valid || probe_body_bytes != 1 {
+                all_valid = false;
+                continue;
+            }
+            let client = self
+                .client_for_url(&url, self.allow_loopback_benchmark_target())
+                .await?;
+            sources.push(HttpSegmentSource { url, client });
+        }
+
+        if !all_valid || sources.len() != urls.len() {
+            return Ok(None);
+        }
+        Ok(common_total.map(|total| (sources, total)))
+    }
+
+    async fn download_multi_source_segmented(
+        &self,
+        id: DownloadId,
+        urls: Vec<String>,
+        expected_sha256: String,
+        sources: Vec<HttpSegmentSource>,
+        total_size: u64,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<DownloadItem, DownloadEngineError> {
+        let mut item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let first_url = sources
+            .first()
+            .map(|source| source.url.clone())
+            .ok_or(DownloadEngineError::InvalidConfiguration)?;
+        let temporary_path = temporary_path(item.destination());
+        let segment_count =
+            segmented_layout(&temporary_path, self.config.segment_count, total_size).await?;
+        if let Some(completed) = self
+            .recover_finalization(&item, &first_url, &temporary_path, item.destination())
+            .await?
+        {
+            return Ok(completed);
+        }
+
+        let existing_identity = load_resource_identity(&temporary_path).await?;
+        let can_resume = existing_identity.as_ref().is_some_and(|identity| {
+            identity.multi_source_sha256.as_deref() == Some(expected_sha256.as_str())
+                && identity.multi_source_urls == urls
+                && identity.total_size == Some(total_size)
+                && identity.segment_count == Some(segment_count)
+        });
+        if !can_resume {
+            if let Some(identity) = existing_identity.as_ref()
+                && let (Some(old_count), Some(old_total)) =
+                    (identity.segment_count, identity.total_size)
+            {
+                cleanup_segment_files(&temporary_path, old_count, old_total).await?;
+            }
+            cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
+            remove_partial_file(&temporary_path).await?;
+        }
+
+        let extra_headers = existing_identity
+            .as_ref()
+            .map(|identity| identity.extra_headers.clone())
+            .unwrap_or_default();
+        let identity = ResourceIdentity {
+            version: 1,
+            url: first_url.to_string(),
+            validator: None,
+            finalizing: false,
+            total_size: Some(total_size),
+            segment_count: Some(segment_count),
+            extra_headers: extra_headers.clone(),
+            multi_source_sha256: Some(expected_sha256),
+            multi_source_urls: urls,
+        };
+        save_resource_identity(&temporary_path, &identity).await?;
+        let mut expected_updated_at = item.updated_at();
+        let status = item.status();
+        item.set_progress_at(
+            DownloadProgress::new(0, Some(total_size), None, None)?,
+            next_timestamp(item.updated_at())?,
+        )?;
+        self.persist_if_status(&item, status, expected_updated_at)
+            .await?;
+        expected_updated_at = item.updated_at();
+        let segmented = self
+            .download_segmented(
+                SegmentedContext {
+                    id,
+                    item,
+                    expected_updated_at,
+                    status,
+                    url: first_url,
+                    total_size,
+                    segment_count,
+                    validator: String::new(),
+                    extra_headers,
+                    sources: Some(sources),
+                },
+                control,
+            )
+            .await?;
+        match segmented {
+            SegmentedOutcome::Completed(item) => Ok(*item),
+            SegmentedOutcome::Fallback => Err(DownloadEngineError::RangeMismatch),
+        }
     }
 
     async fn reset_for_source_switch(
@@ -468,12 +799,15 @@ where
             save_resource_identity(
                 &temporary_path,
                 &ResourceIdentity {
+                    version: 1,
                     url: next_url.to_string(),
                     validator: None,
                     finalizing: false,
                     total_size: None,
                     segment_count: None,
                     extra_headers: identity.extra_headers,
+                    multi_source_sha256: None,
+                    multi_source_urls: Vec::new(),
                 },
             )
             .await?;
@@ -527,10 +861,15 @@ where
             .filter(|identity| identity.url == url.as_str())
             .and_then(|identity| identity.validator.clone());
         // Preserve any browser context headers that were stored before this run.
-        let extra_headers: Vec<(String, String)> = stored_identity
+        let stored_headers: Vec<(String, String)> = stored_identity
             .as_ref()
             .map(|id| id.extra_headers.clone())
             .unwrap_or_default();
+        let primary_url = parse_http_url_with_private_policy(
+            item.source().url(),
+            self.allow_loopback_benchmark_target(),
+        )?;
+        let extra_headers = context_headers_for_source(&stored_headers, &url, &primary_url);
         let range_start =
             (existing_size > 0 && resume_validator.is_some()).then_some(existing_size);
         let mut expected_updated_at = item.updated_at();
@@ -591,12 +930,15 @@ where
             save_resource_identity(
                 &temporary_path,
                 &ResourceIdentity {
+                    version: 1,
                     url: url.to_string(),
                     validator: initial_validator,
                     finalizing: false,
                     total_size: Some(total_size),
                     segment_count: Some(segment_count),
                     extra_headers: extra_headers.clone(),
+                    multi_source_sha256: None,
+                    multi_source_urls: Vec::new(),
                 },
             )
             .await?;
@@ -613,6 +955,7 @@ where
                         segment_count,
                         validator,
                         extra_headers: extra_headers.clone(),
+                        sources: None,
                     },
                     control,
                 )
@@ -701,12 +1044,15 @@ where
             save_resource_identity(
                 &temporary_path,
                 &ResourceIdentity {
+                    version: 1,
                     url: url.to_string(),
                     validator: current_validator,
                     finalizing: false,
                     total_size: None,
                     segment_count: None,
                     extra_headers: extra_headers.clone(),
+                    multi_source_sha256: None,
+                    multi_source_urls: Vec::new(),
                 },
             )
             .await?;
@@ -774,15 +1120,38 @@ where
             return Ok(None);
         }
 
-        if fs::try_exists(destination)
+        let expected_sidecar = load_expected_sha256(destination).await?;
+        if let Some(expected_sha256) = identity.multi_source_sha256.as_deref() {
+            if expected_sidecar
+                .as_deref()
+                .is_some_and(|sidecar| sidecar != expected_sha256)
+            {
+                return Ok(None);
+            }
+            verify_sha256(temporary, expected_sha256).await?;
+        }
+        let destination_exists = fs::try_exists(destination)
             .await
-            .map_err(DownloadEngineError::Io)?
-        {
+            .map_err(DownloadEngineError::Io)?;
+        if destination_exists {
             if !files_equal(temporary, destination).await? {
                 return Ok(None);
             }
         } else {
-            publish_without_replacement(temporary, destination).await?;
+            if let Some(expected_sha256) = identity.multi_source_sha256.as_deref() {
+                if expected_sidecar.as_deref() != Some(expected_sha256) {
+                    return Ok(None);
+                }
+                if load_http_multi_source_set(destination)
+                    .await?
+                    .is_none_or(|sources| sources.urls != identity.multi_source_urls)
+                {
+                    return Ok(None);
+                }
+                publish_verified_atomically(temporary, destination, expected_sha256).await?;
+            } else {
+                publish_without_replacement(temporary, destination).await?;
+            }
         }
 
         let mut recovered = item.clone();
@@ -838,8 +1207,14 @@ where
                     }
                 }
                 response = async {
-                    self.send_redirect_chain(&url, range_start, if_range.as_deref(), extra_headers)
-                        .await
+                    self.send_redirect_chain(
+                        &url,
+                        range_start,
+                        None,
+                        if_range.as_deref(),
+                        extra_headers,
+                    )
+                    .await
                 } => {
                     match response {
                         Ok(response)
@@ -977,6 +1352,7 @@ where
         &self,
         initial_url: &Url,
         range_start: Option<u64>,
+        range_end: Option<u64>,
         if_range: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Response, DownloadEngineError> {
@@ -987,7 +1363,8 @@ where
             let client = self.client_for_url(&url, allow_loopback_fixture).await?;
             let mut request = client.get(url.clone());
             if let Some(start) = range_start {
-                request = request.header(RANGE, format!("bytes={start}-"));
+                let end = range_end.map_or_else(String::new, |end| end.to_string());
+                request = request.header(RANGE, format!("bytes={start}-{end}"));
                 if let Some(validator) = if_range {
                     request = request.header(IF_RANGE, validator);
                 }
@@ -1097,11 +1474,19 @@ where
             segment_count,
             validator,
             extra_headers,
+            sources,
         } = context;
         let temporary_path = temporary_path(item.destination());
-        let segment_client = self
-            .client_for_url(&url, self.allow_loopback_benchmark_target())
-            .await?;
+        let segment_sources = match sources {
+            Some(sources) => sources,
+            None => vec![HttpSegmentSource {
+                url: url.clone(),
+                client: self
+                    .client_for_url(&url, self.allow_loopback_benchmark_target())
+                    .await?,
+            }],
+        };
+        let cross_source = segment_sources.len() > 1;
         let mut segments = segments::plan_segments(total_size, segment_count, |index| {
             segment_file_path(&temporary_path, segment_count, total_size, index)
         })
@@ -1139,13 +1524,21 @@ where
 
         let downloaded = Arc::new(AtomicU64::new(already_downloaded));
         let (stop_sender, stop_receiver) = watch::channel(false);
-        let mut tasks: JoinSet<(usize, Segment, Result<SegmentResult, DownloadEngineError>)> =
-            JoinSet::new();
+        let mut tasks: JoinSet<(
+            usize,
+            usize,
+            Segment,
+            Result<SegmentResult, DownloadEngineError>,
+        )> = JoinSet::new();
         let mut pending = segments
             .iter()
             .filter(|segment| segment.state != SegmentState::Complete)
             .map(|segment| segment.index)
             .collect::<VecDeque<_>>();
+        let mut source_assignments = (0..segments.len())
+            .map(|index| index % segment_sources.len())
+            .collect::<Vec<_>>();
+        let mut failed_sources = vec![HashSet::new(); segments.len()];
         let mut controller = AdaptiveController::new(self.config.adaptive.clone());
         let mut connection_limit = *control.connection_limit.borrow_and_update();
         let initial_target = controller
@@ -1155,11 +1548,12 @@ where
             &mut tasks,
             &mut pending,
             &segments,
+            &segment_sources,
+            &source_assignments,
+            &url,
             initial_target,
             total_size,
-            &url,
             &validator,
-            &segment_client,
             &control.cancellation,
             &stop_receiver,
             &control.bandwidth,
@@ -1227,13 +1621,14 @@ where
                             &mut tasks,
                             &mut pending,
                             &segments,
+                            &segment_sources,
+                            &source_assignments,
+                            &url,
                             controller
                                 .desired_concurrency(remaining_segments)
                                 .min(connection_limit),
                             total_size,
-                            &url,
                             &validator,
-                            &segment_client,
                             &control.cancellation,
                             &stop_receiver,
                             &control.bandwidth,
@@ -1303,11 +1698,12 @@ where
                         &mut tasks,
                         &mut pending,
                         &segments,
+                        &segment_sources,
+                        &source_assignments,
+                        &url,
                         target,
                         total_size,
-                        &url,
                         &validator,
-                        &segment_client,
                         &control.cancellation,
                         &stop_receiver,
                         &control.bandwidth,
@@ -1324,22 +1720,67 @@ where
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {
                     match joined {
-                        Some(Ok((index, segment, Ok(SegmentResult::Complete)))) => {
+                        Some(Ok((index, _, segment, Ok(SegmentResult::Complete)))) => {
                             segments[index] = segment;
                             completed_since_sample = completed_since_sample.saturating_add(1);
                         }
-                        Some(Ok((_, _, Ok(SegmentResult::Fallback)))) if stop_reason.is_none() => {
-                            stop_reason = Some(SegmentedStop::Fallback);
-                            let _ = stop_sender.send(true);
+                        Some(Ok((index, source_index, segment, Ok(SegmentResult::Fallback)))) if stop_reason.is_none() => {
+                            segments[index] = segment;
+                            if cross_source {
+                                if let Some(next_source) = next_segment_source(
+                                    source_index,
+                                    &mut failed_sources[index],
+                                    segment_sources.len(),
+                                ) {
+                                    let discarded = segments[index].current;
+                                    downloaded.fetch_sub(discarded, Ordering::AcqRel);
+                                    if let Err(error) = segments::reset_segment(&mut segments[index]).await {
+                                        stop_reason = Some(SegmentedStop::Failure(error));
+                                        let _ = stop_sender.send(true);
+                                    } else {
+                                        source_assignments[index] = next_source;
+                                        pending.push_front(index);
+                                    }
+                                } else {
+                                    stop_reason = Some(SegmentedStop::Fallback);
+                                    let _ = stop_sender.send(true);
+                                }
+                            } else {
+                                stop_reason = Some(SegmentedStop::Fallback);
+                                let _ = stop_sender.send(true);
+                            }
                         }
-                        Some(Ok((index, segment, Ok(SegmentResult::Cancelled)))) => {
+                        Some(Ok((index, _, segment, Ok(SegmentResult::Cancelled)))) => {
                             segments[index] = segment;
                         }
-                        Some(Ok((index, segment, Err(error)))) if stop_reason.is_none() => {
+                        Some(Ok((index, source_index, segment, Err(error)))) if stop_reason.is_none() => {
                             segments[index] = segment;
                             failures_since_sample = failures_since_sample.saturating_add(1);
                             wait_for_error_sample = true;
-                            if segments[index].attempts < MAX_SEGMENT_ATTEMPTS
+                            if cross_source && is_segment_source_failure(&error) {
+                                if let Some(next_source) = next_segment_source(
+                                    source_index,
+                                    &mut failed_sources[index],
+                                    segment_sources.len(),
+                                ) {
+                                    let discarded = segments[index].current;
+                                    downloaded.fetch_sub(discarded, Ordering::AcqRel);
+                                    match segments::reset_segment(&mut segments[index]).await {
+                                        Ok(()) => {
+                                            source_assignments[index] = next_source;
+                                            pending.push_front(index);
+                                            wait_for_error_sample = false;
+                                        }
+                                        Err(reset_error) => {
+                                            stop_reason = Some(SegmentedStop::Failure(reset_error));
+                                            let _ = stop_sender.send(true);
+                                        }
+                                    }
+                                } else {
+                                    stop_reason = Some(SegmentedStop::Fallback);
+                                    let _ = stop_sender.send(true);
+                                }
+                            } else if segments[index].attempts < MAX_SEGMENT_ATTEMPTS
                                 && matches!(error, DownloadEngineError::SegmentFailed { .. })
                             {
                                 match segments::prepare_segment(&mut segments[index]).await {
@@ -1393,11 +1834,12 @@ where
                             &mut tasks,
                             &mut pending,
                             &segments,
+                            &segment_sources,
+                            &source_assignments,
+                            &url,
                             target,
                             total_size,
-                            &url,
                             &validator,
-                            &segment_client,
                             &control.cancellation,
                             &stop_receiver,
                             &control.bandwidth,
@@ -1467,9 +1909,42 @@ where
             &mut control.pause,
         )
         .await?;
-        cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
         mark_resource_finalizing(&temporary_path, total_size).await?;
-        publish_without_replacement(&temporary_path, item.destination()).await?;
+        if cross_source {
+            let identity = load_resource_identity(&temporary_path)
+                .await?
+                .ok_or_else(|| {
+                    DownloadEngineError::InvalidPartialMetadata(
+                        "cross-source resume identity is missing before publication".to_owned(),
+                    )
+                })?;
+            let expected_sha256 = identity
+                .multi_source_sha256
+                .as_deref()
+                .ok_or(DownloadEngineError::InvalidConfiguration)?;
+            if load_expected_sha256(item.destination()).await?.as_deref() != Some(expected_sha256)
+                || load_http_multi_source_set(item.destination())
+                    .await?
+                    .is_none_or(|sources| sources.urls != identity.multi_source_urls)
+            {
+                return Err(DownloadEngineError::InvalidPartialMetadata(
+                    "cross-source checksum or source set changed during transfer".to_owned(),
+                ));
+            }
+            if let Err(error) =
+                publish_verified_atomically(&temporary_path, item.destination(), expected_sha256)
+                    .await
+            {
+                if matches!(error, DownloadEngineError::Sha256Mismatch { .. }) {
+                    cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
+                    remove_partial_file(&temporary_path).await?;
+                }
+                return Err(error);
+            }
+        } else {
+            publish_without_replacement(&temporary_path, item.destination()).await?;
+        }
+        cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
 
         let completed = self
             .state_machine
@@ -1844,41 +2319,46 @@ where
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_segment_workers(
-    tasks: &mut JoinSet<(usize, Segment, Result<SegmentResult, DownloadEngineError>)>,
+    tasks: &mut JoinSet<(
+        usize,
+        usize,
+        Segment,
+        Result<SegmentResult, DownloadEngineError>,
+    )>,
     pending: &mut VecDeque<usize>,
     segments: &[Segment],
+    sources: &[HttpSegmentSource],
+    source_assignments: &[usize],
+    primary_url: &Url,
     target_concurrency: usize,
     total_size: u64,
-    url: &Url,
     validator: &str,
-    client: &Client,
     cancellation: &watch::Receiver<bool>,
     stop: &watch::Receiver<bool>,
     bandwidth: &BandwidthControl,
     downloaded: &Arc<AtomicU64>,
     extra_headers: &[(String, String)],
 ) {
-    let headers_vec = extra_headers.to_vec();
     while tasks.len() < target_concurrency {
         let Some(index) = pending.pop_front() else {
             break;
         };
         let mut segment = segments[index].clone();
-        let client = client.clone();
-        let url = url.clone();
+        let source_index = source_assignments[index];
+        let source = sources[source_index].clone();
         let validator = validator.to_owned();
         let mut cancellation = cancellation.clone();
         let mut stop = stop.clone();
         let bandwidth = bandwidth.clone();
         let downloaded = Arc::clone(downloaded);
-        let segment_headers = headers_vec.clone();
+        let segment_headers = context_headers_for_source(extra_headers, &source.url, primary_url);
         tasks.spawn(async move {
             let result = segments::download_segment(
                 &mut segment,
                 total_size,
-                &url,
+                &source.url,
                 &validator,
-                &client,
+                &source.client,
                 &mut cancellation,
                 &mut stop,
                 &bandwidth,
@@ -1886,9 +2366,51 @@ fn spawn_segment_workers(
                 &segment_headers,
             )
             .await;
-            (index, segment, result)
+            (index, source_index, segment, result)
         });
     }
+}
+
+fn context_headers_for_source(
+    headers: &[(String, String)],
+    source: &Url,
+    primary: &Url,
+) -> Vec<(String, String)> {
+    if source.origin() == primary.origin() {
+        return headers.to_vec();
+    }
+    headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("cookie"))
+        .cloned()
+        .collect()
+}
+
+fn next_segment_source(
+    current: usize,
+    failed_sources: &mut HashSet<usize>,
+    source_count: usize,
+) -> Option<usize> {
+    failed_sources.insert(current);
+    (1..source_count)
+        .map(|offset| (current + offset) % source_count)
+        .find(|candidate| !failed_sources.contains(candidate))
+}
+
+fn is_segment_source_failure(error: &DownloadEngineError) -> bool {
+    matches!(
+        error,
+        DownloadEngineError::Request(_)
+            | DownloadEngineError::HttpStatus(_)
+            | DownloadEngineError::InvalidContentLength
+            | DownloadEngineError::InvalidContentRange
+            | DownloadEngineError::RangeMismatch
+            | DownloadEngineError::RangeNotSatisfiable
+            | DownloadEngineError::UnexpectedPartialResponse
+            | DownloadEngineError::ContentLengthExceeded { .. }
+            | DownloadEngineError::IncompleteResponse { .. }
+            | DownloadEngineError::SegmentFailed { .. }
+    )
 }
 
 async fn report_resource_demand(
@@ -2099,11 +2621,10 @@ fn http_multi_source_set_path(destination: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Persists an ordered set of HTTP(S) sources for a single DirectHTTP queue row.
+/// Persists an ordered set of HTTP(S) sources for one DirectHTTP queue row.
 ///
-/// The engine downloads from one source at a time. It does not combine ranges
-/// across URLs, so validators or equal lengths are never treated as proof of
-/// cross-source object identity.
+/// The engine may assign ranges across candidates only with an expected
+/// whole-object SHA-256 and successful, consistent range probes.
 pub async fn save_http_multi_source_set(
     destination: &Path,
     urls: &[String],
@@ -2257,18 +2778,41 @@ fn resource_identity_path(temporary: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
+fn resource_identity_version() -> u8 {
+    1
+}
+
 async fn load_resource_identity(
     temporary: &Path,
 ) -> Result<Option<ResourceIdentity>, DownloadEngineError> {
     let path = resource_identity_path(temporary);
+    match fs::symlink_metadata(&path).await {
+        Ok(metadata) if metadata.file_type().is_file() && metadata.len() <= 256 * 1024 => {}
+        Ok(_) => {
+            warn!(
+                error_code = "HTTP_RESUME_METADATA_INVALID",
+                "ignoring invalid HTTP resume metadata"
+            );
+            return Ok(None);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    }
     let bytes = match fs::read(&path).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(DownloadEngineError::Io(error)),
     };
-    match serde_json::from_slice(&bytes) {
-        Ok(identity) => Ok(Some(identity)),
+    match serde_json::from_slice::<ResourceIdentity>(&bytes) {
+        Ok(identity) if valid_resource_identity(&identity) => Ok(Some(identity)),
         Err(_error) => {
+            warn!(
+                error_code = "HTTP_RESUME_METADATA_INVALID",
+                "ignoring invalid HTTP resume metadata"
+            );
+            Ok(None)
+        }
+        Ok(_) => {
             warn!(
                 error_code = "HTTP_RESUME_METADATA_INVALID",
                 "ignoring invalid HTTP resume metadata"
@@ -2278,12 +2822,49 @@ async fn load_resource_identity(
     }
 }
 
+fn valid_resource_identity(identity: &ResourceIdentity) -> bool {
+    identity.version == 1
+        && identity.extra_headers.len() <= 3
+        && identity
+            .extra_headers
+            .iter()
+            .all(|(name, value)| name.len() <= 128 && value.len() <= 8192)
+        && valid_identity_source_urls(&identity.multi_source_urls)
+        && (identity.multi_source_sha256.is_none()
+            || (identity
+                .multi_source_sha256
+                .as_deref()
+                .is_some_and(is_valid_sha256)
+                && identity.multi_source_urls.len() >= 2))
+        && (identity.multi_source_sha256.is_some() || identity.multi_source_urls.is_empty())
+}
+
+fn valid_identity_source_urls(urls: &[String]) -> bool {
+    if urls.is_empty() {
+        return true;
+    }
+    if !(2..=MAX_HTTP_SOURCE_URLS).contains(&urls.len()) {
+        return false;
+    }
+    let mut unique = HashSet::with_capacity(urls.len());
+    urls.iter().all(|url| {
+        url.len() <= MAX_HTTP_SOURCE_URL_LENGTH
+            && parse_http_source_structure(url).is_ok_and(|parsed| parsed.as_str() == url)
+            && unique.insert(url)
+    })
+}
+
 async fn save_resource_identity(
     temporary: &Path,
     identity: &ResourceIdentity,
 ) -> Result<(), DownloadEngineError> {
     let bytes = serde_json::to_vec(identity)
         .map_err(|error| DownloadEngineError::InvalidPartialMetadata(error.to_string()))?;
+    if bytes.len() > 256 * 1024 || !valid_resource_identity(identity) {
+        return Err(DownloadEngineError::InvalidPartialMetadata(
+            "resume identity exceeds its bounds or is invalid".to_owned(),
+        ));
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -2331,12 +2912,15 @@ pub async fn save_initial_context_headers(
             id_meta
         }
         None => ResourceIdentity {
+            version: 1,
             url: url.to_owned(),
             validator: None,
             finalizing: false,
             total_size: None,
             segment_count: None,
             extra_headers: safe_headers,
+            multi_source_sha256: None,
+            multi_source_urls: Vec::new(),
         },
     };
     save_resource_identity(&temp, &identity).await
@@ -2779,6 +3363,20 @@ async fn cleanup_segment_files(
     Ok(())
 }
 
+async fn remove_partial_file(temporary: &Path) -> Result<(), DownloadEngineError> {
+    match fs::symlink_metadata(temporary).await {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(temporary)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            Ok(())
+        }
+        Ok(_) => Err(DownloadEngineError::InvalidPartialFile),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DownloadEngineError::Io(error)),
+    }
+}
+
 async fn publish_without_replacement(
     temporary: &Path,
     destination: &Path,
@@ -2786,7 +3384,10 @@ async fn publish_without_replacement(
     verify_expected_sha256(temporary, destination).await?;
     // Try hard link first (zero-copy, atomic on same filesystem).
     match fs::hard_link(temporary, destination).await {
-        Ok(()) => return Ok(()),
+        Ok(()) => {
+            remove_expected_sha256(destination).await;
+            return Ok(());
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(DownloadEngineError::DestinationExists);
         }
@@ -2800,6 +3401,7 @@ async fn publish_without_replacement(
     match fs::copy(temporary, destination).await {
         Ok(_) => {
             let _ = fs::remove_file(temporary).await;
+            remove_expected_sha256(destination).await;
             Ok(())
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -2809,22 +3411,36 @@ async fn publish_without_replacement(
     }
 }
 
+async fn publish_verified_atomically(
+    temporary: &Path,
+    destination: &Path,
+    expected_sha256: &str,
+) -> Result<(), DownloadEngineError> {
+    verify_sha256(temporary, expected_sha256).await?;
+    fs::hard_link(temporary, destination)
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                DownloadEngineError::DestinationExists
+            } else {
+                DownloadEngineError::Io(error)
+            }
+        })?;
+    remove_expected_sha256(destination).await;
+    Ok(())
+}
+
 async fn verify_expected_sha256(
     temporary: &Path,
     destination: &Path,
 ) -> Result<(), DownloadEngineError> {
-    let mut sidecar = destination.as_os_str().to_os_string();
-    sidecar.push(".fetchx.sha256");
-    let sidecar = PathBuf::from(sidecar);
-    let expected = match fs::read_to_string(&sidecar).await {
-        Ok(expected) => expected.trim().to_ascii_lowercase(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(DownloadEngineError::Io(error)),
+    let Some(expected) = load_expected_sha256(destination).await? else {
+        return Ok(());
     };
-    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(DownloadEngineError::InvalidConfiguration);
-    }
+    verify_sha256(temporary, &expected).await
+}
 
+async fn verify_sha256(temporary: &Path, expected: &str) -> Result<(), DownloadEngineError> {
     let mut file = File::open(temporary)
         .await
         .map_err(DownloadEngineError::Io)?;
@@ -2842,15 +3458,55 @@ async fn verify_expected_sha256(
     }
     let actual = hex::encode(hasher.finalize());
     if actual != expected {
-        return Err(DownloadEngineError::Sha256Mismatch { expected, actual });
+        return Err(DownloadEngineError::Sha256Mismatch {
+            expected: expected.to_owned(),
+            actual,
+        });
     }
-    let _ = fs::remove_file(sidecar).await;
     Ok(())
+}
+
+async fn load_expected_sha256(destination: &Path) -> Result<Option<String>, DownloadEngineError> {
+    let mut sidecar = destination.as_os_str().to_os_string();
+    sidecar.push(".fetchx.sha256");
+    let sidecar = PathBuf::from(sidecar);
+    match fs::symlink_metadata(&sidecar).await {
+        Ok(metadata) if metadata.file_type().is_file() && metadata.len() <= 128 => {}
+        Ok(_) => return Err(DownloadEngineError::InvalidConfiguration),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(DownloadEngineError::Io(error)),
+    }
+    let expected = fs::read_to_string(sidecar)
+        .await
+        .map_err(DownloadEngineError::Io)?
+        .trim()
+        .to_ascii_lowercase();
+    if !is_valid_sha256(&expected) {
+        return Err(DownloadEngineError::InvalidConfiguration);
+    }
+    Ok(Some(expected))
+}
+
+fn is_valid_sha256(checksum: &str) -> bool {
+    checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+async fn remove_expected_sha256(destination: &Path) {
+    let mut sidecar = destination.as_os_str().to_os_string();
+    sidecar.push(".fetchx.sha256");
+    if let Err(error) = fs::remove_file(PathBuf::from(sidecar)).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        warn!(%error, "could not remove verified SHA-256 metadata");
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_blocked_target, redirect_target_is_safe, validate_http_source_url};
+    use super::{
+        context_headers_for_source, is_blocked_target, redirect_target_is_safe,
+        validate_http_source_url,
+    };
     use reqwest::Url;
 
     #[test]
@@ -2930,5 +3586,31 @@ mod tests {
         let recovered = smooth_speed(Some(second), 5_000_000);
         // 0.3 * 5_000_000 + 0.7 * 2_458_160 = 1_500_000 + 1_720_712 = 3_220_712
         assert_eq!(recovered, 3_220_712);
+    }
+
+    #[test]
+    fn cross_origin_mirrors_do_not_receive_browser_cookies() {
+        let primary = Url::parse("https://downloads.example.test/file").unwrap();
+        let same_origin = Url::parse("https://downloads.example.test/mirror").unwrap();
+        let other_origin = Url::parse("https://mirror.example.test/file").unwrap();
+        let headers = vec![
+            ("cookie".to_owned(), "session=secret".to_owned()),
+            (
+                "referer".to_owned(),
+                "https://page.example.test/".to_owned(),
+            ),
+        ];
+
+        assert_eq!(
+            context_headers_for_source(&headers, &same_origin, &primary),
+            headers
+        );
+        assert_eq!(
+            context_headers_for_source(&headers, &other_origin, &primary),
+            [(
+                "referer".to_owned(),
+                "https://page.example.test/".to_owned()
+            )]
+        );
     }
 }
