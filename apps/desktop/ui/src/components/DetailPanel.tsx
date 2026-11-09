@@ -6,7 +6,9 @@ import {
   getTorrentDownloadMetadata,
   getTorrentTelemetry,
   restartAria2HttpWithNative,
+  restartAria2TorrentFileWithNative,
   restartAria2TorrentWithNative,
+  inspectTorrentFile,
   selectTorrentFiles,
   setTorrentDirectorySelected,
   setTorrentFileSelected,
@@ -116,7 +118,13 @@ export function DetailPanel({
   const [restartError, setRestartError] = useState<string | null>(null);
   const [restartedDownloadId, setRestartedDownloadId] = useState<string | null>(null);
   const [torrentRestartOpen, setTorrentRestartOpen] = useState(false);
+  const [torrentRestartSourceType, setTorrentRestartSourceType] = useState<"magnet" | "file">("magnet");
   const [torrentRestartMagnet, setTorrentRestartMagnet] = useState("");
+  const [torrentRestartFilePath, setTorrentRestartFilePath] = useState("");
+  const [torrentRestartFileInspection, setTorrentRestartFileInspection] =
+    useState<Awaited<ReturnType<typeof inspectTorrentFile>> | null>(null);
+  const [torrentRestartSelectedFiles, setTorrentRestartSelectedFiles] = useState<number[]>([]);
+  const [torrentRestartSelectionConfirmed, setTorrentRestartSelectionConfirmed] = useState(false);
   const [torrentRestartDestination, setTorrentRestartDestination] = useState("");
   const [torrentRestartConfirmed, setTorrentRestartConfirmed] = useState(false);
   const [torrentRestartLoading, setTorrentRestartLoading] = useState(false);
@@ -246,17 +254,39 @@ export function DetailPanel({
     setTorrentRestartError(null);
     setRestartedTorrentDownloadId(null);
     try {
-      const created = await restartAria2TorrentWithNative(
-        download.id,
-        torrentRestartMagnet,
-        torrentRestartDestination,
-        torrentRestartConfirmed,
-      );
+      const created = torrentRestartSourceType === "magnet"
+        ? await restartAria2TorrentWithNative(
+            download.id,
+            torrentRestartMagnet,
+            torrentRestartDestination,
+            torrentRestartConfirmed,
+          )
+        : await restartAria2TorrentFileWithNative(
+            download.id,
+            torrentRestartFilePath,
+            torrentRestartDestination,
+            torrentRestartSelectedFiles,
+            torrentRestartConfirmed,
+            torrentRestartSelectionConfirmed,
+          );
       setRestartedTorrentDownloadId(created.id);
     } catch (cause) {
       setTorrentRestartError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setTorrentRestartLoading(false);
+    }
+  };
+
+  const inspectTorrentRestartFile = async () => {
+    setTorrentRestartError(null);
+    setTorrentRestartFileInspection(null);
+    setTorrentRestartSelectedFiles([]);
+    setTorrentRestartSelectionConfirmed(false);
+    try {
+      const inspected = await inspectTorrentFile(torrentRestartFilePath.trim());
+      setTorrentRestartFileInspection(inspected);
+    } catch (cause) {
+      setTorrentRestartError(cause instanceof Error ? cause.message : String(cause));
     }
   };
 
@@ -398,21 +428,110 @@ export function DetailPanel({
                   </button>
                 ) : (
                   <form onSubmit={(event) => void startNativeTorrentRestart(event)}>
-                    <label className="field-label" htmlFor={`torrent-restart-magnet-${download.id}`}>
-                      Current magnet URI
+                    <label className="field-label" htmlFor={`torrent-restart-source-type-${download.id}`}>
+                      Current torrent source
                     </label>
-                    <input
-                      id={`torrent-restart-magnet-${download.id}`}
+                    <select
+                      id={`torrent-restart-source-type-${download.id}`}
                       className="field-input"
-                      type="text"
-                      required
-                      value={torrentRestartMagnet}
+                      value={torrentRestartSourceType}
                       disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
-                      onChange={(event) => setTorrentRestartMagnet(event.target.value)}
-                    />
-                    <p className="field-hint">
-                      Enter the current magnet URI. FetchX verifies its info hash against the saved aria2 torrent.
-                    </p>
+                      onChange={(event) => {
+                        setTorrentRestartSourceType(event.target.value as "magnet" | "file");
+                        setTorrentRestartFileInspection(null);
+                        setTorrentRestartSelectedFiles([]);
+                        setTorrentRestartSelectionConfirmed(false);
+                      }}
+                    >
+                      <option value="magnet">Magnet URI</option>
+                      <option value="file">Local .torrent file</option>
+                    </select>
+                    {torrentRestartSourceType === "magnet" ? (
+                      <>
+                        <label className="field-label" htmlFor={`torrent-restart-magnet-${download.id}`}>
+                          Current magnet URI
+                        </label>
+                        <input
+                          id={`torrent-restart-magnet-${download.id}`}
+                          className="field-input"
+                          type="text"
+                          required
+                          value={torrentRestartMagnet}
+                          disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
+                          onChange={(event) => setTorrentRestartMagnet(event.target.value)}
+                        />
+                        <p className="field-hint">
+                          Enter a current v1 magnet URI. Hex and base32 btih values are accepted; FetchX verifies the info hash against the saved aria2 torrent.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <label className="field-label" htmlFor={`torrent-restart-file-${download.id}`}>
+                          Current .torrent file path
+                        </label>
+                        <input
+                          id={`torrent-restart-file-${download.id}`}
+                          className="field-input"
+                          type="text"
+                          required
+                          value={torrentRestartFilePath}
+                          disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
+                          onChange={(event) => {
+                            setTorrentRestartFilePath(event.target.value);
+                            setTorrentRestartFileInspection(null);
+                            setTorrentRestartSelectedFiles([]);
+                            setTorrentRestartSelectionConfirmed(false);
+                          }}
+                          placeholder="Path to a current .torrent file"
+                        />
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          disabled={!torrentRestartFilePath.trim() || torrentRestartLoading}
+                          onClick={() => void inspectTorrentRestartFile()}
+                        >
+                          Inspect and review files
+                        </button>
+                        {torrentRestartFileInspection && (
+                          <div className="torrent-file-list">
+                            <p>
+                              {torrentRestartFileInspection.name} · {formatBytes(torrentRestartFileInspection.total_size)}
+                            </p>
+                            {torrentRestartFileInspection.files.map((file) => (
+                              <label className="field-checkbox" key={file.index}>
+                                <input
+                                  type="checkbox"
+                                  checked={torrentRestartSelectedFiles.includes(file.index)}
+                                  disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
+                                  onChange={(event) => {
+                                    setTorrentRestartSelectedFiles((current) =>
+                                      event.target.checked
+                                        ? [...current, file.index]
+                                        : current.filter((index) => index !== file.index),
+                                    );
+                                    setTorrentRestartSelectionConfirmed(false);
+                                  }}
+                                />
+                                <span>{file.path} · {formatBytes(file.size)}</span>
+                              </label>
+                            ))}
+                            <label className="field-checkbox">
+                              <input
+                                type="checkbox"
+                                checked={torrentRestartSelectionConfirmed}
+                                disabled={
+                                  torrentRestartLoading ||
+                                  restartedTorrentDownloadId !== null ||
+                                  torrentRestartSelectedFiles.length === 0
+                                }
+                                onChange={(event) => setTorrentRestartSelectionConfirmed(event.target.checked)}
+                              />
+                              <span>I reviewed this file list and selected the content for the new native job.</span>
+                            </label>
+                          </div>
+                        )}
+                      </>
+                    )}
                     <label className="field-label" htmlFor={`torrent-restart-destination-${download.id}`}>
                       New destination directory
                     </label>
@@ -436,9 +555,7 @@ export function DetailPanel({
                         disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
                         onChange={(event) => setTorrentRestartConfirmed(event.target.checked)}
                       />
-                      <span>
-                        I confirm this is the current source for the saved torrent. I will review and select files on the new native job.
-                      </span>
+                      <span>I confirm this is a current source for the saved aria2 torrent. The old job and its files will remain unchanged.</span>
                     </label>
                     {torrentRestartError && <p className="detail-error-message">{torrentRestartError}</p>}
                     {restartedTorrentDownloadId && (
@@ -453,7 +570,11 @@ export function DetailPanel({
                         disabled={
                           torrentRestartLoading ||
                           restartedTorrentDownloadId !== null ||
-                          !torrentRestartConfirmed
+                          !torrentRestartConfirmed ||
+                          (torrentRestartSourceType === "file" &&
+                            (!torrentRestartFileInspection ||
+                              torrentRestartSelectedFiles.length === 0 ||
+                              !torrentRestartSelectionConfirmed))
                         }
                       >
                         {torrentRestartLoading ? "Creating…" : "Create separate native torrent"}

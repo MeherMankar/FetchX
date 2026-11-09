@@ -277,16 +277,13 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetInfo, DownloadSourceError> {
                     return Err(DownloadSourceError::InvalidMagnetUri);
                 }
                 let hash = &value["urn:btih:".len()..];
-                if !((hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
-                    || (hash.len() == 32
-                        && hash.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric()
-                                && !matches!(byte, b'0' | b'1' | b'8' | b'9')
-                        })))
-                {
-                    return Err(DownloadSourceError::InvalidMagnetUri);
-                }
-                info_hash = Some(hash.to_ascii_lowercase());
+                info_hash = Some(
+                    if hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                        hash.to_ascii_lowercase()
+                    } else {
+                        decode_base32_btih(hash).ok_or(DownloadSourceError::InvalidMagnetUri)?
+                    },
+                );
             }
             "dn" => {
                 if display_name.is_some() || value.trim().is_empty() || value.len() > 1024 {
@@ -319,6 +316,38 @@ pub fn parse_magnet_uri(uri: &str) -> Result<MagnetInfo, DownloadSourceError> {
         display_name,
         trackers,
     })
+}
+
+fn decode_base32_btih(hash: &str) -> Option<String> {
+    if hash.len() != 32 {
+        return None;
+    }
+
+    let mut decoded = [0_u8; 20];
+    let mut output_index = 0;
+    let mut accumulator = 0_u16;
+    let mut bits = 0;
+    for byte in hash.bytes() {
+        let value = match byte.to_ascii_uppercase() {
+            b'A'..=b'Z' => byte.to_ascii_uppercase() - b'A',
+            b'2'..=b'7' => byte - b'2' + 26,
+            _ => return None,
+        };
+        accumulator = (accumulator << 5) | u16::from(value);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            let output = decoded.get_mut(output_index)?;
+            *output = (accumulator >> bits) as u8;
+            output_index += 1;
+            accumulator &= (1_u16 << bits) - 1;
+        }
+    }
+    if output_index != decoded.len() || bits != 0 || accumulator != 0 {
+        return None;
+    }
+
+    Some(decoded.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -693,6 +722,19 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_hex_and_base32_v1_magnet_hashes() -> Result<(), DownloadSourceError> {
+        let hex = parse_magnet_uri("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567")?;
+        for encoded in [
+            "AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH",
+            "aerukz4jvpg66ajdivtytk6n54asgrlh",
+        ] {
+            let base32 = parse_magnet_uri(&format!("magnet:?xt=urn:btih:{encoded}"))?;
+            assert_eq!(base32.info_hash, hex.info_hash);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rejects_malformed_or_unsafe_magnet_uris() {
         for magnet in [
             "magnet:?dn=missing-hash",
@@ -700,6 +742,9 @@ mod tests {
             "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
             "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&tr=file%3A%2F%2F%2Fetc%2Fpasswd",
             "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&tr=https%3A%2F%2Fuser%3Apass%40tracker.example%2Fannounce",
+            "magnet:?xt=urn:btih:AERUKZ4JVPG66AJDIVTYTK6N54ASGRL0",
+            "magnet:?xt=urn:btih:AERUKZ4JVPG66AJDIVTYTK6N54ASGRLH&xt=urn:btmh:1220deadbeef",
+            "magnet:?xt=urn:btmh:1220deadbeef",
         ] {
             assert!(parse_magnet_uri(magnet).is_err(), "accepted {magnet}");
         }

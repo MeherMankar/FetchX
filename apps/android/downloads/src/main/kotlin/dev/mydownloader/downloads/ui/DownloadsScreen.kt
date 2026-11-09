@@ -37,12 +37,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.fetchx.core.download.TorrentMetadata
+import java.io.IOException
 import java.io.File
+import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val TABS = listOf("All", "Active", "Queued", "Completed", "Failed", "Cancelled")
 
@@ -88,6 +96,57 @@ fun DownloadsScreen(
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var showAddDialog by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingTorrentFileSelection by remember {
+        mutableStateOf<((String, TorrentMetadata) -> Unit)?>(null)
+    }
+    val torrentRestartFilePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val onSelected = pendingTorrentFileSelection
+        pendingTorrentFileSelection = null
+        if (uri != null && onSelected != null) {
+            scope.launch {
+                try {
+                    val stagedPath = withContext(Dispatchers.IO) {
+                        val directory = File(context.filesDir, "torrent-restart-sources")
+                        if (!directory.exists() && !directory.mkdirs()) {
+                            throw IOException("Could not create private torrent storage.")
+                        }
+                        val staged = File(directory, "${UUID.randomUUID()}.torrent")
+                        try {
+                            val input = context.contentResolver.openInputStream(uri)
+                                ?: throw IOException("Could not open the selected torrent document.")
+                            input.use { source ->
+                                staged.outputStream().use { output ->
+                                    val buffer = ByteArray(8192)
+                                    var copiedBytes = 0
+                                    while (true) {
+                                        val count = source.read(buffer)
+                                        if (count < 0) break
+                                        copiedBytes += count
+                                        if (copiedBytes > 8 * 1024 * 1024) {
+                                            throw IOException("Torrent file exceeds the 8 MiB limit.")
+                                        }
+                                        output.write(buffer, 0, count)
+                                    }
+                                }
+                            }
+                            staged.absolutePath
+                        } catch (error: Exception) {
+                            staged.delete()
+                            throw error
+                        }
+                    }
+                    val metadata = viewModel.inspectAria2TorrentRestartFile(stagedPath)
+                    onSelected(stagedPath, metadata)
+                } catch (error: Exception) {
+                    snackbarHostState.showSnackbar(error.message ?: "Could not inspect the selected torrent file.")
+                }
+            }
+        }
+    }
 
     // Show errors via Snackbar — clear after display.
     LaunchedEffect(uiState.error) {
@@ -274,6 +333,20 @@ fun DownloadsScreen(
                                     destination,
                                     confirmed,
                                 )
+                            },
+                            onRestartAria2TorrentFileWithNative = { path, destination, indexes, confirmed, selectionConfirmed ->
+                                viewModel.restartAria2TorrentFileWithNative(
+                                    item.id,
+                                    path,
+                                    destination,
+                                    indexes,
+                                    confirmed,
+                                    selectionConfirmed,
+                                )
+                            },
+                            onChooseAria2TorrentFile = { onSelected ->
+                                pendingTorrentFileSelection = onSelected
+                                torrentRestartFilePicker.launch(arrayOf("*/*"))
                             },
                             onPrepareAria2NativeRestart = {
                                 viewModel.clearAria2NativeRestartState(item.id)

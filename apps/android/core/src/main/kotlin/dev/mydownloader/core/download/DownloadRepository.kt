@@ -115,6 +115,14 @@ interface Aria2NativeRestartRepository {
         destinationPath: String,
         confirmedCurrentSource: Boolean,
     ): String
+    suspend fun restartAria2TorrentFileWithNative(
+        downloadId: String,
+        currentTorrentPath: String,
+        destinationPath: String,
+        selectedFileIndexes: List<Int>,
+        confirmedCurrentSource: Boolean,
+        confirmedSelection: Boolean,
+    ): String
 }
 
 interface TorrentDownloadRepository : DownloadRepository {

@@ -14,6 +14,7 @@ import dev.fetchx.core.download.Aria2RecoveryRepository
 import dev.fetchx.core.download.Aria2NativeRestartRepository
 import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadMetadata
+import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentTelemetry
 import kotlinx.coroutines.CancellationException
@@ -545,6 +546,57 @@ class DownloadsViewModel(
             } catch (e: Exception) {
                 _aria2NativeRestart.update {
                     it + (downloadId to Aria2NativeRestartUiState(error = e.message ?: "Could not create the native torrent."))
+                }
+            }
+        }
+    }
+
+    suspend fun inspectAria2TorrentRestartFile(path: String): TorrentMetadata {
+        val torrentRepository = repository as? TorrentDownloadRepository
+            ?: error("Torrent source inspection is unavailable in this app build.")
+        return torrentRepository.inspectTorrentFile(path)
+    }
+
+    fun restartAria2TorrentFileWithNative(
+        downloadId: String,
+        currentTorrentPath: String,
+        destinationPath: String,
+        selectedFileIndexes: List<Int>,
+        confirmedCurrentSource: Boolean,
+        confirmedSelection: Boolean,
+    ) {
+        val restartRepository = repository as? Aria2NativeRestartRepository ?: run {
+            _aria2NativeRestart.update {
+                it + (downloadId to Aria2NativeRestartUiState(
+                    error = "Native torrent restart is unavailable in this app build.",
+                ))
+            }
+            return
+        }
+        if (_aria2NativeRestart.value[downloadId]?.loading == true) return
+        _aria2NativeRestart.update {
+            it + (downloadId to Aria2NativeRestartUiState(loading = true))
+        }
+        viewModelScope.launch {
+            try {
+                val newId = restartRepository.restartAria2TorrentFileWithNative(
+                    downloadId,
+                    currentTorrentPath,
+                    destinationPath,
+                    selectedFileIndexes,
+                    confirmedCurrentSource,
+                    confirmedSelection,
+                )
+                _aria2NativeRestart.update {
+                    it + (downloadId to Aria2NativeRestartUiState(newDownloadId = newId))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _aria2NativeRestart.update {
+                    it + (downloadId to Aria2NativeRestartUiState(
+                        error = e.message ?: "Could not create the native torrent.",
+                    ))
                 }
             }
         }

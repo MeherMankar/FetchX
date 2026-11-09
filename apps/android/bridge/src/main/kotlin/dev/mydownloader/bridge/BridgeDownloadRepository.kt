@@ -468,6 +468,36 @@ class BridgeDownloadRepository(
         )
     }
 
+    override suspend fun restartAria2TorrentFileWithNative(
+        downloadId: String,
+        currentTorrentPath: String,
+        destinationPath: String,
+        selectedFileIndexes: List<Int>,
+        confirmedCurrentSource: Boolean,
+        confirmedSelection: Boolean,
+    ): String = withContext(Dispatchers.IO) {
+        val destination = File(destinationPath).canonicalFile
+        val privateRoot = File(privateDownloadDirectory).canonicalFile
+        require(destination.parentFile == privateRoot) {
+            "Choose a destination directory directly inside FetchX's app-specific downloads folder."
+        }
+        require(!destination.exists()) {
+            "Choose a new destination directory that does not already exist."
+        }
+        val source = File(currentTorrentPath).canonicalFile
+        require(source.isFile && source.extension.equals("torrent", ignoreCase = true)) {
+            "Choose a valid .torrent file."
+        }
+        service.restartAria2TorrentFileWithNative(
+            downloadId,
+            source.path,
+            destination.path,
+            selectedFileIndexes.map(Int::toUInt),
+            confirmedCurrentSource,
+            confirmedSelection,
+        )
+    }
+
     override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =
         withContext(Dispatchers.IO) {
             mapTorrentMetadata(service.inspectTorrentFile(torrentPath))

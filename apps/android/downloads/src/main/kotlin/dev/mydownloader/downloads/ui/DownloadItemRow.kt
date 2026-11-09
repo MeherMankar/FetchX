@@ -7,7 +7,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -34,6 +37,7 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadState
 import dev.fetchx.core.download.TorrentDownloadMetadata
+import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentTelemetry
 
 /**
@@ -59,6 +63,9 @@ fun DownloadItemRow(
     onRestartAria2WithNative: (String, String, Boolean) -> Unit = { _, _, _ -> },
     suggestedNativeTorrentRestartDestination: String? = null,
     onRestartAria2TorrentWithNative: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    onRestartAria2TorrentFileWithNative: (String, String, List<Int>, Boolean, Boolean) -> Unit =
+        { _, _, _, _, _ -> },
+    onChooseAria2TorrentFile: (((String, TorrentMetadata) -> Unit) -> Unit) = {},
     onPrepareAria2NativeRestart: () -> Unit = {},
     onTorrentFileSelected: (Int, Boolean) -> Unit = { _, _ -> },
     onTorrentSelectionAll: (Boolean) -> Unit = {},
@@ -81,6 +88,11 @@ fun DownloadItemRow(
         mutableStateOf(suggestedNativeTorrentRestartDestination.orEmpty())
     }
     var confirmedCurrentMagnet by remember(item.id) { mutableStateOf(false) }
+    var restartFromTorrentFile by remember(item.id) { mutableStateOf(false) }
+    var currentTorrentPath by remember(item.id) { mutableStateOf("") }
+    var currentTorrentMetadata by remember(item.id) { mutableStateOf<TorrentMetadata?>(null) }
+    var selectedRestartTorrentFiles by remember(item.id) { mutableStateOf<Set<Int>>(emptySet()) }
+    var confirmedRestartTorrentSelection by remember(item.id) { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -551,18 +563,93 @@ fun DownloadItemRow(
                     text = {
                         Column {
                             Text(
-                                "Enter the current magnet URI. FetchX verifies its info hash against the saved aria2 torrent. " +
-                                    "The new download will require a fresh file selection.",
+                                "Provide a current v1 magnet URI or choose a .torrent file. FetchX verifies its info hash against the saved aria2 torrent.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
-                            OutlinedTextField(
-                                value = currentMagnetUri,
-                                onValueChange = { currentMagnetUri = it },
-                                label = { Text("Current magnet URI") },
-                                singleLine = true,
-                                enabled = aria2NativeRestart?.loading != true &&
-                                    aria2NativeRestart?.newDownloadId == null,
-                            )
+                            Row {
+                                TextButton(
+                                    onClick = {
+                                        restartFromTorrentFile = false
+                                        currentTorrentMetadata = null
+                                    },
+                                    enabled = aria2NativeRestart?.loading != true,
+                                ) { Text("Use magnet") }
+                                TextButton(
+                                    onClick = {
+                                        restartFromTorrentFile = true
+                                        currentTorrentMetadata = null
+                                        selectedRestartTorrentFiles = emptySet()
+                                        confirmedRestartTorrentSelection = false
+                                        onChooseAria2TorrentFile { path, metadata ->
+                                            currentTorrentPath = path
+                                            currentTorrentMetadata = metadata
+                                            selectedRestartTorrentFiles = emptySet()
+                                            confirmedRestartTorrentSelection = false
+                                        }
+                                    },
+                                    enabled = aria2NativeRestart?.loading != true &&
+                                        aria2NativeRestart?.newDownloadId == null,
+                                ) { Text("Choose .torrent file") }
+                            }
+                            if (restartFromTorrentFile) {
+                                Text(
+                                    currentTorrentPath.ifBlank { "No .torrent file selected" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                currentTorrentMetadata?.let { metadata ->
+                                    Text(
+                                        "${metadata.name} · ${metadata.infoHash}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    LazyColumn(
+                                        modifier = Modifier.heightIn(max = 240.dp),
+                                    ) {
+                                        items(metadata.files, key = { it.index }) { file ->
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Checkbox(
+                                                    checked = file.index in selectedRestartTorrentFiles,
+                                                    onCheckedChange = { selected ->
+                                                        selectedRestartTorrentFiles =
+                                                            if (selected) {
+                                                                selectedRestartTorrentFiles + file.index
+                                                            } else {
+                                                                selectedRestartTorrentFiles - file.index
+                                                            }
+                                                        confirmedRestartTorrentSelection = false
+                                                    },
+                                                    enabled = aria2NativeRestart?.loading != true &&
+                                                        aria2NativeRestart?.newDownloadId == null,
+                                                )
+                                                Text(
+                                                    "${file.path} (${file.sizeBytes} bytes)",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = confirmedRestartTorrentSelection,
+                                            onCheckedChange = { confirmedRestartTorrentSelection = it },
+                                            enabled = selectedRestartTorrentFiles.isNotEmpty() &&
+                                                aria2NativeRestart?.loading != true,
+                                        )
+                                        Text(
+                                            "I reviewed the file list and selected the content to restart.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                            } else {
+                                OutlinedTextField(
+                                    value = currentMagnetUri,
+                                    onValueChange = { currentMagnetUri = it },
+                                    label = { Text("Current v1 magnet URI") },
+                                    singleLine = true,
+                                    enabled = aria2NativeRestart?.loading != true &&
+                                        aria2NativeRestart?.newDownloadId == null,
+                                )
+                            }
                             OutlinedTextField(
                                 value = newTorrentDestination,
                                 onValueChange = { newTorrentDestination = it },
@@ -601,15 +688,32 @@ fun DownloadItemRow(
                     confirmButton = {
                         TextButton(
                             onClick = {
-                                onRestartAria2TorrentWithNative(
-                                    currentMagnetUri,
-                                    newTorrentDestination,
-                                    confirmedCurrentMagnet,
-                                )
+                                if (restartFromTorrentFile) {
+                                    onRestartAria2TorrentFileWithNative(
+                                        currentTorrentPath,
+                                        newTorrentDestination,
+                                        selectedRestartTorrentFiles.sorted(),
+                                        confirmedCurrentMagnet,
+                                        confirmedRestartTorrentSelection,
+                                    )
+                                } else {
+                                    onRestartAria2TorrentWithNative(
+                                        currentMagnetUri,
+                                        newTorrentDestination,
+                                        confirmedCurrentMagnet,
+                                    )
+                                }
                             },
                             enabled = aria2NativeRestart?.loading != true &&
                                 aria2NativeRestart?.newDownloadId == null &&
-                                currentMagnetUri.startsWith("magnet:") &&
+                                (if (restartFromTorrentFile) {
+                                    currentTorrentPath.isNotBlank() &&
+                                        currentTorrentMetadata != null &&
+                                        selectedRestartTorrentFiles.isNotEmpty() &&
+                                        confirmedRestartTorrentSelection
+                                } else {
+                                    currentMagnetUri.startsWith("magnet:")
+                                }) &&
                                 newTorrentDestination.isNotBlank() &&
                                 confirmedCurrentMagnet,
                         ) {

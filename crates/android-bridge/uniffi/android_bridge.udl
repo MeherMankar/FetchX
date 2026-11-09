@@ -265,6 +265,16 @@ interface DownloadService {
     );
 
     [Throws=MobileApiError]
+    string restart_aria2_torrent_file_with_native(
+        string id,
+        string current_torrent_path,
+        string destination,
+        sequence<u32> selected_file_indexes,
+        boolean confirmed_current_source,
+        boolean confirmed_selection
+    );
+
+    [Throws=MobileApiError]
     string add_download(
         string url,
         string filename,

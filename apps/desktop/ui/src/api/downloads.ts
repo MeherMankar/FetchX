@@ -62,6 +62,24 @@ export function restartAria2TorrentWithNative(
   });
 }
 
+export function restartAria2TorrentFileWithNative(
+  id: string,
+  currentTorrentPath: string,
+  destination: string,
+  selectedFileIndexes: number[],
+  confirmedCurrentSource: boolean,
+  confirmedSelection: boolean,
+): Promise<Download> {
+  return invoke<Download>("restart_aria2_torrent_file_with_native", {
+    id,
+    current_torrent_path: currentTorrentPath,
+    destination,
+    selected_file_indexes: selectedFileIndexes,
+    confirmed_current_source: confirmedCurrentSource,
+    confirmed_selection: confirmedSelection,
+  });
+}
+
 export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
 }

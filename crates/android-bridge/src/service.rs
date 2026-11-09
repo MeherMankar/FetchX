@@ -61,6 +61,9 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
         BatchDownloadError::DestinationCollision => BatchDownloadErrorCodeDto::Destination,
         BatchDownloadError::InvalidTorrentRestartSource => BatchDownloadErrorCodeDto::InvalidUrl,
         BatchDownloadError::TorrentSourceMismatch => BatchDownloadErrorCodeDto::InvalidFormat,
+        BatchDownloadError::InvalidTorrentRestartSelection => {
+            BatchDownloadErrorCodeDto::InvalidFormat
+        }
         BatchDownloadError::InvalidTorrentRestartDestination => {
             BatchDownloadErrorCodeDto::InvalidDestination
         }
@@ -454,6 +457,41 @@ impl DownloadService {
                     current_magnet_uri,
                     PathBuf::from(destination),
                     confirmed_current_source,
+                ))
+                .map(|native_id| native_id.to_string())
+                .map_err(|error| match error {
+                    fetchx_core_services::BatchDownloadError::UnavailableEngine(engine) => {
+                        MobileApiError::UnavailableEngine(format!("{engine:?}"))
+                    }
+                    error @ fetchx_core_services::BatchDownloadError::RestartNotEligible => {
+                        MobileApiError::InvalidStateTransition(error.to_string())
+                    }
+                    error => MobileApiError::Validation(error.to_string()),
+                })
+        })
+    }
+
+    pub fn restart_aria2_torrent_file_with_native(
+        &self,
+        id: String,
+        current_torrent_path: String,
+        destination: String,
+        selected_file_indexes: Vec<u32>,
+        confirmed_current_source: bool,
+        confirmed_selection: bool,
+    ) -> Result<String, MobileApiError> {
+        let aria2_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation("invalid download ID".to_owned()))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.restart_aria2_torrent_file_with_native(
+                    aria2_id,
+                    PathBuf::from(current_torrent_path),
+                    PathBuf::from(destination),
+                    selected_file_indexes,
+                    confirmed_current_source,
+                    confirmed_selection,
                 ))
                 .map(|native_id| native_id.to_string())
                 .map_err(|error| match error {

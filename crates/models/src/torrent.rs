@@ -239,6 +239,7 @@ fn parse_info(object: Object<'_, '_>) -> Result<ParsedInfo, TorrentMetadataError
             }
             b"piece length" => piece_length = Some(read_u64(value)?),
             b"pieces" => pieces = Some(read_bytes(value)?),
+            b"meta version" => return Err(TorrentMetadataError::InvalidMetainfo),
             b"length" => single_file_length = Some(read_u64(value)?),
             b"files" => multi_files = Some(parse_files(value)?),
             _ => {}
@@ -648,6 +649,16 @@ mod tests {
         bytes.splice(index..index + 5, b"0".iter().copied());
         assert_eq!(
             parse_torrent_metainfo(&bytes),
+            Err(TorrentMetadataError::InvalidMetainfo)
+        );
+        let mut hybrid = multi_file_metainfo(&[(&["docs", "one.txt"], 3)]);
+        let name_key = hybrid
+            .windows(b"4:name".len())
+            .position(|window| window == b"4:name")
+            .expect("fixture contains info name");
+        hybrid.splice(name_key..name_key, b"12:meta versioni2e".iter().copied());
+        assert_eq!(
+            parse_torrent_metainfo(&hybrid),
             Err(TorrentMetadataError::InvalidMetainfo)
         );
     }
