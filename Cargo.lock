@@ -1956,6 +1956,7 @@ dependencies = [
  "librqbit",
  "md-5 0.11.0",
  "netstat2",
+ "rand 0.10.3",
  "reqwest 0.12.28",
  "roxmltree",
  "russh",

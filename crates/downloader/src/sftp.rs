@@ -361,6 +361,13 @@ where
         let total_bytes = attrs
             .size
             .ok_or_else(|| DownloadEngineError::SftpError("file size unavailable".to_owned()))?;
+        let initial_mtime = attrs.mtime;
+
+        if resume_offset > total_bytes {
+            return Err(DownloadEngineError::SftpError(
+                "remote file is shorter than the existing partial file".to_owned(),
+            ));
+        }
 
         // Open remote file for reading.
         let mut remote_file = sftp
@@ -368,8 +375,41 @@ where
             .await
             .map_err(|e| DownloadEngineError::SftpError(format!("open failed: {e}")))?;
 
-        // Seek to resume position if resuming.
+        // A byte offset alone cannot establish that the partial file belongs to
+        // the current remote object. Compare the saved prefix before appending.
         if resume_offset > 0 {
+            let mut local_prefix = tokio::fs::File::open(&tmp)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            let mut compared = 0_u64;
+            let mut local_buf = vec![0_u8; CHUNK_SIZE];
+            let mut remote_buf = vec![0_u8; CHUNK_SIZE];
+            while compared < resume_offset {
+                let chunk_len = (resume_offset - compared).min(CHUNK_SIZE as u64) as usize;
+                let n = remote_file
+                    .read(&mut remote_buf[..chunk_len])
+                    .await
+                    .map_err(|e| {
+                        DownloadEngineError::SftpError(format!(
+                            "resume validation read failed: {e}"
+                        ))
+                    })?;
+                if n == 0 {
+                    return Err(DownloadEngineError::SftpError(
+                        "remote file ended while validating the existing partial file".to_owned(),
+                    ));
+                }
+                local_prefix
+                    .read_exact(&mut local_buf[..n])
+                    .await
+                    .map_err(DownloadEngineError::Io)?;
+                if local_buf[..n] != remote_buf[..n] {
+                    return Err(DownloadEngineError::SftpError(
+                        "existing partial file does not match the current remote file".to_owned(),
+                    ));
+                }
+                compared += n as u64;
+            }
             remote_file
                 .seek(std::io::SeekFrom::Start(resume_offset))
                 .await
@@ -468,6 +508,25 @@ where
 
         local_file.flush().await.map_err(DownloadEngineError::Io)?;
         drop(local_file);
+
+        if downloaded != total_bytes {
+            return Err(DownloadEngineError::SftpError(format!(
+                "remote file size changed during transfer (expected {total_bytes} bytes, received {downloaded})"
+            )));
+        }
+
+        let final_attrs = sftp
+            .metadata(path.as_str())
+            .await
+            .map_err(|e| DownloadEngineError::SftpError(format!("final stat failed: {e}")))?;
+        let final_size = final_attrs.size.ok_or_else(|| {
+            DownloadEngineError::SftpError("final file size unavailable".to_owned())
+        })?;
+        if final_size != total_bytes || final_attrs.mtime != initial_mtime {
+            return Err(DownloadEngineError::SftpError(
+                "remote file changed during transfer".to_owned(),
+            ));
+        }
 
         // Clean shutdown: drop SFTP objects then disconnect SSH.
         drop(remote_file);
@@ -782,15 +841,39 @@ fn parse_sftp_url(url: &str) -> Result<(String, u16, String, String), DownloadEn
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, path::PathBuf};
+    use std::{
+        collections::HashMap,
+        error::Error,
+        future::Future,
+        net::SocketAddr,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        },
+        time::Duration,
+    };
 
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp,
     };
     use fetchx_storage::{Database, DownloadRepository};
+    use russh::{
+        Channel, ChannelId,
+        server::{self, Auth, Msg, Session},
+    };
+    use russh_sftp::protocol::{Attrs, Data, FileAttributes, Handle, Status, StatusCode};
+    use tokio::{
+        net::TcpListener,
+        sync::{Mutex, Notify, RwLock, watch},
+        task::JoinHandle,
+    };
 
     use super::{SftpEngine, SftpEngineConfig, SftpKnownHost, parse_sftp_url};
-    use crate::DownloadEngineError;
+    use crate::{
+        BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
+        ManagedDownloadEngine,
+    };
 
     // ── URL parsing ──────────────────────────────────────────────────────────
 
@@ -942,24 +1025,6 @@ mod tests {
         ));
 
         let _ = id;
-        Ok(())
-    }
-
-    /// LOCAL_INTEGRATION_TEST: spins up an in-process russh SFTP server with a
-    /// generated Ed25519 key pair, populates known_hosts, downloads a known
-    /// file, and verifies the content.
-    ///
-    /// Marked #[ignore] because it requires a working local network stack.
-    #[tokio::test]
-    #[ignore = "LOCAL_INTEGRATION_TEST: requires local network stack for russh server"]
-    async fn sftp_integration_download() -> Result<(), Box<dyn Error>> {
-        // Full integration test would:
-        // 1. Generate an Ed25519 key pair with ssh_key::PrivateKey::random()
-        // 2. Start a russh server on 127.0.0.1:0 with a static file serving handler
-        // 3. Derive host_key_base64 via public_key.to_bytes() + base64::encode
-        // 4. Populate SftpEngineConfig::known_hosts with the derived value
-        // 5. Enqueue an sftp:// item pointing to the test server
-        // 6. Run download_managed and assert the file contents match
         Ok(())
     }
 
@@ -1146,5 +1211,620 @@ mod tests {
             result.is_err(),
             "Mismatched key should be rejected, got: {result:?}"
         );
+    }
+
+    #[derive(Clone)]
+    struct TestSftpState {
+        contents: Arc<RwLock<Vec<u8>>>,
+        modified_at: Arc<AtomicU32>,
+        read_offsets: Arc<Mutex<Vec<u64>>>,
+        first_read: Arc<Notify>,
+    }
+
+    struct TestSftpServer {
+        address: SocketAddr,
+        host_key_base64: String,
+        state: TestSftpState,
+        task: JoinHandle<()>,
+    }
+
+    impl TestSftpServer {
+        async fn start(contents: Vec<u8>) -> Result<Self, Box<dyn Error>> {
+            use base64::Engine as _;
+            use rand::SeedableRng;
+            use russh::keys::{Algorithm, PrivateKey};
+
+            let mut rng = rand::rngs::StdRng::seed_from_u64(35);
+            let key = PrivateKey::random(&mut rng, Algorithm::Ed25519)?;
+            let host_key_base64 =
+                base64::engine::general_purpose::STANDARD.encode(key.public_key().to_bytes()?);
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+            let address = listener.local_addr()?;
+            let state = TestSftpState {
+                contents: Arc::new(RwLock::new(contents)),
+                modified_at: Arc::new(AtomicU32::new(1)),
+                read_offsets: Arc::new(Mutex::new(Vec::new())),
+                first_read: Arc::new(Notify::new()),
+            };
+            let server_state = state.clone();
+            let server_config = Arc::new(server::Config {
+                keys: vec![key],
+                auth_rejection_time: Duration::ZERO,
+                auth_rejection_time_initial: Some(Duration::ZERO),
+                ..Default::default()
+            });
+            let task = tokio::spawn(async move {
+                while let Ok((stream, _)) = listener.accept().await {
+                    let config = server_config.clone();
+                    let state = server_state.clone();
+                    tokio::spawn(async move {
+                        if let Ok(session) =
+                            server::run_stream(config, stream, TestSshSession::new(state)).await
+                        {
+                            let _ = session.await;
+                        }
+                    });
+                }
+            });
+
+            Ok(Self {
+                address,
+                host_key_base64,
+                state,
+                task,
+            })
+        }
+
+        fn url(&self) -> String {
+            format!("sftp://test@{}/file.bin", self.address)
+        }
+
+        fn config(&self) -> SftpEngineConfig {
+            SftpEngineConfig {
+                known_hosts: vec![SftpKnownHost {
+                    host: "127.0.0.1".to_owned(),
+                    host_key_base64: self.host_key_base64.clone(),
+                }],
+                password: Some("fixture-password".to_owned()),
+                connect_timeout: Duration::from_secs(3),
+                ..Default::default()
+            }
+        }
+    }
+
+    impl Drop for TestSftpServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    struct TestSshSession {
+        channels: HashMap<ChannelId, Channel<Msg>>,
+        state: TestSftpState,
+    }
+
+    impl TestSshSession {
+        fn new(state: TestSftpState) -> Self {
+            Self {
+                channels: HashMap::new(),
+                state,
+            }
+        }
+    }
+
+    impl server::Handler for TestSshSession {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            password: &str,
+        ) -> Result<Auth, Self::Error> {
+            Ok(if password == "fixture-password" {
+                Auth::Accept
+            } else {
+                Auth::reject()
+            })
+        }
+
+        async fn auth_publickey(
+            &mut self,
+            _user: &str,
+            _public_key: &russh::keys::ssh_key::PublicKey,
+        ) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            channel: Channel<Msg>,
+            reply: server::ChannelOpenHandle,
+            _session: &mut Session,
+        ) -> Result<(), Self::Error> {
+            self.channels.insert(channel.id(), channel);
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn subsystem_request(
+            &mut self,
+            channel_id: ChannelId,
+            name: &str,
+            session: &mut Session,
+        ) -> Result<(), Self::Error> {
+            if name != "sftp" {
+                session.channel_failure(channel_id)?;
+                return Ok(());
+            }
+            let Some(channel) = self.channels.remove(&channel_id) else {
+                session.channel_failure(channel_id)?;
+                return Ok(());
+            };
+            session.channel_success(channel_id)?;
+            let state = self.state.clone();
+            tokio::spawn(async move {
+                let _ =
+                    russh_sftp::server::run(channel.into_stream(), TestSftpHandler { state }).await;
+            });
+            Ok(())
+        }
+    }
+
+    struct TestSftpHandler {
+        state: TestSftpState,
+    }
+
+    impl russh_sftp::server::Handler for TestSftpHandler {
+        type Error = StatusCode;
+
+        fn unimplemented(&self) -> Self::Error {
+            StatusCode::OpUnsupported
+        }
+
+        async fn open(
+            &mut self,
+            id: u32,
+            _filename: String,
+            _pflags: russh_sftp::protocol::OpenFlags,
+            _attrs: FileAttributes,
+        ) -> Result<Handle, Self::Error> {
+            Ok(Handle {
+                id,
+                handle: "fixture-file".to_owned(),
+            })
+        }
+
+        async fn close(&mut self, id: u32, _handle: String) -> Result<Status, Self::Error> {
+            Ok(Status {
+                id,
+                status_code: StatusCode::Ok,
+                error_message: String::new(),
+                language_tag: "en".to_owned(),
+            })
+        }
+
+        fn read(
+            &mut self,
+            id: u32,
+            _handle: String,
+            offset: u64,
+            len: u32,
+        ) -> impl Future<Output = Result<Data, Self::Error>> + Send {
+            let state = self.state.clone();
+            async move {
+                state.read_offsets.lock().await.push(offset);
+                state.first_read.notify_one();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let contents = state.contents.read().await;
+                let start = usize::try_from(offset).map_err(|_| StatusCode::Failure)?;
+                let end = start.saturating_add(len as usize).min(contents.len());
+                let data = contents
+                    .get(start..end)
+                    .filter(|data| !data.is_empty())
+                    .ok_or(StatusCode::Eof)?
+                    .to_vec();
+                Ok(Data { id, data })
+            }
+        }
+
+        fn stat(
+            &mut self,
+            id: u32,
+            _path: String,
+        ) -> impl Future<Output = Result<Attrs, Self::Error>> + Send {
+            let state = self.state.clone();
+            async move {
+                let contents = state.contents.read().await;
+                let attrs = FileAttributes {
+                    size: Some(contents.len() as u64),
+                    mtime: Some(state.modified_at.load(Ordering::SeqCst)),
+                    ..Default::default()
+                };
+                Ok(Attrs { id, attrs })
+            }
+        }
+    }
+
+    async fn insert_sftp_item(
+        repository: &impl DownloadRepository,
+        url: &str,
+        destination: PathBuf,
+    ) -> Result<DownloadId, Box<dyn Error>> {
+        let item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(url, EngineKind::Sftp)?,
+            FileName::new("download.bin")?,
+            destination,
+            Timestamp::from_unix_millis(1),
+        );
+        let id = item.id();
+        repository.create(&item).await?;
+        Ok(id)
+    }
+
+    #[tokio::test]
+    async fn sftp_password_auth_downloads_over_local_fixture() -> Result<(), Box<dyn Error>> {
+        let contents = b"hermetic SFTP password transfer".to_vec();
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = DownloadEngine::download(&engine, id, cancel_rx).await?;
+        assert_eq!(result.status(), fetchx_models::DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(destination).await?, contents);
+        assert!(!partial.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_rejected_password_does_not_create_destination() -> Result<(), Box<dyn Error>> {
+        let server = TestSftpServer::start(b"auth failure".to_vec()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(
+            repository,
+            SftpEngineConfig {
+                password: Some("wrong-password".to_owned()),
+                ..server.config()
+            },
+        );
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        assert!(matches!(
+            DownloadEngine::download(&engine, id, cancel_rx).await,
+            Err(DownloadEngineError::SftpAuthenticationFailed)
+        ));
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_public_key_auth_downloads_over_local_fixture() -> Result<(), Box<dyn Error>> {
+        use rand::SeedableRng;
+        use russh::keys::{Algorithm, PrivateKey, ssh_key::LineEnding};
+
+        let contents = b"hermetic SFTP public key transfer".to_vec();
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(36);
+        let user_key = PrivateKey::random(&mut rng, Algorithm::Ed25519)?;
+        let private_key_pem = user_key.to_openssh(LineEnding::LF)?.to_string();
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(
+            repository,
+            SftpEngineConfig {
+                private_key_pem: Some(private_key_pem),
+                ..server.config()
+            },
+        );
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = DownloadEngine::download(&engine, id, cancel_rx).await?;
+        assert_eq!(result.status(), fetchx_models::DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(destination).await?, contents);
+        assert!(!partial.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_changed_host_key_is_rejected_by_local_fixture() -> Result<(), Box<dyn Error>> {
+        use base64::Engine as _;
+        use rand::SeedableRng;
+        use russh::keys::{Algorithm, PrivateKey};
+
+        let server = TestSftpServer::start(b"host key check".to_vec()).await?;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(37);
+        let changed_key = PrivateKey::random(&mut rng, Algorithm::Ed25519)?;
+        let changed_key =
+            base64::engine::general_purpose::STANDARD.encode(changed_key.public_key().to_bytes()?);
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(
+            repository,
+            SftpEngineConfig {
+                known_hosts: vec![SftpKnownHost {
+                    host: "127.0.0.1".to_owned(),
+                    host_key_base64: changed_key,
+                }],
+                connect_timeout: Duration::from_secs(3),
+                ..Default::default()
+            },
+        );
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        assert!(matches!(
+            DownloadEngine::download(&engine, id, cancel_rx).await,
+            Err(DownloadEngineError::SftpError(message)) if message.contains("host key")
+        ));
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_resume_validates_prefix_before_appending() -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'x'; 150_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let prefix_len = 70_000;
+        tokio::fs::write(&partial, &contents[..prefix_len]).await?;
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        DownloadEngine::download(&engine, id, cancel_rx).await?;
+        assert_eq!(tokio::fs::read(destination).await?, contents);
+        assert!(
+            server
+                .state
+                .read_offsets
+                .lock()
+                .await
+                .contains(&(prefix_len as u64))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_changed_remote_prefix_preserves_partial_and_destination()
+    -> Result<(), Box<dyn Error>> {
+        let old_contents = vec![b'a'; 128_000];
+        let server = TestSftpServer::start(vec![b'b'; 128_000]).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let saved_partial = old_contents[..64_000].to_vec();
+        tokio::fs::write(&partial, &saved_partial).await?;
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = DownloadEngine::download(&engine, id, cancel_rx).await;
+        assert!(matches!(result, Err(DownloadEngineError::SftpError(_))));
+        assert_eq!(tokio::fs::read(&partial).await?, saved_partial);
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_remote_file_shrinking_below_partial_preserves_partial()
+    -> Result<(), Box<dyn Error>> {
+        let server = TestSftpServer::start(vec![b's'; 32]).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let saved_partial = vec![b'p'; 64];
+        tokio::fs::write(&partial, &saved_partial).await?;
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        assert!(matches!(
+            DownloadEngine::download(&engine, id, cancel_rx).await,
+            Err(DownloadEngineError::SftpError(_))
+        ));
+        assert_eq!(tokio::fs::read(partial).await?, saved_partial);
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_interruption_retry_resumes_from_partial() -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'r'; 250_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = Arc::new(SftpEngine::with_config(repository, server.config()));
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (_pause_tx, pause) = watch::channel(false);
+        let (_connection_tx, connection_limit) = watch::channel(1);
+        let task_engine = engine.clone();
+        let first_read = server.state.first_read.notified();
+        let download = tokio::spawn(async move {
+            task_engine
+                .download_managed(
+                    id,
+                    ManagedDownloadControl {
+                        cancellation: cancel_rx,
+                        pause,
+                        connection_limit,
+                        resource_demand: None,
+                        bandwidth: BandwidthControl::default(),
+                    },
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), first_read).await?;
+        cancel_tx.send(true)?;
+        assert!(matches!(
+            download.await?,
+            Err(DownloadEngineError::Cancelled)
+        ));
+        let partial = super::temporary_path(&destination);
+        let saved_partial = tokio::fs::read(&partial).await?;
+        assert!(!saved_partial.is_empty());
+        assert_eq!(tokio::fs::read(&partial).await?, saved_partial);
+
+        let (_retry_cancel_tx, retry_cancel_rx) = watch::channel(false);
+        let result = engine
+            .download_managed(
+                id,
+                ManagedDownloadControl {
+                    cancellation: retry_cancel_rx,
+                    pause: watch::channel(false).1,
+                    connection_limit: watch::channel(1).1,
+                    resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
+                },
+            )
+            .await?;
+        assert_eq!(result.status(), fetchx_models::DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(destination).await?, contents);
+        assert!(!partial.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_interrupted_partial_rejects_changed_remote_and_stays_intact()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'a'; 220_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = Arc::new(SftpEngine::with_config(repository, server.config()));
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (_pause_tx, pause) = watch::channel(false);
+        let (_connection_tx, connection_limit) = watch::channel(1);
+        let task_engine = engine.clone();
+        let first_read = server.state.first_read.notified();
+        let download = tokio::spawn(async move {
+            task_engine
+                .download_managed(
+                    id,
+                    ManagedDownloadControl {
+                        cancellation: cancel_rx,
+                        pause,
+                        connection_limit,
+                        resource_demand: None,
+                        bandwidth: BandwidthControl::default(),
+                    },
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), first_read).await?;
+        cancel_tx.send(true)?;
+        assert!(matches!(
+            download.await?,
+            Err(DownloadEngineError::Cancelled)
+        ));
+
+        let partial = super::temporary_path(&destination);
+        let saved_partial = tokio::fs::read(&partial).await?;
+        assert!(!saved_partial.is_empty());
+        *server.state.contents.write().await = vec![b'b'; contents.len()];
+
+        let (_retry_cancel_tx, retry_cancel_rx) = watch::channel(false);
+        let result = engine
+            .download_managed(
+                id,
+                ManagedDownloadControl {
+                    cancellation: retry_cancel_rx,
+                    pause: watch::channel(false).1,
+                    connection_limit: watch::channel(1).1,
+                    resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(DownloadEngineError::SftpError(_))));
+        assert_eq!(tokio::fs::read(&partial).await?, saved_partial);
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_remote_metadata_change_during_transfer_prevents_publish()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'a'; 128_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let first_read = server.state.first_read.notified();
+        let download =
+            tokio::spawn(async move { DownloadEngine::download(&engine, id, cancel_rx).await });
+
+        tokio::time::timeout(Duration::from_secs(5), first_read).await?;
+        *server.state.contents.write().await = vec![b'b'; contents.len()];
+        server.state.modified_at.store(2, Ordering::SeqCst);
+
+        assert!(matches!(
+            download.await?,
+            Err(DownloadEngineError::SftpError(_))
+        ));
+        assert!(!destination.exists());
+        assert!(partial.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_existing_destination_is_preserved_on_publish_failure()
+    -> Result<(), Box<dyn Error>> {
+        let contents = b"new remote contents".to_vec();
+        let server = TestSftpServer::start(contents.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let original_destination = b"existing destination".to_vec();
+        tokio::fs::write(&destination, &original_destination).await?;
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        assert!(matches!(
+            DownloadEngine::download(&engine, id, cancel_rx).await,
+            Err(DownloadEngineError::DestinationExists)
+        ));
+        assert_eq!(tokio::fs::read(destination).await?, original_destination);
+        assert_eq!(tokio::fs::read(partial).await?, contents);
+        Ok(())
     }
 }
