@@ -220,3 +220,20 @@ New-download defaults are Rust-native by protocol: HTTP/HTTPS uses direct HTTP (
 No behavior migration is justified in Prompt 22. Redirecting explicit jobs or persisted aria2 rows would remove a supported fallback; replacing persisted torrent recovery would change engine identity without proven equivalent GID reconciliation or native process-restart recovery. Exact dependency and protocol tables, plus the next deprecation decision, are in [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md). Source inspection and `git diff --check` are the validation boundary; no tests/builds were run for this documentation-only update.
 
 Before any aria2 removal, require verified native process/device recovery and partial-piece reuse, live persisted-aria2 reconciliation on supported targets, live current/older remote compatibility, a migration/rollback policy for explicit users, and an Android policy for legacy aria2 rows. Preserve RPC credentials/settings and helper availability until those gates pass.
+
+## Prompt 23 — legacy aria2 recovery audit
+
+The Prompt 23 worktree was clean at `d7280b5`. Source tracing covered persisted engine identity and torrent metadata, queue startup recovery and controls, `EngineDispatcher`, aria2 GID restoration/submission, Android engine initialization/retry, and Android failure-row mapping. No code change is safe in this phase: native engines do not consume aria2 GIDs or control files, and no cross-engine validation proves that persisted bytes can be reused.
+
+Verified behavior:
+
+- `DownloadStateMachine::recover_interrupted` requeues interrupted work while preserving the original `DownloadSource.engine()`; queue recovery does not rewrite an aria2 record to native.
+- `EngineDispatcher` selects by that persisted engine. If aria2 is unavailable, the job is not automatically dispatched to native.
+- Aria2 torrent metadata persists a GID and selected-file metadata. GID reconciliation is aria2 RPC-specific and validates the torrent info hash when metadata is available. Generic protocol GIDs are runtime-only.
+- For supervised aria2 work with nonzero progress, re-submission requires the expected `.aria2` control file. Unsupervised work cannot be resumed from progress alone without a usable GID. A malformed GID or info-hash mismatch is rejected for reconciliation; an invalid-GID response clears the stale torrent GID. These constraints do not establish native adoption.
+- Android configures no local aria2 executable. Its separately configured remote aria2 profile is a diagnostic probe and is not connected to persisted download dispatch. A failed legacy row shows a sanitized generic engine error and retry/remove actions; the retry guard preserves the record when its persisted engine is unavailable. This is data-preserving, but does not explain the platform-specific recovery limitation clearly.
+- Queue removal deletes the row while preserving destination and partial data. Completed files do not require engine recovery.
+
+Legacy state disposition is detailed in the migration report's Prompt 23 matrix. Queued/paused/failed/cancelled aria2 records remain aria2-bound; interrupted work is requeued as aria2; torrent GIDs can only be reconciled in aria2; completed files remain completed; removed records have no app metadata for recovery. No case is automatically adoptable by native Rust. A stale/missing GID, absent aria2 runtime, absent `.aria2` control data, destination conflict, or unverified partial content blocks safe native adoption; aria2-only continuation remains conditional on its own runtime and reconciliation state.
+
+The next work is a read-only CoreServices recovery assessment and actionable per-record UI, then controlled recovery tests with a real supervised aria2 runtime. Any later native replacement should be opt-in and create a separate task, preserving the original record and payload until the replacement passes source, destination, and integrity checks. No schema, engine identity, GID, setting, or file was changed. This documentation-only update was checked with `git diff --check`; no tests/builds or live daemon/device validation was performed.

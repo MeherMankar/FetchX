@@ -241,3 +241,13 @@ Prioritized next work:
 - Exact commands, test results, runtime scope, and unverified acceptance criteria are recorded in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
 
 Next: validate exact partial-piece reuse, process restart, and explicit destination-collision behavior on supported hosts, then run the remote selection flow against an older and current live server and exercise Android/desktop runtimes. Keep aria2 packaging/RPC until all migration acceptance criteria pass across supported hosts.
+
+## Prompt 23 — legacy aria2 recovery plan
+
+- Persisted aria2 engine identity is authoritative for dispatch, retry, and interrupted-work recovery. Queue startup requeues interrupted states without changing the engine; it does not fall back to native Rust.
+- Torrent GIDs are aria2 RPC task identifiers stored alongside torrent metadata; generic protocol GIDs are runtime-only. GIDs are never native identifiers. A supervised aria2 partial with progress requires its `.aria2` control file before resubmission; its presence does not establish that librqbit can safely consume the same bytes.
+- Android has no configured local aria2 executable. Its remote aria2 settings are an endpoint probe, not a persisted-download engine binding. Legacy rows remain stored; failed rows show a sanitized generic reason and retry/remove actions, and retry preserves the row if aria2 is unavailable.
+- No engine conversion or schema change is justified. Keep partial files and records intact. Completed files need no engine recovery; queue removal removes only the record and preserves files.
+- Next: implement a read-only CoreServices assessment of persisted aria2 recovery requirements and runtime availability; expose an actionable explanation to Android and other clients; validate same-runtime pause/resume and process-restart behavior with a real supervised aria2 daemon, covering GID validity, stale GIDs, and `.aria2` control-file presence/absence.
+- Only after this evidence, design opt-in native replacement as a new task while retaining the aria2 original until source, selection, destination collision, and integrity checks pass. No automatic adoption or deletion of aria2 data is allowed.
+- Prompt 23 is documentation-only. Source inspection and `git diff --check` are the validation boundary; no tests/builds, live aria2 daemon, Android device, or process-restart experiment was run. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md) for the state matrix and exact findings.

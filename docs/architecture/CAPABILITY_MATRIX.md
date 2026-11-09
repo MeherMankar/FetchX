@@ -187,3 +187,16 @@ Prompt 21 host validation passed for serial Rust tests (including the controlled
 | Diagnostics/configuration | Shared runtime status and host settings | Optional local aria2 supervisor/client, desktop Windows helper/settings, desktop and Android separate remote-daemon probes. No general aria2 RPC is exposed through FetchX remote/browser APIs. |
 
 Prompt 22 found no non-torrent download default still routed through aria2 and no aria2 code proven dead. No implementation was removed or migrated: explicit fallback, aria2 GID persistence/recovery, and settings remain required. Android disables local aria2 bundling; legacy Android records persisted as aria2 remain unchanged but cannot execute locally without an aria2 runtime. Credentials/configuration are preserved and excluded from download export and sanitized diagnostics. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md) for the full dependency inventory, evidence, and removal gates.
+
+## Prompt 23 — persisted aria2 job recovery
+
+| State / capability | Shared Rust behavior | Android capability |
+|---|---|---|
+| Persisted `EngineKind::Aria2` | Remains the dispatch and retry identity. No transparent native fallback or engine rewrite. | Persisted and displayed; not locally executable because the bridge supplies no aria2 runtime. |
+| Interrupted job recovery | Preparing/downloading/metadata-acquiring/recovering/seeding work is requeued and retains its persisted engine. aria2 reconciliation is required to continue it. | A requeued row can fail through the unavailable local engine; row/data are retained. |
+| aria2 GID recovery | Torrent GIDs are persisted in torrent metadata and reconciled with aria2 RPC/info hash; generic GIDs are runtime-only. A GID is never a native identifier. | No local RPC recovery. Separate remote aria2 endpoint configuration does not dispatch these download records. |
+| Partial-file continuation | Supervised aria2 resubmission with progress requires aria2's `.aria2` control file. Progress alone is not sufficient. Cross-engine partial adoption is unverified and unsupported. | No local aria2 resume path. Retry does not replace the persisted record when the engine is unavailable. |
+| Completed/removed data | Completed output needs no engine recovery. Queue removal preserves output and partial files, though it removes the record. | Completed results remain; removed files are not implicitly imported as downloads. |
+| User-visible unavailable state | Persisted failure diagnostics are sanitized; no structured recovery assessment currently identifies platform/runtime unavailability. | Failed rows show a sanitized reason and retry/remove controls, but the reason is generic and not Android-specific. |
+
+No native adoption capability is claimed for any persisted aria2 state. The safe next slice is a read-only shared-core recovery assessment, an actionable UI explanation, and tests with a real supervised aria2 runtime before any opt-in conversion design. See the Prompt 23 recovery matrix and validation boundary in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
