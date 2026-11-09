@@ -16,12 +16,11 @@ pause/resume/cancel/removal controls, startup recovery, and a global connection 
 Tauri 2 desktop foundation is in place with a minimal React + TypeScript shell. It
 currently exposes direct HTTP/HTTPS downloads, queue controls, and explicit refresh;
 live progress notifications and engine selection are not yet wired to the desktop.
-The desktop app includes an optional per-user helper manager for aria2c, yt-dlp,
-FFmpeg, and FFprobe. Installs are initiated explicitly in Settings, use allowlisted
+The desktop app includes an optional per-user helper manager for yt-dlp, FFmpeg,
+and FFprobe. Installs are initiated explicitly in Settings, use allowlisted
 HTTPS distributions, verify published SHA-256 checksums, validate Windows x64 PE
 architecture and executable version output, and install into the FetchX application
 data `bin` directory without changing the system PATH. The supported sources are the
-aria2 GitHub release pinned to the SHA-256 in the Microsoft WinGet manifest, the
 yt-dlp GitHub release digest, and Gyan.dev's Windows FFmpeg essentials build and
 checksum. The helper manager is Windows desktop only; helper installation is optional
 and does not affect Android or CLI startup. Installed engine paths are persisted and
@@ -34,14 +33,14 @@ never installs binaries itself. The processor bounds concurrent child processes,
 cancellation but not active pause/resume, streams selected input files over stdin with
 only the `pipe` input protocol enabled, caps output at 100 GiB by default (configurable
 up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal
-tests independent of FFmpeg. The optional yt-dlp
-engine is configured as an external process adapter and uses fake runners in tests; no
-installed yt-dlp is required for CI. The optional aria2 engine can use the JSON-RPC
-client through the engine dispatcher and a private `aria2c` process owned by
-the Rust supervisor. Process supervision requires an explicitly configured executable
-path; no shell or PATH-based executable discovery is used. One-shot scheduled start
-times are persisted in SQLite and coordinated by an event-driven Scheduler above the
-Queue Manager.
+tests independent of FFmpeg. The optional yt-dlp engine is configured as an external
+process adapter and uses fake runners in tests; no installed yt-dlp is required for CI.
+Historical aria2 records remain readable but the external aria2 runtime, daemon RPC,
+process supervision, packaging, settings, and fallback have been removed. Supported
+new work uses FetchX's shared Rust engines; eligible old records can be restarted as
+separate native jobs only through the explicit user-confirmed flow. One-shot scheduled
+start times are persisted in SQLite and coordinated by an event-driven Scheduler above
+the Queue Manager.
 
 Queued downloads can be moved earlier or later within their own priority group. The
 Rust queue actor persists this ordering through the existing SQLite `queue_order`
@@ -52,16 +51,6 @@ Android's embedded yt-dlp runtime also supports selectable media formats. Adapti
 video/audio selections use a bundled, statically linked FFmpeg 8.1.2 executable
 (LGPL configuration, without GPL-only external libraries), built for the app's
 supported ABIs with `scripts/build-android-ffmpeg.sh`.
-
-The supervised aria2 RPC listener is restricted to loopback and requires a
-runtime-generated authentication secret. The secret is supplied through a short-lived
-private runtime config file, not process arguments, logs, or persistent application
-storage. Child output is drained without logging. GIDs remain memory-only and are scoped
-to a process generation; after a crash, active jobs are resubmitted from fetchx's
-persisted state, while completed and cancelled records are never resurrected. Shutdown
-is graceful first, then bounded and forced if required. Each aria2 job uses one
-connection; Queue Manager remains authoritative for queueing and global resources.
-Supervision tests use injected fake processes and do not require aria2 on the test host.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
@@ -139,8 +128,7 @@ host does not initialize are reported as unavailable rather than inferred to be 
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume/adaptive segmentation,
-  optional aria2 and yt-dlp engine adapters, FFmpeg/ffprobe media processing, and engine
-  dispatcher
+  yt-dlp engine adapter, FFmpeg/ffprobe media processing, and engine dispatcher
 - `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
 - `crates/scheduler` — persistent one-shot start times and event-driven eligibility handoff
 - `apps/desktop/src-tauri` — Tauri commands, shared application services, and lifecycle

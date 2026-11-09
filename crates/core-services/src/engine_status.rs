@@ -11,7 +11,6 @@ pub enum EngineAvailability {
 /// Runtime status of all optional engines.
 #[derive(Clone, Debug)]
 pub struct EngineRuntimeStatus {
-    pub aria2: EngineAvailability,
     pub yt_dlp: EngineAvailability,
     pub native_torrent: EngineAvailability,
     /// FTP and FTPS are always-available (pure Rust, no external binary).
@@ -42,7 +41,6 @@ impl EngineRuntimeStatus {
         vec![
             builtin_entry(EngineKind::DirectHttp),
             builtin_entry(EngineKind::Hls),
-            status_entry(EngineKind::Aria2, &self.aria2),
             status_entry(EngineKind::YtDlp, &self.yt_dlp),
             status_entry(EngineKind::NativeTorrent, &self.native_torrent),
             status_entry(EngineKind::Ftp, &self.ftp),
@@ -94,7 +92,6 @@ mod tests {
     #[test]
     fn entries_include_all_engines_and_preserve_runtime_availability() {
         let status = EngineRuntimeStatus {
-            aria2: EngineAvailability::Disabled,
             yt_dlp: EngineAvailability::Available {
                 version: "2026.01".to_owned(),
             },
@@ -116,7 +113,6 @@ mod tests {
             [
                 EngineKind::DirectHttp,
                 EngineKind::Hls,
-                EngineKind::Aria2,
                 EngineKind::YtDlp,
                 EngineKind::NativeTorrent,
                 EngineKind::Ftp,
@@ -131,14 +127,13 @@ mod tests {
                 .filter(|entry| matches!(entry.engine, EngineKind::DirectHttp | EngineKind::Hls))
                 .all(|entry| entry.state == EngineRuntimeState::Available)
         );
-        assert_eq!(entries[2].state, EngineRuntimeState::Disabled);
-        assert_eq!(entries[3].state, EngineRuntimeState::Available);
-        assert_eq!(entries[3].version.as_deref(), Some("2026.01"));
-        assert_eq!(entries[4].state, EngineRuntimeState::Unavailable);
-        assert_eq!(entries[4].reason.as_deref(), Some("runtime failed"));
+        assert_eq!(entries[2].state, EngineRuntimeState::Available);
+        assert_eq!(entries[2].version.as_deref(), Some("2026.01"));
+        assert_eq!(entries[3].state, EngineRuntimeState::Unavailable);
+        assert_eq!(entries[3].reason.as_deref(), Some("runtime failed"));
+        assert_eq!(entries[4].state, EngineRuntimeState::Available);
         assert_eq!(entries[5].state, EngineRuntimeState::Available);
-        assert_eq!(entries[6].state, EngineRuntimeState::Available);
-        assert_eq!(entries[7].state, EngineRuntimeState::Disabled);
-        assert_eq!(entries[8].state, EngineRuntimeState::Unavailable);
+        assert_eq!(entries[6].state, EngineRuntimeState::Disabled);
+        assert_eq!(entries[7].state, EngineRuntimeState::Unavailable);
     }
 }

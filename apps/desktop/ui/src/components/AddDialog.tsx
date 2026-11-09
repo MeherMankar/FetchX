@@ -29,7 +29,7 @@ const ENGINE_OPTIONS: { kind: EngineKind; label: string }[] = [
   { kind: "yt_dlp",      label: "yt-dlp" },
 ];
 
-type TorrentEngineChoice = "automatic" | "aria2" | "native_torrent";
+type TorrentEngineChoice = "automatic" | "native_torrent";
 
 /**
  * Returns true when the given engine kind is runtime-available according to
@@ -40,7 +40,6 @@ function isEngineAvailable(kind: EngineKind, status: EngineStatus | null): boole
   if (!status) return kind === "direct_http"; // safe default while loading
   switch (kind) {
     case "direct_http": return status.direct_http.available;
-    case "aria2":       return false;
     case "yt_dlp":      return status.yt_dlp.available;
     case "native_torrent": return status.native_torrent.available;
   }
@@ -50,10 +49,6 @@ function engineUnavailableReason(kind: EngineKind, status: EngineStatus | null):
   if (!status) return null;
   switch (kind) {
     case "direct_http": return null;
-    case "aria2":
-      if (!status.aria2.enabled) return "disabled in Settings";
-      if (!status.aria2.available) return status.aria2.error ?? "unavailable";
-      return null;
     case "yt_dlp":
       if (!status.yt_dlp.enabled) return "disabled in Settings";
       if (!status.yt_dlp.available) return status.yt_dlp.error ?? "unavailable";
@@ -457,10 +452,10 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 {isTorrent ? (
                   <>
                     <option value="automatic">Native torrent (default)</option>
-                    {(["native_torrent", "aria2"] as const).map((kind) => {
+                    {(["native_torrent"] as const).map((kind) => {
                       const available = isEngineAvailable(kind, engineStatus);
                       const reason = engineUnavailableReason(kind, engineStatus);
-                      const label = kind === "native_torrent" ? "Native torrent" : "aria2 fallback";
+                      const label = "Native torrent";
                       return (
                         <option key={kind} value={kind} disabled={!available}>
                           {available ? label : `${label} — ${reason ?? "unavailable"}`}
@@ -481,7 +476,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             )}
             <p id="add-engine-hint" className="field-hint">
               {isTorrent
-                ? "New torrent downloads use the native engine by default. Choose aria2 as an explicit fallback."
+                ? "New torrent downloads use the native Rust engine."
                 : "Only available engines are selectable. Configure engines in Settings."}
             </p>
           </div>

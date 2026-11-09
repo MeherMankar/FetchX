@@ -53,7 +53,7 @@ export interface DownloadError {
   message: string;
 }
 
-export type EngineKind = "direct_http" | "aria2" | "yt_dlp" | "native_torrent";
+export type EngineKind = "direct_http" | "yt_dlp" | "native_torrent";
 
 export interface Download {
   id: string;
@@ -62,7 +62,7 @@ export interface Download {
   destination: string;
   status: DownloadStatus;
   priority: DownloadPriority;
-  engine: EngineKind;
+  engine: EngineKind | "aria2";
   progress: DownloadProgress;
   error: DownloadError | null;
   queue_position?: number;
@@ -75,26 +75,6 @@ export interface DownloadRuntimeStatus {
   status: DownloadStatus;
   progress: DownloadProgress;
   updated_at: number;
-}
-
-export type Aria2RecoveryState =
-  | "not_aria2"
-  | "not_required"
-  | "runtime_unavailable"
-  | "ready_to_start"
-  | "job_available"
-  | "missing_torrent_metadata"
-  | "missing_gid"
-  | "stale_gid"
-  | "missing_control_file"
-  | "control_file_present"
-  | "unknown";
-
-export interface Aria2RecoveryAssessment {
-  download_id: string;
-  state: Aria2RecoveryState;
-  explanation: string;
-  next_step: string;
 }
 
 export interface DuplicateDownloadMatch {
@@ -211,14 +191,6 @@ export interface DirectHttpConfigDto {
   enabled: boolean;
 }
 
-export interface Aria2ConfigDto {
-  enabled: boolean;
-  executable_path: string | null;
-  rpc_port: number;
-  /** True when a non-empty secret is stored. The actual secret is never returned. */
-  has_secret: boolean;
-}
-
 export interface YtDlpConfigDto {
   enabled: boolean;
   executable_path: string | null;
@@ -226,7 +198,6 @@ export interface YtDlpConfigDto {
 
 export interface EngineConfigDto {
   direct_http: DirectHttpConfigDto;
-  aria2: Aria2ConfigDto;
   yt_dlp: YtDlpConfigDto;
   resource_policy: ResourcePolicyDto;
 }
@@ -236,7 +207,6 @@ export type ResourceProfile = "unlimited" | "normal" | "limited" | "night" | "cu
 export interface EngineBandwidthLimitsDto {
   direct_http_bytes_per_second: number | null;
   hls_bytes_per_second: number | null;
-  aria2_bytes_per_second: number | null;
   yt_dlp_bytes_per_second: number | null;
 }
 
@@ -250,21 +220,12 @@ export interface ResourcePolicyDto {
   engine_bandwidth_limits: EngineBandwidthLimitsDto;
 }
 
-export interface SaveAria2ConfigRequest {
-  enabled: boolean;
-  executable_path: string | null;
-  rpc_port: number;
-  /** null = leave existing secret unchanged. "" = clear secret. "token" = set. */
-  rpc_secret_update: string | null;
-}
-
 export interface SaveYtDlpConfigRequest {
   enabled: boolean;
   executable_path: string | null;
 }
 
 export interface SaveEngineConfigRequest {
-  aria2: SaveAria2ConfigRequest;
   yt_dlp: SaveYtDlpConfigRequest;
   resource_policy: ResourcePolicyDto;
 }
@@ -273,14 +234,6 @@ export interface DiagnosticResult {
   available: boolean;
   executable: string | null;
   version: string | null;
-  enabled_features?: string[];
-  aria2_global_stat?: {
-    download_speed_bytes_per_second: number;
-    upload_speed_bytes_per_second: number;
-    active_downloads: number;
-    waiting_downloads: number;
-    stopped_results: number;
-  };
   message: string;
 }
 
@@ -303,12 +256,11 @@ export interface EngineInstanceStatus {
 
 export interface EngineStatus {
   direct_http: EngineInstanceStatus;
-  aria2: EngineInstanceStatus;
   yt_dlp: EngineInstanceStatus;
   native_torrent: EngineInstanceStatus;
 }
 
-export type ManagedHelperId = "aria2c" | "yt_dlp" | "ffmpeg" | "ffprobe";
+export type ManagedHelperId = "yt_dlp" | "ffmpeg" | "ffprobe";
 
 export interface HelperStatus {
   helper: ManagedHelperId;

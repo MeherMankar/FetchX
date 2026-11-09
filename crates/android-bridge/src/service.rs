@@ -72,12 +72,11 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
 }
 
 use crate::dto::{
-    Aria2RecoveryAssessmentDto, BatchDownloadAudioFormatDto, BatchDownloadEngineDto,
-    BatchDownloadErrorCodeDto, BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig,
-    DownloadInfoDto, DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto,
-    TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto,
-    aria2_recovery_assessment_to_dto, duplicate_match_to_dto, event_to_dto, item_to_dto,
-    priority_from_dto, runtime_status_to_dto,
+    BatchDownloadAudioFormatDto, BatchDownloadEngineDto, BatchDownloadErrorCodeDto,
+    BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig, DownloadInfoDto,
+    DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto, TorrentFileDto,
+    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, duplicate_match_to_dto, event_to_dto,
+    item_to_dto, priority_from_dto, runtime_status_to_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -288,10 +287,6 @@ impl DownloadService {
             if ytdlp_runner.is_some() {
                 engine_config.yt_dlp.enabled = true;
             }
-            if let Some(path) = config.aria2_executable_path {
-                engine_config.aria2.enabled = true;
-                engine_config.aria2.executable_path = Some(PathBuf::from(path));
-            }
             engine_config.native_torrent.enabled = true;
             // Use app-private storage; std::env::temp_dir() may resolve to
             // /data/local/tmp, which is not writable by the app sandbox.
@@ -399,21 +394,6 @@ impl DownloadService {
                 .block_on(inner.core.repository.get(download_id))
                 .map_err(|e| MobileApiError::Storage(e.to_string()))?;
             Ok(item.as_ref().map(item_to_dto))
-        })
-    }
-
-    pub fn assess_aria2_recovery(
-        &self,
-        id: String,
-    ) -> Result<Option<Aria2RecoveryAssessmentDto>, MobileApiError> {
-        let download_id = DownloadId::parse(&id)
-            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
-        self.with_inner(|inner| {
-            let assessment = inner
-                .runtime
-                .block_on(inner.core.assess_aria2_recovery(download_id))
-                .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
-            Ok(assessment.map(aria2_recovery_assessment_to_dto))
         })
     }
 
@@ -1504,7 +1484,6 @@ mod tests {
             downloads_dir: dir.path().join("downloads").to_string_lossy().into_owned(),
             runtime_dir: dir.path().join("runtime").to_string_lossy().into_owned(),
             yt_dlp_executable_path: None,
-            aria2_executable_path: None,
         };
         (config, dir)
     }
@@ -1644,14 +1623,8 @@ mod tests {
     }
 
     #[test]
-    fn magnet_add_defaults_to_native_when_aria2_is_unavailable() {
-        let (mut config, dir) = make_config();
-        config.aria2_executable_path = Some(
-            dir.path()
-                .join("missing-aria2")
-                .to_string_lossy()
-                .into_owned(),
-        );
+    fn magnet_add_defaults_to_native_engine() {
+        let (config, _dir) = make_config();
         let svc = DownloadService::new(config, None).expect("service creation failed");
 
         assert!(matches!(

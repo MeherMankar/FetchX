@@ -15,9 +15,7 @@ import {
 } from "./protocol";
 import { TorrentSelectionPanel } from "./TorrentSelectionPanel";
 import {
-  defaultTorrentEngineChoice,
   supportsNativeMagnetSelection,
-  type TorrentEngineChoice,
 } from "./torrentSelectionState";
 
 type Section =
@@ -93,7 +91,6 @@ export function App() {
   const [search, setSearch] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [priority, setPriority] = useState<DownloadPriority>("normal");
-  const [torrentEngine, setTorrentEngine] = useState<TorrentEngineChoice>("automatic");
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -189,7 +186,6 @@ export function App() {
       setProtocol(currentProtocol);
       setDownloads(rows.downloads);
       setEngineStatuses(currentEngineStatuses?.engines ?? null);
-      setTorrentEngine(defaultTorrentEngineChoice(currentProtocol.capabilities));
       clientRef.current = activeClient;
       setClient(activeClient);
       setTokenInput("");
@@ -357,11 +353,17 @@ export function App() {
       if (!capabilities.has("download.create")) {
         throw new RemoteError("download.create is not available in the current protocol.", "protocol");
       }
+      const isMagnet = newUrl.trim().toLowerCase().startsWith("magnet:");
+      if (isMagnet && !supportsNativeMagnetSelection(capabilities)) {
+        throw new RemoteError(
+          "Native torrent creation is unavailable on this server; no external engine fallback is used.",
+          "protocol",
+        );
+      }
       const created = await client.call<CreateResult>("download.create", {
         url: newUrl.trim(),
         priority,
-        ...(newUrl.trim().toLowerCase().startsWith("magnet:")
-          && torrentEngine !== "automatic" ? { engine: torrentEngine } : {}),
+        ...(isMagnet ? { engine: "native_torrent" } : {}),
       });
       setNewUrl("");
       await refreshDownloads(client);
@@ -371,7 +373,7 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, capabilities, client, handleError, newUrl, priority, refreshDownloads, torrentEngine]);
+  }, [busy, capabilities, client, handleError, newUrl, priority, refreshDownloads]);
 
   const refreshNow = useCallback(async () => {
     if (!client || refreshing) return;
@@ -535,8 +537,6 @@ export function App() {
               onNewUrl={setNewUrl}
               priority={priority}
               onPriority={setPriority}
-              torrentEngine={torrentEngine}
-              onTorrentEngine={setTorrentEngine}
               onAdd={(event) => void addDownload(event)}
               onAction={(download, action) => void operate(download, action)}
               onPriorityChange={(download, value) => void changePriority(download, value)}
@@ -697,8 +697,6 @@ function DownloadsView(props: {
   onNewUrl: (value: string) => void;
   priority: DownloadPriority;
   onPriority: (value: DownloadPriority) => void;
-  torrentEngine: TorrentEngineChoice;
-  onTorrentEngine: (value: TorrentEngineChoice) => void;
   onAdd: (event: FormEvent<HTMLFormElement>) => void;
   onAction: (download: RemoteDownload, action: "pause" | "resume" | "cancel" | "remove") => void;
   onPriorityChange: (download: RemoteDownload, value: DownloadPriority) => void;
@@ -710,6 +708,8 @@ function DownloadsView(props: {
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const canCreate = props.capabilities.has("download.create");
   const isMagnet = props.newUrl.trim().toLowerCase().startsWith("magnet:");
+  const nativeTorrentAvailable = supportsNativeMagnetSelection(props.capabilities);
+  const canSubmit = canCreate && (!isMagnet || nativeTorrentAvailable);
   const waitingForSelection = props.downloads.find((download) =>
     download.engine === "native_torrent" && download.status === "metadata_acquiring"
   );
@@ -731,41 +731,29 @@ function DownloadsView(props: {
             onChange={(event) => props.onNewUrl(event.target.value)}
             placeholder="https://example.com/file.zip or magnet:?xt=..."
             required
-            disabled={!canCreate || props.busy}
+            disabled={!canSubmit || props.busy}
           />
           <label className="visually-hidden" htmlFor="download-priority">Priority</label>
           <select
             id="download-priority"
             value={props.priority}
             onChange={(event) => props.onPriority(event.target.value as DownloadPriority)}
-            disabled={!canCreate || props.busy}
+            disabled={!canSubmit || props.busy}
           >
             <option value="low">Low priority</option>
             <option value="normal">Normal priority</option>
             <option value="high">High priority</option>
           </select>
-          {isMagnet && (
-            <select
-              aria-label="Torrent engine"
-              value={props.torrentEngine}
-              onChange={(event) => props.onTorrentEngine(event.target.value as TorrentEngineChoice)}
-              disabled={!canCreate || props.busy}
-            >
-              <option value="automatic">Automatic (legacy server default)</option>
-              <option value="aria2">aria2</option>
-              <option
-                value="native_torrent"
-                disabled={!supportsNativeMagnetSelection(props.capabilities)}
-              >
-                Native torrent (default)
-              </option>
-            </select>
-          )}
-          <button className="primary-button" type="submit" disabled={!canCreate || props.busy}>
+          <button className="primary-button" type="submit" disabled={!canSubmit || props.busy}>
             {props.busy ? "Sending…" : "Add download"}
           </button>
         </form>
         {!canCreate && <p className="muted small-note">Download creation is not advertised by this server.</p>}
+        {isMagnet && !nativeTorrentAvailable && (
+          <p className="muted small-note">
+            Native torrent creation is unavailable on this server. FetchX will not use an external engine fallback.
+          </p>
+        )}
       </section>
       <section className="panel">
         <div className="panel-heading downloads-heading">
@@ -951,6 +939,7 @@ function DownloadTable(props: {
         </thead>
         <tbody>
           {props.downloads.map((download) => {
+            const legacyAria2 = download.engine === "aria2";
             const percentage = download.progress_basis_points === null
               ? null
               : Math.min(100, Math.max(0, download.progress_basis_points / 100));
@@ -962,7 +951,14 @@ function DownloadTable(props: {
                   <strong title={download.filename}>{download.filename}</strong>
                   <span title={download.id}>{download.id}</span>
                 </td>
-                <td><StatusPill status={download.status} /></td>
+                <td>
+                  <StatusPill status={download.status} />
+                  {legacyAria2 && (
+                    <p className="muted small-note">
+                      Legacy aria2 job cannot resume because the external engine was removed.
+                    </p>
+                  )}
+                </td>
                 <td className="progress-cell">
                   <progress
                     className="progress-line"
@@ -981,7 +977,7 @@ function DownloadTable(props: {
                         className="priority-select"
                         aria-label={`Priority for ${download.filename}`}
                         value={download.priority}
-                        disabled={!props.canSetPriority || props.busy}
+                        disabled={!props.canSetPriority || props.busy || legacyAria2}
                         onChange={(event) => props.onPriorityChange?.(download, event.target.value as DownloadPriority)}
                       >
                         <option value="low">Low</option>
@@ -994,16 +990,16 @@ function DownloadTable(props: {
                 {!props.compact && (
                   <td>
                     <div className="row-actions">
-                      {props.onAction && props.canControl && canPause && <button disabled={props.busy} onClick={() => props.onAction?.(download, "pause")}>Pause</button>}
-                      {props.onAction && props.canControl && canResume && <button disabled={props.busy} onClick={() => props.onAction?.(download, "resume")}>Resume</button>}
+                      {!legacyAria2 && props.onAction && props.canControl && canPause && <button disabled={props.busy} onClick={() => props.onAction?.(download, "pause")}>Pause</button>}
+                      {!legacyAria2 && props.onAction && props.canControl && canResume && <button disabled={props.busy} onClick={() => props.onAction?.(download, "resume")}>Resume</button>}
                       {props.onTorrentDetails && download.engine === "native_torrent" && (
                         <button disabled={props.busy} onClick={() => props.onTorrentDetails?.(download)}>Files</button>
                       )}
-                      {props.onQueueMove && props.canMoveQueue && download.status === "queued" && <>
+                      {!legacyAria2 && props.onQueueMove && props.canMoveQueue && download.status === "queued" && <>
                         <button disabled={props.busy} aria-label={`Move ${download.filename} earlier in queue`} onClick={() => props.onQueueMove?.(download, "up")}>↑</button>
                         <button disabled={props.busy} aria-label={`Move ${download.filename} later in queue`} onClick={() => props.onQueueMove?.(download, "down")}>↓</button>
                       </>}
-                      {props.onAction && props.canCancel && !["completed", "cancelled", "failed", "stopped"].includes(download.status) && <button disabled={props.busy} onClick={() => props.onAction?.(download, "cancel")}>Cancel</button>}
+                      {!legacyAria2 && props.onAction && props.canCancel && !["completed", "cancelled", "failed", "stopped"].includes(download.status) && <button disabled={props.busy} onClick={() => props.onAction?.(download, "cancel")}>Cancel</button>}
                       {props.onAction && props.canRemove && <button className="danger-text" disabled={props.busy} onClick={() => {
                         if (window.confirm(`Remove "${download.filename}" from FetchX? Files on disk are preserved.`)) {
                           props.onAction?.(download, "remove");

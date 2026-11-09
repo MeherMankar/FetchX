@@ -65,19 +65,6 @@ pub async fn start() -> Result<CoreServices, CoreServicesError> {
     start_with_queue_mode(true).await
 }
 
-/// Starts the core without launching aria2 or dispatching downloads.
-pub async fn start_for_read_only_assessment() -> Result<CoreServices, CoreServicesError> {
-    let data_dir = app_data_dir();
-    start_with_read_only_config(CoreServicesConfig {
-        database_path: data_dir.join("fetchx.db"),
-        downloads_dir: downloads_dir(),
-        runtime_dir: data_dir.join("runtime"),
-        bundled_engines_dir: None,
-        defer_queued_on_start: true,
-    })
-    .await
-}
-
 /// Starts services for the long-running monitor command, which owns queue
 /// dispatch for its lifetime.
 pub async fn start_worker() -> Result<CoreServices, CoreServicesError> {
@@ -105,17 +92,6 @@ async fn start_with_config(cfg: CoreServicesConfig) -> Result<CoreServices, Core
         "starting core services"
     );
     CoreServices::start(cfg).await
-}
-
-async fn start_with_read_only_config(
-    cfg: CoreServicesConfig,
-) -> Result<CoreServices, CoreServicesError> {
-    tracing::debug!(
-        database = %cfg.database_path.display(),
-        downloads = %cfg.downloads_dir.display(),
-        "starting core for read-only assessment"
-    );
-    CoreServices::start_for_read_only_assessment(cfg).await
 }
 
 /// Returns the plugin directory: `{data_dir}/plugins/`.

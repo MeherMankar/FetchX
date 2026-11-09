@@ -8,7 +8,7 @@ sealed class DownloadState {
     /** Waiting to be started by the queue manager. */
     data object Queued : DownloadState()
 
-    /** aria2 is resolving a magnet before the torrent file list is available. */
+    /** A torrent engine is resolving a magnet before the file list is available. */
     data class MetadataAcquiring(
         val downloadedBytes: Long,
         val totalBytes: Long?,
@@ -29,7 +29,7 @@ sealed class DownloadState {
         val totalBytes: Long? = null,
     ) : DownloadState()
 
-    /** The payload is complete and aria2 is still seeding. */
+    /** The payload is complete and the torrent engine is still seeding. */
     data class Seeding(
         val downloadedBytes: Long,
         val totalBytes: Long?,

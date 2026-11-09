@@ -20,7 +20,6 @@ pub async fn run(json: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
                     "version": null,
                     "note": "built-in"
                 },
-                "aria2": avail_json(&status.aria2),
                 "yt_dlp": avail_json(&status.yt_dlp),
                 "native_torrent": avail_json(&status.native_torrent),
                 "ftp": avail_json(&status.ftp),
@@ -36,7 +35,6 @@ pub async fn run(json: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
             "yes".to_owned(),
             "built-in".to_owned(),
         ]);
-        table.add_row(avail_row("aria2", &status.aria2));
         table.add_row(avail_row("yt-dlp", &status.yt_dlp));
         table.add_row(vec![
             "hls".to_owned(),

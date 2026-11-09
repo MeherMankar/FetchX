@@ -66,7 +66,7 @@ impl ResourcePolicy {
                 self.engine_bandwidth_limits.direct_http_bytes_per_second
             }
             crate::EngineKind::Hls => self.engine_bandwidth_limits.hls_bytes_per_second,
-            crate::EngineKind::Aria2 => self.engine_bandwidth_limits.aria2_bytes_per_second,
+            crate::EngineKind::Aria2 => None,
             crate::EngineKind::YtDlp => self.engine_bandwidth_limits.yt_dlp_bytes_per_second,
             crate::EngineKind::NativeTorrent => {
                 self.engine_bandwidth_limits.native_torrent_bytes_per_second
@@ -145,7 +145,6 @@ impl ResourcePolicy {
             self.per_download_bandwidth_bytes_per_second,
             self.engine_bandwidth_limits.direct_http_bytes_per_second,
             self.engine_bandwidth_limits.hls_bytes_per_second,
-            self.engine_bandwidth_limits.aria2_bytes_per_second,
             self.engine_bandwidth_limits.yt_dlp_bytes_per_second,
             self.engine_bandwidth_limits.native_torrent_bytes_per_second,
             self.engine_bandwidth_limits.ftp_bytes_per_second,

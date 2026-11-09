@@ -43,7 +43,6 @@ export type DownloadStatus =
 export type DownloadPriority = "low" | "normal" | "high";
 export type EngineKind =
   | "direct_http"
-  | "aria2"
   | "yt_dlp"
   | "hls"
   | "native_torrent"
@@ -57,7 +56,7 @@ export interface RemoteDownload {
   filename: string;
   status: DownloadStatus;
   priority: DownloadPriority;
-  engine: EngineKind;
+  engine: EngineKind | "aria2";
   downloaded_bytes: number;
   total_bytes: number | null;
   speed_bytes_per_second: number | null;

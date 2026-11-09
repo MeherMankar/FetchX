@@ -5,8 +5,6 @@ use fetchx_models::{DownloadError, DownloadErrorCode, DownloadId};
 use fetchx_storage::StorageError;
 use thiserror::Error;
 
-use crate::aria2::Aria2ClientError;
-use crate::supervisor::Aria2SupervisorError;
 use crate::ytdlp::YtDlpError;
 
 /// Failures reported by the direct HTTP/HTTPS engine.
@@ -24,6 +22,8 @@ pub enum DownloadEngineError {
     EngineMismatch,
     #[error("the selected download engine is not implemented")]
     EngineNotAvailable,
+    #[error("legacy aria2 job cannot resume because the external engine was removed")]
+    LegacyAria2Unavailable,
     #[error("URLs containing embedded credentials are not supported")]
     EmbeddedCredentials,
     #[error("could not initialize HTTP client: {0}")]
@@ -89,20 +89,6 @@ pub enum DownloadEngineError {
         operation: Box<Self>,
         state: StateMachineError,
     },
-    #[error("aria2 RPC operation failed: {0}")]
-    Aria2Client(#[from] Aria2ClientError),
-    #[error("aria2 reported a failed transfer")]
-    Aria2TransferFailed,
-    #[error("aria2 job was removed outside the application")]
-    Aria2InvalidGid,
-    #[error("aria2 download requires reconciliation before it can be restarted")]
-    Aria2ReconciliationRequired,
-    #[error("aria2 reported an unexpected status")]
-    Aria2UnexpectedStatus,
-    #[error("aria2 output file is missing or has an unexpected size")]
-    Aria2InvalidOutput,
-    #[error("aria2 process supervisor failed: {0}")]
-    Aria2Supervisor(#[from] Aria2SupervisorError),
     #[error("yt-dlp operation failed: {0}")]
     YtDlp(#[from] YtDlpError),
     #[error("native torrent engine error: {0}")]
@@ -153,13 +139,10 @@ impl DownloadEngineError {
                 DownloadErrorCode::Engine,
                 "The selected download engine is not available.".to_owned(),
             ),
-            Self::Aria2Client(crate::aria2::Aria2ClientError::InvalidUri) => (
-                DownloadErrorCode::Source,
-                "The aria2 source URI is invalid or unsupported.".to_owned(),
-            ),
-            Self::Aria2Client(crate::aria2::Aria2ClientError::InvalidPath) => (
-                DownloadErrorCode::Destination,
-                "The aria2 destination path is invalid.".to_owned(),
+            Self::LegacyAria2Unavailable => (
+                DownloadErrorCode::Engine,
+                "Legacy aria2 job cannot resume because the external engine was removed."
+                    .to_owned(),
             ),
             Self::DestinationExists | Self::TemporaryFileExists | Self::Io(_) => (
                 DownloadErrorCode::Destination,
@@ -188,24 +171,6 @@ impl DownloadEngineError {
             | Self::ByteCountOverflow => (
                 DownloadErrorCode::Engine,
                 "The HTTP response was incomplete or invalid.".to_owned(),
-            ),
-            Self::Aria2Client(crate::aria2::Aria2ClientError::AmbiguousAddUri) => (
-                DownloadErrorCode::Engine,
-                crate::aria2::AMBIGUOUS_ADD_URI_DIAGNOSTIC.to_owned(),
-            ),
-            Self::Aria2Client(crate::aria2::Aria2ClientError::InvalidGid)
-            | Self::Aria2InvalidGid
-            | Self::Aria2ReconciliationRequired => (
-                DownloadErrorCode::Engine,
-                crate::aria2::RECONCILIATION_DIAGNOSTIC.to_owned(),
-            ),
-            Self::Aria2Client(_)
-            | Self::Aria2TransferFailed
-            | Self::Aria2UnexpectedStatus
-            | Self::Aria2InvalidOutput
-            | Self::Aria2Supervisor(_) => (
-                DownloadErrorCode::Engine,
-                "The aria2 download could not be completed safely.".to_owned(),
             ),
             Self::YtDlp(YtDlpError::InvalidUrl) => (
                 DownloadErrorCode::Source,

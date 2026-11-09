@@ -9,7 +9,6 @@ pub mod list;
 pub mod monitor;
 pub mod plugins;
 pub mod priority;
-pub mod recovery;
 pub mod remote;
 pub mod schedule;
 pub mod status;

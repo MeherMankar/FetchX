@@ -12,8 +12,7 @@ pub enum EngineKind {
     /// Native parallel HLS downloader (fetches all segments concurrently).
     #[serde(rename = "hls")]
     Hls,
-    /// Native Rust BitTorrent engine (librqbit). Used on Android where aria2c
-    /// cannot be bundled. Handles magnet URIs and .torrent files natively.
+    /// Native Rust BitTorrent engine (librqbit). Handles magnet URIs and .torrent files.
     #[serde(rename = "native_torrent")]
     NativeTorrent,
     /// FTP download engine (plain FTP, ftp:// scheme).

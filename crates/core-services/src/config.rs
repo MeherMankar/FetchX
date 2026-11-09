@@ -79,28 +79,7 @@ impl Default for Aria2Config {
     }
 }
 
-impl Aria2Config {
-    pub fn has_secret(&self) -> bool {
-        self.rpc_secret
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty())
-    }
-
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.rpc_port == 0 {
-            return Err(ConfigError::InvalidPort);
-        }
-        if let Some(secret) = &self.rpc_secret {
-            if secret.len() > 256 {
-                return Err(ConfigError::SecretTooLong);
-            }
-            if secret.chars().any(char::is_whitespace) {
-                return Err(ConfigError::SecretHasWhitespace);
-            }
-        }
-        Ok(())
-    }
-}
+impl Aria2Config {}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct YtDlpConfig {
@@ -189,12 +168,6 @@ impl Default for MetalinkConfig {
 pub enum ConfigError {
     #[error("unsupported configuration version {0}")]
     UnsupportedVersion(u32),
-    #[error("aria2 RPC port must be between 1 and 65535")]
-    InvalidPort,
-    #[error("aria2 RPC secret must not exceed 256 characters")]
-    SecretTooLong,
-    #[error("aria2 RPC secret must not contain whitespace")]
-    SecretHasWhitespace,
     #[error("resource policy is invalid: {0}")]
     ResourcePolicy(String),
     #[error("configuration serialisation failed: {0}")]
@@ -208,7 +181,6 @@ impl EngineConfig {
         if self.version != CURRENT_VERSION {
             return Err(ConfigError::UnsupportedVersion(self.version));
         }
-        self.aria2.validate()?;
         self.resource_policy
             .validate()
             .map_err(|error| ConfigError::ResourcePolicy(error.to_string()))?;
@@ -291,7 +263,7 @@ impl ConfigService {
 mod tests {
     use fetchx_storage::Database;
 
-    use super::{Aria2Config, ConfigError, ConfigService, EngineConfig};
+    use super::{ConfigError, ConfigService};
 
     async fn service() -> ConfigService {
         let database = Database::connect("sqlite::memory:")
@@ -349,22 +321,6 @@ mod tests {
                 .resource_policy,
             config.resource_policy
         );
-    }
-
-    #[test]
-    fn rejects_invalid_aria2_configuration() {
-        let mut config = EngineConfig::default();
-        config.aria2.rpc_port = 0;
-        assert!(matches!(config.validate(), Err(ConfigError::InvalidPort)));
-
-        config.aria2 = Aria2Config {
-            rpc_secret: Some("secret with spaces".to_owned()),
-            ..Aria2Config::default()
-        };
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::SecretHasWhitespace)
-        ));
     }
 
     #[tokio::test]

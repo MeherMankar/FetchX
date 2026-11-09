@@ -35,7 +35,6 @@ use std::{
 };
 
 use fetchx_downloader::{
-    Aria2Client, Aria2ClientConfig, Aria2Engine, Aria2Supervisor, Aria2SupervisorConfig,
     DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
     NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
     YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
@@ -63,7 +62,6 @@ use thiserror::Error;
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
     sync::Mutex,
     time::Duration,
 };
@@ -78,8 +76,6 @@ pub use engine_status::{
     EngineAvailability, EngineRuntimeState, EngineRuntimeStatus, EngineStatusEntry,
 };
 
-mod aria2_recovery;
-pub use aria2_recovery::{Aria2RecoveryAssessment, Aria2RecoveryState};
 mod builtin;
 pub mod config;
 mod engine_status;
@@ -132,7 +128,6 @@ pub struct CoreServices {
     queue: QueueManager,
     pub downloads_dir: PathBuf,
     shutdown_complete: Mutex<bool>,
-    aria2_runtime_assessment_enabled: bool,
 }
 
 /// Parameters for [`CoreServices::create_torrent_metadata_row`].
@@ -447,16 +442,7 @@ impl CoreServices {
     /// Optional engines that fail to start are marked `Unavailable`; the
     /// function only fails for unrecoverable errors (e.g. database I/O).
     pub async fn start(cfg: CoreServicesConfig) -> Result<Self, CoreServicesError> {
-        Self::start_internal(cfg, None, None, true).await
-    }
-
-    /// Starts services for a read-only aria2 recovery assessment without
-    /// starting a local aria2 process or dispatching queued downloads.
-    pub async fn start_for_read_only_assessment(
-        mut cfg: CoreServicesConfig,
-    ) -> Result<Self, CoreServicesError> {
-        cfg.defer_queued_on_start = true;
-        Self::start_internal(cfg, None, None, false).await
+        Self::start_internal(cfg, None, None).await
     }
 
     /// Initializes services with a per-process engine configuration override.
@@ -467,7 +453,7 @@ impl CoreServices {
         cfg: CoreServicesConfig,
         engine_config_override: Option<EngineConfig>,
     ) -> Result<Self, CoreServicesError> {
-        Self::start_internal(cfg, engine_config_override, None, true).await
+        Self::start_internal(cfg, engine_config_override, None).await
     }
 
     pub async fn start_with_engine_config_and_ytdlp_runner(
@@ -475,14 +461,13 @@ impl CoreServices {
         engine_config_override: Option<EngineConfig>,
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
     ) -> Result<Self, CoreServicesError> {
-        Self::start_internal(cfg, engine_config_override, ytdlp_runner, true).await
+        Self::start_internal(cfg, engine_config_override, ytdlp_runner).await
     }
 
     async fn start_internal(
         cfg: CoreServicesConfig,
         engine_config_override: Option<EngineConfig>,
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
-        initialize_aria2: bool,
     ) -> Result<Self, CoreServicesError> {
         // Ensure directories exist.
         if let Some(parent) = cfg.database_path.parent() {
@@ -532,7 +517,6 @@ impl CoreServices {
             &cfg.runtime_dir,
             ytdlp_runner,
             Some(database.torrent_metadata()),
-            initialize_aria2,
         )
         .await?;
 
@@ -587,7 +571,6 @@ impl CoreServices {
             queue,
             downloads_dir: cfg.downloads_dir,
             shutdown_complete: Mutex::new(false),
-            aria2_runtime_assessment_enabled: initialize_aria2,
         })
     }
 
@@ -667,51 +650,6 @@ impl CoreServices {
         Ok(items.iter().map(DownloadRuntimeStatus::from).collect())
     }
 
-    pub async fn assess_aria2_recovery(
-        &self,
-        id: DownloadId,
-    ) -> Result<Option<Aria2RecoveryAssessment>, CoreServicesError> {
-        let item = self
-            .repository
-            .get(id)
-            .await
-            .map_err(|error| CoreServicesError::Database(error.to_string()))?;
-        let Some(item) = item else {
-            return Ok(None);
-        };
-
-        let state = if item.source().engine() != EngineKind::Aria2 {
-            Aria2RecoveryState::NotAria2
-        } else if item.status() == DownloadStatus::Completed {
-            Aria2RecoveryState::NotRequired
-        } else if !self.aria2_runtime_assessment_enabled {
-            Aria2RecoveryState::Unknown
-        } else if !matches!(
-            &self.engine_runtime.status.aria2,
-            EngineAvailability::Available { .. }
-        ) {
-            Aria2RecoveryState::RuntimeUnavailable
-        } else {
-            match self
-                .engine_runtime
-                .aria2_engine
-                .assess_recovery(&item)
-                .await
-            {
-                Ok(state) => state.into(),
-                Err(fetchx_downloader::DownloadEngineError::Storage(error)) => {
-                    return Err(CoreServicesError::Database(error.to_string()));
-                }
-                Err(_error) => {
-                    warn!(download_id = %id, "aria2 recovery assessment is inconclusive");
-                    Aria2RecoveryState::Unknown
-                }
-            }
-        };
-
-        Ok(Some(Aria2RecoveryAssessment::new(id.to_string(), state)))
-    }
-
     pub async fn find_duplicate_download(
         &self,
         url: &str,
@@ -754,7 +692,6 @@ impl CoreServices {
                 };
                 let engine_kinds = [
                     (EngineKind::DirectHttp, "direct_http"),
-                    (EngineKind::Aria2, "aria2"),
                     (EngineKind::YtDlp, "yt_dlp"),
                     (EngineKind::Hls, "hls"),
                     (EngineKind::NativeTorrent, "native_torrent"),
@@ -786,10 +723,7 @@ impl CoreServices {
                 let mut uploaded_bytes = 0_u64;
                 let mut has_upload_telemetry = false;
                 for active in &snapshot.active {
-                    if !matches!(
-                        active.item.source().engine(),
-                        EngineKind::Aria2 | EngineKind::NativeTorrent
-                    ) {
+                    if !matches!(active.item.source().engine(), EngineKind::NativeTorrent) {
                         continue;
                     }
                     match self.torrent_telemetry(active.item.id()).await {
@@ -981,7 +915,7 @@ impl CoreServices {
         use EngineAvailability::{Available, Disabled, Unavailable};
         let availability = match engine {
             EngineKind::DirectHttp | EngineKind::Hls => return DiagnosticHealth::Healthy,
-            EngineKind::Aria2 => &self.engine_runtime.status.aria2,
+            EngineKind::Aria2 => return DiagnosticHealth::Unavailable,
             EngineKind::YtDlp => &self.engine_runtime.status.yt_dlp,
             EngineKind::NativeTorrent => &self.engine_runtime.status.native_torrent,
             EngineKind::Ftp | EngineKind::Ftps => &self.engine_runtime.status.ftp,
@@ -1669,7 +1603,7 @@ impl CoreServices {
         self.database.torrent_metadata()
     }
 
-    /// Queries current torrent telemetry from aria2 for a persisted torrent task.
+    /// Returns live torrent telemetry only when the native engine owns the task.
     pub async fn torrent_telemetry(
         &self,
         id: DownloadId,
@@ -1690,12 +1624,7 @@ impl CoreServices {
                     Ok(None)
                 }
             }
-            _ => self
-                .engine_runtime
-                .aria2_engine
-                .torrent_telemetry(id)
-                .await
-                .map_err(|error| CoreServicesError::Engine(error.to_string())),
+            _ => Ok(None),
         }
     }
 
@@ -2081,11 +2010,7 @@ impl CoreServices {
                 // NativeTorrent), the handle is already gone — just transition.
             }
             EngineKind::Aria2 => {
-                // Do NOT call queue.cancel() here — it races with finish_worker
-                // when the worker is still active during seeding. The state
-                // machine transition to Stopped below is sufficient. If aria2
-                // is available, the reconciliation loop will detect the Stopped
-                // status and clean up the aria2 process.
+                return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
             }
             engine => {
                 return Err(CoreServicesError::Queue(format!(
@@ -2543,8 +2468,6 @@ impl CoreServices {
 
 pub struct EngineRuntime {
     pub dispatcher: Arc<EngineDispatcher<CoreRepository>>,
-    pub aria2_engine: Arc<Aria2Engine<CoreRepository>>,
-    pub aria2_supervisor: Option<Arc<Aria2Supervisor>>,
     pub native_torrent_engine: Option<Arc<NativeTorrentEngine<CoreRepository>>>,
     pub ftp_engine: Arc<FtpEngine<CoreRepository>>,
     pub sftp_engine: Arc<SftpEngine<CoreRepository>>,
@@ -2559,7 +2482,7 @@ impl EngineRuntime {
         config: &EngineConfig,
         runtime_dir: &std::path::Path,
     ) -> Result<Self, CoreServicesError> {
-        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None, None, true).await
+        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None, None).await
     }
 
     async fn initialize_with_ytdlp_runner(
@@ -2568,7 +2491,6 @@ impl EngineRuntime {
         runtime_dir: &std::path::Path,
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
         torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
-        initialize_aria2: bool,
     ) -> Result<Self, CoreServicesError> {
         let direct_http = Arc::new(
             DirectHttpEngine::new(repository.clone())
@@ -2581,17 +2503,6 @@ impl EngineRuntime {
         );
 
         let native_torrent_metadata = torrent_metadata.clone();
-        let (aria2_engine, aria2_supervisor, aria2_avail) = if initialize_aria2 {
-            init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await
-        } else {
-            (
-                stub_aria2(repository.clone()),
-                None,
-                EngineAvailability::Unavailable {
-                    reason: "not initialized for read-only assessment".to_owned(),
-                },
-            )
-        };
         // Clone the runner before moving it into init_ytdlp so we can also
         // pass it to YtDlpProcessRunnerAdapter for the media extraction registry.
         let ytdlp_runner_for_registry = ytdlp_runner.clone();
@@ -2600,7 +2511,6 @@ impl EngineRuntime {
         let (native_torrent_engine, native_torrent_avail) =
             init_native_torrent(repository.clone(), config, native_torrent_metadata).await;
 
-        log_avail("aria2", &aria2_avail);
         log_avail("yt-dlp", &ytdlp_avail);
         log_avail("native-torrent", &native_torrent_avail);
         info!(engine = "hls", "engine ready");
@@ -2648,12 +2558,11 @@ impl EngineRuntime {
             EngineAvailability::Disabled
         };
 
-        let mut dispatcher =
-            EngineDispatcher::new(repository, direct_http, Arc::clone(&aria2_engine))
-                .with_hls(hls_engine)
-                .with_ftp(Arc::clone(&ftp_engine))
-                .with_sftp(Arc::clone(&sftp_engine))
-                .with_metalink(Arc::clone(&metalink_engine));
+        let mut dispatcher = EngineDispatcher::new(repository, direct_http)
+            .with_hls(hls_engine)
+            .with_ftp(Arc::clone(&ftp_engine))
+            .with_sftp(Arc::clone(&sftp_engine))
+            .with_metalink(Arc::clone(&metalink_engine));
 
         // Capture the resolved executable BEFORE moving the engine into the dispatcher.
         let ytdlp_executable: Option<std::path::PathBuf> =
@@ -2700,14 +2609,11 @@ impl EngineRuntime {
 
         Ok(Self {
             dispatcher: Arc::new(dispatcher),
-            aria2_engine,
-            aria2_supervisor,
             native_torrent_engine,
             ftp_engine,
             sftp_engine,
             metalink_engine,
             status: EngineRuntimeStatus {
-                aria2: aria2_avail,
                 yt_dlp: ytdlp_avail,
                 native_torrent: native_torrent_avail,
                 ftp: ftp_avail,
@@ -2719,12 +2625,6 @@ impl EngineRuntime {
     }
 
     pub async fn shutdown(&self) -> Result<(), CoreServicesError> {
-        if let Some(sup) = &self.aria2_supervisor {
-            sup.shutdown()
-                .await
-                .map_err(|error| CoreServicesError::Shutdown(error.to_string()))?;
-            info!("aria2 supervisor shut down");
-        }
         if let Some(engine) = &self.native_torrent_engine {
             engine.session().stop().await;
             info!("native torrent session stopped");
@@ -2736,7 +2636,7 @@ impl EngineRuntime {
     pub fn is_available(&self, kind: EngineKind) -> bool {
         match kind {
             EngineKind::DirectHttp | EngineKind::Hls => true,
-            EngineKind::Aria2 => matches!(self.status.aria2, EngineAvailability::Available { .. }),
+            EngineKind::Aria2 => false,
             EngineKind::YtDlp => matches!(self.status.yt_dlp, EngineAvailability::Available { .. }),
             EngineKind::NativeTorrent => {
                 matches!(
@@ -2763,16 +2663,6 @@ fn bundled_engine_defaults(directory: Option<&std::path::Path>) -> EngineConfig 
         return config;
     };
 
-    let aria2 = directory.join(if cfg!(target_os = "windows") {
-        "aria2c.exe"
-    } else {
-        "aria2c"
-    });
-    if aria2.is_file() {
-        config.aria2.enabled = true;
-        config.aria2.executable_path = Some(aria2);
-    }
-
     let ytdlp = directory.join(if cfg!(target_os = "windows") {
         "yt-dlp.exe"
     } else {
@@ -2794,81 +2684,6 @@ fn log_avail(name: &str, avail: &EngineAvailability) {
         }
         EngineAvailability::Disabled => info!(engine = name, "engine disabled"),
     }
-}
-
-// ── aria2 init ────────────────────────────────────────────────────────────
-
-async fn init_aria2(
-    repository: CoreRepository,
-    config: &EngineConfig,
-    runtime_dir: &std::path::Path,
-    torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
-) -> (
-    Arc<Aria2Engine<CoreRepository>>,
-    Option<Arc<Aria2Supervisor>>,
-    EngineAvailability,
-) {
-    if !config.aria2.enabled {
-        return (stub_aria2(repository), None, EngineAvailability::Disabled);
-    }
-    let executable: PathBuf = config.aria2.executable_path.clone().unwrap_or_else(|| {
-        if cfg!(target_os = "windows") {
-            "aria2c.exe".into()
-        } else {
-            "aria2c".into()
-        }
-    });
-    let sup_cfg =
-        Aria2SupervisorConfig::new(executable.clone()).with_runtime_directory(runtime_dir);
-    match Aria2Supervisor::start(sup_cfg).await {
-        Ok(sup) => {
-            let version = detect_aria2_version(&executable).await;
-            let mut engine = Aria2Engine::with_supervisor(repository, Arc::clone(&sup));
-            if let Some(torrent_metadata) = torrent_metadata {
-                engine = engine.with_torrent_metadata_repository(torrent_metadata);
-            }
-            let engine = Arc::new(engine);
-            (engine, Some(sup), EngineAvailability::Available { version })
-        }
-        Err(e) => {
-            warn!(error = %e, "aria2 supervisor failed to start");
-            (
-                stub_aria2(repository),
-                None,
-                EngineAvailability::Unavailable {
-                    reason: e.to_string(),
-                },
-            )
-        }
-    }
-}
-
-async fn detect_aria2_version(executable: &std::path::Path) -> String {
-    let mut command = Command::new(executable);
-    command.arg("--version");
-    // Suppress the console window that would otherwise flash on Windows.
-    #[cfg(windows)]
-    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let result = tokio::time::timeout(Duration::from_secs(5), command.output()).await;
-    match result {
-        Ok(Ok(out)) if out.status.success() => String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .next()
-            .unwrap_or("aria2")
-            .trim()
-            .to_owned(),
-        _ => "unknown".to_owned(),
-    }
-}
-
-fn stub_aria2(repository: CoreRepository) -> Arc<Aria2Engine<CoreRepository>> {
-    let client = Aria2Client::new(Aria2ClientConfig::new(
-        "http://127.0.0.1:1/jsonrpc",
-        None,
-        Duration::from_millis(1),
-    ))
-    .expect("stub aria2 client is statically valid");
-    Arc::new(Aria2Engine::new(repository, client))
 }
 
 // ── yt-dlp init ──────────────────────────────────────────────────────────
@@ -3289,10 +3104,9 @@ mod tests {
     };
 
     use super::{
-        Aria2RecoveryState, BatchDownloadDestinationRequest, BatchDownloadError,
-        BatchDownloadRequest, ConfigService, CoreServices, CoreServicesConfig, CoreServicesError,
-        EngineAvailability, EngineConfig, NativeTorrentConfig, append_path_suffix,
-        suggest_download_package_name,
+        BatchDownloadDestinationRequest, BatchDownloadError, BatchDownloadRequest, ConfigService,
+        CoreServices, CoreServicesConfig, CoreServicesError, EngineAvailability, EngineConfig,
+        NativeTorrentConfig, append_path_suffix, suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
     use fetchx_storage::Database;
@@ -5219,11 +5033,9 @@ mod tests {
             &services.engine_runtime.status.yt_dlp,
             EngineAvailability::Unavailable { .. }
         ));
-        assert!(matches!(
-            &services.engine_runtime.status.aria2,
-            EngineAvailability::Unavailable { .. }
-        ));
-        assert!(services.config_service.load().await?.yt_dlp.enabled);
+        let persisted_config = services.config_service.load().await?;
+        assert!(persisted_config.yt_dlp.enabled);
+        assert!(persisted_config.aria2.enabled);
 
         services.shutdown().await?;
         Ok(())
@@ -6019,10 +5831,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aria2_recovery_assessment_preserves_records_and_download_files()
+    async fn legacy_aria2_rows_and_files_are_preserved_on_startup()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let paths = config(root.path());
+        let services = CoreServices::start(paths.clone()).await?;
         let now = Timestamp::now()?;
         let id = DownloadId::new();
         let destination = root.path().join("downloads").join("partial.bin");
@@ -6046,124 +5859,19 @@ mod tests {
             now,
             None,
         )?;
-        let completed_id = DownloadId::new();
-        let completed = DownloadItem::from_parts(
-            completed_id,
-            DownloadSource::new("https://example.test/complete.bin", EngineKind::Aria2)?,
-            FileName::new("complete.bin")?,
-            root.path().join("downloads").join("complete.bin"),
-            DownloadStatus::Completed,
-            DownloadPriority::default(),
-            DownloadProgress::new(10, Some(10), None, None)?,
-            now,
-            now,
-            None,
-        )?;
-        let direct_id = DownloadId::new();
-        let direct = DownloadItem::from_parts(
-            direct_id,
-            DownloadSource::new("https://example.test/direct.bin", EngineKind::DirectHttp)?,
-            FileName::new("direct.bin")?,
-            root.path().join("downloads").join("direct.bin"),
-            DownloadStatus::Queued,
-            DownloadPriority::default(),
-            DownloadProgress::default(),
-            now,
-            now,
-            None,
-        )?;
         services.repository.create(&aria2_item).await?;
-        services.repository.create(&completed).await?;
-        services.repository.create(&direct).await?;
+        services.shutdown().await?;
 
-        let before = services
+        let restarted = CoreServices::start(paths).await?;
+        let after = restarted
             .repository
             .get(id)
             .await?
-            .ok_or("missing aria2 row")?;
-        let assessment = services
-            .assess_aria2_recovery(id)
-            .await?
-            .ok_or("missing aria2 assessment")?;
-        let after = services
-            .repository
-            .get(id)
-            .await?
-            .ok_or("missing aria2 row")?;
-        assert_eq!(assessment.state, Aria2RecoveryState::RuntimeUnavailable);
-        assert_eq!(before, after);
+            .ok_or("missing legacy aria2 row after startup")?;
+        assert_eq!(aria2_item, after);
         assert_eq!(tokio::fs::read(&destination).await?, payload);
         assert_eq!(tokio::fs::read(&sidecar).await?, control_data);
-
-        assert_eq!(
-            services
-                .assess_aria2_recovery(completed_id)
-                .await?
-                .ok_or("missing completed assessment")?
-                .state,
-            Aria2RecoveryState::NotRequired
-        );
-        assert_eq!(
-            services
-                .assess_aria2_recovery(direct_id)
-                .await?
-                .ok_or("missing direct assessment")?
-                .state,
-            Aria2RecoveryState::NotAria2
-        );
-        assert!(
-            services
-                .assess_aria2_recovery(DownloadId::new())
-                .await?
-                .is_none()
-        );
-
-        services.shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn read_only_assessment_start_does_not_launch_aria2_or_dispatch_downloads()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let root = tempdir()?;
-        let paths = config(root.path());
-        let services = CoreServices::start_for_read_only_assessment(paths).await?;
-        assert!(services.engine_runtime.aria2_supervisor.is_none());
-
-        let id = DownloadId::new();
-        let now = Timestamp::now()?;
-        let destination = root.path().join("downloads").join("partial.bin");
-        let partial_bytes = b"existing partial";
-        tokio::fs::write(&destination, partial_bytes).await?;
-        let item = DownloadItem::from_parts(
-            id,
-            DownloadSource::new("https://example.test/partial.bin", EngineKind::Aria2)?,
-            FileName::new("partial.bin")?,
-            destination.clone(),
-            DownloadStatus::Paused,
-            DownloadPriority::default(),
-            DownloadProgress::new(4, Some(100), None, None)?,
-            now,
-            now,
-            None,
-        )?;
-        services.repository.create(&item).await?;
-
-        let assessment = services
-            .assess_aria2_recovery(id)
-            .await?
-            .ok_or("missing read-only assessment")?;
-        assert_eq!(assessment.state, Aria2RecoveryState::Unknown);
-        assert_eq!(
-            services
-                .repository
-                .get(id)
-                .await?
-                .ok_or("download disappeared")?,
-            item
-        );
-        assert_eq!(tokio::fs::read(destination).await?, partial_bytes);
-        services.shutdown().await?;
+        restarted.shutdown().await?;
         Ok(())
     }
 }

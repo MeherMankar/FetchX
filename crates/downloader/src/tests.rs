@@ -3165,37 +3165,12 @@ fn credential_fields_are_not_logged_in_ftp_or_sftp() {
     }
 }
 
-// ── Binary-detection tests (aria2, yt-dlp, ffmpeg) ────────────────────────────
+// ── Binary-detection tests (yt-dlp, ffmpeg) ──────────────────────────────────
 //
 // These tests attempt to detect the external binary on PATH. If absent they
 // return early (skip). They do NOT validate behaviour — only that detection
 // succeeds or gracefully reports absence.
 // NOT VALIDATED — results depend on the CI/developer environment.
-
-/// Detect aria2c binary; skip gracefully if absent.
-/// NOT VALIDATED — binary presence depends on environment.
-#[tokio::test]
-async fn aria2_binary_detection_skips_when_absent() {
-    use std::process::Stdio;
-    let Ok(output) = tokio::process::Command::new("aria2c")
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-    else {
-        // Binary not found — test skips.
-        return;
-    };
-    if !output.status.success() {
-        return;
-    }
-    let version_output = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        version_output.contains("aria2"),
-        "aria2c --version did not mention 'aria2': {version_output}"
-    );
-}
 
 /// Detect yt-dlp binary; skip gracefully if absent.
 /// NOT VALIDATED — binary presence depends on environment.

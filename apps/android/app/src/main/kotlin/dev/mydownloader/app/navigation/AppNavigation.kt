@@ -44,7 +44,6 @@ import dev.fetchx.downloads.ui.DownloadsViewModel
 import dev.fetchx.downloads.ui.TorrentDetailScreen
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
-import dev.fetchx.app.aria2.Aria2RemoteScreen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
@@ -162,7 +161,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
         ).absolutePath
 
     // Handle notification deep-link: navigate to Downloads, then to TorrentDetailScreen
-    // for torrent downloads (engine == "native_torrent" or "aria2").
+    // for native and preserved legacy torrent records.
     val openDownloadId = pendingOpenDownloadId
     if (openDownloadId != null) {
         LaunchedEffect(openDownloadId) {
@@ -177,8 +176,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 ?: return@LaunchedEffect  // bridge never came up — stay on Downloads
             val item = readyRepo.getDownload(openDownloadId)
             val engine = item?.engine ?: ""
-            val isTorrent = engine.equals("native_torrent", ignoreCase = true) ||
-                engine.equals("aria2", ignoreCase = true)
+            val isTorrent = engine.equals("native_torrent", ignoreCase = true)
             if (isTorrent) {
                 navController.navigate(Screen.TorrentDetail.route(openDownloadId))
             }
@@ -362,17 +360,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 }
             }
             composable(Screen.Storage.route) {
-                StorageScreen(
-                    onBack = { navController.popBackStack() },
-                    onOpenAria2 = {
-                        navController.navigate(Screen.Aria2Remote.route) {
-                            launchSingleTop = true
-                        }
-                    },
-                )
-            }
-            composable(Screen.Aria2Remote.route) {
-                Aria2RemoteScreen(onBack = { navController.popBackStack() })
+                StorageScreen(onBack = { navController.popBackStack() })
             }
             composable(Screen.TorrentDetail.ROUTE_PATTERN) { backStackEntry ->
                 val downloadId = backStackEntry.arguments?.getString("downloadId") ?: ""

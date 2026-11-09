@@ -519,10 +519,10 @@ pub enum TorrentMetadataError {
     InvalidSelection,
 }
 
-/// Real-time torrent telemetry sourced exclusively from aria2 JSON-RPC.
+/// Real-time torrent telemetry reported by the active torrent engine.
 ///
-/// Fields not provided by aria2 are represented as `None`; callers must treat
-/// those values as unavailable rather than assuming zero.
+/// Fields not provided by the active engine are represented as `None`; callers
+/// must treat those values as unavailable rather than assuming zero.
 #[derive(Clone, Debug, Default)]
 pub struct TorrentTelemetry {
     pub download_speed_bps: Option<u64>,
@@ -530,14 +530,14 @@ pub struct TorrentTelemetry {
     pub downloaded_bytes: Option<u64>,
     pub uploaded_bytes: Option<u64>,
     pub peer_count: Option<u64>,
-    /// Number of connected remote peers that aria2 reports as complete seeders.
+    /// Number of connected remote peers reported as complete seeders.
     pub completed_peer_count: Option<u64>,
     pub seed_count: Option<u64>,
     /// Upload / download ratio. `None` when either counter is unavailable or download is zero.
     pub share_ratio: Option<f64>,
-    /// Seeding status reported by aria2, or `None` when unavailable.
+    /// Seeding status reported by the engine, or `None` when unavailable.
     pub seeding: Option<bool>,
-    /// Tracker URIs reported by aria2, or `None` when unavailable.
+    /// Tracker URIs reported by the engine, or `None` when unavailable.
     pub tracker_uris: Option<Vec<String>>,
 }
 

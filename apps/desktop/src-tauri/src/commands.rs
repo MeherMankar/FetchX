@@ -149,7 +149,7 @@ impl AppState {
             request.engine_kind,
         ) {
             (true, None) => EngineKind::NativeTorrent,
-            (true, Some(engine @ (EngineKind::NativeTorrent | EngineKind::Aria2))) => engine,
+            (true, Some(EngineKind::NativeTorrent)) => EngineKind::NativeTorrent,
             (true, Some(_)) => return Err(IpcError::invalid_request()),
             (false, Some(engine)) => engine,
             (false, None) => EngineKind::DirectHttp,
@@ -882,7 +882,7 @@ impl IpcError {
         // Static messages per engine; do not expose process details or secrets.
         let message: &'static str = match kind {
             EngineKind::Aria2 => {
-                "aria2 is currently unavailable. Please check Settings → Download Engines."
+                "The external aria2 engine was removed. Use a native restart for supported legacy jobs."
             }
             EngineKind::YtDlp => {
                 "yt-dlp is currently unavailable. Please check Settings → Download Engines."
@@ -1645,22 +1645,6 @@ pub async fn get_torrent_telemetry(
         seeding: value.seeding,
         tracker_uris: value.tracker_uris,
     }))
-}
-
-#[tauri::command]
-pub async fn assess_aria2_recovery(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Option<fetchx_core_services::Aria2RecoveryAssessment>, IpcError> {
-    let download_id = parse_download_id(&id)?;
-    let core_services = state
-        .core_services
-        .as_ref()
-        .ok_or_else(IpcError::internal)?;
-    core_services
-        .assess_aria2_recovery(download_id)
-        .await
-        .map_err(|_| IpcError::internal())
 }
 
 #[tauri::command]

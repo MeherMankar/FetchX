@@ -13,8 +13,6 @@ import {
   installHelper,
   resetEngineConfig,
   saveEngineConfig,
-  testAria2Config,
-  testRemoteAria2,
   testYtDlpConfig,
 } from "../api/engine";
 import type {
@@ -26,7 +24,6 @@ import type {
   HelperInstallProgress,
   HelperStatus,
   ManagedHelperId,
-  SaveAria2ConfigRequest,
   ResourcePolicyDto,
   ResourceProfile,
   SaveYtDlpConfigRequest,
@@ -187,24 +184,6 @@ function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
         {result.version && (
           <span className="diagnostic-version">Version: {result.version}</span>
         )}
-        {result.enabled_features && (
-          <span className="diagnostic-version">
-            Enabled features: {result.enabled_features.join(", ") || "none reported"}
-          </span>
-        )}
-        {result.aria2_global_stat && (
-          <>
-            <span className="diagnostic-version">
-              aria2 activity: {result.aria2_global_stat.active_downloads} active,{" "}
-              {result.aria2_global_stat.waiting_downloads} waiting,{" "}
-              {result.aria2_global_stat.stopped_results} stopped results
-            </span>
-            <span className="diagnostic-version">
-              aria2 rate: ↓ {result.aria2_global_stat.download_speed_bytes_per_second} B/s,{" "}
-              ↑ {result.aria2_global_stat.upload_speed_bytes_per_second} B/s
-            </span>
-          </>
-        )}
         {result.executable && (
           <span className="diagnostic-path" title={result.executable}>
             {result.executable}
@@ -212,280 +191,6 @@ function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
         )}
       </div>
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Aria2 section
-// ---------------------------------------------------------------------------
-
-interface Aria2SectionProps {
-  cfg: EngineConfigDto;
-  runtimeStatus: EngineInstanceStatus | null;
-  onSaved: (updated: EngineConfigDto) => void;
-  onError: (msg: string) => void;
-}
-
-function Aria2Section({ cfg, runtimeStatus, onSaved, onError }: Aria2SectionProps) {
-  const [enabled, setEnabled] = useState(cfg.aria2.enabled);
-  const [execPath, setExecPath] = useState(cfg.aria2.executable_path ?? "");
-  const [port, setPort] = useState(String(cfg.aria2.rpc_port));
-  const [secretUpdate, setSecretUpdate] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [diagnostic, setDiagnostic] = useState<DiagnosticResult | null>(null);
-  const [testBusy, setTestBusy] = useState(false);
-  const [remoteEndpoint, setRemoteEndpoint] = useState("");
-  const [remoteSecret, setRemoteSecret] = useState("");
-  const [remoteDiagnostic, setRemoteDiagnostic] = useState<DiagnosticResult | null>(null);
-  const [remoteTestBusy, setRemoteTestBusy] = useState(false);
-
-  // Sync if parent config changes (e.g. after reset).
-  useEffect(() => {
-    setEnabled(cfg.aria2.enabled);
-    setExecPath(cfg.aria2.executable_path ?? "");
-    setPort(String(cfg.aria2.rpc_port));
-    setSecretUpdate(null);
-    setDiagnostic(null);
-  }, [cfg]);
-
-  const save = async () => {
-    const portNum = parseInt(port, 10);
-    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-      onError("RPC port must be a number between 1 and 65535.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const req: SaveAria2ConfigRequest = {
-        enabled,
-        executable_path: execPath.trim() || null,
-        rpc_port: portNum,
-        rpc_secret_update: secretUpdate,
-      };
-      const updated = await saveEngineConfig({
-        aria2: req,
-        yt_dlp: {
-          enabled: cfg.yt_dlp.enabled,
-          executable_path: cfg.yt_dlp.executable_path,
-        },
-        resource_policy: cfg.resource_policy,
-      });
-      onSaved(updated);
-    } catch (cause) {
-      onError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const test = async () => {
-    setTestBusy(true);
-    setDiagnostic(null);
-    try {
-      const result = await testAria2Config();
-      setDiagnostic(result);
-    } catch (cause) {
-      onError(errorMessage(cause));
-    } finally {
-      setTestBusy(false);
-    }
-  };
-
-  const testRemote = async () => {
-    setRemoteTestBusy(true);
-    setRemoteDiagnostic(null);
-    try {
-      setRemoteDiagnostic(
-        await testRemoteAria2(
-          remoteEndpoint.trim(),
-          remoteSecret.length > 0 ? remoteSecret : null,
-        ),
-      );
-    } catch (cause) {
-      onError(errorMessage(cause));
-    } finally {
-      setRemoteTestBusy(false);
-    }
-  };
-
-  return (
-    <section className="settings-section" aria-labelledby="aria2-heading">
-      <div className="settings-section-header">
-        <h3 id="aria2-heading" className="settings-section-title">aria2</h3>
-        <RuntimeStatusBadge status={runtimeStatus} />
-      </div>
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="aria2-enabled">Enabled</label>
-        <div className="settings-control">
-          <input
-            id="aria2-enabled"
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            disabled={busy}
-          />
-        </div>
-      </div>
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="aria2-exec">Executable path</label>
-        <div className="settings-control">
-          <input
-            id="aria2-exec"
-            type="text"
-            className="settings-input"
-            placeholder="aria2c (discovered from PATH)"
-            value={execPath}
-            onChange={(e) => setExecPath(e.target.value)}
-            disabled={busy}
-          />
-          <p className="settings-hint">
-            Leave blank to discover from PATH. Must be an absolute path to aria2c.
-          </p>
-        </div>
-      </div>
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="aria2-port">RPC port</label>
-        <div className="settings-control">
-          <input
-            id="aria2-port"
-            type="number"
-            className="settings-input settings-input-sm"
-            min={1}
-            max={65535}
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            disabled={busy}
-          />
-          <p className="settings-hint">
-            RPC listens on loopback only. Default: 6800.
-          </p>
-        </div>
-      </div>
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="aria2-secret">RPC secret</label>
-        <div className="settings-control">
-          {secretUpdate === null ? (
-            <div className="secret-display">
-              <span className="secret-badge">
-                {cfg.aria2.has_secret ? "Configured" : "Not set"}
-              </span>
-              <button
-                className="button button-secondary button-xs"
-                onClick={() => setSecretUpdate("")}
-                disabled={busy}
-              >
-                {cfg.aria2.has_secret ? "Change" : "Set"}
-              </button>
-              {cfg.aria2.has_secret && (
-                <button
-                  className="button button-secondary button-xs"
-                  onClick={() => setSecretUpdate("")}
-                  disabled={busy}
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="secret-edit">
-              <input
-                id="aria2-secret"
-                type="password"
-                className="settings-input"
-                placeholder="Enter new secret (no spaces)"
-                value={secretUpdate}
-                onChange={(e) => setSecretUpdate(e.target.value)}
-                disabled={busy}
-                autoComplete="new-password"
-              />
-              <button
-                className="button button-secondary button-xs"
-                onClick={() => setSecretUpdate(null)}
-                disabled={busy}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          <p className="settings-hint">
-            Secret is stored in the application database. It is never shown
-            in the UI after saving.
-          </p>
-        </div>
-      </div>
-
-      <DiagnosticDisplay result={diagnostic} />
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="aria2-remote-endpoint">
-          Remote RPC endpoint
-        </label>
-        <div className="settings-control">
-          <input
-            id="aria2-remote-endpoint"
-            type="url"
-            className="settings-input"
-            placeholder="https://aria2.example/jsonrpc"
-            value={remoteEndpoint}
-            onChange={(e) => setRemoteEndpoint(e.target.value)}
-            disabled={remoteTestBusy}
-            autoComplete="url"
-          />
-          <p className="settings-hint">
-            Remote connections require HTTPS. HTTP is allowed only on loopback.
-            Address and secret are used for this test only and are not saved.
-          </p>
-        </div>
-      </div>
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="aria2-remote-secret">
-          Remote RPC secret
-        </label>
-        <div className="settings-control">
-          <input
-            id="aria2-remote-secret"
-            type="password"
-            className="settings-input"
-            placeholder="Optional aria2 RPC token"
-            value={remoteSecret}
-            onChange={(e) => setRemoteSecret(e.target.value)}
-            disabled={remoteTestBusy}
-            autoComplete="off"
-          />
-        </div>
-      </div>
-
-      <DiagnosticDisplay result={remoteDiagnostic} />
-
-      <div className="settings-actions">
-        <button
-          className="button button-secondary"
-          onClick={() => void test()}
-          disabled={busy || testBusy || remoteTestBusy}
-        >
-          {testBusy ? "Testing…" : "Test configuration"}
-        </button>
-        <button
-          className="button button-secondary"
-          onClick={() => void testRemote()}
-          disabled={busy || testBusy || remoteTestBusy}
-        >
-          {remoteTestBusy ? "Testing…" : "Test remote connection"}
-        </button>
-        <button
-          className="button button-primary"
-          onClick={() => void save()}
-          disabled={busy || testBusy || remoteTestBusy}
-        >
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </section>
   );
 }
 
@@ -521,12 +226,6 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
         executable_path: execPath.trim() || null,
       };
       const updated = await saveEngineConfig({
-        aria2: {
-          enabled: cfg.aria2.enabled,
-          executable_path: cfg.aria2.executable_path,
-          rpc_port: cfg.aria2.rpc_port,
-          rpc_secret_update: null,
-        },
         yt_dlp: req,
         resource_policy: cfg.resource_policy,
       });
@@ -688,7 +387,7 @@ function HelperInstallPanel({
     try {
       setHelpers(await getHelperStatus());
     } catch (cause) {
-      setErrors((current) => ({ ...current, aria2c: errorMessage(cause) }));
+      setErrors((current) => ({ ...current, yt_dlp: errorMessage(cause) }));
     } finally {
       setLoading(false);
     }
@@ -736,7 +435,6 @@ function HelperInstallPanel({
   };
 
   const items: Array<{ id: ManagedHelperId; name: string }> = [
-    { id: "aria2c", name: "aria2c" },
     { id: "yt_dlp", name: "yt-dlp" },
     { id: "ffmpeg", name: "FFmpeg" },
     { id: "ffprobe", name: "FFprobe" },
@@ -813,7 +511,7 @@ function HelperInstallPanel({
         </div>
       )}
       <p className="settings-hint">
-        aria2 and yt-dlp use their upstream release artifacts; aria2 is checksum-pinned to the Microsoft WinGet manifest.
+        yt-dlp uses its upstream release artifacts.
         FFmpeg and FFprobe use Gyan.dev’s Windows essentials build and published checksum. Windows x64 is supported;
         other architectures are rejected.
       </p>
@@ -828,7 +526,6 @@ function policyForProfile(
   const engineLimits = {
     direct_http_bytes_per_second: null,
     hls_bytes_per_second: null,
-    aria2_bytes_per_second: null,
     yt_dlp_bytes_per_second: null,
   };
   const profiles: Partial<Record<ResourceProfile, ResourcePolicyDto>> = {
@@ -890,12 +587,6 @@ function ResourcePolicySection({
     setBusy(true);
     try {
       const updated = await saveEngineConfig({
-        aria2: {
-          enabled: cfg.aria2.enabled,
-          executable_path: cfg.aria2.executable_path,
-          rpc_port: cfg.aria2.rpc_port,
-          rpc_secret_update: null,
-        },
         yt_dlp: {
           enabled: cfg.yt_dlp.enabled,
           executable_path: cfg.yt_dlp.executable_path,
@@ -1011,7 +702,7 @@ function ResourcePolicySection({
         </div>
       </div>
       <p className="settings-hint">
-        HTTP and HLS use shared Rust bandwidth limits. aria2 and yt-dlp use native per-download limits where supported.
+        HTTP and HLS use shared Rust bandwidth limits. yt-dlp uses native per-download limits where supported.
         FFmpeg processing has its own local process ceiling and is not network bandwidth limited.
         The queue accepts explicit pressure signals: elevated pressure reduces new allocations, high pressure limits new starts, and critical pressure blocks new work without stopping active downloads. Automatic OS-pressure detection is not wired.
       </p>
@@ -1112,12 +803,6 @@ export function SettingsPage() {
         <>
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <DirectHttpSection runtimeStatus={runtimeStatus?.direct_http ?? null} />
-          <Aria2Section
-            cfg={cfg}
-            runtimeStatus={runtimeStatus?.aria2 ?? null}
-            onSaved={setCfg}
-            onError={setError}
-          />
           <YtDlpSection
             cfg={cfg}
             runtimeStatus={runtimeStatus?.yt_dlp ?? null}

@@ -5,6 +5,8 @@
 > Windows (.exe) and Android (.apk) are client/presentation/platform layers
 > that share the same core -- they do NOT have separate download implementations.
 
+> **Current engine note:** The aria2 runtime, daemon/RPC integration, packaging, settings, and fallback described in older phase plans below have been removed. Persisted aria2 records remain compatibility-only and are not dispatched. See the [current migration status](research/ARIA2_NATIVE_RUST_MIGRATION.md) and [shared-core roadmap](roadmap/SHARED_CORE_ROADMAP.md).
+
 ---
 
 ## Architecture Overview

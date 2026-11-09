@@ -402,7 +402,8 @@ async fn authorization_roles_gate_rpc_events_and_survive_restart()
             let engines = body["result"]["engines"]
                 .as_array()
                 .ok_or_else(|| std::io::Error::other("engine status omitted engine list"))?;
-            assert_eq!(engines.len(), 9);
+            assert_eq!(engines.len(), 8);
+            assert!(engines.iter().all(|engine| engine["engine"] != "aria2"));
             assert!(engines.iter().any(|engine| {
                 engine["engine"] == "direct_http" && engine["state"] == "available"
             }));

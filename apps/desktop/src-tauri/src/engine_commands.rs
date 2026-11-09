@@ -1,20 +1,10 @@
-//! Tauri commands for reading and writing engine configuration, and for
-//! running diagnostic checks against aria2 and yt-dlp.
-//!
-//! # Security notes
-//! - The aria2 RPC secret is **never** included in any DTO returned to the
-//!   frontend.  The `Aria2ConfigDto` field `has_secret` signals whether a
-//!   secret is configured without exposing its value.
-//! - Executable paths are validated server-side before being stored or used.
-//! - Diagnostic commands use the existing structured process launchers;
-//!   no shell-string concatenation is performed.
+//! Tauri commands for native engine configuration and diagnostics.
 
 use std::{path::PathBuf, time::Duration};
 
 use fetchx_core_services::{
-    Aria2Config, ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
+    ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
 };
-use fetchx_downloader::{Aria2Client, Aria2ClientConfig, Aria2GlobalStat};
 use fetchx_models::{ResourcePolicy, ResourceProfile};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -22,33 +12,11 @@ use tokio::{fs, process::Command};
 
 use crate::commands::AppState;
 
-// ============================================================
-// Request / response DTOs
-// ============================================================
-
-/// The configuration payload sent from the frontend when saving settings.
-///
-/// The aria2 `rpc_secret_update` field is `None` when the user did not touch
-/// the secret field.  A `Some("")` value explicitly clears the secret.
-/// `deny_unknown_fields` prevents the frontend from injecting unexpected keys.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SaveEngineConfigRequest {
-    pub aria2: SaveAria2ConfigRequest,
     pub yt_dlp: SaveYtDlpConfigRequest,
     pub resource_policy: Option<ResourcePolicy>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SaveAria2ConfigRequest {
-    pub enabled: bool,
-    pub executable_path: Option<String>,
-    pub rpc_port: u16,
-    /// `None` = leave existing secret unchanged.
-    /// `Some("")` = clear the secret.
-    /// `Some("token")` = set the secret to "token".
-    pub rpc_secret_update: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -58,12 +26,9 @@ pub struct SaveYtDlpConfigRequest {
     pub executable_path: Option<String>,
 }
 
-/// Configuration DTO returned to the frontend.
-/// Secret fields are replaced with `has_secret` booleans.
 #[derive(Clone, Debug, Serialize)]
 pub struct EngineConfigDto {
     pub direct_http: DirectHttpConfigDto,
-    pub aria2: Aria2ConfigDto,
     pub yt_dlp: YtDlpConfigDto,
     pub resource_policy: ResourcePolicy,
 }
@@ -74,79 +39,37 @@ pub struct DirectHttpConfigDto {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct Aria2ConfigDto {
-    pub enabled: bool,
-    pub executable_path: Option<String>,
-    pub rpc_port: u16,
-    /// `true` when a non-empty secret is stored.  The actual secret is never
-    /// returned to the frontend.
-    pub has_secret: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct YtDlpConfigDto {
     pub enabled: bool,
     pub executable_path: Option<String>,
 }
 
 impl From<&EngineConfig> for EngineConfigDto {
-    fn from(cfg: &EngineConfig) -> Self {
+    fn from(config: &EngineConfig) -> Self {
         Self {
             direct_http: DirectHttpConfigDto {
-                enabled: cfg.direct_http.enabled,
-            },
-            aria2: Aria2ConfigDto {
-                enabled: cfg.aria2.enabled,
-                executable_path: cfg
-                    .aria2
-                    .executable_path
-                    .as_deref()
-                    .map(|p| p.to_string_lossy().into_owned()),
-                rpc_port: cfg.aria2.rpc_port,
-                has_secret: cfg.aria2.has_secret(),
+                enabled: config.direct_http.enabled,
             },
             yt_dlp: YtDlpConfigDto {
-                enabled: cfg.yt_dlp.enabled,
-                executable_path: cfg
+                enabled: config.yt_dlp.enabled,
+                executable_path: config
                     .yt_dlp
                     .executable_path
                     .as_deref()
-                    .map(|p| p.to_string_lossy().into_owned()),
+                    .map(|path| path.to_string_lossy().into_owned()),
             },
-            resource_policy: cfg.resource_policy.clone(),
+            resource_policy: config.resource_policy.clone(),
         }
     }
 }
 
-/// Diagnostic result returned after testing an engine configuration.
 #[derive(Clone, Debug, Serialize)]
 pub struct DiagnosticResult {
     pub available: bool,
-    /// Resolved executable path (may differ from the configured path if PATH
-    /// discovery was used).
     pub executable: Option<String>,
-    /// Version string as reported by the executable.
     pub version: Option<String>,
-    /// Features reported by aria2's JSON-RPC `getVersion` method.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled_features: Option<Vec<String>>,
-    /// Read-only aggregate status returned by aria2's `getGlobalStat`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub aria2_global_stat: Option<Aria2GlobalStat>,
-    /// Human-readable status message.
     pub message: String,
 }
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RemoteAria2ProbeRequest {
-    pub endpoint: String,
-    pub secret: Option<String>,
-}
-
-// ============================================================
-// IpcError mapping
-// ============================================================
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -163,30 +86,22 @@ pub struct EngineIpcError {
 }
 
 impl std::fmt::Display for EngineIpcError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 
 impl std::error::Error for EngineIpcError {}
 
 impl From<ConfigError> for EngineIpcError {
-    fn from(e: ConfigError) -> Self {
+    fn from(error: ConfigError) -> Self {
         Self {
             code: EngineIpcErrorCode::InvalidConfig,
-            message: e.to_string(),
+            message: error.to_string(),
         }
     }
 }
 
-// ============================================================
-// Helper: validate an executable path
-// ============================================================
-
-/// Resolves and validates that a path points to an existing regular file.
-/// Returns the canonical path on success.
-///
-/// This does NOT execute the file.
 async fn validate_executable_path(path: &str) -> Result<PathBuf, EngineIpcError> {
     if path.trim().is_empty() {
         return Err(EngineIpcError {
@@ -194,9 +109,9 @@ async fn validate_executable_path(path: &str) -> Result<PathBuf, EngineIpcError>
             message: "Executable path must not be empty.".to_owned(),
         });
     }
-    let p = PathBuf::from(path);
-    match fs::metadata(&p).await {
-        Ok(meta) if meta.is_file() => Ok(p),
+    let path_buf = PathBuf::from(path);
+    match fs::metadata(&path_buf).await {
+        Ok(metadata) if metadata.is_file() => Ok(path_buf),
         Ok(_) => Err(EngineIpcError {
             code: EngineIpcErrorCode::ExecutableInvalid,
             message: format!("Path '{}' exists but is not a regular file.", path),
@@ -208,155 +123,89 @@ async fn validate_executable_path(path: &str) -> Result<PathBuf, EngineIpcError>
     }
 }
 
-// ============================================================
-// Helper: resolve aria2c from config or PATH
-// ============================================================
-
-async fn resolve_aria2_executable(cfg: &Aria2Config) -> Result<PathBuf, EngineIpcError> {
-    if let Some(path) = &cfg.executable_path {
+async fn resolve_ytdlp_executable(
+    config: &PersistedYtDlpConfig,
+) -> Result<PathBuf, EngineIpcError> {
+    if let Some(path) = &config.executable_path {
         return validate_executable_path(&path.to_string_lossy()).await;
     }
-    // Search PATH for "aria2c" or "aria2c.exe" using structured Command lookup.
-    // We do NOT construct a shell string; `which`-style lookup via `Command::new`.
-    let name = if cfg!(target_os = "windows") {
-        "aria2c.exe"
-    } else {
-        "aria2c"
-    };
-    // On Windows, `where` is a built-in; on Unix, use `which` via PATH resolution.
-    // Simpler and cross-platform: just try to query the version and let the OS
-    // resolve the name from PATH.
-    let resolved = PathBuf::from(name);
-    // Verify it's actually runnable by checking with a trivial version call below.
-    Ok(resolved)
-}
-
-async fn resolve_ytdlp_executable(cfg: &PersistedYtDlpConfig) -> Result<PathBuf, EngineIpcError> {
-    if let Some(path) = &cfg.executable_path {
-        return validate_executable_path(&path.to_string_lossy()).await;
-    }
-    let name = if cfg!(target_os = "windows") {
+    Ok(PathBuf::from(if cfg!(target_os = "windows") {
         "yt-dlp.exe"
     } else {
         "yt-dlp"
-    };
-    Ok(PathBuf::from(name))
+    }))
 }
 
-// ============================================================
-// Tauri commands
-// ============================================================
-
-/// Returns the current engine configuration.  The aria2 secret is never
-/// included; `has_secret` indicates whether one is stored.
 #[tauri::command]
 pub async fn get_engine_config(
     state: State<'_, AppState>,
 ) -> Result<EngineConfigDto, EngineIpcError> {
-    let cfg = state
+    let config = state
         .config_service
         .load()
         .await
         .map_err(EngineIpcError::from)?;
-    Ok(EngineConfigDto::from(&cfg))
+    Ok(EngineConfigDto::from(&config))
 }
 
-/// Validates and persists updated engine configuration.
-///
-/// The aria2 secret is only updated when `rpc_secret_update` is `Some(_)`.
-/// Passing `Some("")` clears the secret.
 #[tauri::command]
 pub async fn save_engine_config(
     state: State<'_, AppState>,
     request: SaveEngineConfigRequest,
 ) -> Result<EngineConfigDto, EngineIpcError> {
-    // Load current config so we can apply a partial update (secret update is
-    // optional).
-    let mut cfg = state
+    let mut config = state
         .config_service
         .load()
         .await
         .map_err(EngineIpcError::from)?;
-
-    // ---- Direct HTTP: not user-configurable; always enabled ----
-
-    // ---- aria2 ----
-    cfg.aria2.enabled = request.aria2.enabled;
-    cfg.aria2.rpc_port = request.aria2.rpc_port;
-
-    // Validate and canonicalise the executable path if provided.
-    cfg.aria2.executable_path = match &request.aria2.executable_path {
-        Some(p) if !p.trim().is_empty() => Some(validate_executable_path(p).await?),
+    config.yt_dlp.enabled = request.yt_dlp.enabled;
+    config.yt_dlp.executable_path = match &request.yt_dlp.executable_path {
+        Some(path) if !path.trim().is_empty() => Some(validate_executable_path(path).await?),
         _ => None,
     };
-
-    // Apply secret update only when explicitly provided.
-    if let Some(secret_update) = request.aria2.rpc_secret_update {
-        let trimmed = secret_update.trim();
-        cfg.aria2.rpc_secret = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        };
-    }
-
-    // ---- yt-dlp ----
-    cfg.yt_dlp.enabled = request.yt_dlp.enabled;
-    cfg.yt_dlp.executable_path = match &request.yt_dlp.executable_path {
-        Some(p) if !p.trim().is_empty() => Some(validate_executable_path(p).await?),
-        _ => None,
-    };
-    if let Some(resource_policy) = request.resource_policy {
-        cfg.resource_policy = match resource_policy.profile {
-            ResourceProfile::Custom => resource_policy,
+    if let Some(policy) = request.resource_policy {
+        config.resource_policy = match policy.profile {
+            ResourceProfile::Custom => policy,
             profile => ResourcePolicy::for_profile(profile),
         };
     }
-
     state
         .config_service
-        .save(&cfg)
+        .save(&config)
         .await
         .map_err(EngineIpcError::from)?;
-
-    Ok(EngineConfigDto::from(&cfg))
+    Ok(EngineConfigDto::from(&config))
 }
 
-/// Resets engine configuration to safe defaults.
 #[tauri::command]
 pub async fn reset_engine_config(
     state: State<'_, AppState>,
 ) -> Result<EngineConfigDto, EngineIpcError> {
-    let cfg = state
+    let config = state
         .config_service
         .reset()
         .await
         .map_err(EngineIpcError::from)?;
-    Ok(EngineConfigDto::from(&cfg))
+    Ok(EngineConfigDto::from(&config))
 }
 
-/// Live runtime status of a single engine instance.
-/// Never includes secrets or internal process state.
 #[derive(Clone, Debug, Serialize)]
 pub struct EngineInstanceStatusDto {
     pub enabled: bool,
     pub available: bool,
     pub version: Option<String>,
-    /// Human-readable error when available == false.
     pub error: Option<String>,
 }
 
-/// Runtime status of all engines returned to the frontend.
 #[derive(Clone, Debug, Serialize)]
 pub struct EngineStatusDto {
     pub direct_http: EngineInstanceStatusDto,
-    pub aria2: EngineInstanceStatusDto,
     pub yt_dlp: EngineInstanceStatusDto,
     pub native_torrent: EngineInstanceStatusDto,
 }
 
-pub(crate) fn engine_instance_dto(avail: &EngineAvailability) -> EngineInstanceStatusDto {
-    match avail {
+pub(crate) fn engine_instance_dto(availability: &EngineAvailability) -> EngineInstanceStatusDto {
+    match availability {
         EngineAvailability::Disabled => EngineInstanceStatusDto {
             enabled: false,
             available: false,
@@ -378,9 +227,6 @@ pub(crate) fn engine_instance_dto(avail: &EngineAvailability) -> EngineInstanceS
     }
 }
 
-/// Returns the live runtime availability of each engine.
-/// Reflects what actually happened at startup, not just persisted config.
-/// Secrets are never included.
 #[tauri::command]
 pub async fn get_engine_status(
     state: State<'_, AppState>,
@@ -393,299 +239,89 @@ pub async fn get_engine_status(
             version: None,
             error: None,
         },
-        aria2: engine_instance_dto(&status.aria2),
         yt_dlp: engine_instance_dto(&status.yt_dlp),
         native_torrent: engine_instance_dto(&status.native_torrent),
     })
 }
+
 #[tauri::command]
-pub async fn test_aria2_config(
+pub async fn test_ytdlp_config(
     state: State<'_, AppState>,
 ) -> Result<DiagnosticResult, EngineIpcError> {
-    let cfg = state
+    let config = state
         .config_service
         .load()
         .await
         .map_err(EngineIpcError::from)?;
-
-    let executable = match resolve_aria2_executable(&cfg.aria2).await {
-        Ok(p) => p,
-        Err(e) => {
-            return Ok(DiagnosticResult {
-                available: false,
-                executable: None,
-                version: None,
-                enabled_features: None,
-                aria2_global_stat: None,
-                message: e.message,
-            });
-        }
-    };
-
-    // Run `aria2c --version` with structured arguments.
-    // Hard timeout of 5 seconds to avoid hanging.
-    let mut aria2_cmd = Command::new(&executable);
-    aria2_cmd.arg("--version");
-    // Suppress the console window that would otherwise flash on Windows.
-    #[cfg(windows)]
-    aria2_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = tokio::time::timeout(Duration::from_secs(5), aria2_cmd.output()).await;
-
-    match output {
-        Ok(Ok(out)) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            // First line of `aria2c --version` is typically "aria2 version X.Y.Z".
-            let version = stdout.lines().next().unwrap_or("").trim().to_owned();
-            Ok(DiagnosticResult {
-                available: true,
-                executable: Some(executable.to_string_lossy().into_owned()),
-                version: Some(version),
-                enabled_features: None,
-                aria2_global_stat: None,
-                message: "aria2 is available.".to_owned(),
-            })
-        }
-        Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            // Log only the first 200 chars of stderr to avoid large output in logs.
-            let preview: String = stderr.chars().take(200).collect();
-            tracing::warn!(aria2_stderr = %preview, "aria2 --version returned non-zero exit");
-            Ok(DiagnosticResult {
-                available: false,
-                executable: Some(executable.to_string_lossy().into_owned()),
-                version: None,
-                enabled_features: None,
-                aria2_global_stat: None,
-                message: format!(
-                    "aria2 exited with status {}.",
-                    out.status
-                        .code()
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "unknown".to_owned())
-                ),
-            })
-        }
-        Ok(Err(io_err)) => Ok(DiagnosticResult {
-            available: false,
-            executable: Some(executable.to_string_lossy().into_owned()),
-            version: None,
-            enabled_features: None,
-            aria2_global_stat: None,
-            message: format!("Could not start aria2: {io_err}"),
-        }),
-        Err(_timeout) => Ok(DiagnosticResult {
-            available: false,
-            executable: Some(executable.to_string_lossy().into_owned()),
-            version: None,
-            enabled_features: None,
-            aria2_global_stat: None,
-            message: "aria2 version check timed out.".to_owned(),
-        }),
-    }
-}
-
-/// Checks an explicitly supplied remote aria2 endpoint without saving its
-/// address or credentials. Remote endpoints require HTTPS; HTTP is accepted
-/// only for loopback endpoints.
-#[tauri::command]
-pub async fn test_remote_aria2(
-    request: RemoteAria2ProbeRequest,
-) -> Result<DiagnosticResult, EngineIpcError> {
-    let client = match Aria2Client::new(Aria2ClientConfig::new(
-        request.endpoint,
-        request.secret,
-        Duration::from_secs(5),
-    )) {
-        Ok(client) => client,
+    let executable = match resolve_ytdlp_executable(&config.yt_dlp).await {
+        Ok(path) => path,
         Err(error) => {
             return Ok(DiagnosticResult {
                 available: false,
                 executable: None,
                 version: None,
-                enabled_features: None,
-                aria2_global_stat: None,
-                message: error.to_string(),
+                message: error.message,
             });
         }
     };
-
-    match client.get_version().await {
-        Ok(version) => {
-            let (aria2_global_stat, message) = match client.get_global_stat().await {
-                Ok(stats) => (
-                    Some(stats),
-                    "Remote aria2 RPC and global statistics are available.".to_owned(),
-                ),
-                Err(_) => (
-                    None,
-                    "Remote aria2 RPC is available, but global statistics could not be read."
-                        .to_owned(),
-                ),
-            };
-            Ok(DiagnosticResult {
-                available: true,
-                executable: None,
-                version: Some(version.version().to_owned()),
-                enabled_features: Some(version.enabled_features().to_vec()),
-                aria2_global_stat,
-                message,
-            })
-        }
-        Err(error) => Ok(DiagnosticResult {
-            available: false,
-            executable: None,
-            version: None,
-            enabled_features: None,
-            aria2_global_stat: None,
-            message: format!("Remote aria2 RPC check failed: {error}"),
-        }),
-    }
-}
-
-/// Tests whether the configured yt-dlp executable is present and reports its
-/// version.  Does NOT download anything.
-#[tauri::command]
-pub async fn test_ytdlp_config(
-    state: State<'_, AppState>,
-) -> Result<DiagnosticResult, EngineIpcError> {
-    let cfg = state
-        .config_service
-        .load()
-        .await
-        .map_err(EngineIpcError::from)?;
-
-    let executable = match resolve_ytdlp_executable(&cfg.yt_dlp).await {
-        Ok(p) => p,
-        Err(e) => {
-            return Ok(DiagnosticResult {
-                available: false,
-                executable: None,
-                version: None,
-                enabled_features: None,
-                aria2_global_stat: None,
-                message: e.message,
-            });
-        }
-    };
-
-    // Run `yt-dlp --version` with structured arguments.
-    let mut ytdlp_cmd = Command::new(&executable);
-    ytdlp_cmd.arg("--version");
-    // Suppress the console window that would otherwise flash on Windows.
+    let mut command = Command::new(&executable);
+    command.arg("--version");
     #[cfg(windows)]
-    ytdlp_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = tokio::time::timeout(Duration::from_secs(5), ytdlp_cmd.output()).await;
-
-    match output {
-        Ok(Ok(out)) if out.status.success() => {
-            let version = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-            Ok(DiagnosticResult {
-                available: true,
-                executable: Some(executable.to_string_lossy().into_owned()),
-                version: Some(version),
-                enabled_features: None,
-                aria2_global_stat: None,
-                message: "yt-dlp is available.".to_owned(),
-            })
-        }
-        Ok(Ok(out)) => Ok(DiagnosticResult {
+    command.creation_flags(0x08000000);
+    let result = tokio::time::timeout(Duration::from_secs(5), command.output()).await;
+    match result {
+        Ok(Ok(output)) if output.status.success() => Ok(DiagnosticResult {
+            available: true,
+            executable: Some(executable.to_string_lossy().into_owned()),
+            version: Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()),
+            message: "yt-dlp is available.".to_owned(),
+        }),
+        Ok(Ok(output)) => Ok(DiagnosticResult {
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
-            enabled_features: None,
-            aria2_global_stat: None,
             message: format!(
                 "yt-dlp exited with status {}.",
-                out.status
+                output
+                    .status
                     .code()
-                    .map(|c| c.to_string())
+                    .map(|code| code.to_string())
                     .unwrap_or_else(|| "unknown".to_owned())
             ),
         }),
-        Ok(Err(io_err)) => Ok(DiagnosticResult {
+        Ok(Err(error)) => Ok(DiagnosticResult {
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
-            enabled_features: None,
-            aria2_global_stat: None,
-            message: format!("Could not start yt-dlp: {io_err}"),
+            message: format!("Could not start yt-dlp: {error}"),
         }),
-        Err(_timeout) => Ok(DiagnosticResult {
+        Err(_) => Ok(DiagnosticResult {
             available: false,
             executable: Some(executable.to_string_lossy().into_owned()),
             version: None,
-            enabled_features: None,
-            aria2_global_stat: None,
             message: "yt-dlp version check timed out.".to_owned(),
         }),
     }
 }
 
-// ============================================================
-// Tests
-// ============================================================
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::SaveEngineConfigRequest;
 
     #[test]
-    fn engine_config_dto_hides_secret() {
-        let mut cfg = EngineConfig::default();
-        cfg.aria2.rpc_secret = Some("s3cr3t".to_owned());
-        let dto = EngineConfigDto::from(&cfg);
-        assert!(dto.aria2.has_secret);
-        // Confirm the actual serialisation does not contain the secret value.
-        let json = serde_json::to_string(&dto).unwrap();
-        assert!(!json.contains("s3cr3t"));
-    }
-
-    #[test]
-    fn engine_config_dto_has_secret_false_when_none() {
-        let cfg = EngineConfig::default();
-        let dto = EngineConfigDto::from(&cfg);
-        assert!(!dto.aria2.has_secret);
-    }
-
-    #[test]
-    fn save_request_rejects_unknown_fields() {
+    fn save_request_rejects_aria2_fields() {
         let json = r#"{
-            "aria2": {"enabled": false, "rpc_port": 6800, "executable_path": null, "rpc_secret_update": null, "extra": true},
+            "aria2": {"enabled": true, "rpc_port": 6800},
             "yt_dlp": {"enabled": false, "executable_path": null}
         }"#;
         assert!(serde_json::from_str::<SaveEngineConfigRequest>(json).is_err());
     }
 
     #[test]
-    fn save_request_accepts_valid_payload() {
+    fn save_request_accepts_native_engine_settings() {
         let json = r#"{
-            "aria2": {"enabled": false, "rpc_port": 6800, "executable_path": null, "rpc_secret_update": null},
             "yt_dlp": {"enabled": false, "executable_path": null}
         }"#;
         assert!(serde_json::from_str::<SaveEngineConfigRequest>(json).is_ok());
-    }
-
-    #[test]
-    fn diagnostic_result_serializes_stably() {
-        let result = DiagnosticResult {
-            available: true,
-            executable: Some("/usr/bin/aria2c".to_owned()),
-            version: Some("aria2 version 1.37.0".to_owned()),
-            enabled_features: Some(vec!["HTTPS".to_owned()]),
-            aria2_global_stat: Some(Aria2GlobalStat {
-                download_speed_bytes_per_second: 1024,
-                upload_speed_bytes_per_second: 128,
-                active_downloads: 2,
-                waiting_downloads: 3,
-                stopped_results: 4,
-            }),
-            message: "aria2 is available.".to_owned(),
-        };
-        let json = serde_json::to_string(&result).unwrap();
-        assert!(json.contains(r#""available":true"#));
-        assert!(json.contains(r#""version":"aria2 version 1.37.0""#));
-        assert!(json.contains(r#""enabled_features":["HTTPS"]"#));
-        assert!(json.contains(r#""active_downloads":2"#));
-        assert!(json.contains(r#""stopped_results":4"#));
     }
 }

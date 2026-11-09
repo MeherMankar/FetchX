@@ -1,11 +1,10 @@
 use std::{env, sync::atomic::AtomicU64, time::Duration};
 
 use fetchx_remote_protocol::{
-    ARIA2_RECOVERY_ASSESSMENT_VERSION, Aria2RecoveryAssessmentResult, Aria2RecoveryState,
-    DOWNLOAD_ARIA2_RECOVERY, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE,
-    DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_RESUME, JSON_RPC_VERSION, MAX_MESSAGE_BYTES,
-    PROTOCOL_VERSION, ProtocolInfo, QUEUE_MOVE_DOWN, QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH,
-    QUEUE_RESUME_DISPATCH, RpcFailure, RpcId, RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
+    DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_LIST, DOWNLOAD_PAUSE,
+    DOWNLOAD_RESUME, JSON_RPC_VERSION, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ProtocolInfo,
+    QUEUE_MOVE_DOWN, QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RpcFailure, RpcId,
+    RpcRequest, RpcSuccess, SYSTEM_DISCOVER,
 };
 use reqwest::{StatusCode, Url, redirect::Policy};
 use serde::Deserialize;
@@ -121,16 +120,6 @@ pub async fn run(options: RemoteOpts, json_output: bool) -> ExitCode {
                 }
             })
         }
-        RemoteCommand::Aria2Recovery { id } => client.aria2_recovery(&id).await.map(|assessment| {
-            if json_output {
-                output::print_json_ok(&json!({
-                    "ok": true,
-                    "assessment": assessment,
-                }));
-            } else {
-                print_remote_assessment(&assessment);
-            }
-        }),
         RemoteCommand::Add { url } => client.add(&url).await.map(|id| {
             if json_output {
                 output::print_json_ok(&json!({ "ok": true, "id": id }));
@@ -282,31 +271,6 @@ impl RemoteClient {
             })
     }
 
-    async fn aria2_recovery(&self, id: &str) -> Result<Aria2RecoveryAssessmentResult, String> {
-        let status = self.status().await?;
-        if !supports_aria2_recovery(&status.protocol) {
-            return Err(
-                "remote server does not support aria2 recovery assessment; no request was sent"
-                    .to_owned(),
-            );
-        }
-        let result = self
-            .call(DOWNLOAD_ARIA2_RECOVERY, Some(json!({ "id": id })))
-            .await?;
-        let assessment: Aria2RecoveryAssessmentResult =
-            serde_json::from_value(result).map_err(|_| {
-                "remote server returned an invalid aria2 recovery assessment".to_owned()
-            })?;
-        if assessment.assessment_version != ARIA2_RECOVERY_ASSESSMENT_VERSION
-            || assessment.download_id != id
-        {
-            return Err(
-                "remote server returned an incompatible aria2 recovery assessment".to_owned(),
-            );
-        }
-        Ok(assessment)
-    }
-
     async fn add(&self, url: &str) -> Result<String, String> {
         let result = self
             .call(DOWNLOAD_CREATE, Some(json!({ "url": url })))
@@ -347,37 +311,6 @@ impl RemoteClient {
         let response = read_response_bytes(response).await?;
         parse_rpc_response(status, &response, &request_id)
     }
-}
-
-fn supports_aria2_recovery(protocol: &ProtocolInfo) -> bool {
-    protocol
-        .capabilities
-        .iter()
-        .any(|capability| capability == DOWNLOAD_ARIA2_RECOVERY)
-}
-
-fn recovery_state_name(state: Aria2RecoveryState) -> &'static str {
-    match state {
-        Aria2RecoveryState::NotAria2 => "not_aria2",
-        Aria2RecoveryState::NotRequired => "not_required",
-        Aria2RecoveryState::RuntimeUnavailable => "runtime_unavailable",
-        Aria2RecoveryState::ReadyToStart => "ready_to_start",
-        Aria2RecoveryState::JobAvailable => "job_available",
-        Aria2RecoveryState::MissingTorrentMetadata => "missing_torrent_metadata",
-        Aria2RecoveryState::MissingGid => "missing_gid",
-        Aria2RecoveryState::StaleGid => "stale_gid",
-        Aria2RecoveryState::MissingControlFile => "missing_control_file",
-        Aria2RecoveryState::ControlFilePresent => "control_file_present",
-        Aria2RecoveryState::Unknown => "unknown",
-    }
-}
-
-fn print_remote_assessment(assessment: &Aria2RecoveryAssessmentResult) {
-    println!("aria2 recovery assessment for {}", assessment.download_id);
-    println!("  State:      {}", recovery_state_name(assessment.state));
-    println!("  Assessment: {}", assessment.explanation);
-    println!("  Next step:  {}", assessment.next_step);
-    println!("  Read-only:  yes");
 }
 
 fn validate_server_url(raw: &str) -> Result<Url, String> {
@@ -573,32 +506,6 @@ mod tests {
     }
 
     #[test]
-    fn aria2_recovery_is_capability_gated_and_response_version_checked()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut current = ProtocolInfo::new("0.1.0");
-        assert!(supports_aria2_recovery(&current));
-        current
-            .capabilities
-            .retain(|capability| capability != DOWNLOAD_ARIA2_RECOVERY);
-        assert!(!supports_aria2_recovery(&current));
-
-        let response = json!({
-            "assessment_version": ARIA2_RECOVERY_ASSESSMENT_VERSION,
-            "download_id": "download-1",
-            "state": "unknown",
-            "explanation": "evidence is inconclusive",
-            "next_step": "check aria2",
-        });
-        let decoded: Aria2RecoveryAssessmentResult = serde_json::from_value(response)?;
-        assert_eq!(decoded.state, Aria2RecoveryState::Unknown);
-        assert_eq!(
-            decoded.assessment_version,
-            ARIA2_RECOVERY_ASSESSMENT_VERSION
-        );
-        Ok(())
-    }
-
-    #[test]
     fn authentication_errors_are_sanitized() -> Result<(), Box<dyn std::error::Error>> {
         let id = RpcId::String("request-1".to_owned());
         let failure = json!({
@@ -645,95 +552,6 @@ mod tests {
                 .await
                 .is_err(),
             "remote client followed an RPC redirect"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn old_server_without_recovery_capability_receives_no_assessment_request()
-    -> Result<(), Box<dyn std::error::Error>> {
-        use tokio::{
-            io::{AsyncReadExt, AsyncWriteExt},
-            net::TcpListener,
-            time::timeout,
-        };
-
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let server = tokio::spawn(async move {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().await?;
-                let mut request = Vec::new();
-                let mut chunk = [0_u8; 2048];
-                let body_start = loop {
-                    let length = stream.read(&mut chunk).await?;
-                    if length == 0 {
-                        return Err(std::io::Error::other("client closed request early"));
-                    }
-                    request.extend_from_slice(&chunk[..length]);
-                    if let Some(position) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break position + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&request[..body_start]);
-                let content_length = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length:")
-                            .and_then(|value| value.trim().parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                while request.len() < body_start + content_length {
-                    let length = stream.read(&mut chunk).await?;
-                    if length == 0 {
-                        return Err(std::io::Error::other("client closed request body early"));
-                    }
-                    request.extend_from_slice(&chunk[..length]);
-                }
-                let request_line = request
-                    .split(|byte| *byte == b'\n')
-                    .next()
-                    .unwrap_or_default();
-                let body = if request_line.starts_with(b"GET /health ") {
-                    json!({ "status": "ok" }).to_string()
-                } else {
-                    let request_body: Value = serde_json::from_slice(&request[body_start..])?;
-                    let id = request_body["id"].clone();
-                    let mut protocol = ProtocolInfo::new("0.1.0");
-                    protocol
-                        .capabilities
-                        .retain(|capability| capability != DOWNLOAD_ARIA2_RECOVERY);
-                    json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": protocol,
-                    })
-                    .to_string()
-                };
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                stream.write_all(response.as_bytes()).await?;
-            }
-            Ok::<bool, std::io::Error>(
-                timeout(Duration::from_millis(150), listener.accept())
-                    .await
-                    .is_err(),
-            )
-        });
-
-        let client = RemoteClient::new(&format!("http://{address}"), "test-token".to_owned())?;
-        let error = client
-            .aria2_recovery("download-1")
-            .await
-            .expect_err("old server must not be sent the new method");
-        assert!(error.contains("does not support aria2 recovery assessment"));
-        assert!(
-            server.await??,
-            "client sent an assessment call to old server"
         );
         Ok(())
     }

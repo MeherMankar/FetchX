@@ -13,9 +13,6 @@ sealed class Screen(val route: String) {
     /** Read-only breakdown of FetchX-owned storage. */
     data object Storage : Screen("storage")
 
-    /** Remote aria2 JSON-RPC profile and connection status. */
-    data object Aria2Remote : Screen("aria2-remote")
-
     /** Detail screen for a torrent download (file tree, telemetry, actions). */
     data class TorrentDetail(val downloadId: String) : Screen("torrent-detail/$downloadId") {
         companion object {

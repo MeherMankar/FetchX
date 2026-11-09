@@ -33,7 +33,7 @@ import dev.fetchx.app.media.MediaDownloadPreferences
 import dev.fetchx.downloads.storage.StorageManager
 
 @Composable
-internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
+internal fun StorageScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val storageManager = remember(context) { FetchXStorageManager(context) }
     var refreshRequest by remember { mutableIntStateOf(0) }
@@ -116,17 +116,7 @@ internal fun StorageScreen(onBack: () -> Unit, onOpenAria2: () -> Unit = {}) {
             "Read-only estimates of app-specific storage. FetchX does not remove files from this screen.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            onClick = onOpenAria2,
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Text("Remote aria2 server", style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "Configure an aria2 JSON-RPC connection and test server status.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
+        Card(modifier = Modifier.fillMaxWidth()) {
             PolicySwitch(
                 title = "Smart download folders",
                 description = "Route files into Videos, Audio, Archives, Documents, or Others automatically.",

@@ -9,8 +9,6 @@ import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
-import dev.fetchx.core.download.Aria2RecoveryAssessment
-import dev.fetchx.core.download.Aria2RecoveryRepository
 import dev.fetchx.core.download.Aria2NativeRestartRepository
 import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadMetadata
@@ -41,12 +39,6 @@ data class DownloadsUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
     val bridgeAvailable: Boolean = true,
-)
-
-data class Aria2RecoveryCheckUiState(
-    val assessment: Aria2RecoveryAssessment? = null,
-    val loading: Boolean = false,
-    val error: String? = null,
 )
 
 data class Aria2NativeRestartUiState(
@@ -112,8 +104,6 @@ class DownloadsViewModel(
     val torrentTelemetry: StateFlow<Map<String, TorrentTelemetry>> = _torrentTelemetry.asStateFlow()
     private val _torrentMetadata = MutableStateFlow<Map<String, TorrentDownloadMetadata>>(emptyMap())
     val torrentMetadata: StateFlow<Map<String, TorrentDownloadMetadata>> = _torrentMetadata.asStateFlow()
-    private val _aria2Recovery = MutableStateFlow<Map<String, Aria2RecoveryCheckUiState>>(emptyMap())
-    val aria2Recovery: StateFlow<Map<String, Aria2RecoveryCheckUiState>> = _aria2Recovery.asStateFlow()
     private val _aria2NativeRestart =
         MutableStateFlow<Map<String, Aria2NativeRestartUiState>>(emptyMap())
     val aria2NativeRestart: StateFlow<Map<String, Aria2NativeRestartUiState>> =
@@ -208,7 +198,7 @@ class DownloadsViewModel(
                         val snapshots = mutableMapOf<String, TorrentTelemetry>()
                         val metadataSnapshots = mutableMapOf<String, TorrentDownloadMetadata>()
                         for (item in items) {
-                            if (!item.engine.equals("aria2", ignoreCase = true) && !item.engine.equals("native_torrent", ignoreCase = true)) continue
+                            if (!item.engine.equals("native_torrent", ignoreCase = true)) continue
                             try {
                                 torrentRepository.torrentTelemetry(item.id)?.let {
                                     snapshots[item.id] = it
@@ -418,43 +408,6 @@ class DownloadsViewModel(
             return
         }
         performAction("stop seeding") { torrentRepository.stopTorrentSeeding(downloadId) }
-    }
-
-    fun assessAria2Recovery(downloadId: String) {
-        val recoveryRepository = repository as? Aria2RecoveryRepository ?: run {
-            _aria2Recovery.update {
-                it + (downloadId to Aria2RecoveryCheckUiState(
-                    error = "aria2 recovery checks are unavailable in this app build.",
-                ))
-            }
-            return
-        }
-        if (_aria2Recovery.value[downloadId]?.loading == true) return
-        _aria2Recovery.update {
-            it + (downloadId to (it[downloadId] ?: Aria2RecoveryCheckUiState()).copy(
-                loading = true,
-                error = null,
-            ))
-        }
-        viewModelScope.launch {
-            try {
-                val assessment = recoveryRepository.assessAria2Recovery(downloadId)
-                _aria2Recovery.update {
-                    it + (downloadId to Aria2RecoveryCheckUiState(
-                        assessment = assessment,
-                        error = if (assessment == null) "This download no longer exists." else null,
-                    ))
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _aria2Recovery.update {
-                    it + (downloadId to Aria2RecoveryCheckUiState(
-                        error = "Recovery status could not be checked. The record and files were not changed.",
-                    ))
-                }
-            }
-        }
     }
 
     fun suggestAria2NativeRestartDestination(fileName: String): String? =

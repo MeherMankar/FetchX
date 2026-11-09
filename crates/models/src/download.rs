@@ -677,7 +677,7 @@ pub enum DownloadStatus {
     /// Torrent is fetching metadata (info hash / file list) before downloading.
     #[serde(rename = "metadata_acquiring")]
     MetadataAcquiring,
-    /// Torrent download is complete and aria2 is still seeding.
+    /// Torrent download is complete and the torrent engine is still seeding.
     #[serde(rename = "seeding")]
     Seeding,
     /// Torrent is being reconciled against aria2 after a FetchX/aria2 restart.

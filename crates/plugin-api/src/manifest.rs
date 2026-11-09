@@ -88,7 +88,6 @@ pub enum PluginCapability {
     MetadataRead,
     ProcessSpawn,
     EngineDirectHttp,
-    EngineAria2,
     EngineYtDlp,
     EngineFfmpeg,
     SettingsRead,
@@ -110,7 +109,7 @@ impl PluginCapability {
             | Self::DownloadRemove => PluginPermission::Downloads,
             Self::MetadataRead => PluginPermission::Metadata,
             Self::ProcessSpawn => PluginPermission::Process,
-            Self::EngineDirectHttp | Self::EngineAria2 | Self::EngineYtDlp | Self::EngineFfmpeg => {
+            Self::EngineDirectHttp | Self::EngineYtDlp | Self::EngineFfmpeg => {
                 PluginPermission::Engine
             }
             Self::SettingsRead | Self::SettingsWrite => PluginPermission::Settings,

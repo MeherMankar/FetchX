@@ -39,7 +39,6 @@ class StorageMigrationInstrumentedTest {
             downloadsDir = downloads.absolutePath,
             runtimeDir = runtime.absolutePath,
             ytDlpExecutablePath = null,
-            aria2ExecutablePath = null,
         )
         val expectedId: String
         val service = DownloadService(config, null)

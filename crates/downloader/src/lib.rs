@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 mod adaptive;
-mod aria2;
 mod bandwidth;
 mod dispatcher;
 mod engine;
@@ -16,14 +15,9 @@ mod native_torrent;
 mod retry;
 mod segments;
 mod sftp;
-mod supervisor;
 mod ytdlp;
 
 pub use adaptive::AdaptiveConfig;
-pub use aria2::{
-    Aria2Client, Aria2ClientConfig, Aria2ClientError, Aria2DownloadStatus, Aria2Engine, Aria2Gid,
-    Aria2GlobalStat, Aria2RecoveryState, Aria2Status, Aria2Version,
-};
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::{EngineDispatcher, is_dash_url};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
@@ -45,10 +39,6 @@ pub use media_extractor_adapter::{YtDlpProcessRunnerAdapter, parse_yt_dlp_json_t
 pub use metalink::{MetalinkEngine, MetalinkFile, MetalinkMirror};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
-pub use supervisor::{
-    Aria2ProcessLauncher, Aria2Supervisor, Aria2SupervisorConfig, Aria2SupervisorError,
-    Aria2SupervisorState, ProcessExit, SupervisedProcess,
-};
 pub use ytdlp::{
     YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner,
     YtDlpProgress, YtDlpRunnerEvent, YtDlpRunnerFuture, parse_format_output,

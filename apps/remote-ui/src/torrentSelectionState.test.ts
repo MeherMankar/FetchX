@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { RemoteNativeMagnetMetadata } from "./protocol";
 import {
   initialTorrentSelectionState,
-  defaultTorrentEngineChoice,
   reduceTorrentSelection,
   supportsNativeMagnetSelection,
 } from "./torrentSelectionState";
@@ -30,9 +29,8 @@ const ready: RemoteNativeMagnetMetadata = {
 };
 
 describe("native magnet selection UI state", () => {
-  it("uses legacy routing when an older server lacks native selection capabilities", () => {
+  it("requires native selection capabilities and does not fall back on older servers", () => {
     expect(supportsNativeMagnetSelection(["download.create"])).toBe(false);
-    expect(defaultTorrentEngineChoice(["download.create"])).toBe("automatic");
     expect(supportsNativeMagnetSelection([
       "download.create",
       "download.torrentMetadata",
@@ -42,11 +40,6 @@ describe("native magnet selection UI state", () => {
       "download.torrentMetadata",
       "download.selectTorrentFiles",
     ])).toBe(true);
-    expect(defaultTorrentEngineChoice([
-      "download.create",
-      "download.torrentMetadata",
-      "download.selectTorrentFiles",
-    ])).toBe("native_torrent");
   });
 
   it("starts loading and shows metadata-acquisition state", () => {

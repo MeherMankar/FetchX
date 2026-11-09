@@ -1,8 +1,7 @@
 //! Native BitTorrent engine backed by librqbit.
 //!
-//! This engine handles magnet URIs and `.torrent` files on platforms where
-//! aria2c cannot be bundled (primarily Android). It integrates into the
-//! existing `EngineDispatcher` as `EngineKind::NativeTorrent` and drives
+//! This engine handles magnet URIs and `.torrent` files. It integrates into
+//! the existing `EngineDispatcher` as `EngineKind::NativeTorrent` and drives
 //! downloads through the same `DownloadStateMachine` used by every other
 //! engine.
 //!

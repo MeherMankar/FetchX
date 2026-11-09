@@ -24,19 +24,6 @@ export function resetEngineConfig(): Promise<EngineConfigDto> {
   return invoke<EngineConfigDto>("reset_engine_config");
 }
 
-export function testAria2Config(): Promise<DiagnosticResult> {
-  return invoke<DiagnosticResult>("test_aria2_config");
-}
-
-export function testRemoteAria2(
-  endpoint: string,
-  secret: string | null,
-): Promise<DiagnosticResult> {
-  return invoke<DiagnosticResult>("test_remote_aria2", {
-    request: { endpoint, secret },
-  });
-}
-
 export function testYtDlpConfig(): Promise<DiagnosticResult> {
   return invoke<DiagnosticResult>("test_ytdlp_config");
 }

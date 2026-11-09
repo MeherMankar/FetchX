@@ -7,7 +7,7 @@ use reqwest::{Client, Url, header::CONTENT_TYPE};
 use tokio::sync::watch;
 
 use crate::{
-    Aria2Engine, DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
+    DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
     ManagedDownloadControl, ManagedDownloadEngine, MetalinkEngine, NativeTorrentEngine, SftpEngine,
     YtDlpEngine, is_hls_url,
 };
@@ -16,7 +16,6 @@ use crate::{
 pub struct EngineDispatcher<R> {
     repository: R,
     direct_http: Arc<DirectHttpEngine<R>>,
-    aria2: Arc<Aria2Engine<R>>,
     yt_dlp: Option<Arc<YtDlpEngine<R>>>,
     hls: Option<Arc<HlsEngine<R>>>,
     native_torrent: Option<Arc<NativeTorrentEngine<R>>>,
@@ -30,15 +29,10 @@ impl<R> EngineDispatcher<R>
 where
     R: DownloadRepository + Clone,
 {
-    pub fn new(
-        repository: R,
-        direct_http: Arc<DirectHttpEngine<R>>,
-        aria2: Arc<Aria2Engine<R>>,
-    ) -> Self {
+    pub fn new(repository: R, direct_http: Arc<DirectHttpEngine<R>>) -> Self {
         Self {
             repository,
             direct_http,
-            aria2,
             yt_dlp: None,
             hls: None,
             native_torrent: None,
@@ -160,7 +154,7 @@ where
     ) -> Result<DownloadItem, DownloadEngineError> {
         match self.selected_engine_for(id).await? {
             EngineKind::DirectHttp => Box::pin(self.direct_http.download(id, cancellation)).await,
-            EngineKind::Aria2 => Box::pin(self.aria2.download(id, cancellation)).await,
+            EngineKind::Aria2 => Err(DownloadEngineError::LegacyAria2Unavailable),
             EngineKind::YtDlp => match &self.yt_dlp {
                 Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
@@ -202,7 +196,7 @@ where
             EngineKind::DirectHttp => {
                 Box::pin(self.direct_http.download_managed(id, control)).await
             }
-            EngineKind::Aria2 => Box::pin(self.aria2.download_managed(id, control)).await,
+            EngineKind::Aria2 => Err(DownloadEngineError::LegacyAria2Unavailable),
             EngineKind::YtDlp => match &self.yt_dlp {
                 Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
@@ -236,8 +230,8 @@ where
                 .yt_dlp
                 .as_ref()
                 .is_some_and(|engine| engine.supports_active_pause(EngineKind::YtDlp)),
+            EngineKind::Aria2 => false,
             EngineKind::DirectHttp
-            | EngineKind::Aria2
             | EngineKind::Hls
             | EngineKind::NativeTorrent
             | EngineKind::Ftp
@@ -261,12 +255,12 @@ where
     ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
         async move {
             match self.engine_for(id).await? {
-                EngineKind::Aria2 => self.aria2.cancel_inactive(id).await,
                 EngineKind::NativeTorrent => match &self.native_torrent {
                     Some(engine) => engine.cancel_inactive(id).await,
                     None => Ok(()),
                 },
                 EngineKind::DirectHttp
+                | EngineKind::Aria2
                 | EngineKind::YtDlp
                 | EngineKind::Hls
                 | EngineKind::Ftp
@@ -299,10 +293,9 @@ mod tests {
 
     use super::EngineDispatcher;
     use crate::{
-        Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
-        DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine, SftpEngine,
-        YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner,
-        YtDlpRunnerEvent, YtDlpRunnerFuture, is_dash_url,
+        DirectHttpEngine, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
+        ManagedDownloadEngine, SftpEngine, YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit,
+        YtDlpProcessRunner, YtDlpRunnerEvent, YtDlpRunnerFuture, is_dash_url,
     };
 
     #[test]
@@ -372,17 +365,18 @@ mod tests {
             repository.create(download).await?;
         }
         let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::new(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                "http://127.0.0.1:6800/jsonrpc",
-                Some("runtime-only-test-secret".to_owned()),
-                Duration::from_millis(50),
-            ))?,
-        ));
-        let dispatcher = EngineDispatcher::new(repository.clone(), direct, aria2);
+        let dispatcher = EngineDispatcher::new(repository.clone(), direct);
 
         assert_eq!(dispatcher.engine_for(aria2_id).await?, EngineKind::Aria2);
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        assert!(matches!(
+            dispatcher.download(aria2_id, cancellation).await,
+            Err(DownloadEngineError::LegacyAria2Unavailable)
+        ));
+        assert_eq!(
+            repository.get(aria2_id).await?.unwrap().status(),
+            DownloadStatus::Queued
+        );
         assert!(!dispatcher.supports_active_pause_for(&dash_item));
         assert!(dispatcher.supports_active_pause_for(&direct_item));
         let (_cancel_sender, cancellation) = watch::channel(false);
@@ -445,16 +439,8 @@ mod tests {
         repository.create(&sftp_item).await?;
 
         let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::new(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                "http://127.0.0.1:6800/jsonrpc",
-                None,
-                Duration::from_millis(50),
-            ))?,
-        ));
         let sftp = Arc::new(SftpEngine::new(repository.clone()));
-        let dispatcher = EngineDispatcher::new(repository.clone(), direct, aria2).with_sftp(sftp);
+        let dispatcher = EngineDispatcher::new(repository.clone(), direct).with_sftp(sftp);
 
         let (_cancel_sender, cancellation) = watch::channel(false);
         let result = dispatcher.download(sftp_id, cancellation).await;
@@ -488,14 +474,6 @@ mod tests {
         let id = video.id();
         repository.create(&video).await?;
         let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::new(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                "http://127.0.0.1:6800/jsonrpc",
-                None,
-                Duration::from_millis(50),
-            ))?,
-        ));
         let run_count = Arc::new(AtomicUsize::new(0));
         let yt_dlp = Arc::new(
             YtDlpEngine::initialize_with_runner(
@@ -505,8 +483,7 @@ mod tests {
             )
             .await?,
         );
-        let dispatcher =
-            EngineDispatcher::new(repository.clone(), direct, aria2).with_yt_dlp(yt_dlp);
+        let dispatcher = EngineDispatcher::new(repository.clone(), direct).with_yt_dlp(yt_dlp);
         let (_cancel_sender, cancellation) = watch::channel(false);
 
         assert!(matches!(
@@ -548,14 +525,6 @@ mod tests {
         repository.create(&dash).await?;
 
         let direct = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::new(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                "http://127.0.0.1:6800/jsonrpc",
-                None,
-                Duration::from_millis(50),
-            ))?,
-        ));
         let run_count = Arc::new(AtomicUsize::new(0));
         let yt_dlp = Arc::new(
             YtDlpEngine::initialize_with_runner(
@@ -565,8 +534,7 @@ mod tests {
             )
             .await?,
         );
-        let dispatcher =
-            EngineDispatcher::new(repository.clone(), direct, aria2).with_yt_dlp(yt_dlp);
+        let dispatcher = EngineDispatcher::new(repository.clone(), direct).with_yt_dlp(yt_dlp);
         let (_cancel_sender, cancellation) = watch::channel(false);
 
         assert!(matches!(

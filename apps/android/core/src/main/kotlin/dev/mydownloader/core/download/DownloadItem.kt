@@ -17,7 +17,7 @@ data class DownloadItem(
     val state: DownloadState,
     /** Scheduling/queue priority. */
     val priority: DownloadPriority,
-    /** Engine identifier ("direct", "aria2", "yt-dlp", etc.). */
+    /** Engine identifier, including historical values loaded from older records. */
     val engine: String,
     /** MIME type if known. */
     val mimeType: String?,
@@ -26,4 +26,3 @@ data class DownloadItem(
     /** Epoch millis when the download was added. */
     val createdAt: Long
 )
-

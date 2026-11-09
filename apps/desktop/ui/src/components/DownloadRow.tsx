@@ -63,6 +63,7 @@ export const DownloadRow = memo(function DownloadRow({
 }: DownloadRowProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
+  const isLegacyAria2 = download.engine === "aria2";
 
   // Trigger lazy schedule fetch for schedulable downloads.
   onEnsureSchedule(download);
@@ -149,8 +150,13 @@ export const DownloadRow = memo(function DownloadRow({
         {download.error && (
           <p className="download-error">{download.error.message}</p>
         )}
+        {isLegacyAria2 && (
+          <p className="download-error">
+            Legacy aria2 job cannot resume because the external engine was removed.
+          </p>
+        )}
 
-        {canSchedule(download.status) && (
+        {!isLegacyAria2 && canSchedule(download.status) && (
           // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
           <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <ScheduleEditor
@@ -171,7 +177,7 @@ export const DownloadRow = memo(function DownloadRow({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
       >
-        {download.status === "queued" && (
+        {!isLegacyAria2 && download.status === "queued" && (
           <>
             <button
               className="button button-secondary"
@@ -193,7 +199,7 @@ export const DownloadRow = memo(function DownloadRow({
             </button>
           </>
         )}
-        {canChangePriority(download.status) && (
+        {!isLegacyAria2 && canChangePriority(download.status) && (
           <>
             <label className="visually-hidden" htmlFor={`priority-${download.id}`}>
               Priority
@@ -214,7 +220,7 @@ export const DownloadRow = memo(function DownloadRow({
             </select>
           </>
         )}
-        {canPause(download.status) && (
+        {!isLegacyAria2 && canPause(download.status) && (
           <button
             className="button button-secondary"
             disabled={busy}
@@ -224,7 +230,7 @@ export const DownloadRow = memo(function DownloadRow({
             Pause
           </button>
         )}
-        {canResume(download.status) && (
+        {!isLegacyAria2 && canResume(download.status) && (
           <button
             className="button button-secondary"
             disabled={busy}
@@ -234,7 +240,7 @@ export const DownloadRow = memo(function DownloadRow({
             Resume
           </button>
         )}
-        {canRetry(download.status) && (
+        {!isLegacyAria2 && canRetry(download.status) && (
           <button
             className="button button-secondary"
             disabled={busy}
@@ -244,7 +250,7 @@ export const DownloadRow = memo(function DownloadRow({
             Retry
           </button>
         )}
-        {canCancel(download.status) && (
+        {!isLegacyAria2 && canCancel(download.status) && (
           <button
             className="button button-secondary"
             disabled={busy}

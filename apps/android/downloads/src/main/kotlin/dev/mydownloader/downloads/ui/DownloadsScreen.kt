@@ -82,7 +82,6 @@ fun DownloadsScreen(
     val cancelledDownloads by viewModel.cancelledDownloads.collectAsStateWithLifecycle()
     val torrentTelemetry by viewModel.torrentTelemetry.collectAsStateWithLifecycle()
     val torrentMetadata by viewModel.torrentMetadata.collectAsStateWithLifecycle()
-    val aria2Recovery by viewModel.aria2Recovery.collectAsStateWithLifecycle()
     val aria2NativeRestart by viewModel.aria2NativeRestart.collectAsStateWithLifecycle()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val queueDispatchPaused by viewModel.queueDispatchPaused.collectAsStateWithLifecycle()
@@ -311,8 +310,6 @@ fun DownloadsScreen(
                             onMoveDownInQueue = { viewModel.moveDownInQueue(item.id) },
                             torrentTelemetry = torrentTelemetry[item.id],
                             torrentMetadata = torrentMetadata[item.id],
-                            aria2Recovery = aria2Recovery[item.id],
-                            onAssessAria2Recovery = { viewModel.assessAria2Recovery(item.id) },
                             aria2NativeRestart = aria2NativeRestart[item.id],
                             suggestedNativeRestartDestination =
                                 viewModel.suggestAria2NativeRestartDestination(item.fileName),

@@ -193,7 +193,9 @@ impl QueueManager {
         let state_machine = DownloadStateMachine::new(repository.clone());
         let mut items = repository.list().await?;
         for item in &mut items {
-            if let Some(recovered) = state_machine.recover_interrupted(item.id()).await? {
+            if item.source().engine() != EngineKind::Aria2
+                && let Some(recovered) = state_machine.recover_interrupted(item.id()).await?
+            {
                 *item = recovered;
             }
         }
@@ -458,10 +460,6 @@ impl RuntimeResourceManager {
             (
                 EngineKind::Hls,
                 policy.engine_bandwidth_limits.hls_bytes_per_second,
-            ),
-            (
-                EngineKind::Aria2,
-                policy.engine_bandwidth_limits.aria2_bytes_per_second,
             ),
             (
                 EngineKind::YtDlp,
@@ -891,6 +889,7 @@ fn choose_next(
         .iter()
         .filter(|(id, entry)| {
             entry.item.status() == DownloadStatus::Queued
+                && entry.item.source().engine() != EngineKind::Aria2
                 && !active.contains_key(id)
                 && !deferred.contains(id)
         })
@@ -934,6 +933,7 @@ fn allocate_resources(
         .iter()
         .filter(|(id, entry)| {
             entry.item.status() == DownloadStatus::Queued
+                && entry.item.source().engine() != EngineKind::Aria2
                 && !active.contains_key(id)
                 && !deferred.contains(id)
         })
@@ -1007,6 +1007,11 @@ where
     match command {
         Command::Enqueue { item, reply } => {
             let result = async {
+                if item.source().engine() == EngineKind::Aria2 {
+                    return Err(QueueError::Engine(
+                        DownloadEngineError::LegacyAria2Unavailable,
+                    ));
+                }
                 if item.status() != DownloadStatus::Queued {
                     return Err(QueueError::InvalidStatus {
                         id: item.id(),
@@ -1027,6 +1032,11 @@ where
         }
         Command::EnqueueDeferred { item, reply } => {
             let result = async {
+                if item.source().engine() == EngineKind::Aria2 {
+                    return Err(QueueError::Engine(
+                        DownloadEngineError::LegacyAria2Unavailable,
+                    ));
+                }
                 if item.status() != DownloadStatus::Queued {
                     return Err(QueueError::InvalidStatus {
                         id: item.id(),
@@ -1868,7 +1878,6 @@ where
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        error::Error,
         ffi::OsString,
         path::{Path, PathBuf},
         sync::{
@@ -1882,10 +1891,9 @@ mod tests {
     #[cfg(feature = "phase30-queue-fault-injection")]
     use fetchx_downloader::inject_next_write_failure;
     use fetchx_downloader::{
-        Aria2Client, Aria2ClientConfig, Aria2Engine, DirectHttpEngine, DownloadEngine,
-        DownloadEngineError, EngineDispatcher, ManagedDownloadControl, ManagedDownloadEngine,
-        ResourceDemand, YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpProcessExit, YtDlpProcessRunner,
-        YtDlpRunnerEvent, YtDlpRunnerFuture,
+        DirectHttpEngine, DownloadEngine, DownloadEngineError, EngineDispatcher,
+        ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand, YtDlpConfig, YtDlpEngine,
+        YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent, YtDlpRunnerFuture,
     };
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus, EngineKind,
@@ -1896,10 +1904,11 @@ mod tests {
     use sha2::{Digest, Sha256};
     #[cfg(feature = "phase30-queue-fault-injection")]
     use tokio::sync::oneshot;
+    use tokio::sync::{mpsc, watch};
+    #[cfg(feature = "phase30-queue-fault-injection")]
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
-        sync::{mpsc, watch},
         task::JoinHandle,
     };
 
@@ -2195,7 +2204,7 @@ mod tests {
             &self,
             _id: DownloadId,
         ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
-            async { Err(DownloadEngineError::Aria2ReconciliationRequired) }
+            async { Err(DownloadEngineError::EngineNotAvailable) }
         }
     }
 
@@ -2318,68 +2327,6 @@ mod tests {
         .await?
     }
 
-    async fn start_aria2_mock()
-    -> Result<(String, mpsc::UnboundedReceiver<String>, JoinHandle<()>), Box<dyn Error>> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = format!("http://{}/jsonrpc", listener.local_addr()?);
-        let (sender, requests) = mpsc::unbounded_channel();
-        let task = tokio::spawn(async move {
-            let responses = [
-                r#"{"jsonrpc":"2.0","id":"1","result":"0123456789abcdef"}"#,
-                r#"{"jsonrpc":"2.0","id":"2","result":{"gid":"0123456789abcdef","status":"error","totalLength":"0","completedLength":"0","downloadSpeed":"0","connections":"0","errorCode":"1"}}"#,
-            ];
-            for body in responses {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    return;
-                };
-                let mut bytes = Vec::new();
-                let mut chunk = [0_u8; 1024];
-                let body_start = loop {
-                    let Ok(read) = stream.read(&mut chunk).await else {
-                        return;
-                    };
-                    if read == 0 {
-                        return;
-                    }
-                    bytes.extend_from_slice(&chunk[..read]);
-                    if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-                        break index + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&bytes[..body_start]);
-                let Some(content_length) = headers.lines().find_map(|line| {
-                    let (key, value) = line.split_once(':')?;
-                    key.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())
-                        .flatten()
-                }) else {
-                    return;
-                };
-                while bytes.len() < body_start + content_length {
-                    let Ok(read) = stream.read(&mut chunk).await else {
-                        return;
-                    };
-                    if read == 0 {
-                        return;
-                    }
-                    bytes.extend_from_slice(&chunk[..read]);
-                }
-                let request =
-                    String::from_utf8_lossy(&bytes[body_start..body_start + content_length])
-                        .into_owned();
-                let _ = sender.send(request);
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                if stream.write_all(response.as_bytes()).await.is_err() {
-                    return;
-                }
-            }
-        });
-        Ok((endpoint, requests, task))
-    }
-
     #[cfg(feature = "phase30-queue-fault-injection")]
     async fn start_retry_fixture() -> Result<
         (
@@ -2468,20 +2415,7 @@ mod tests {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::with_poll_interval(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                "http://127.0.0.1:1/jsonrpc".to_owned(),
-                Some("queue-test-token".to_owned()),
-                Duration::from_secs(1),
-            ))?,
-            Duration::from_millis(10),
-        ));
-        let dispatcher = Arc::new(EngineDispatcher::new(
-            repository.clone(),
-            direct_http,
-            aria2,
-        ));
+        let dispatcher = Arc::new(EngineDispatcher::new(repository.clone(), direct_http));
         let manager = QueueManager::new(
             repository.clone(),
             dispatcher,
@@ -2793,20 +2727,25 @@ mod tests {
     }
 
     #[test]
-    fn external_engines_receive_a_share_of_the_global_bandwidth_ceiling() {
+    fn engines_receive_a_share_of_the_global_bandwidth_ceiling() {
         let mut policy = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
         policy.max_active_downloads = 4;
         policy.global_bandwidth_bytes_per_second = Some(8000);
-        policy.engine_bandwidth_limits.aria2_bytes_per_second = Some(1500);
+        policy
+            .engine_bandwidth_limits
+            .native_torrent_bytes_per_second = Some(1500);
         policy.engine_bandwidth_limits.hls_bytes_per_second = Some(1200);
         let resources = RuntimeResourceManager::new(&policy).expect("valid resource policy");
-        let aria2 = resources
-            .bandwidth_for(EngineKind::Aria2)
-            .expect("aria2 limits should be created");
+        let native_torrent = resources
+            .bandwidth_for(EngineKind::NativeTorrent)
+            .expect("native torrent limits should be created");
         let yt_dlp = resources
             .bandwidth_for(EngineKind::YtDlp)
             .expect("yt-dlp limits should be created");
-        assert_eq!(aria2.external_download_rate_bytes_per_second, Some(1500));
+        assert_eq!(
+            native_torrent.external_download_rate_bytes_per_second,
+            Some(1500)
+        );
         assert_eq!(yt_dlp.external_download_rate_bytes_per_second, Some(2000));
         assert_eq!(
             resources
@@ -2825,13 +2764,13 @@ mod tests {
             2000
         );
         assert!(Arc::ptr_eq(
-            aria2.global.as_ref().expect("global limiter"),
+            native_torrent.global.as_ref().expect("global limiter"),
             yt_dlp.global.as_ref().expect("global limiter"),
         ));
     }
 
     #[tokio::test]
-    async fn mixed_direct_turbo_hls_aria2_and_torrent_workload_obeys_shared_resource_limits()
+    async fn mixed_direct_turbo_hls_and_torrent_workload_obeys_shared_resource_limits()
     -> Result<(), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
@@ -2849,12 +2788,14 @@ mod tests {
         policy.global_bandwidth_bytes_per_second = Some(12_000);
         policy.per_download_bandwidth_bytes_per_second = Some(5_000);
         policy.engine_bandwidth_limits.hls_bytes_per_second = Some(3_000);
-        policy.engine_bandwidth_limits.aria2_bytes_per_second = Some(2_000);
+        policy
+            .engine_bandwidth_limits
+            .native_torrent_bytes_per_second = Some(2_000);
         let resources = RuntimeResourceManager::new(&policy)?;
         let direct_bandwidth = resources.bandwidth_for(EngineKind::DirectHttp)?;
         let hls_bandwidth = resources.bandwidth_for(EngineKind::Hls)?;
-        let first_torrent_bandwidth = resources.bandwidth_for(EngineKind::Aria2)?;
-        let second_torrent_bandwidth = resources.bandwidth_for(EngineKind::Aria2)?;
+        let first_torrent_bandwidth = resources.bandwidth_for(EngineKind::NativeTorrent)?;
+        let second_torrent_bandwidth = resources.bandwidth_for(EngineKind::NativeTorrent)?;
         assert_eq!(
             direct_bandwidth
                 .per_download
@@ -2910,17 +2851,17 @@ mod tests {
                 "hls.bin",
             ),
             (
-                EngineKind::Aria2,
-                "https://example.test/aria.bin",
-                "aria.bin",
+                EngineKind::NativeTorrent,
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                "torrent.bin",
             ),
             (
-                EngineKind::Aria2,
+                EngineKind::NativeTorrent,
                 "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
                 "torrent-one",
             ),
             (
-                EngineKind::Aria2,
+                EngineKind::NativeTorrent,
                 "magnet:?xt=urn:btih:1123456789abcdef0123456789abcdef01234567",
                 "torrent-two",
             ),
@@ -2967,24 +2908,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn queue_dispatches_mixed_direct_http_aria2_and_ytdlp_items()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn queue_dispatches_native_and_ytdlp_items() -> Result<(), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
-        let (endpoint, mut requests, server) = start_aria2_mock().await?;
         let yt_dlp_base =
             std::env::temp_dir().join(format!("fetchx-queue-ytdlp-test-{}", DownloadId::new()));
         tokio::fs::create_dir_all(&yt_dlp_base).await?;
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::with_poll_interval(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                endpoint,
-                Some("queue-test-token".to_owned()),
-                Duration::from_secs(1),
-            ))?,
-            Duration::from_millis(10),
-        ));
         let yt_dlp = Arc::new(
             YtDlpEngine::initialize_with_runner(
                 repository.clone(),
@@ -2993,9 +2923,8 @@ mod tests {
             )
             .await?,
         );
-        let dispatcher = Arc::new(
-            EngineDispatcher::new(repository.clone(), direct_http, aria2).with_yt_dlp(yt_dlp),
-        );
+        let dispatcher =
+            Arc::new(EngineDispatcher::new(repository.clone(), direct_http).with_yt_dlp(yt_dlp));
         let manager =
             QueueManager::new(repository.clone(), dispatcher, QueueConfig::default()).await?;
 
@@ -3006,13 +2935,6 @@ mod tests {
             PathBuf::from("direct.bin"),
             Timestamp::now()?,
         );
-        let aria_item = DownloadItem::new(
-            DownloadId::new(),
-            DownloadSource::new("https://example.test/aria.bin", EngineKind::Aria2)?,
-            FileName::new("aria.bin")?,
-            PathBuf::from("aria.bin"),
-            Timestamp::now()?,
-        );
         let yt_dlp_item = DownloadItem::new(
             DownloadId::new(),
             DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
@@ -3021,19 +2943,15 @@ mod tests {
             Timestamp::now()?,
         );
         let direct_id = direct.id();
-        let aria_id = aria_item.id();
         let yt_dlp_id = yt_dlp_item.id();
         manager.enqueue(direct).await?;
-        manager.enqueue(aria_item).await?;
         manager.enqueue(yt_dlp_item).await?;
 
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let direct_status = repository.get(direct_id).await?.map(|item| item.status());
-                let aria_status = repository.get(aria_id).await?.map(|item| item.status());
                 let yt_dlp_status = repository.get(yt_dlp_id).await?.map(|item| item.status());
                 if direct_status == Some(DownloadStatus::Failed)
-                    && aria_status == Some(DownloadStatus::Failed)
                     && yt_dlp_status == Some(DownloadStatus::Completed)
                 {
                     return Ok::<_, fetchx_storage::StorageError>(());
@@ -3043,19 +2961,7 @@ mod tests {
         })
         .await??;
 
-        let add = requests
-            .recv()
-            .await
-            .ok_or("aria2 addUri was not dispatched")?;
-        let status = requests
-            .recv()
-            .await
-            .ok_or("aria2 tellStatus was not dispatched")?;
-        assert!(add.contains("\"method\":\"aria2.addUri\""));
-        assert!(add.contains("\"token:queue-test-token\""));
-        assert!(status.contains("\"method\":\"aria2.tellStatus\""));
         manager.shutdown().await?;
-        server.await?;
         assert_eq!(
             tokio::fs::read(yt_dlp_base.join("video.webm")).await?,
             b"video"
@@ -3089,20 +2995,7 @@ mod tests {
         });
 
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
-        let aria2 = Arc::new(Aria2Engine::with_poll_interval(
-            repository.clone(),
-            Aria2Client::new(Aria2ClientConfig::new(
-                "http://127.0.0.1:1/jsonrpc".to_owned(),
-                Some("queue-test-token".to_owned()),
-                Duration::from_secs(1),
-            ))?,
-            Duration::from_millis(10),
-        ));
-        let dispatcher = Arc::new(EngineDispatcher::new(
-            repository.clone(),
-            direct_http,
-            aria2,
-        ));
+        let dispatcher = Arc::new(EngineDispatcher::new(repository.clone(), direct_http));
         let manager = QueueManager::new(
             repository.clone(),
             dispatcher,
@@ -3627,9 +3520,7 @@ mod tests {
 
         assert!(matches!(
             manager.remove_download(id).await,
-            Err(QueueError::Engine(
-                DownloadEngineError::Aria2ReconciliationRequired
-            ))
+            Err(QueueError::Engine(DownloadEngineError::EngineNotAvailable))
         ));
         assert_eq!(
             repository
@@ -3884,9 +3775,7 @@ mod tests {
 
         assert!(matches!(
             manager.cancel(id).await,
-            Err(QueueError::Engine(
-                DownloadEngineError::Aria2ReconciliationRequired
-            ))
+            Err(QueueError::Engine(DownloadEngineError::EngineNotAvailable))
         ));
         assert_eq!(
             repository.get(id).await?.ok_or("missing item")?.status(),

@@ -21,7 +21,6 @@ use uuid::Uuid;
 use crate::commands::AppState;
 
 const MAX_METADATA_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_ARIA2_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_YTDLP_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_FFMPEG_ARCHIVE_BYTES: u64 = 400 * 1024 * 1024;
 const MAX_EXTRACTED_EXE_BYTES: u64 = 300 * 1024 * 1024;
@@ -31,7 +30,6 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HelperId {
-    Aria2c,
     YtDlp,
     Ffmpeg,
     Ffprobe,
@@ -59,14 +57,12 @@ impl HelperId {
     fn executable_name(self) -> &'static str {
         if cfg!(target_os = "windows") {
             match self {
-                Self::Aria2c => "aria2c.exe",
                 Self::YtDlp => "yt-dlp.exe",
                 Self::Ffmpeg => "ffmpeg.exe",
                 Self::Ffprobe => "ffprobe.exe",
             }
         } else {
             match self {
-                Self::Aria2c => "aria2c",
                 Self::YtDlp => "yt-dlp",
                 Self::Ffmpeg => "ffmpeg",
                 Self::Ffprobe => "ffprobe",
@@ -76,7 +72,6 @@ impl HelperId {
 
     fn display_name(self) -> &'static str {
         match self {
-            Self::Aria2c => "aria2c",
             Self::YtDlp => "yt-dlp",
             Self::Ffmpeg => "ffmpeg",
             Self::Ffprobe => "ffprobe",
@@ -85,9 +80,8 @@ impl HelperId {
 
     fn install_group(self) -> u8 {
         match self {
-            Self::Aria2c => 0,
-            Self::YtDlp => 1,
-            Self::Ffmpeg | Self::Ffprobe => 2,
+            Self::YtDlp => 0,
+            Self::Ffmpeg | Self::Ffprobe => 1,
         }
     }
 
@@ -184,13 +178,8 @@ impl HelperManager {
         &self,
         configured_paths: &HashMap<HelperId, PathBuf>,
     ) -> Vec<HelperStatus> {
-        let mut statuses = Vec::with_capacity(4);
-        for helper in [
-            HelperId::Aria2c,
-            HelperId::YtDlp,
-            HelperId::Ffmpeg,
-            HelperId::Ffprobe,
-        ] {
+        let mut statuses = Vec::with_capacity(3);
+        for helper in [HelperId::YtDlp, HelperId::Ffmpeg, HelperId::Ffprobe] {
             statuses.push(self.get_status(helper, configured_paths.get(&helper)).await);
         }
         statuses
@@ -411,7 +400,6 @@ impl HelperManager {
         cancellation: &AtomicBool,
     ) -> Result<InstallPackage, String> {
         match helper {
-            HelperId::Aria2c => aria2_package(),
             HelperId::YtDlp => self.ytdlp_package(cancellation).await,
             HelperId::Ffmpeg | HelperId::Ffprobe => self.ffmpeg_package(cancellation).await,
         }
@@ -784,9 +772,6 @@ pub async fn get_helper_status(
         .await
         .map_err(|error| format!("Could not load engine configuration: {error}"))?;
     let mut configured = HashMap::new();
-    if let Some(path) = &config.aria2.executable_path {
-        configured.insert(HelperId::Aria2c, path.clone());
-    }
     if let Some(path) = &config.yt_dlp.executable_path {
         configured.insert(HelperId::YtDlp, path.clone());
     }
@@ -806,7 +791,6 @@ pub async fn install_helper(
     })?;
     for (installed_helper, path) in installed {
         match installed_helper {
-            HelperId::Aria2c => config.aria2.executable_path = Some(path),
             HelperId::YtDlp => config.yt_dlp.executable_path = Some(path),
             HelperId::Ffmpeg | HelperId::Ffprobe => {}
         }
@@ -836,34 +820,10 @@ pub fn configured_helper_paths(
     config: &fetchx_core_services::EngineConfig,
 ) -> HashMap<HelperId, PathBuf> {
     let mut configured = HashMap::new();
-    if let Some(path) = config.aria2.executable_path.as_deref() {
-        configured.insert(HelperId::Aria2c, path.to_path_buf());
-    }
     if let Some(path) = config.yt_dlp.executable_path.as_deref() {
         configured.insert(HelperId::YtDlp, path.to_path_buf());
     }
     configured
-}
-
-fn aria2_package() -> Result<InstallPackage, String> {
-    if std::env::consts::ARCH != "x86_64" {
-        return Err("The trusted aria2 Windows package is available for x64 only.".to_owned());
-    }
-    // SHA256 from the Microsoft WinGet installer manifest for aria2 1.37.0.
-    Ok(InstallPackage {
-        url: validate_allowlisted_url(
-            "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
-        )?,
-        sha256: "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288".to_owned(),
-        archive_name: "aria2.zip",
-        max_bytes: MAX_ARIA2_ARCHIVE_BYTES,
-        archive_format: ArchiveFormat::Zip,
-        files: vec![InstallFile {
-            helper: HelperId::Aria2c,
-            archive_entry: "aria2-1.37.0-win-64bit-build1/aria2c.exe",
-            staged_name: "aria2c.exe",
-        }],
-    })
 }
 
 fn github_digest(asset: &GithubAsset) -> Result<String, String> {
@@ -903,10 +863,7 @@ fn validate_allowlisted_url(value: &str) -> Result<Url, String> {
     let path = url.path();
     let allowed = match host.as_str() {
         "api.github.com" => path == "/repos/yt-dlp/yt-dlp/releases/latest",
-        "github.com" => {
-            path.starts_with("/aria2/aria2/releases/download/release-1.37.0/")
-                || path.starts_with("/yt-dlp/yt-dlp/releases/download/")
-        }
+        "github.com" => path.starts_with("/yt-dlp/yt-dlp/releases/download/"),
         "www.gyan.dev" => {
             path.starts_with("/ffmpeg/builds/ffmpeg-release-essentials.zip")
                 || path.starts_with("/ffmpeg/builds/packages/")
@@ -984,7 +941,6 @@ async fn install_with_native_package_manager(helper: HelperId) -> Result<(), Str
     #[cfg(target_os = "macos")]
     {
         let package = match helper {
-            HelperId::Aria2c => "aria2",
             HelperId::YtDlp => "yt-dlp",
             HelperId::Ffmpeg | HelperId::Ffprobe => "ffmpeg",
         };
@@ -1006,7 +962,6 @@ async fn install_with_native_package_manager(helper: HelperId) -> Result<(), Str
     #[cfg(target_os = "linux")]
     {
         let packages: &[&str] = match helper {
-            HelperId::Aria2c => &["aria2"],
             HelperId::YtDlp => &["yt-dlp"],
             HelperId::Ffmpeg | HelperId::Ffprobe => &["ffmpeg"],
         };
@@ -1108,7 +1063,6 @@ async fn detect_version(helper: HelperId, executable: &Path) -> Result<String, S
 
 fn version_arguments(helper: HelperId) -> &'static [&'static str] {
     match helper {
-        HelperId::Aria2c => &["--version"],
         HelperId::YtDlp => &["--version"],
         HelperId::Ffmpeg | HelperId::Ffprobe => &["-version"],
     }
@@ -1123,7 +1077,6 @@ fn parse_version_output(helper: HelperId, stdout: &[u8], stderr: &[u8]) -> Resul
     };
     let normalized = line.to_ascii_lowercase();
     let expected_label = match helper {
-        HelperId::Aria2c => "aria2 version",
         HelperId::YtDlp => "",
         HelperId::Ffmpeg => "ffmpeg version",
         HelperId::Ffprobe => "ffprobe version",
@@ -1359,8 +1312,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        HelperId, InstallFile, aria2_package, ensure_not_cancelled, expected_pe_machine,
-        hex_digest, parse_checksum_file, replace_transactionally, validate_allowlisted_url,
+        HelperId, InstallFile, ensure_not_cancelled, expected_pe_machine, hex_digest,
+        parse_checksum_file, replace_transactionally, validate_allowlisted_url,
         validate_pe_architecture, validate_sha256, verify_sha256,
     };
 
@@ -1374,16 +1327,10 @@ mod tests {
     }
 
     #[test]
-    fn helper_catalog_contains_only_the_four_supported_helpers() {
-        assert_eq!(HelperId::Aria2c.display_name(), "aria2c");
+    fn helper_catalog_contains_only_native_helpers_and_media_tools() {
         assert_eq!(HelperId::YtDlp.display_name(), "yt-dlp");
         assert_eq!(HelperId::Ffmpeg.display_name(), "ffmpeg");
         assert_eq!(HelperId::Ffprobe.display_name(), "ffprobe");
-        assert_eq!(aria2_package().expect("catalog URL valid").files.len(), 1);
-        assert_eq!(
-            aria2_package().expect("aria2 package").sha256,
-            "67d015301eef0b612191212d564c5bb0a14b5b9c4796b76454276a4d28d9b288"
-        );
     }
 
     #[test]
@@ -1434,11 +1381,6 @@ mod tests {
 
     #[test]
     fn parses_only_expected_version_responses() {
-        assert_eq!(
-            super::parse_version_output(HelperId::Aria2c, b"aria2 version 1.37.0\n", b"")
-                .expect("aria2 version"),
-            "1.37.0"
-        );
         assert_eq!(
             super::parse_version_output(HelperId::YtDlp, b"2026.10.21\n", b"")
                 .expect("yt-dlp version"),
@@ -1510,7 +1452,7 @@ mod tests {
         if let Some(path) = manager.find_executable(HelperId::YtDlp, None) {
             assert_eq!(path.file_name().unwrap(), "yt-dlp.exe");
         }
-        assert_eq!(HelperId::Aria2c.executable_name(), "aria2c.exe");
+        assert_eq!(HelperId::YtDlp.executable_name(), "yt-dlp.exe");
     }
 
     #[test]
@@ -1518,14 +1460,14 @@ mod tests {
         let directory = tempdir().expect("temp directory");
         let managed = directory.path().join("bin");
         fs::create_dir_all(&managed).expect("managed directory");
-        let existing = managed.join("aria2c.exe");
+        let existing = managed.join("yt-dlp.exe");
         fs::write(&existing, b"working old version").expect("existing executable");
         let staging = managed.join(".stage");
         fs::create_dir(&staging).expect("stage directory");
         let staged_missing = staging.join("missing.exe");
         let error = replace_transactionally(
             &staging,
-            &[(HelperId::Aria2c, staged_missing, existing.clone())],
+            &[(HelperId::YtDlp, staged_missing, existing.clone())],
         )
         .expect_err("missing staged file must fail");
         assert!(error.contains("atomically install"));
@@ -1561,14 +1503,14 @@ mod tests {
         fs::create_dir_all(&managed).expect("managed directory");
         let staging = managed.join(".stage");
         fs::create_dir(&staging).expect("stage directory");
-        let existing = managed.join("aria2c.exe");
+        let existing = managed.join("yt-dlp.exe");
         fs::write(&existing, b"old").expect("old executable");
-        let staged = staging.join("aria2c.exe");
+        let staged = staging.join("yt-dlp.exe");
         fs::File::create(&staged)
             .expect("staged file")
             .write_all(b"verified new")
             .expect("write staged file");
-        replace_transactionally(&staging, &[(HelperId::Aria2c, staged, existing.clone())])
+        replace_transactionally(&staging, &[(HelperId::YtDlp, staged, existing.clone())])
             .expect("atomic replacement");
         assert_eq!(
             fs::read(existing).expect("installed executable"),
@@ -1617,7 +1559,7 @@ mod tests {
             super::HelperManager::new(managed, directory.path().join("resources").join("engines"));
         assert!(
             manager
-                .commit_install(&staging, &[(HelperId::Aria2c, outside)])
+                .commit_install(&staging, &[(HelperId::YtDlp, outside)])
                 .is_err()
         );
     }

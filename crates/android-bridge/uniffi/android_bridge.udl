@@ -15,7 +15,6 @@ dictionary CoreConfig {
     string downloads_dir;
     string runtime_dir;
     string? yt_dlp_executable_path;
-    string? aria2_executable_path;
 };
 
 callback interface YtDlpRuntime {
@@ -82,27 +81,6 @@ enum DownloadStatusDto {
     "Seeding",
     "Recovering",
     "Stopped",
-};
-
-enum Aria2RecoveryStateDto {
-    "NotAria2",
-    "NotRequired",
-    "RuntimeUnavailable",
-    "ReadyToStart",
-    "JobAvailable",
-    "MissingTorrentMetadata",
-    "MissingGid",
-    "StaleGid",
-    "MissingControlFile",
-    "ControlFilePresent",
-    "Unknown",
-};
-
-dictionary Aria2RecoveryAssessmentDto {
-    string download_id;
-    Aria2RecoveryStateDto state;
-    string explanation;
-    string next_step;
 };
 
 enum DownloadPriorityDto {
@@ -244,9 +222,6 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     DownloadInfoDto? get_download(string id);
-
-    [Throws=MobileApiError]
-    Aria2RecoveryAssessmentDto? assess_aria2_recovery(string id);
 
     [Throws=MobileApiError]
     string restart_aria2_http_with_native(

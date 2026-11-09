@@ -300,7 +300,6 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
 pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
     match s.unwrap_or("direct-http").to_ascii_lowercase().as_str() {
         "direct-http" | "direct_http" | "http" => Ok(EngineKind::DirectHttp),
-        "aria2" => Ok(EngineKind::Aria2),
         "native-torrent" | "native_torrent" => Ok(EngineKind::NativeTorrent),
         "yt-dlp" | "yt_dlp" | "ytdlp" => Ok(EngineKind::YtDlp),
         "ftp" => Ok(EngineKind::Ftp),
@@ -308,7 +307,7 @@ pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
         "sftp" => Ok(EngineKind::Sftp),
         "metalink" => Ok(EngineKind::Metalink),
         other => Err(format!(
-            "unknown engine `{other}`. Valid: direct-http, aria2, native-torrent, yt-dlp, ftp, ftps, sftp, metalink"
+            "unknown engine `{other}`. Valid: direct-http, native-torrent, yt-dlp, ftp, ftps, sftp, metalink"
         )),
     }
 }
@@ -324,7 +323,7 @@ fn resolve_engine(
             return Ok(EngineKind::NativeTorrent);
         }
         return match parse_engine(engine) {
-            Ok(engine @ (EngineKind::Aria2 | EngineKind::NativeTorrent)) => Ok(engine),
+            Ok(EngineKind::NativeTorrent) => Ok(EngineKind::NativeTorrent),
             Ok(_) => Err("magnet and torrent downloads require a torrent engine".to_owned()),
             Err(error) => Err(error),
         };
@@ -394,7 +393,7 @@ mod tests {
     use fetchx_models::{EngineKind, parse_magnet_uri};
 
     #[test]
-    fn magnet_defaults_to_native_and_allows_aria2_fallback_when_selected() {
+    fn magnet_defaults_to_native_and_rejects_aria2_selection() {
         assert_eq!(
             resolve_engine(true, false, None, None),
             Ok(EngineKind::NativeTorrent)
@@ -409,10 +408,7 @@ mod tests {
         .expect("valid test magnet");
         assert_eq!(metadata.suggested_filename(), "unsafename.torrent");
         assert!(resolve_engine(true, false, Some("direct-http"), None).is_err());
-        assert_eq!(
-            resolve_engine(true, false, Some("aria2"), None),
-            Ok(EngineKind::Aria2)
-        );
+        assert!(resolve_engine(true, false, Some("aria2"), None).is_err());
         assert_eq!(
             resolve_engine(false, true, Some("native-torrent"), None),
             Ok(EngineKind::NativeTorrent)

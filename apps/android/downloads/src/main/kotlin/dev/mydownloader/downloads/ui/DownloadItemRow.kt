@@ -56,8 +56,6 @@ fun DownloadItemRow(
     onMoveDownInQueue: () -> Unit,
     torrentTelemetry: TorrentTelemetry? = null,
     torrentMetadata: TorrentDownloadMetadata? = null,
-    aria2Recovery: Aria2RecoveryCheckUiState? = null,
-    onAssessAria2Recovery: () -> Unit = {},
     aria2NativeRestart: Aria2NativeRestartUiState? = null,
     suggestedNativeRestartDestination: String? = null,
     onRestartAria2WithNative: (String, String, Boolean) -> Unit = { _, _, _ -> },
@@ -93,6 +91,8 @@ fun DownloadItemRow(
     var currentTorrentMetadata by remember(item.id) { mutableStateOf<TorrentMetadata?>(null) }
     var selectedRestartTorrentFiles by remember(item.id) { mutableStateOf<Set<Int>>(emptySet()) }
     var confirmedRestartTorrentSelection by remember(item.id) { mutableStateOf(false) }
+    val legacyAria2Unavailable =
+        item.engine.equals("aria2", ignoreCase = true) && item.state !is DownloadState.Completed
 
     Card(
         modifier = modifier
@@ -120,38 +120,13 @@ fun DownloadItemRow(
                 )
                 PriorityBadge(priority = item.priority)
             }
-            if (item.engine.equals("aria2", ignoreCase = true)) {
+            if (legacyAria2Unavailable) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Recovery check is read-only; it will not change the saved engine or files.",
+                    text = "Legacy aria2 job cannot resume because the external engine was removed.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.error,
                 )
-                TextButton(
-                    onClick = onAssessAria2Recovery,
-                    enabled = aria2Recovery?.loading != true,
-                ) {
-                    Text(if (aria2Recovery?.loading == true) "Checking recovery…" else "Check aria2 recovery")
-                }
-                aria2Recovery?.assessment?.let { assessment ->
-                    Text(
-                        text = assessment.explanation,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = assessment.nextStep,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                aria2Recovery?.error?.let { error ->
-                    Text(
-                        text = error,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
                 if (canOfferNativeRestart(item)) {
                     TextButton(
                         onClick = {
@@ -242,9 +217,9 @@ fun DownloadItemRow(
                         horizontalArrangement = Arrangement.End,
                     ) {
                         if (!item.engine.equals("yt_dlp", ignoreCase = true)) {
-                            TextButton(onClick = onPause) { Text("Pause") }
+                            TextButton(onClick = onPause, enabled = !legacyAria2Unavailable) { Text("Pause") }
                         }
-                        TextButton(onClick = onCancel) { Text("Cancel") }
+                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                     }
                 }
 
@@ -259,9 +234,9 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(onClick = onMoveUpInQueue) { Text("Move up") }
-                        TextButton(onClick = onMoveDownInQueue) { Text("Move down") }
-                        TextButton(onClick = onCancel) { Text("Cancel") }
+                        TextButton(onClick = onMoveUpInQueue, enabled = !legacyAria2Unavailable) { Text("Move up") }
+                        TextButton(onClick = onMoveDownInQueue, enabled = !legacyAria2Unavailable) { Text("Move down") }
+                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                     }
                 }
 
@@ -288,7 +263,7 @@ fun DownloadItemRow(
                             modifier = Modifier.clickable(onClick = onOpenDetail),
                         )
                     }
-                    TextButton(onClick = onCancel) { Text("Cancel") }
+                    TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                 }
 
                 is DownloadState.Recovering -> {
@@ -298,7 +273,7 @@ fun DownloadItemRow(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(onClick = onCancel) { Text("Cancel") }
+                    TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                 }
 
                 is DownloadState.Seeding -> {
@@ -316,11 +291,11 @@ fun DownloadItemRow(
                         horizontalArrangement = Arrangement.End,
                     ) {
                         if (!item.engine.equals("native_torrent", ignoreCase = true)) {
-                            TextButton(onClick = onPause) { Text("Pause") }
+                            TextButton(onClick = onPause, enabled = !legacyAria2Unavailable) { Text("Pause") }
                         }
-                        TextButton(onClick = onStopSeeding) { Text("Stop seeding") }
+                        TextButton(onClick = onStopSeeding, enabled = !legacyAria2Unavailable) { Text("Stop seeding") }
                         if (!item.engine.equals("native_torrent", ignoreCase = true)) {
-                            TextButton(onClick = onCancel) { Text("Cancel") }
+                            TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                         }
                     }
                 }
@@ -357,8 +332,8 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(onClick = onResume) { Text("Resume") }
-                        TextButton(onClick = onCancel) { Text("Cancel") }
+                        TextButton(onClick = onResume, enabled = !legacyAria2Unavailable) { Text("Resume") }
+                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                     }
                 }
 
@@ -380,7 +355,7 @@ fun DownloadItemRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
                     ) {
-                        TextButton(onClick = onRetry) { Text("Retry") }
+                        TextButton(onClick = onRetry, enabled = !legacyAria2Unavailable) { Text("Retry") }
                         TextButton(onClick = onRemove) { Text("Remove") }
                     }
                 }
@@ -440,7 +415,7 @@ fun DownloadItemRow(
                         horizontalArrangement = Arrangement.End,
                     ) {
                         if (state.retryable) {
-                            TextButton(onClick = onRetry) { Text("Retry") }
+                            TextButton(onClick = onRetry, enabled = !legacyAria2Unavailable) { Text("Retry") }
                         }
                         TextButton(onClick = onRemove) { Text("Remove") }
                     }

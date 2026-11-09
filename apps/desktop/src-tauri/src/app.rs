@@ -218,7 +218,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::set_torrent_directory_selected,
             commands::inspect_torrent_file,
             commands::get_torrent_telemetry,
-            commands::assess_aria2_recovery,
             commands::restart_aria2_http_with_native,
             commands::restart_aria2_torrent_with_native,
             commands::restart_aria2_torrent_file_with_native,
@@ -226,8 +225,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             engine_commands::get_engine_config,
             engine_commands::save_engine_config,
             engine_commands::reset_engine_config,
-            engine_commands::test_aria2_config,
-            engine_commands::test_remote_aria2,
             engine_commands::test_ytdlp_config,
             engine_commands::get_engine_status,
             helper_manager::get_helper_status,
@@ -282,12 +279,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             };
                             let path = std::path::PathBuf::from(path);
                             match status.helper {
-                                crate::helper_manager::HelperId::Aria2c => {
-                                    if config.aria2.executable_path.as_deref() != Some(path.as_path()) {
-                                        config.aria2.executable_path = Some(path.clone());
-                                        needs_save = true;
-                                    }
-                                }
                                 crate::helper_manager::HelperId::YtDlp => {
                                     if config.yt_dlp.executable_path.as_deref() != Some(path.as_path()) {
                                         config.yt_dlp.executable_path = Some(path.clone());

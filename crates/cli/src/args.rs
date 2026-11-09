@@ -51,9 +51,6 @@ pub enum Command {
     /// Show detailed status of one download.
     Status(IdOpts),
 
-    /// Assess persisted aria2 recovery state without starting aria2.
-    Aria2Recovery(IdOpts),
-
     /// Pause a download.
     Pause(IdOpts),
 
@@ -180,11 +177,6 @@ pub enum RemoteCommand {
     FindDuplicate {
         /// HTTP(S) URL or source URI to check.
         url: String,
-    },
-    /// Assess aria2 recovery state for a remote download.
-    Aria2Recovery {
-        /// Download ID.
-        id: String,
     },
     /// Create a download on the remote server.
     Add {
@@ -313,7 +305,7 @@ pub struct AddOpts {
     #[arg(long, value_name = "URI", conflicts_with = "url")]
     pub magnet: Option<String>,
 
-    /// Engine to use: direct-http | aria2 | native-torrent | yt-dlp. Torrent downloads default to native-torrent.
+    /// Engine to use: direct-http | native-torrent | yt-dlp. Torrent downloads default to native-torrent.
     #[arg(short = 'e', long, value_name = "ENGINE")]
     pub engine: Option<String>,
 
@@ -618,26 +610,6 @@ mod tests {
         assert!(
             matches!(options.command, RemoteCommand::Add { url } if url == "https://example.test/file.bin")
         );
-
-        let assessment = Cli::try_parse_from(["fetchx", "remote", "aria2-recovery", "download-id"])
-            .expect("remote aria2 recovery assessment should parse");
-        let Command::Remote(options) = assessment.command else {
-            panic!("expected remote command");
-        };
-        assert!(matches!(
-            options.command,
-            RemoteCommand::Aria2Recovery { id } if id == "download-id"
-        ));
-    }
-
-    #[test]
-    fn local_aria2_recovery_command_parses_download_id() {
-        let cli = Cli::try_parse_from(["fetchx", "aria2-recovery", "download-id"])
-            .expect("aria2 recovery assessment should parse");
-        let Command::Aria2Recovery(options) = cli.command else {
-            panic!("expected aria2 recovery assessment command");
-        };
-        assert_eq!(options.id, "download-id");
     }
 
     #[test]

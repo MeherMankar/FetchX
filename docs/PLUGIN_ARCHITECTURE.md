@@ -154,7 +154,7 @@ and unsupported operations fail closed.
 | `downloads` | `download_create`, `download_list`, `download_pause`, `download_resume`, `download_cancel`, `download_remove` |
 | `metadata` | `metadata_read` |
 | `process` | `process_spawn` |
-| `engine` | `engine_direct_http`, `engine_aria2`, `engine_yt_dlp`, `engine_ffmpeg` |
+| `engine` | `engine_direct_http`, `engine_yt_dlp`, `engine_ffmpeg` |
 | `settings` | `settings_read`, `settings_write` |
 
 Newly discovered plugins are `unknown` and have no approvals. `PluginManager`

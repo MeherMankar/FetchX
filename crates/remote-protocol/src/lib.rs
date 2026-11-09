@@ -45,8 +45,6 @@ pub const DOWNLOAD_TORRENT_METADATA: &str = "download.torrentMetadata";
 pub const DOWNLOAD_SELECT_TORRENT_FILES: &str = "download.selectTorrentFiles";
 pub const DOWNLOAD_RUNTIME_STATUS: &str = "download.runtimeStatus";
 pub const DOWNLOAD_FIND_DUPLICATE: &str = "download.findDuplicate";
-pub const DOWNLOAD_ARIA2_RECOVERY: &str = "download.aria2Recovery";
-pub const ARIA2_RECOVERY_ASSESSMENT_VERSION: u16 = 1;
 pub const BROWSER_RPC_METHODS: &[&str] = &[
     SYSTEM_DISCOVER,
     DOWNLOAD_CREATE,
@@ -158,7 +156,6 @@ pub enum RemoteCommand {
     },
     DownloadRuntimeStatus,
     DownloadFindDuplicate(DownloadUrlParams),
-    DownloadAria2Recovery(DownloadId),
     DownloadPause(DownloadId),
     DownloadResume(DownloadId),
     DownloadCancel(DownloadId),
@@ -204,32 +201,6 @@ pub struct DownloadCreateParams {
 #[serde(deny_unknown_fields)]
 pub struct DownloadIdParams {
     pub id: DownloadId,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Aria2RecoveryState {
-    NotAria2,
-    NotRequired,
-    RuntimeUnavailable,
-    ReadyToStart,
-    JobAvailable,
-    MissingTorrentMetadata,
-    MissingGid,
-    StaleGid,
-    MissingControlFile,
-    ControlFilePresent,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Aria2RecoveryAssessmentResult {
-    pub assessment_version: u16,
-    pub download_id: String,
-    pub state: Aria2RecoveryState,
-    pub explanation: String,
-    pub next_step: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -326,7 +297,6 @@ pub const CAPABILITIES: &[&str] = &[
     DOWNLOAD_SELECT_TORRENT_FILES,
     DOWNLOAD_RUNTIME_STATUS,
     DOWNLOAD_FIND_DUPLICATE,
-    DOWNLOAD_ARIA2_RECOVERY,
     DOWNLOAD_PAUSE,
     DOWNLOAD_RESUME,
     DOWNLOAD_CANCEL,
@@ -542,8 +512,6 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
                 Ok(RemoteCommand::DownloadFindDuplicate(params))
             }
         }),
-        DOWNLOAD_ARIA2_RECOVERY => parse_params::<DownloadIdParams>(&request)
-            .map(|params| RemoteCommand::DownloadAria2Recovery(params.id)),
         DOWNLOAD_PAUSE => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::DownloadPause(params.id)),
         DOWNLOAD_RESUME => parse_params::<DownloadIdParams>(&request)
@@ -688,7 +656,6 @@ mod tests {
         let cases = [
             (DOWNLOAD_GET, serde_json::json!({ "id": ID })),
             (DOWNLOAD_TORRENT_METADATA, serde_json::json!({ "id": ID })),
-            (DOWNLOAD_ARIA2_RECOVERY, serde_json::json!({ "id": ID })),
             (
                 DOWNLOAD_SELECT_TORRENT_FILES,
                 serde_json::json!({
@@ -753,7 +720,6 @@ mod tests {
         );
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_RUNTIME_STATUS));
         assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_TORRENT_METADATA));
-        assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_ARIA2_RECOVERY));
         assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_SELECT_TORRENT_FILES));
         assert!(!BROWSER_RPC_METHODS.contains(&ENGINE_RUNTIME_STATUS));
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_FIND_DUPLICATE));
@@ -761,34 +727,6 @@ mod tests {
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_MOVE_DOWN));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_PAUSE_DISPATCH));
         assert!(!BROWSER_RPC_METHODS.contains(&QUEUE_RESUME_DISPATCH));
-        Ok(())
-    }
-
-    #[test]
-    fn aria2_recovery_assessment_response_has_a_stable_versioned_shape()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let assessment = Aria2RecoveryAssessmentResult {
-            assessment_version: ARIA2_RECOVERY_ASSESSMENT_VERSION,
-            download_id: ID.to_owned(),
-            state: Aria2RecoveryState::Unknown,
-            explanation: "Recovery evidence is inconclusive.".to_owned(),
-            next_step: "Check the persisted aria2 task.".to_owned(),
-        };
-        let value = serde_json::to_value(&assessment)?;
-        assert_eq!(value["assessment_version"], 1);
-        assert_eq!(value["download_id"], ID);
-        assert_eq!(value["state"], "unknown");
-        assert_eq!(
-            serde_json::from_value::<Aria2RecoveryAssessmentResult>(value)?,
-            assessment
-        );
-
-        let info = ProtocolInfo::new("0.1.0");
-        assert_eq!(info.protocol_version, PROTOCOL_VERSION);
-        assert!(
-            info.capabilities
-                .contains(&DOWNLOAD_ARIA2_RECOVERY.to_owned())
-        );
         Ok(())
     }
 

@@ -10,9 +10,6 @@ import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
-import dev.fetchx.core.download.Aria2RecoveryAssessment
-import dev.fetchx.core.download.Aria2RecoveryRepository
-import dev.fetchx.core.download.Aria2RecoveryState
 import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
@@ -378,40 +375,6 @@ class DownloadsViewModelTest {
         assertNull(vm.uiState.value.error)
     }
 
-    @Test
-    fun aria2RecoveryAssessmentIsExposedToTheUi() = runTest {
-        val expected = Aria2RecoveryAssessment(
-            state = Aria2RecoveryState.RUNTIME_UNAVAILABLE,
-            explanation = "aria2 is unavailable; the record and files are unchanged.",
-            nextStep = "Enable aria2 before retrying.",
-        )
-        val repo = FakeDownloadRepository().apply { aria2RecoveryAssessment = expected }
-        val vm = DownloadsViewModel(repo)
-
-        vm.assessAria2Recovery("aria2-1")
-
-        assertEquals(expected, vm.aria2Recovery.value["aria2-1"]?.assessment)
-        assertFalse(vm.aria2Recovery.value["aria2-1"]?.loading ?: true)
-    }
-
-    @Test
-    fun aria2RecoveryShowsLoadingThenFailure() = runTest {
-        val gate = CompletableDeferred<Aria2RecoveryAssessment?>()
-        val repo = FakeDownloadRepository().apply { aria2RecoveryGate = gate }
-        val vm = DownloadsViewModel(repo)
-
-        vm.assessAria2Recovery("aria2-1")
-        assertTrue(vm.aria2Recovery.value["aria2-1"]?.loading == true)
-
-        gate.completeExceptionally(IllegalStateException("aria2 is unavailable"))
-
-        assertEquals(
-            "Recovery status could not be checked. The record and files were not changed.",
-            vm.aria2Recovery.value["aria2-1"]?.error,
-        )
-        assertFalse(vm.aria2Recovery.value["aria2-1"]?.loading ?: true)
-    }
-
     // ── 15. native_torrent telemetry is polled ─────────────────────────────
 
     @Test
@@ -475,8 +438,7 @@ private fun makeItem(id: String, state: DownloadState): DownloadItem = DownloadI
 private class FakeDownloadRepository :
     DownloadRepository,
     DuplicateDownloadRepository,
-    BatchDownloadRepository,
-    Aria2RecoveryRepository {
+    BatchDownloadRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>()
@@ -493,8 +455,6 @@ private class FakeDownloadRepository :
     var duplicateFileName: String? = null
     var lastDuplicateLookupUrl: String? = null
     var duplicateLookupFailure: Exception? = null
-    var aria2RecoveryAssessment: Aria2RecoveryAssessment? = null
-    var aria2RecoveryGate: CompletableDeferred<Aria2RecoveryAssessment?>? = null
     var batchOutcomes: List<DownloadBatchOutcome> = emptyList()
     var lastBatchItems: List<DownloadBatchItem>? = null
     var lastBatchPriority: DownloadPriority? = null
@@ -579,8 +539,6 @@ private class FakeDownloadRepository :
 
     override suspend fun getDownload(downloadId: String): DownloadItem? = null
 
-    override suspend fun assessAria2Recovery(downloadId: String): Aria2RecoveryAssessment? =
-        aria2RecoveryGate?.await() ?: aria2RecoveryAssessment
 }
 
 // ── Fake TorrentDownloadRepository ────────────────────────────────────────────
