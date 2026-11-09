@@ -21,6 +21,7 @@ import type {
 const ENGINE_LABELS: Record<string, string> = {
   direct_http: "Direct HTTP",
   aria2: "aria2",
+  native_torrent: "Native torrent",
   yt_dlp: "yt-dlp",
 };
 
@@ -59,7 +60,7 @@ export function DetailPanel({
 }: DetailPanelProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
-  const isTorrent = download.engine === "aria2"
+  const isTorrent = (download.engine === "aria2" || download.engine === "native_torrent")
     && (download.url.startsWith("magnet:") || download.url.startsWith("torrent+file:"));
   const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
   const [torrentTelemetryError, setTorrentTelemetryError] = useState<string | null>(null);

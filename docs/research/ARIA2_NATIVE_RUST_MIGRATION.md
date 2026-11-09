@@ -22,8 +22,8 @@ The upstream code was used only as a behavioral reference. No aria2 implementati
 | FTP/FTPS and SFTP | Covered | Shared Rust `FtpEngine` and `SftpEngine`; adapter availability remains configuration/platform dependent. |
 | HLS and DASH/media extraction | Covered | Rust HLS engine and dispatcher; DASH is routed to the configured yt-dlp runtime, not a native DASH parser. |
 | Metalink | Covered | Shared `MetalinkEngine` resolves mirrors/checksums using FetchX models and storage. |
-| Magnet and local `.torrent` transfers | Partial | `librqbit` is integrated into the shared dispatcher. This phase makes backend choice explicit and passes confirmed local torrent file indexes to `AddTorrentOptions.only_files`. Magnet metadata selection is still not applied by the native engine. |
-| Local torrent file selection | Covered for the migrated path | Persisted confirmed indexes are revalidated against the current `.torrent` info hash and file list before being supplied to librqbit; unconfirmed, empty, changed, and out-of-range selections are rejected. Magnet metadata does not restrict the local-file add. |
+| Magnet and local `.torrent` transfers | Partial | `librqbit` is integrated into the shared dispatcher. Local `.torrent` selection and native magnet metadata acquisition, persisted explicit selection, and selected-file transfer are implemented. The controlled lifecycle is tested, but full platform/device parity and crash recovery are not established. |
+| Local and magnet file selection | Covered for the migrated paths | Persisted confirmed indexes are revalidated against current metainfo (info hash and file bounds) before being supplied to librqbit `only_files`; unconfirmed, empty, stale, and out-of-range selections are rejected. Magnet metadata-only sessions are removed after acquisition, before selection is awaited and persisted. |
 | HTTP resume, retries, and remote-change safety | Covered for direct HTTP | FetchX reuses its existing validator-safe Rust implementation. Do not infer identical restart/resume semantics for every protocol. |
 | Torrent resume/recovery and seeding | Partial | Existing FetchX persisted state and native lifecycle are retained; librqbit session persistence is disabled and aria2-specific recovery behavior is not replaced wholesale. |
 | Shared priority, queue ordering, admission limits | Covered | The Rust queue/scheduler remains authoritative; no competing engine queue was introduced. |
@@ -54,10 +54,10 @@ The implementation reuses `crates/downloader` (`DirectHttpEngine`, `Aria2Engine`
 
 | Surface | Status |
 |---|---|
-| Android | Existing shared-core native-torrent fallback remains available when aria2 is not configured. No Kotlin/UniFFI change was needed for this slice. Native magnet file selection is not migrated. |
-| Desktop | Explicit engine selection reaches CoreServices; the local torrent file-selection path selects native torrent. aria2 settings and helper management remain available. |
-| CLI | Explicit `native-torrent` selection is supported for magnets and local torrent files; current aria2 default is preserved. |
-| Remote server | Explicit native or aria2 magnet selection is honored. An omitted engine preserves aria2-first/native-fallback behavior. |
+| Android | Native magnet metadata polling and file selection are exposed through the existing bridge/UI when the shared core routes the magnet to native torrent (including the existing fallback); there is no explicit Android engine chooser. Host tests exist; no device run was performed. |
+| Desktop | Tauri exposes metadata lookup and file-selection commands; the DetailPanel now recognizes `native_torrent` jobs and presents its selection flow. aria2 settings/helper management remain. UI/build checks are reported below. |
+| CLI | Explicit `--engine native-torrent` magnet admission can be followed by torrent metadata inspection and file selection; the default remains aria2. |
+| Remote server | Explicit native or aria2 magnet admission is honored, but no remote torrent metadata/selection operation exists. Native remote magnets cannot be user-confirmed and remain unsupported beyond admission; no universal integration claim is made. |
 | Browser/native host | No protocol or RPC contract change; no new native engine-selection UI was added. |
 | Existing data/settings | Preserved. There is no migration away from aria2 GIDs or aria2-specific configuration, and no existing download is rewritten. |
 
@@ -73,6 +73,16 @@ The acceptance scope is still incomplete: the peer transfer does not exercise pa
 
 No default change was made. Defaults remain adapter-specific: desktop torrent admission explicitly selects native torrent, while the CLI and legacy CoreServices/remote paths preserve aria2-first behavior (with the existing native fallback where configured). This evidence is not sufficient to promote native torrent globally or remove aria2.
 
+## Prompt 19 — native magnet metadata, selection, and controlled lifecycle
+
+The shared Rust lifecycle admits a native magnet without selecting every file, acquires metainfo through librqbit, parses librqbit's validated `info_bytes` with FetchX's existing parser, verifies the magnet info hash, and persists the resulting file list in the existing torrent metadata row. The temporary metadata-only torrent is removed before the engine waits for user confirmation. Transfer starts only after `selection_confirmed` is persisted with a non-empty index list; execution rechecks the info hash and index bounds before passing selected indexes to librqbit. Cancellation/pause also interrupt metadata admission/initialization, and cleanup errors are surfaced. Tests verify pre-admission cancellation leaves no torrent in the session and inject a post-handle metadata failure to verify the cleanup finalizer removes the temporary torrent and preserves the original error.
+
+The controlled integration test uses a synthetic, non-private multi-file torrent: an unselected 16 KiB file and a selected 4 MiB file. A local librqbit seeder is addressed directly by loopback IP; there are no trackers, DHT, local discovery, public peers, or aria2 daemon. It verifies magnet metadata acquisition and info hash, waits for an explicit persisted selection, completes only the selected payload, pauses after partial progress, creates a new engine/session for the same persisted job and destination, and then completes with at least the previous persisted progress. The test also removes the sole seeder during a second active transfer, cancels after the controlled interruption, verifies the managed torrent handle was removed, restores the local seeder, retries the same persisted download, and verifies selected-file completion. An unselected destination may be absent or an empty placeholder; it must not contain payload bytes.
+
+The restart test is an engine/session recreation with the same destination, not a process-kill/device restart test; it does not assert exact piece reuse before new peer data arrives. Peer interruption/retry is covered by controlled seeder removal and restoration, not by an actual network failure or arbitrary retry policy. Destination collision behavior, Android process recovery, adapter runtime consistency, and long-term seeding lifecycle are not covered by this fixture. Synthetic private torrents are not used for magnet metadata exchange because this librqbit test setup rejects their `ut_metadata` requests; the non-private fixture is still private to the test because only a loopback peer is supplied and discovery is disabled.
+
+Adapter support is deliberately bounded: Android can inspect/poll and confirm a selection for native magnets when the existing routing chooses the native engine (no Android backend chooser); desktop exposes Tauri metadata and selection calls and now displays selection for `native_torrent`; CLI can inspect/select after explicit native admission. The remote server can admit a native magnet but exposes no metadata or selection API, so remote native magnet selection is not integrated. No global default, aria2 setting, packaging, RPC, or persisted-download behavior changed.
+
 ## Tests and validation
 
 Completed checks for this validation slice:
@@ -85,10 +95,24 @@ Completed checks for this validation slice:
 
 These are compilation and automated test results, including a real transfer between two local peer sessions. No public/live swarm, aria2 daemon, Android device/emulator, packaged desktop application, or external network transfer was exercised. Kotlin/TypeScript UI checks were not needed because this slice changes no Android or desktop UI source.
 
+### Prompt 19 validation
+
+- `cargo test -j 1 -p fetchx-downloader` — passed: 293 unit tests passed, 3 ignored; both native-torrent lifecycle integration tests passed.
+- `cargo test -j 1 -p fetchx-downloader native_magnet -- --nocapture` — passed: all 3 magnet tests (acquisition cleanup before/after a handle, and controlled-peer metadata/selection/lifecycle).
+- `cargo test -j 1 -p fetchx-core-services torrent -- --nocapture` — passed: 6 tests.
+- `cargo test -j 1 -p fetchx-downloader -p fetchx-core-services -p fetchx-storage -p fetchx-queue -p fetchx -p fetchx-remote-server -p fetchx-android-bridge` — passed before the final test-only cleanup helper refactor; the final downloader and CoreServices results are separately listed above.
+- `cargo test -j 1 --manifest-path apps\desktop\src-tauri\Cargo.toml` — passed: 60 desktop Tauri tests.
+- `npm run build` in `apps\desktop\ui` — passed TypeScript checking and Vite production build.
+- `cargo fmt --all -- --check` — passed.
+- `cargo clippy -j 1 --all-targets -p fetchx-downloader -p fetchx-storage -p fetchx-core-services -p fetchx-queue -p fetchx -p fetchx-remote-server -p fetchx-android-bridge` — passed without warnings after fixing two warnings in the new/related native magnet selection test.
+- `cargo clippy -j 1 --all-targets --manifest-path apps\desktop\src-tauri\Cargo.toml` — passed with two existing warnings: `collapsible_if` in `apps\desktop\src-tauri\src\app.rs` and `too_many_arguments` in `commands.rs`.
+
+The Android bridge was covered by its Rust tests in the multi-package command; no Android Kotlin/Gradle device test was run because no Android source changed. No remote native-selection behavior was tested because the remote metadata/selection API does not exist. No device, process-kill, packaged desktop, public swarm, or live aria2 daemon validation was performed. `git diff --check` is run as a final worktree check.
+
 ## Migration phases still outstanding
 
-1. **Phase A — coverage and acceptance**: retain this table as the baseline; add focused tests for native magnet selection, live-transfer pause/resume/cancel/retry, and torrent-specific queue/restart behavior before changing defaults.
-2. **Phase B — parity**: implement the next missing native behavior only when a FetchX workflow needs it; magnet file selection needs metadata acquisition followed by a persisted selection before file transfer.
+1. **Phase A — coverage and acceptance**: retain this table as the baseline; strengthen exact piece-reuse and process-restart tests, and validate destination collision behavior before changing defaults.
+2. **Phase B — parity**: implement the next missing native behavior only when a FetchX workflow needs it; the loopback tests cover the supported magnet lifecycle slice, while arbitrary peer-failure policy and broader aria2 option parity remain open.
 3. **Phase C — adapters**: migrate each adapter only after its explicit selection, fallback, settings, and backward-compatibility behavior is tested. Do not silently change the current default.
 4. **Phase D — removal**: remove aria2 RPC, process supervision, helper packaging, and settings only after native acceptance tests cover existing downloads, recovery, controls, diagnostics, and every supported target.
 

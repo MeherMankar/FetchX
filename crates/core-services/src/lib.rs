@@ -2111,6 +2111,7 @@ async fn init_native_torrent(
         listen_port: config.native_torrent.listen_port,
         max_connections_per_torrent: 20,
         session_dir: config.native_torrent.session_dir.clone(),
+        disable_dht: false,
     };
     match NativeTorrentEngine::new(repository, native_cfg).await {
         Ok(engine) => {

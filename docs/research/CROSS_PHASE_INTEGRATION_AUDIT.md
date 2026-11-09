@@ -169,3 +169,12 @@ See the migration report for the aria2 revision/license, reviewed source files, 
 - No global default change was made. Desktop local torrent admission explicitly selects native, while CLI and legacy CoreServices/remote routes retain aria2-first behavior. aria2 functionality, settings, and existing records remain intact.
 
 See [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md) for exact commands, runtime scope, and remaining acceptance criteria.
+
+## Prompt 19 — native magnet metadata and lifecycle
+
+- Shared Rust now acquires magnet metadata with librqbit, parses its validated info bytes, persists the file list, and waits for an explicit non-empty confirmed selection before selected-file transfer. It validates the saved info hash/indexes at execution and removes the metadata-only torrent before selection confirmation. Metadata acquisition observes pause/cancel and reports cleanup errors.
+- Android can inspect and confirm a selection when existing routing chooses native torrent (native fallback; no explicit engine chooser). Desktop exposes Tauri metadata and selection calls and now recognizes `native_torrent` jobs in the detail selection flow. CLI supports metadata inspection and selection after explicit `--engine native-torrent` admission. Remote server supports native magnet admission but has no metadata/selection operation, so native remote magnets cannot be confirmed.
+- The controlled fixture is synthetic, non-private, trackerless, DHT-disabled, discovery-disabled, and loopback-only. It verifies magnet metadata/info hash, explicit selection and selected-only transfer, partial progress, pause, new engine/session continuation, a second active transfer's seeder interruption, cancellation and managed-handle cleanup, peer restoration, and retry to completion. The test does not prove exact piece reuse before resumed peer data or process/device restart recovery. It also does not exercise a real adapter runtime, destination collision, or a retry policy for arbitrary network errors. Private-torrent `ut_metadata` exchange is unsupported in this test setup.
+- No Android device/emulator, packaged desktop, public swarm, or aria2 daemon was tested. Global defaults, aria2 settings, packaging, RPC, and persisted records remain unchanged. The native migration remains partial.
+
+Exact test/build results and limitations are tracked in [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md).

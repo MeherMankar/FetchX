@@ -13,7 +13,8 @@
 use std::{net::SocketAddr, num::NonZeroU32, sync::Arc, time::Duration};
 
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadStatus, EngineKind, TorrentMetadata, parse_torrent_metainfo,
+    DownloadId, DownloadItem, DownloadStatus, EngineKind, Timestamp, TorrentMetadata,
+    parse_torrent_metainfo,
 };
 use fetchx_storage::{
     DownloadRepository, SqliteTorrentMetadataRepository, TorrentMetadataRepository,
@@ -45,6 +46,8 @@ pub struct NativeTorrentConfig {
     /// (e.g. `context.filesDir`) because `/data/local/tmp` is not writable
     /// by app sandboxes.
     pub session_dir: Option<std::path::PathBuf>,
+    /// Disables DHT discovery. Useful for isolated environments and deterministic peers.
+    pub disable_dht: bool,
 }
 
 impl Default for NativeTorrentConfig {
@@ -53,6 +56,7 @@ impl Default for NativeTorrentConfig {
             listen_port: 6881,
             max_connections_per_torrent: 20,
             session_dir: None,
+            disable_dht: false,
         }
     }
 }
@@ -114,10 +118,11 @@ where
             // Disable disk-backed session persistence — FetchX manages state.
             persistence: None,
             // Ephemeral DHT (no disk writes).
-            dht: Some(librqbit::DhtSessionConfig {
+            dht: (!config.disable_dht).then_some(librqbit::DhtSessionConfig {
                 persistence: None,
                 ..Default::default()
             }),
+            disable_local_service_discovery: true,
             ..SessionOptions::default()
         };
 
@@ -141,6 +146,239 @@ where
     ) -> Self {
         self.torrent_metadata = Some(repository);
         self
+    }
+
+    /// Acquires and validates a magnet's metainfo without downloading payload files.
+    ///
+    /// The temporary torrent uses an empty file selection and is removed after
+    /// metadata is extracted. Callers must persist a confirmed selection before
+    /// admitting the corresponding download to the shared queue.
+    pub async fn acquire_magnet_metadata(
+        &self,
+        magnet_uri: &str,
+    ) -> Result<TorrentMetadata, DownloadEngineError> {
+        self.acquire_magnet_metadata_with_options(magnet_uri, None, None)
+            .await
+    }
+
+    async fn acquire_magnet_metadata_with_options(
+        &self,
+        magnet_uri: &str,
+        initial_peers: Option<Vec<SocketAddr>>,
+        control: Option<&ManagedDownloadControl>,
+    ) -> Result<TorrentMetadata, DownloadEngineError> {
+        let magnet = fetchx_models::parse_magnet_uri(magnet_uri).map_err(|error| {
+            DownloadEngineError::NativeTorrent(format!("invalid magnet URI: {error}"))
+        })?;
+        let add_torrent = self.session.add_torrent(
+            AddTorrent::from_url(magnet_uri),
+            Some(AddTorrentOptions {
+                only_files: Some(Vec::new()),
+                initial_peers,
+                ..AddTorrentOptions::default()
+            }),
+        );
+        let add_result = tokio::time::timeout(Duration::from_secs(120), async {
+            if let Some(control) = control {
+                let mut cancellation = control.cancellation.clone();
+                let mut pause = control.pause.clone();
+                tokio::select! {
+                    biased;
+                    () = wait_for_signal(&mut cancellation) => Err(DownloadEngineError::Cancelled),
+                    () = wait_for_signal(&mut pause) => Err(DownloadEngineError::Paused),
+                    result = add_torrent => result
+                        .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string())),
+                }
+            } else {
+                add_torrent
+                    .await
+                    .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))
+            }
+        })
+        .await
+        .map_err(|_| {
+            DownloadEngineError::NativeTorrent(
+                "timed out while acquiring magnet metadata".to_owned(),
+            )
+        })?;
+        let response = add_result?;
+        let handle = response.into_handle().ok_or_else(|| {
+            DownloadEngineError::NativeTorrent(
+                "magnet metadata acquisition returned no managed torrent".to_owned(),
+            )
+        })?;
+
+        let acquisition = tokio::time::timeout(Duration::from_secs(120), async {
+            let initialized = if let Some(control) = control {
+                let mut cancellation = control.cancellation.clone();
+                let mut pause = control.pause.clone();
+                tokio::select! {
+                    result = handle.wait_until_initialized() => {
+                        result.map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?;
+                    }
+                    () = wait_for_signal(&mut cancellation) => {
+                        return Err(DownloadEngineError::Cancelled);
+                    }
+                    () = wait_for_signal(&mut pause) => {
+                        return Err(DownloadEngineError::Paused);
+                    }
+                }
+                Ok(())
+            } else {
+                handle
+                    .wait_until_initialized()
+                    .await
+                    .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))
+            };
+            initialized?;
+
+            let metadata = handle
+                .with_metadata(|metadata| parse_torrent_info_bytes(&metadata.info_bytes))
+                .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?
+                .map_err(|error| DownloadEngineError::NativeTorrent(error.to_string()))?;
+            if !metadata.info_hash.eq_ignore_ascii_case(&magnet.info_hash) {
+                return Err(DownloadEngineError::NativeTorrent(
+                    "acquired metainfo does not match the magnet info hash".to_owned(),
+                ));
+            }
+            Ok(metadata)
+        })
+        .await
+        .map_err(|_| {
+            DownloadEngineError::NativeTorrent(
+                "timed out while acquiring magnet metadata".to_owned(),
+            )
+        })
+        .and_then(|result| result);
+
+        self.finish_magnet_metadata_acquisition(&magnet.info_hash, &handle, acquisition)
+            .await
+    }
+
+    async fn finish_magnet_metadata_acquisition(
+        &self,
+        info_hash: &str,
+        handle: &ManagedTorrent,
+        acquisition: Result<TorrentMetadata, DownloadEngineError>,
+    ) -> Result<TorrentMetadata, DownloadEngineError> {
+        let cleanup = self
+            .session
+            .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
+            .await
+            .map_err(|error| {
+                warn!(
+                    %info_hash,
+                    %error,
+                    "NativeTorrentEngine: failed to remove metadata-only torrent"
+                );
+                DownloadEngineError::NativeTorrent(format!(
+                    "could not clean up metadata-only torrent: {error}"
+                ))
+            });
+        match (acquisition, cleanup) {
+            (Ok(metadata), Ok(())) => Ok(metadata),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
+            (Err(error), Err(cleanup_error)) => Err(DownloadEngineError::NativeTorrent(format!(
+                "{error}; additionally, {cleanup_error}"
+            ))),
+        }
+    }
+
+    async fn wait_for_magnet_selection(
+        &self,
+        id: DownloadId,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<TorrentMetadataRow, DownloadEngineError> {
+        let Some(repository) = self.torrent_metadata.as_ref() else {
+            return Err(DownloadEngineError::NativeTorrent(
+                "torrent metadata repository is unavailable".to_owned(),
+            ));
+        };
+
+        loop {
+            if *control.cancellation.borrow_and_update() {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow_and_update() {
+                return Err(DownloadEngineError::Paused);
+            }
+
+            let metadata = repository
+                .get_torrent_metadata(id)
+                .await
+                .map_err(DownloadEngineError::Storage)?
+                .ok_or_else(|| {
+                    DownloadEngineError::NativeTorrent(format!(
+                        "torrent metadata for download {id} was not found"
+                    ))
+                })?;
+
+            if metadata.metadata_state == "ready"
+                && metadata.torrent_metadata.is_some()
+                && metadata.selection_confirmed
+                && !metadata.selected_file_indexes.is_empty()
+            {
+                return Ok(metadata);
+            }
+
+            tokio::select! {
+                biased;
+                changed = control.cancellation.changed() => {
+                    if changed.is_err() || *control.cancellation.borrow_and_update() {
+                        return Err(DownloadEngineError::Cancelled);
+                    }
+                }
+                changed = control.pause.changed() => {
+                    if changed.is_err() || *control.pause.borrow_and_update() {
+                        return Err(DownloadEngineError::Paused);
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+            }
+        }
+    }
+
+    async fn ensure_magnet_metadata_ready(
+        &self,
+        id: DownloadId,
+        magnet_uri: &str,
+        control: &mut ManagedDownloadControl,
+        initial_peers: Option<Vec<SocketAddr>>,
+    ) -> Result<TorrentMetadataRow, DownloadEngineError> {
+        let Some(repository) = self.torrent_metadata.as_ref() else {
+            return Err(DownloadEngineError::NativeTorrent(
+                "torrent metadata repository is unavailable".to_owned(),
+            ));
+        };
+
+        let mut metadata = repository
+            .get_torrent_metadata(id)
+            .await
+            .map_err(DownloadEngineError::Storage)?
+            .ok_or_else(|| {
+                DownloadEngineError::NativeTorrent(format!(
+                    "torrent metadata for download {id} was not found"
+                ))
+            })?;
+
+        if metadata.metadata_state == "ready" && metadata.torrent_metadata.is_some() {
+            return self.wait_for_magnet_selection(id, control).await;
+        }
+
+        let acquired = self
+            .acquire_magnet_metadata_with_options(magnet_uri, initial_peers, Some(control))
+            .await?;
+        metadata.torrent_name = acquired.name.clone();
+        metadata.torrent_metadata = Some(acquired);
+        metadata.metadata_state = "ready".to_owned();
+        metadata.updated_at = Timestamp::now()?.max(metadata.updated_at);
+        repository
+            .update_torrent_metadata(&metadata)
+            .await
+            .map_err(DownloadEngineError::Storage)?;
+
+        self.wait_for_magnet_selection(id, control).await
     }
 
     /// Stops an in-session torrent without deleting its downloaded files.
@@ -302,6 +540,7 @@ where
         let destination = item.destination().to_path_buf();
         let is_magnet = source_url.starts_with("magnet:");
         let state_machine = fetchx_core::DownloadStateMachine::new(self.repository.clone());
+        let mut control = control;
 
         state_machine
             .transition(id, DownloadStatus::Preparing)
@@ -312,8 +551,15 @@ where
                 .await?;
         }
 
-        let (add_source, local_torrent_metadata) = if is_magnet {
-            (AddTorrent::from_url(source_url.as_str()), None)
+        let (add_source, local_torrent_metadata, magnet_info_hash) = if is_magnet {
+            let magnet = fetchx_models::parse_magnet_uri(&source_url).map_err(|error| {
+                DownloadEngineError::NativeTorrent(format!("invalid magnet URI: {error}"))
+            })?;
+            (
+                AddTorrent::from_url(source_url.as_str()),
+                None,
+                Some(magnet.info_hash),
+            )
         } else if source_url.starts_with("torrent+file:") {
             let file_path = item
                 .source()
@@ -327,7 +573,7 @@ where
                     "could not validate local torrent metadata: {error}"
                 ))
             })?;
-            (AddTorrent::from_bytes(torrent_bytes), Some(metadata))
+            (AddTorrent::from_bytes(torrent_bytes), Some(metadata), None)
         } else {
             return Err(DownloadEngineError::UnsupportedScheme);
         };
@@ -338,16 +584,30 @@ where
             .as_ref()
             .map(|limit| limit.bytes_per_second())
             .and_then(|bps| NonZeroU32::new(bps.min(u64::from(u32::MAX)) as u32));
-        let selected_files = match &self.torrent_metadata {
-            Some(repository) => selected_files_from_metadata(
-                repository
+        let persisted_metadata = if is_magnet {
+            self.ensure_magnet_metadata_ready(id, &source_url, &mut control, initial_peers.clone())
+                .await?;
+            match &self.torrent_metadata {
+                Some(repository) => repository
                     .get_torrent_metadata(id)
                     .await
                     .map_err(DownloadEngineError::Storage)?,
-                local_torrent_metadata.as_ref(),
-            )?,
-            None => selected_files_from_metadata(None, local_torrent_metadata.as_ref())?,
+                None => None,
+            }
+        } else {
+            match &self.torrent_metadata {
+                Some(repository) => repository
+                    .get_torrent_metadata(id)
+                    .await
+                    .map_err(DownloadEngineError::Storage)?,
+                None => None,
+            }
         };
+        let selected_files = selected_files_from_metadata(
+            persisted_metadata,
+            local_torrent_metadata.as_ref(),
+            magnet_info_hash.as_deref(),
+        )?;
         let add_opts = AddTorrentOptions {
             overwrite: true,
             output_folder: Some(destination.to_string_lossy().into_owned()),
@@ -452,6 +712,32 @@ where
         id: DownloadId,
         control: ManagedDownloadControl,
     ) -> Result<DownloadItem, DownloadEngineError> {
+        self.download_managed_with_peers(id, control, None).await
+    }
+
+    fn supports_active_pause(&self, _engine: EngineKind) -> bool {
+        true
+    }
+
+    #[allow(clippy::manual_async_fn)]
+    fn cancel_inactive(
+        &self,
+        id: DownloadId,
+    ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
+        async move { self.remove_managed_torrent(id).await }
+    }
+}
+
+impl<R> NativeTorrentEngine<R>
+where
+    R: DownloadRepository + Clone,
+{
+    async fn download_managed_with_peers(
+        &self,
+        id: DownloadId,
+        control: ManagedDownloadControl,
+        initial_peers: Option<Vec<SocketAddr>>,
+    ) -> Result<DownloadItem, DownloadEngineError> {
         let item = self
             .repository
             .get(id)
@@ -462,7 +748,7 @@ where
             return Err(DownloadEngineError::EngineMismatch);
         }
 
-        match self.run_torrent(id, item, control, None).await {
+        match self.run_torrent(id, item, control, initial_peers).await {
             Ok(()) => self
                 .repository
                 .get(id)
@@ -503,54 +789,73 @@ where
             }
         }
     }
-
-    fn supports_active_pause(&self, _engine: EngineKind) -> bool {
-        true
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn cancel_inactive(
-        &self,
-        id: DownloadId,
-    ) -> impl std::future::Future<Output = Result<(), DownloadEngineError>> + Send {
-        async move { self.remove_managed_torrent(id).await }
-    }
 }
 
 fn selected_files_from_metadata(
     metadata: Option<TorrentMetadataRow>,
     local_torrent_metadata: Option<&TorrentMetadata>,
+    magnet_info_hash: Option<&str>,
 ) -> Result<Option<Vec<usize>>, DownloadEngineError> {
     let Some(metadata) = metadata else {
+        if magnet_info_hash.is_some() {
+            return Err(DownloadEngineError::NativeTorrent(
+                "magnet file selection is not confirmed".to_owned(),
+            ));
+        }
         return Ok(None);
     };
 
-    if metadata.source_type != TorrentSourceType::TorrentFile {
-        return Ok(None);
-    }
     if !metadata.selection_confirmed {
         return Err(DownloadEngineError::NativeTorrent(
-            "local torrent file selection is not confirmed".to_owned(),
+            "torrent file selection is not confirmed".to_owned(),
         ));
     }
     if metadata.selected_file_indexes.is_empty() {
         return Err(DownloadEngineError::NativeTorrent(
-            "confirmed local torrent selection contains no files".to_owned(),
+            "confirmed torrent file selection contains no files".to_owned(),
         ));
     }
-    let local_torrent_metadata = local_torrent_metadata.ok_or_else(|| {
-        DownloadEngineError::NativeTorrent("local torrent metadata is unavailable".to_owned())
-    })?;
-    if metadata.info_hash != local_torrent_metadata.info_hash
-        || metadata
-            .torrent_metadata
-            .as_ref()
-            .is_some_and(|stored| stored.info_hash != local_torrent_metadata.info_hash)
-    {
-        return Err(DownloadEngineError::NativeTorrent(
-            "local torrent file changed after its selection was saved".to_owned(),
-        ));
-    }
+    let file_count = if let Some(magnet_info_hash) = magnet_info_hash {
+        if metadata.source_type != TorrentSourceType::Magnet {
+            return Err(DownloadEngineError::NativeTorrent(
+                "persisted torrent source does not match the magnet".to_owned(),
+            ));
+        }
+        let stored = metadata.torrent_metadata.as_ref().ok_or_else(|| {
+            DownloadEngineError::NativeTorrent("magnet metadata is unavailable".to_owned())
+        })?;
+        if !metadata.info_hash.eq_ignore_ascii_case(magnet_info_hash)
+            || !stored.info_hash.eq_ignore_ascii_case(magnet_info_hash)
+        {
+            return Err(DownloadEngineError::NativeTorrent(
+                "magnet metadata changed after its selection was saved".to_owned(),
+            ));
+        }
+        stored.files.len()
+    } else {
+        if metadata.source_type != TorrentSourceType::TorrentFile {
+            return Err(DownloadEngineError::NativeTorrent(
+                "persisted torrent source does not match the local torrent file".to_owned(),
+            ));
+        }
+        let local_torrent_metadata = local_torrent_metadata.ok_or_else(|| {
+            DownloadEngineError::NativeTorrent("local torrent metadata is unavailable".to_owned())
+        })?;
+        if !metadata
+            .info_hash
+            .eq_ignore_ascii_case(&local_torrent_metadata.info_hash)
+            || metadata.torrent_metadata.as_ref().is_some_and(|stored| {
+                !stored
+                    .info_hash
+                    .eq_ignore_ascii_case(&local_torrent_metadata.info_hash)
+            })
+        {
+            return Err(DownloadEngineError::NativeTorrent(
+                "local torrent file changed after its selection was saved".to_owned(),
+            ));
+        }
+        local_torrent_metadata.files.len()
+    };
 
     let selected_files = metadata
         .selected_file_indexes
@@ -562,15 +867,22 @@ fn selected_files_from_metadata(
                 "selected torrent file index is unsupported on this platform: {error}"
             ))
         })?;
-    if let Some(index) = selected_files
-        .iter()
-        .find(|index| **index >= local_torrent_metadata.files.len())
-    {
+    if let Some(index) = selected_files.iter().find(|index| **index >= file_count) {
         return Err(DownloadEngineError::NativeTorrent(format!(
             "selected torrent file index {index} is out of range"
         )));
     }
     Ok(Some(selected_files))
+}
+
+fn parse_torrent_info_bytes(
+    info_bytes: &[u8],
+) -> Result<TorrentMetadata, fetchx_models::TorrentMetadataError> {
+    let mut metainfo = Vec::with_capacity(info_bytes.len() + 8);
+    metainfo.extend_from_slice(b"d4:info");
+    metainfo.extend_from_slice(info_bytes);
+    metainfo.push(b'e');
+    parse_torrent_metainfo(&metainfo)
 }
 
 async fn wait_for_signal(receiver: &mut watch::Receiver<bool>) {
@@ -600,9 +912,13 @@ mod tests {
     };
     use crate::ManagedDownloadControl;
     use fetchx_models::{
-        DownloadSource, DownloadStatus, EngineKind, TorrentFile, TorrentMetadata, parse_magnet_uri,
+        DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, Timestamp,
+        TorrentFile, TorrentMetadata, parse_magnet_uri,
     };
-    use fetchx_storage::{TorrentMetadataRow, TorrentSeedState, TorrentSourceType};
+    use fetchx_storage::{
+        DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
+        TorrentSourceType,
+    };
     use sha1::{Digest, Sha1};
     use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
 
@@ -665,6 +981,7 @@ mod tests {
                 vec![1, 3],
             )),
             Some(&torrent_metadata),
+            None,
         )
         .expect("valid persisted indexes should convert");
 
@@ -672,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn native_engine_requires_confirmed_local_selection_and_ignores_magnet_selection() {
+    fn native_engine_requires_confirmed_torrent_selection() {
         assert!(matches!(
             selected_files_from_metadata(
                 Some(torrent_metadata_row(
@@ -680,25 +997,651 @@ mod tests {
                     false,
                     vec![1],
                 )),
-                Some(&local_torrent_metadata())
+                Some(&local_torrent_metadata()),
+                None
             ),
             Err(DownloadEngineError::NativeTorrent(_))
         ));
+        let mut magnet = torrent_metadata_row(TorrentSourceType::Magnet, true, vec![1]);
+        magnet.torrent_metadata = Some(local_torrent_metadata());
         assert!(matches!(
             selected_files_from_metadata(
-                Some(torrent_metadata_row(
-                    TorrentSourceType::Magnet,
-                    true,
-                    vec![1],
-                )),
-                None
+                Some(magnet),
+                None,
+                Some(&local_torrent_metadata().info_hash)
             ),
-            Ok(None)
+            Ok(Some(files)) if files == vec![1]
         ));
         assert!(matches!(
-            selected_files_from_metadata(None, Some(&local_torrent_metadata())),
+            selected_files_from_metadata(None, Some(&local_torrent_metadata()), None),
             Ok(None)
         ));
+    }
+
+    #[test]
+    fn native_engine_rejects_empty_stale_and_out_of_range_magnet_selection() {
+        let info_hash = local_torrent_metadata().info_hash;
+        let mut row = torrent_metadata_row(TorrentSourceType::Magnet, true, Vec::new());
+        row.torrent_metadata = Some(local_torrent_metadata());
+        assert!(matches!(
+            selected_files_from_metadata(Some(row.clone()), None, Some(&info_hash)),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+
+        row.selected_file_indexes = vec![4];
+        assert!(matches!(
+            selected_files_from_metadata(Some(row.clone()), None, Some(&info_hash)),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+
+        row.selected_file_indexes = vec![1];
+        row.info_hash = "abcdefabcdefabcdefabcdefabcdefabcdefabcd".to_owned();
+        assert!(matches!(
+            selected_files_from_metadata(Some(row), None, Some(&info_hash)),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_engine_waits_until_magnet_selection_is_confirmed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let database = fetchx_storage::Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let id = DownloadId::new();
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=sample";
+        let now = Timestamp::now()?;
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(magnet, EngineKind::NativeTorrent)?,
+            fetchx_models::FileName::new("sample")?,
+            directory.path().join("downloads"),
+            now,
+        );
+        repository.create(&item).await?;
+
+        let metadata = local_torrent_metadata();
+        database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet.to_owned()),
+                local_torrent_path: Some(directory.path().join("sample.torrent")),
+                info_hash: metadata.info_hash.clone(),
+                torrent_name: metadata.name.clone(),
+                torrent_metadata: Some(metadata.clone()),
+                destination: item.destination().to_path_buf(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                selection_confirmed: false,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        let engine = NativeTorrentEngine::new(
+            repository.clone(),
+            NativeTorrentConfig {
+                listen_port: 0,
+                session_dir: Some(directory.path().join("librqbit-session")),
+                ..NativeTorrentConfig::default()
+            },
+        )
+        .await?
+        .with_torrent_metadata_repository(database.torrent_metadata());
+
+        let (selection_tx, selection_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn({
+            let repository = database.torrent_metadata();
+            async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let mut row = repository
+                    .get_torrent_metadata(id)
+                    .await?
+                    .ok_or("magnet row missing")?;
+                row.selected_file_indexes = vec![0];
+                row.selected_total_bytes = metadata.files[0].size;
+                row.selection_confirmed = true;
+                row.updated_at = Timestamp::now()?.max(row.updated_at);
+                repository.update_torrent_metadata(&row).await?;
+                selection_tx
+                    .send(())
+                    .map_err(|_| "selection notification dropped")?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            }
+        });
+
+        let (_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        let (_pause_tx, pause) = tokio::sync::watch::channel(false);
+        let (_limit_tx, connection_limit) = tokio::sync::watch::channel(1usize);
+        let mut control = ManagedDownloadControl {
+            cancellation,
+            pause,
+            connection_limit,
+            resource_demand: None,
+            bandwidth: crate::BandwidthControl::default(),
+        };
+        let row = engine.wait_for_magnet_selection(id, &mut control).await?;
+        assert!(row.selection_confirmed);
+        assert_eq!(row.selected_file_indexes, vec![0]);
+        let _ = selection_rx.await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_magnet_acquires_metadata_waits_for_selection_and_recovers_after_restart()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use fetchx_storage::{DownloadRepository, TorrentMetadataRepository};
+        use librqbit::{AddTorrent, AddTorrentOptions, ListenerOptions, Session, SessionOptions};
+        use std::{net::SocketAddr, sync::Arc};
+
+        let directory = tempfile::tempdir()?;
+        let first_payload = vec![b'u'; 16_384];
+        let selected_payload = vec![b's'; 4 * 1024 * 1024];
+        let torrent_bytes = selected_files_torrent_bytes(&first_payload, &selected_payload);
+        let metadata = fetchx_models::parse_torrent_metainfo(&torrent_bytes)?;
+
+        let seed_output = directory.path().join("seed-output");
+        tokio::fs::create_dir_all(&seed_output).await?;
+        tokio::fs::write(seed_output.join("first.bin"), &first_payload).await?;
+        tokio::fs::write(seed_output.join("selected.bin"), &selected_payload).await?;
+        let seeder_session = Session::new_with_opts(
+            directory.path().join("seed-session"),
+            SessionOptions {
+                dht: None,
+                persistence: None,
+                disable_trackers: true,
+                disable_local_service_discovery: true,
+                ipv4_only: true,
+                listen: Some(ListenerOptions {
+                    listen_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                    ipv4_only: true,
+                    ..ListenerOptions::default()
+                }),
+                ..SessionOptions::default()
+            },
+        )
+        .await?;
+        let seeder = seeder_session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent_bytes.clone()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    output_folder: Some(seed_output.to_string_lossy().into_owned()),
+                    ..AddTorrentOptions::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .ok_or("seeder add did not return a managed torrent")?;
+        tokio::time::timeout(Duration::from_secs(10), seeder.wait_until_initialized()).await??;
+        assert!(
+            seeder.stats().finished,
+            "local seeder payload did not verify"
+        );
+        let seed_address: SocketAddr = seeder_session
+            .listen_addr()
+            .ok_or("seeder did not bind a peer listener")?;
+
+        let database = fetchx_storage::Database::connect("sqlite::memory:").await?;
+        let repository = database.downloads();
+        let torrent_metadata_repository = database.torrent_metadata();
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let magnet_uri = format!("magnet:?xt=urn:btih:{}&dn=bundle", metadata.info_hash);
+        let destination = directory.path().join("magnet-download");
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(&magnet_uri, EngineKind::NativeTorrent)?,
+            fetchx_models::FileName::new("bundle")?,
+            destination.clone(),
+            now,
+        );
+        repository.create(&item).await?;
+        torrent_metadata_repository
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet_uri.clone()),
+                local_torrent_path: Some(directory.path().join("magnet.torrent")),
+                info_hash: metadata.info_hash.clone(),
+                torrent_name: "bundle".to_owned(),
+                torrent_metadata: None,
+                destination: destination.clone(),
+                metadata_state: "pending".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                selection_confirmed: false,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: now,
+                updated_at: now,
+            })
+            .await?;
+
+        let make_engine = || async {
+            NativeTorrentEngine::new(
+                repository.clone(),
+                NativeTorrentConfig {
+                    listen_port: 0,
+                    session_dir: Some(directory.path().join("download-session")),
+                    disable_dht: true,
+                    ..NativeTorrentConfig::default()
+                },
+            )
+            .await
+            .map(|engine| {
+                Arc::new(
+                    engine.with_torrent_metadata_repository(torrent_metadata_repository.clone()),
+                )
+            })
+        };
+        let engine = make_engine().await?;
+        let selector_repository = torrent_metadata_repository.clone();
+        let selector_metadata = metadata.clone();
+        let selector = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut row = selector_repository
+                        .get_torrent_metadata(id)
+                        .await
+                        .expect("magnet metadata lookup should succeed")
+                        .expect("magnet metadata row should exist");
+                    if row.metadata_state == "ready" && row.torrent_metadata.is_some() {
+                        assert_eq!(
+                            row.torrent_metadata.as_ref().map(|value| &value.info_hash),
+                            Some(&selector_metadata.info_hash)
+                        );
+                        row.selected_file_indexes = vec![1];
+                        row.selected_total_bytes = selector_metadata.files[1].size as u64;
+                        row.selection_confirmed = true;
+                        row.updated_at = Timestamp::now()
+                            .expect("selection timestamp should be available")
+                            .max(row.updated_at);
+                        selector_repository
+                            .update_torrent_metadata(&row)
+                            .await
+                            .expect("confirmed magnet selection should persist");
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("native engine should acquire magnet metadata");
+        });
+
+        let (pause_tx, pause_rx) = tokio::sync::watch::channel(false);
+        let (_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        let (_limit_tx, connection_limit) = tokio::sync::watch::channel(1usize);
+        let control = ManagedDownloadControl {
+            cancellation,
+            pause: pause_rx,
+            connection_limit,
+            resource_demand: None,
+            bandwidth: crate::BandwidthControl {
+                per_download: Some(Arc::new(crate::BandwidthLimiter::new(1024 * 1024)?)),
+                ..crate::BandwidthControl::default()
+            },
+        };
+        let worker_engine = Arc::clone(&engine);
+        let mut worker = tokio::spawn(async move {
+            worker_engine
+                .download_managed_with_peers(id, control, Some(vec![seed_address]))
+                .await
+        });
+        let progress_wait = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let item = repository
+                    .get(id)
+                    .await?
+                    .ok_or("magnet download should exist")?;
+                if item.status() == DownloadStatus::Failed {
+                    return Err(format!("native magnet failed: {:?}", item.error()).into());
+                }
+                if item.status() == DownloadStatus::Downloading
+                    && item.progress().downloaded_bytes() > 0
+                {
+                    return Ok::<u64, Box<dyn std::error::Error>>(
+                        item.progress().downloaded_bytes(),
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        let progress_result = match progress_wait {
+            Ok(result) => result,
+            Err(error) => return Err(Box::new(error) as Box<dyn std::error::Error>),
+        };
+        let partial_progress = progress_result?;
+        selector.await?;
+        pause_tx.send(true)?;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), &mut worker).await??,
+            Err(DownloadEngineError::Paused)
+        ));
+        assert!(partial_progress > 0 && partial_progress < selected_payload.len() as u64);
+        assert_eq!(
+            repository.get(id).await?.unwrap().status(),
+            DownloadStatus::Paused
+        );
+        assert_eq!(
+            engine.session().with_torrents(|torrents| torrents.count()),
+            0
+        );
+        drop(engine);
+
+        fetchx_core::DownloadStateMachine::new(repository.clone())
+            .transition(id, DownloadStatus::Queued)
+            .await?;
+        let restarted_engine = make_engine().await?;
+        let (_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        let (_pause_tx, pause) = tokio::sync::watch::channel(false);
+        let (_limit_tx, connection_limit) = tokio::sync::watch::channel(1usize);
+        let completed = tokio::time::timeout(
+            Duration::from_secs(20),
+            restarted_engine.download_managed_with_peers(
+                id,
+                ManagedDownloadControl {
+                    cancellation,
+                    pause,
+                    connection_limit,
+                    resource_demand: None,
+                    bandwidth: crate::BandwidthControl::default(),
+                },
+                Some(vec![seed_address]),
+            ),
+        )
+        .await??;
+        assert_eq!(completed.status(), DownloadStatus::Seeding);
+        assert!(completed.progress().downloaded_bytes() >= partial_progress);
+        assert_eq!(
+            tokio::fs::read(destination.join("selected.bin")).await?,
+            selected_payload
+        );
+        match tokio::fs::read(destination.join("first.bin")).await {
+            Ok(bytes) => assert!(
+                bytes.is_empty(),
+                "unselected magnet file must not contain payload bytes"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(Box::new(error)),
+        }
+
+        let interrupted_id = DownloadId::new();
+        let interrupted_at = Timestamp::now()?;
+        let interrupted_destination = directory.path().join("interrupted-magnet");
+        let interrupted_item = DownloadItem::new(
+            interrupted_id,
+            DownloadSource::new(&magnet_uri, EngineKind::NativeTorrent)?,
+            fetchx_models::FileName::new("bundle")?,
+            interrupted_destination.clone(),
+            interrupted_at,
+        );
+        repository.create(&interrupted_item).await?;
+        torrent_metadata_repository
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: interrupted_id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(magnet_uri.clone()),
+                local_torrent_path: Some(directory.path().join("interrupted-magnet.torrent")),
+                info_hash: metadata.info_hash.clone(),
+                torrent_name: metadata.name.clone(),
+                torrent_metadata: Some(metadata.clone()),
+                destination: interrupted_destination.clone(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: vec![1],
+                selected_total_bytes: selected_payload.len() as u64,
+                selection_confirmed: true,
+                aria2_gid: None,
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at: interrupted_at,
+                updated_at: interrupted_at,
+            })
+            .await?;
+        let cancel_engine = Arc::new(
+            NativeTorrentEngine::new(
+                repository.clone(),
+                NativeTorrentConfig {
+                    listen_port: 0,
+                    session_dir: Some(directory.path().join("cancel-session")),
+                    disable_dht: true,
+                    ..NativeTorrentConfig::default()
+                },
+            )
+            .await?
+            .with_torrent_metadata_repository(torrent_metadata_repository.clone()),
+        );
+        let (cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        let (_pause_tx, pause) = tokio::sync::watch::channel(false);
+        let (_limit_tx, connection_limit) = tokio::sync::watch::channel(1usize);
+        let cancel_control = ManagedDownloadControl {
+            cancellation,
+            pause,
+            connection_limit,
+            resource_demand: None,
+            bandwidth: crate::BandwidthControl {
+                per_download: Some(Arc::new(crate::BandwidthLimiter::new(1024 * 1024)?)),
+                ..crate::BandwidthControl::default()
+            },
+        };
+        let cancel_worker_engine = Arc::clone(&cancel_engine);
+        let mut cancel_worker = tokio::spawn(async move {
+            cancel_worker_engine
+                .download_managed_with_peers(
+                    interrupted_id,
+                    cancel_control,
+                    Some(vec![seed_address]),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let item = repository
+                    .get(interrupted_id)
+                    .await?
+                    .ok_or("interrupted magnet download should exist")?;
+                if item.status() == DownloadStatus::Failed {
+                    return Err(format!("native magnet failed: {:?}", item.error()).into());
+                }
+                if item.status() == DownloadStatus::Downloading
+                    && item.progress().downloaded_bytes() > 0
+                {
+                    return Ok::<(), Box<dyn std::error::Error>>(());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await??;
+        seeder_session
+            .delete(librqbit::api::TorrentIdOrHash::Id(seeder.id()), false)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        cancel_tx.send(true)?;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(5), &mut cancel_worker).await??,
+            Err(DownloadEngineError::Cancelled)
+        ));
+        assert_eq!(
+            repository
+                .get(interrupted_id)
+                .await?
+                .ok_or("interrupted magnet row should remain")?
+                .status(),
+            DownloadStatus::Cancelled
+        );
+        assert_eq!(
+            cancel_engine
+                .session()
+                .with_torrents(|torrents| torrents.count()),
+            0
+        );
+
+        let retry_seeder = seeder_session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent_bytes.clone()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    output_folder: Some(seed_output.to_string_lossy().into_owned()),
+                    ..AddTorrentOptions::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .ok_or("retry seeder add did not return a managed torrent")?;
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            retry_seeder.wait_until_initialized(),
+        )
+        .await??;
+        assert!(retry_seeder.stats().finished);
+        let retry_seed_address: SocketAddr = seeder_session
+            .listen_addr()
+            .ok_or("retry seeder did not bind a peer listener")?;
+
+        let (_retry_cancel_tx, cancellation) = tokio::sync::watch::channel(false);
+        let (_retry_pause_tx, pause) = tokio::sync::watch::channel(false);
+        let (_retry_limit_tx, connection_limit) = tokio::sync::watch::channel(1usize);
+        let retried = tokio::time::timeout(
+            Duration::from_secs(20),
+            cancel_engine.download_managed_with_peers(
+                interrupted_id,
+                ManagedDownloadControl {
+                    cancellation,
+                    pause,
+                    connection_limit,
+                    resource_demand: None,
+                    bandwidth: crate::BandwidthControl::default(),
+                },
+                Some(vec![retry_seed_address]),
+            ),
+        )
+        .await??;
+        assert_eq!(retried.status(), DownloadStatus::Seeding);
+        assert_eq!(
+            tokio::fs::read(interrupted_destination.join("selected.bin")).await?,
+            selected_payload
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_magnet_metadata_cancellation_removes_temporary_torrent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use fetchx_storage::Database;
+
+        let directory = tempfile::tempdir()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let engine = NativeTorrentEngine::new(
+            database.downloads(),
+            NativeTorrentConfig {
+                listen_port: 0,
+                session_dir: Some(directory.path().join("session")),
+                disable_dht: true,
+                ..NativeTorrentConfig::default()
+            },
+        )
+        .await?;
+        let (cancellation_tx, cancellation) = tokio::sync::watch::channel(false);
+        let (_pause_tx, pause) = tokio::sync::watch::channel(false);
+        let (_limit_tx, connection_limit) = tokio::sync::watch::channel(1usize);
+        let control = ManagedDownloadControl {
+            cancellation,
+            pause,
+            connection_limit,
+            resource_demand: None,
+            bandwidth: crate::BandwidthControl::default(),
+        };
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=sample";
+        cancellation_tx.send(true)?;
+        let result = engine
+            .acquire_magnet_metadata_with_options(magnet, None, Some(&control))
+            .await;
+        assert!(
+            matches!(result, Err(DownloadEngineError::Cancelled)),
+            "unexpected metadata acquisition result: {result:?}"
+        );
+        assert_eq!(
+            engine.session().with_torrents(|torrents| torrents.count()),
+            0
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_magnet_metadata_failure_cleans_up_acquired_handle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use fetchx_storage::Database;
+        use librqbit::{AddTorrent, AddTorrentOptions};
+
+        let directory = tempfile::tempdir()?;
+        let database = Database::connect("sqlite::memory:").await?;
+        let engine = NativeTorrentEngine::new(
+            database.downloads(),
+            NativeTorrentConfig {
+                listen_port: 0,
+                session_dir: Some(directory.path().join("session")),
+                disable_dht: true,
+                ..NativeTorrentConfig::default()
+            },
+        )
+        .await?;
+        let bytes = selected_files_torrent_bytes(&[b'a'; 16_384], &[b'b'; 16_384]);
+        let metadata = fetchx_models::parse_torrent_metainfo(&bytes)?;
+        let handle = engine
+            .session()
+            .add_torrent(
+                AddTorrent::from_bytes(bytes),
+                Some(AddTorrentOptions {
+                    only_files: Some(Vec::new()),
+                    ..AddTorrentOptions::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .ok_or("metadata fixture did not return a managed torrent")?;
+        tokio::time::timeout(Duration::from_secs(5), handle.wait_until_initialized()).await??;
+        assert_eq!(
+            engine.session().with_torrents(|torrents| torrents.count()),
+            1
+        );
+
+        let result = engine
+            .finish_magnet_metadata_acquisition(
+                &metadata.info_hash,
+                &handle,
+                Err(DownloadEngineError::NativeTorrent(
+                    "injected metadata parse failure".to_owned(),
+                )),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(DownloadEngineError::NativeTorrent(message))
+                if message == "injected metadata parse failure"
+        ));
+        assert_eq!(
+            engine.session().with_torrents(|torrents| torrents.count()),
+            0
+        );
+        Ok(())
     }
 
     #[test]
@@ -710,7 +1653,8 @@ mod tests {
                     true,
                     Vec::new(),
                 )),
-                Some(&local_torrent_metadata())
+                Some(&local_torrent_metadata()),
+                None
             ),
             Err(DownloadEngineError::NativeTorrent(_))
         ));
@@ -726,7 +1670,8 @@ mod tests {
                     true,
                     vec![4],
                 )),
-                Some(&metadata)
+                Some(&metadata),
+                None
             ),
             Err(DownloadEngineError::NativeTorrent(_))
         ));
@@ -740,7 +1685,8 @@ mod tests {
                     true,
                     vec![1],
                 )),
-                Some(&changed_torrent)
+                Some(&changed_torrent),
+                None
             ),
             Err(DownloadEngineError::NativeTorrent(_))
         ));
@@ -769,7 +1715,7 @@ mod tests {
             piece_hashes.extend_from_slice(&Sha1::digest(piece));
         }
         bencode_string(&piece_hashes, &mut bytes);
-        bytes.extend_from_slice(b"7:privatei1eee");
+        bytes.extend_from_slice(b"ee");
         bytes
     }
 

@@ -226,11 +226,11 @@ Prioritized next work:
 ## Current aria2-to-native-Rust migration
 
 - Pinned and reviewed aria2 source, manual/RPC behavior, license, and focused tests. No upstream source was copied.
-- Reused the existing Rust downloader, CoreServices, queue, storage, models, and `librqbit` engine. Added explicit torrent-backend admission paths and passed confirmed local torrent file indexes to native librqbit.
-- Desktop, CLI, and remote magnet adapters now preserve explicit backend choices. Existing aria2 defaults, supervision, settings, and persisted records remain in place.
-- Prompt 18 verified local `.torrent` inspection and a synthetic selected-file transfer between controlled loopback librqbit peers. The engine now rejects stale info hashes and invalid local selections; CoreServices confirms generated default destinations are distinct.
+- Reused the existing Rust downloader, CoreServices, queue, storage, models, and `librqbit` engine. Native magnets now acquire and persist metadata, wait for an explicit valid file selection, and transfer selected files.
+- Android supports the current native fallback selection path, desktop exposes native metadata/selection through Tauri and UI, and CLI supports inspection/selection after explicit native admission. Remote server only admits native magnets and has no metadata/selection operation.
+- Prompt 19's trackerless loopback test covered selected-file completion, partial progress, pause, new-engine/session continuation, a controlled seeder interruption, active cancellation/handle cleanup, and retry after restoring the peer. Exact piece reuse and process/device crash recovery remain unproven.
 - No global default change was made. Desktop torrent admission explicitly selects native, while CLI and legacy CoreServices/remote routes retain aria2-first behavior.
-- The native migration remains partial. Magnet metadata/file selection, live-transfer pause/resume/retry/cancel, torrent-specific restart recovery, explicit destination-collision behavior, broader aria2 configuration parity, and aria2 removal remain open. No Android device, packaged desktop, public swarm, or live aria2 daemon was tested.
+- The native migration remains partial. Remote magnet selection, exact restart-piece recovery, process/device recovery, explicit destination-collision behavior, broader aria2 configuration parity, and aria2 removal remain open. No Android device, packaged desktop, public swarm, or live aria2 daemon was tested.
 - Exact commands, test results, runtime scope, and unverified acceptance criteria are recorded in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
 
-Next: extend native magnet metadata/file selection and lifecycle/recovery tests. Do not change global defaults or remove aria2 packaging/RPC until migration acceptance criteria pass across supported hosts.
+Next: decide whether remote native magnet selection is required; otherwise validate exact partial-piece reuse and process restart on supported hosts. Do not change global defaults or remove aria2 packaging/RPC until migration acceptance criteria pass across supported hosts.
