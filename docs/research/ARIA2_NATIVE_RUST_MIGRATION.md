@@ -297,3 +297,21 @@ Result: `BUILD SUCCESSFUL`; bridge mapping and downloads ViewModel unit tests ra
 The final Rust test-module type-check, Clippy, formatting, and diff checks passed. Clippy reported two existing desktop warnings outside this change: `collapsible_if` in `app.rs` and `too_many_arguments` in `commands.rs`.
 
 The next dependency boundary remains same-runtime aria2 recovery validation with a live supervised daemon, including GID changes/staleness and partial files with/without sidecars. Do not design cross-engine replacement from an assessment state alone; preserve the aria2 record and files until any future opt-in replacement independently verifies source, selected files, destination, and integrity.
+
+## Prompt 25 — remote and CLI aria2 recovery assessment
+
+The read-only `CoreServices::assess_aria2_recovery` operation is now available through authenticated remote JSON-RPC and the local/remote CLI. The server handler delegates to CoreServices and maps only the typed state/guidance; it does not inspect aria2 settings or endpoint profiles itself. The remote method is `download.aria2Recovery` with `{ "id": "<download-id>" }`. Its typed response carries `assessment_version: 1`, the download ID, one shared assessment state, and sanitized `explanation`/`next_step` strings. It contains no local path, GID, RPC credential, or raw aria2 error.
+
+The method is advertised by `system.discover` as an additive `fetchx.rpc.v1` capability; the protocol version string and existing operations are unchanged. Existing clients remain unaffected. The CLI checks discovery for the exact capability before sending the new method, and refuses without sending it when connected to an older server. The server applies the existing `downloads.read` permission (Admin, Operator, and ReadOnly roles). The RPC is intentionally absent from `BROWSER_RPC_METHODS` and the browser/native-host allowlist.
+
+`fetchx aria2-recovery <id>` uses `CoreServices::start_for_read_only_assessment`: it defers queue dispatch, does not start a local aria2 process, and returns `unknown` when the runtime was not safely checked in this short-lived CLI context. It does not infer a runtime from an unrelated remote aria2 profile. `fetchx remote aria2-recovery <id>` returns the remote server's own CoreServices assessment; thus runtime availability is based only on evidence available to that server.
+
+Tests added cover protocol method parsing and response version/shape, the read-only role and discovery capability, sanitized unavailable-runtime response and persisted-record/partial-file preservation, CLI state rendering, and an older server that lacks the capability (verified to receive no assessment RPC). The serial focused command passed:
+
+```text
+cargo test -j 1 -p fetchx-remote-protocol -p fetchx-remote-server -p fetchx-core-services -p fetchx -- --test-threads=1
+  CLI: 30 passed; CoreServices: 38 passed; remote protocol: 12 passed;
+  remote server: 22 passed; remaining selected package test targets passed.
+```
+
+Validation: `cargo clippy -j 1 --tests --no-deps -p fetchx-remote-protocol -p fetchx-remote-server -p fetchx-core-services -p fetchx` passed; `cargo fmt --all -- --check` passed; and `git diff --check` passed. Git emitted only line-ending normalization warnings for existing modified Rust files. No live remote network/device or real aria2 daemon was used. The remaining limitation is real-runtime/process-restart recovery evidence, not client API availability; no cross-engine adoption or aria2 removal is implied.

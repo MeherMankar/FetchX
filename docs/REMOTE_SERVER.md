@@ -85,6 +85,8 @@ Discovery reports only supported operations and event names. An operation accept
 the shared Phase 21A parser but not implemented by CoreServices returns the stable
 `UnsupportedOperation` error; it is not reported as a successful no-op.
 
+`download.aria2Recovery` is an additive read-only RPC for one persisted download ID. It delegates to `CoreServices::assess_aria2_recovery`, requires the existing `downloads.read` permission (including the ReadOnly role), and is listed in `system.discover` under the unchanged `fetchx.rpc.v1` protocol. Its response includes `assessment_version: 1`, the download ID, typed state, and sanitized explanation/next-step text; it excludes local paths, GIDs, credentials, and raw aria2 errors. Runtime evidence is the server CoreServices runtime only. This method does not inspect a client's separately configured aria2 endpoint, start/restart aria2, dispatch a download, or mutate records/files. The browser/native-host allowlist intentionally does not expose it. Clients should capability-gate this additive operation; the CLI does so and remains compatible with older servers.
+
 The authenticated remote web UI exposes the queue move actions. Queue metrics and
 resource-slot telemetry, engine management/status, scheduling, remote settings,
 device pairing, and plugin management are not available in the current protocol and

@@ -124,6 +124,7 @@ pub struct CoreServices {
     queue: QueueManager,
     pub downloads_dir: PathBuf,
     shutdown_complete: Mutex<bool>,
+    aria2_runtime_assessment_enabled: bool,
 }
 
 /// Parameters for [`CoreServices::create_torrent_metadata_row`].
@@ -303,7 +304,16 @@ impl CoreServices {
     /// Optional engines that fail to start are marked `Unavailable`; the
     /// function only fails for unrecoverable errors (e.g. database I/O).
     pub async fn start(cfg: CoreServicesConfig) -> Result<Self, CoreServicesError> {
-        Self::start_with_engine_config(cfg, None).await
+        Self::start_internal(cfg, None, None, true).await
+    }
+
+    /// Starts services for a read-only aria2 recovery assessment without
+    /// starting a local aria2 process or dispatching queued downloads.
+    pub async fn start_for_read_only_assessment(
+        mut cfg: CoreServicesConfig,
+    ) -> Result<Self, CoreServicesError> {
+        cfg.defer_queued_on_start = true;
+        Self::start_internal(cfg, None, None, false).await
     }
 
     /// Initializes services with a per-process engine configuration override.
@@ -314,13 +324,22 @@ impl CoreServices {
         cfg: CoreServicesConfig,
         engine_config_override: Option<EngineConfig>,
     ) -> Result<Self, CoreServicesError> {
-        Self::start_with_engine_config_and_ytdlp_runner(cfg, engine_config_override, None).await
+        Self::start_internal(cfg, engine_config_override, None, true).await
     }
 
     pub async fn start_with_engine_config_and_ytdlp_runner(
         cfg: CoreServicesConfig,
         engine_config_override: Option<EngineConfig>,
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
+    ) -> Result<Self, CoreServicesError> {
+        Self::start_internal(cfg, engine_config_override, ytdlp_runner, true).await
+    }
+
+    async fn start_internal(
+        cfg: CoreServicesConfig,
+        engine_config_override: Option<EngineConfig>,
+        ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
+        initialize_aria2: bool,
     ) -> Result<Self, CoreServicesError> {
         // Ensure directories exist.
         if let Some(parent) = cfg.database_path.parent() {
@@ -370,6 +389,7 @@ impl CoreServices {
             &cfg.runtime_dir,
             ytdlp_runner,
             Some(database.torrent_metadata()),
+            initialize_aria2,
         )
         .await?;
 
@@ -424,6 +444,7 @@ impl CoreServices {
             queue,
             downloads_dir: cfg.downloads_dir,
             shutdown_complete: Mutex::new(false),
+            aria2_runtime_assessment_enabled: initialize_aria2,
         })
     }
 
@@ -520,6 +541,8 @@ impl CoreServices {
             Aria2RecoveryState::NotAria2
         } else if item.status() == DownloadStatus::Completed {
             Aria2RecoveryState::NotRequired
+        } else if !self.aria2_runtime_assessment_enabled {
+            Aria2RecoveryState::Unknown
         } else if !matches!(
             &self.engine_runtime.status.aria2,
             EngineAvailability::Available { .. }
@@ -1998,7 +2021,7 @@ impl EngineRuntime {
         config: &EngineConfig,
         runtime_dir: &std::path::Path,
     ) -> Result<Self, CoreServicesError> {
-        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None, None).await
+        Self::initialize_with_ytdlp_runner(repository, config, runtime_dir, None, None, true).await
     }
 
     async fn initialize_with_ytdlp_runner(
@@ -2007,6 +2030,7 @@ impl EngineRuntime {
         runtime_dir: &std::path::Path,
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
         torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
+        initialize_aria2: bool,
     ) -> Result<Self, CoreServicesError> {
         let direct_http = Arc::new(
             DirectHttpEngine::new(repository.clone())
@@ -2019,8 +2043,17 @@ impl EngineRuntime {
         );
 
         let native_torrent_metadata = torrent_metadata.clone();
-        let (aria2_engine, aria2_supervisor, aria2_avail) =
-            init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await;
+        let (aria2_engine, aria2_supervisor, aria2_avail) = if initialize_aria2 {
+            init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await
+        } else {
+            (
+                stub_aria2(repository.clone()),
+                None,
+                EngineAvailability::Unavailable {
+                    reason: "not initialized for read-only assessment".to_owned(),
+                },
+            )
+        };
         // Clone the runner before moving it into init_ytdlp so we can also
         // pass it to YtDlpProcessRunnerAdapter for the media extraction registry.
         let ytdlp_runner_for_registry = ytdlp_runner.clone();
@@ -4102,6 +4135,51 @@ mod tests {
                 .is_none()
         );
 
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_only_assessment_start_does_not_launch_aria2_or_dispatch_downloads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let paths = config(root.path());
+        let services = CoreServices::start_for_read_only_assessment(paths).await?;
+        assert!(services.engine_runtime.aria2_supervisor.is_none());
+
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let destination = root.path().join("downloads").join("partial.bin");
+        let partial_bytes = b"existing partial";
+        tokio::fs::write(&destination, partial_bytes).await?;
+        let item = DownloadItem::from_parts(
+            id,
+            DownloadSource::new("https://example.test/partial.bin", EngineKind::Aria2)?,
+            FileName::new("partial.bin")?,
+            destination.clone(),
+            DownloadStatus::Paused,
+            DownloadPriority::default(),
+            DownloadProgress::new(4, Some(100), None, None)?,
+            now,
+            now,
+            None,
+        )?;
+        services.repository.create(&item).await?;
+
+        let assessment = services
+            .assess_aria2_recovery(id)
+            .await?
+            .ok_or("missing read-only assessment")?;
+        assert_eq!(assessment.state, Aria2RecoveryState::Unknown);
+        assert_eq!(
+            services
+                .repository
+                .get(id)
+                .await?
+                .ok_or("download disappeared")?,
+            item
+        );
+        assert_eq!(tokio::fs::read(destination).await?, partial_bytes);
         services.shutdown().await?;
         Ok(())
     }

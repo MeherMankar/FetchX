@@ -102,6 +102,7 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
         RemoteCommand::EngineRuntimeStatus => Permission::EngineRead,
         RemoteCommand::DownloadGet(_)
         | RemoteCommand::DownloadTorrentMetadata(_)
+        | RemoteCommand::DownloadAria2Recovery(_)
         | RemoteCommand::DownloadList
         | RemoteCommand::DownloadRuntimeStatus
         | RemoteCommand::DownloadFindDuplicate(_) => Permission::DownloadsRead,
@@ -149,6 +150,10 @@ mod tests {
             (RemoteCommand::DownloadGet(id), Permission::DownloadsRead),
             (
                 RemoteCommand::DownloadTorrentMetadata(id),
+                Permission::DownloadsRead,
+            ),
+            (
+                RemoteCommand::DownloadAria2Recovery(id),
                 Permission::DownloadsRead,
             ),
             (
@@ -219,7 +224,7 @@ mod tests {
 
     #[test]
     fn every_protocol_command_has_an_explicit_permission() {
-        assert_eq!(commands().len(), 20);
+        assert_eq!(commands().len(), 21);
         for (command, expected) in commands() {
             assert_eq!(required_permission(&command), expected);
         }

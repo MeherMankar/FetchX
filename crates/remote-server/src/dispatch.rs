@@ -10,8 +10,10 @@ use fetchx_models::{
 };
 use fetchx_queue::QueueError;
 use fetchx_remote_protocol::{
-    CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_GET,
-    DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
+    ARIA2_RECOVERY_ASSESSMENT_VERSION, Aria2RecoveryAssessmentResult,
+    Aria2RecoveryState as ProtocolAria2RecoveryState, CAPABILITIES, DOWNLOAD_ARIA2_RECOVERY,
+    DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_GET, DOWNLOAD_LIST,
+    DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
     DOWNLOAD_SELECT_TORRENT_FILES, DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY,
     DOWNLOAD_SET_SPEED_LIMIT, DOWNLOAD_TORRENT_METADATA, DownloadCreateParams,
     ENGINE_RUNTIME_STATUS, EngineRuntimeState, EngineRuntimeStatusEntry, EngineRuntimeStatusResult,
@@ -117,6 +119,27 @@ pub(crate) async fn dispatch(
                 })
                 .collect();
             serde_json::to_value(EngineRuntimeStatusResult { engines })
+                .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?
+        }
+        RemoteCommand::DownloadAria2Recovery(id) => {
+            let assessment = services
+                .assess_aria2_recovery(id)
+                .await
+                .map_err(|_| {
+                    RpcError::new(
+                        RpcErrorCode::ServiceUnavailable,
+                        "aria2 recovery assessment unavailable",
+                    )
+                })?
+                .ok_or_else(not_found)?;
+            let result = Aria2RecoveryAssessmentResult {
+                assessment_version: ARIA2_RECOVERY_ASSESSMENT_VERSION,
+                download_id: assessment.download_id,
+                state: protocol_recovery_state(assessment.state),
+                explanation: assessment.explanation.to_owned(),
+                next_step: assessment.next_step.to_owned(),
+            };
+            serde_json::to_value(result)
                 .map_err(|_| RpcError::new(RpcErrorCode::InternalError, "internal error"))?
         }
         RemoteCommand::DownloadCreate(params) => {
@@ -297,8 +320,10 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         DOWNLOAD_LIST,
         DOWNLOAD_TORRENT_METADATA,
         DOWNLOAD_SELECT_TORRENT_FILES,
+        DOWNLOAD_ARIA2_RECOVERY,
         DOWNLOAD_RUNTIME_STATUS,
         DOWNLOAD_FIND_DUPLICATE,
+        DOWNLOAD_ARIA2_RECOVERY,
         DOWNLOAD_PAUSE,
         DOWNLOAD_RESUME,
         DOWNLOAD_CANCEL,
@@ -325,6 +350,40 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         protocol_version: PROTOCOL_VERSION.to_owned(),
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
         capabilities,
+    }
+}
+
+fn protocol_recovery_state(
+    state: fetchx_core_services::Aria2RecoveryState,
+) -> ProtocolAria2RecoveryState {
+    match state {
+        fetchx_core_services::Aria2RecoveryState::NotAria2 => ProtocolAria2RecoveryState::NotAria2,
+        fetchx_core_services::Aria2RecoveryState::NotRequired => {
+            ProtocolAria2RecoveryState::NotRequired
+        }
+        fetchx_core_services::Aria2RecoveryState::RuntimeUnavailable => {
+            ProtocolAria2RecoveryState::RuntimeUnavailable
+        }
+        fetchx_core_services::Aria2RecoveryState::ReadyToStart => {
+            ProtocolAria2RecoveryState::ReadyToStart
+        }
+        fetchx_core_services::Aria2RecoveryState::JobAvailable => {
+            ProtocolAria2RecoveryState::JobAvailable
+        }
+        fetchx_core_services::Aria2RecoveryState::MissingTorrentMetadata => {
+            ProtocolAria2RecoveryState::MissingTorrentMetadata
+        }
+        fetchx_core_services::Aria2RecoveryState::MissingGid => {
+            ProtocolAria2RecoveryState::MissingGid
+        }
+        fetchx_core_services::Aria2RecoveryState::StaleGid => ProtocolAria2RecoveryState::StaleGid,
+        fetchx_core_services::Aria2RecoveryState::MissingControlFile => {
+            ProtocolAria2RecoveryState::MissingControlFile
+        }
+        fetchx_core_services::Aria2RecoveryState::ControlFilePresent => {
+            ProtocolAria2RecoveryState::ControlFilePresent
+        }
+        fetchx_core_services::Aria2RecoveryState::Unknown => ProtocolAria2RecoveryState::Unknown,
     }
 }
 
@@ -535,7 +594,7 @@ fn unsupported(method: &'static str) -> RpcError {
 mod tests {
     use super::*;
     use crate::authorization::{AuthenticatedPrincipal, Role};
-    use fetchx_core_services::{CoreServices, CoreServicesConfig};
+    use fetchx_core_services::{CoreServices, CoreServicesConfig, EngineConfig};
     use fetchx_models::{
         DownloadProgress, DownloadSource, DownloadStatus, FileName, TorrentFile, TorrentMetadata,
     };
@@ -713,6 +772,99 @@ mod tests {
         assert_eq!(persisted.selected_file_indexes, [0]);
         assert!(persisted.selection_confirmed);
 
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aria2_recovery_rpc_is_read_only_sanitized_and_available_to_read_only_role()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let paths = CoreServicesConfig {
+            database_path: directory.path().join("fetchx.db"),
+            downloads_dir: directory.path().join("downloads"),
+            runtime_dir: directory.path().join("runtime"),
+            bundled_engines_dir: None,
+            defer_queued_on_start: true,
+        };
+        let mut engine_config = EngineConfig::default();
+        engine_config.aria2.enabled = false;
+        let services = CoreServices::start_with_engine_config(paths, Some(engine_config)).await?;
+
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let destination = directory.path().join("partial.bin");
+        let partial_bytes = b"existing aria2 partial";
+        tokio::fs::write(&destination, partial_bytes).await?;
+        let item = DownloadItem::from_parts(
+            id,
+            DownloadSource::new("https://example.test/partial.bin", EngineKind::Aria2)?,
+            FileName::new("partial.bin")?,
+            destination.clone(),
+            DownloadStatus::Paused,
+            DownloadPriority::default(),
+            DownloadProgress::new(4, Some(100), None, None)?,
+            now,
+            now,
+            None,
+        )?;
+        services.repository.create(&item).await?;
+        let before = services
+            .repository
+            .get(id)
+            .await?
+            .ok_or("missing persisted aria2 download")?;
+
+        let discovery = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::ReadOnly),
+            fetchx_remote_protocol::parse_request(
+                br#"{"jsonrpc":"2.0","id":1,"method":"system.discover"}"#,
+            )?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect("discovery should succeed");
+        assert!(
+            discovery["capabilities"]
+                .as_array()
+                .is_some_and(|caps| caps.iter().any(|cap| cap == DOWNLOAD_ARIA2_RECOVERY))
+        );
+
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"{DOWNLOAD_ARIA2_RECOVERY}","params":{{"id":"{id}"}}}}"#
+        );
+        let result = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::ReadOnly),
+            fetchx_remote_protocol::parse_request(request.as_bytes())?,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect("read-only assessment should succeed");
+
+        assert_eq!(
+            result["assessment_version"],
+            ARIA2_RECOVERY_ASSESSMENT_VERSION
+        );
+        assert_eq!(result["download_id"], id.to_string());
+        assert_eq!(result["state"], "runtime_unavailable");
+        assert!(result["explanation"].as_str().is_some());
+        assert!(result["next_step"].as_str().is_some());
+        let response = result.to_string();
+        assert!(!response.contains(&destination.to_string_lossy().to_string()));
+        assert!(!response.contains("aria2_gid"));
+        assert!(!response.contains("rpc_secret"));
+
+        let after = services
+            .repository
+            .get(id)
+            .await?
+            .ok_or("aria2 download disappeared after assessment")?;
+        assert_eq!(before, after);
+        assert_eq!(tokio::fs::read(destination).await?, partial_bytes);
         services.shutdown().await?;
         Ok(())
     }
