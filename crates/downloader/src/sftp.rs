@@ -47,19 +47,25 @@ use russh::{Disconnect, client};
 use russh::keys::PublicKeyOrCertificate;
 use russh::keys::key::PrivateKeyWithHashAlg;
 use russh_sftp::client::SftpSession;
+#[cfg(test)]
+use tokio::sync::Notify;
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::watch,
 };
 use tracing::{info, warn};
 
-use crate::{DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine};
+use crate::{
+    DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
+    retry::RetryPolicy,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 const CHUNK_SIZE: usize = 64 * 1024;
 const DEFAULT_SFTP_PORT: u16 = 22;
+const SFTP_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -128,6 +134,8 @@ pub struct SftpEngine<R> {
     repository: R,
     state_machine: DownloadStateMachine<R>,
     config: SftpEngineConfig,
+    #[cfg(test)]
+    retry_started: Arc<Notify>,
 }
 
 impl<R> SftpEngine<R>
@@ -145,6 +153,8 @@ where
             state_machine: DownloadStateMachine::new(repository.clone()),
             repository,
             config,
+            #[cfg(test)]
+            retry_started: Arc::new(Notify::new()),
         }
     }
 
@@ -188,7 +198,53 @@ where
             }
         };
 
-        let result = self.run(id, &item, &mut control).await;
+        let started_at = Instant::now();
+        let mut attempt = 1_u8;
+        let mut item = item;
+        let result = loop {
+            match self.run(id, &item, &mut control).await {
+                Ok(completed) => break Ok(completed),
+                Err(error @ SftpAttemptError::Transient(_)) => {
+                    let Some(delay) = RetryPolicy::SFTP.delay(attempt, None, started_at.elapsed())
+                    else {
+                        warn!(
+                            download_id = %id,
+                            attempt,
+                            "SFTP transient retry budget exhausted"
+                        );
+                        break Err(error.into_download_error());
+                    };
+                    warn!(
+                        download_id = %id,
+                        attempt,
+                        delay_ms = delay.as_millis(),
+                        "SFTP transient failure; retrying after verified resume"
+                    );
+                    #[cfg(test)]
+                    self.retry_started.notify_one();
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {}
+                        changed = control.cancellation.changed() => {
+                            if changed.is_err() || *control.cancellation.borrow_and_update() {
+                                break Err(DownloadEngineError::Cancelled);
+                            }
+                        }
+                        changed = control.pause.changed() => {
+                            if changed.is_err() || *control.pause.borrow_and_update() {
+                                break Err(DownloadEngineError::Paused);
+                            }
+                        }
+                    }
+                    attempt = attempt.saturating_add(1);
+                    item = self
+                        .repository
+                        .get(id)
+                        .await?
+                        .ok_or(DownloadEngineError::NotFound(id))?;
+                }
+                Err(error) => break Err(error.into_download_error()),
+            }
+        };
 
         match result {
             Ok(completed) => Ok(completed),
@@ -217,13 +273,13 @@ where
         id: DownloadId,
         item: &DownloadItem,
         control: &mut ManagedDownloadControl,
-    ) -> Result<DownloadItem, DownloadEngineError> {
+    ) -> Result<DownloadItem, SftpAttemptError> {
         // Early cooperative check.
         if *control.cancellation.borrow_and_update() {
-            return Err(DownloadEngineError::Cancelled);
+            return Err(DownloadEngineError::Cancelled.into());
         }
         if *control.pause.borrow_and_update() {
-            return Err(DownloadEngineError::Paused);
+            return Err(DownloadEngineError::Paused.into());
         }
 
         let url_str = item.source().url().to_owned();
@@ -254,11 +310,17 @@ where
             ),
         };
 
-        let resume_offset: u64 = std::fs::metadata(&tmp)
-            .ok()
-            .filter(|m| m.is_file())
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let resume_offset = match tokio::fs::symlink_metadata(&tmp).await {
+            Ok(metadata) if metadata.file_type().is_file() => metadata.len(),
+            Ok(_) => {
+                return Err(DownloadEngineError::SftpError(
+                    "partial download path is not a regular file".to_owned(),
+                )
+                .into());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(DownloadEngineError::Io(error).into()),
+        };
 
         // Transition to Downloading.
         let mut tracked = if item.status() == DownloadStatus::Preparing {
@@ -278,7 +340,10 @@ where
             .map_err(DownloadEngineError::Storage)?;
 
         // Connect to SSH server with host key verification.
-        let ssh_config = russh::client::Config::default();
+        let ssh_config = russh::client::Config {
+            inactivity_timeout: Some(SFTP_INACTIVITY_TIMEOUT),
+            ..Default::default()
+        };
         let handler = SftpClientHandler {
             expected_key_base64: expected_key_b64,
         };
@@ -289,8 +354,8 @@ where
             client::connect(Arc::new(ssh_config), addr, handler),
         )
         .await
-        .map_err(|_| DownloadEngineError::SftpError("connection timed out".to_owned()))?
-        .map_err(|e| DownloadEngineError::SftpError(format!("connect failed: {e}")))?;
+        .map_err(|_| SftpAttemptError::Transient("connection timed out".to_owned()))?
+        .map_err(|error| map_connect_error("connect failed", error))?;
 
         // Authenticate: try public-key first, then password, then empty-password fallback.
         if let Some(pem) = &self.config.private_key_pem {
@@ -303,40 +368,34 @@ where
             let auth_result = session
                 .authenticate_publickey(username.as_str(), key_with_alg)
                 .await
-                .map_err(|e| {
-                    DownloadEngineError::SftpError(format!("authentication error: {e}"))
-                })?;
+                .map_err(|error| map_ssh_error("authentication error", error))?;
             if !auth_result.success() {
                 let _ = session
                     .disconnect(Disconnect::ByApplication, "auth failed", "en")
                     .await;
-                return Err(DownloadEngineError::SftpAuthenticationFailed);
+                return Err(DownloadEngineError::SftpAuthenticationFailed.into());
             }
         } else if let Some(password) = &self.config.password {
             let auth_result = session
                 .authenticate_password(username.as_str(), password.clone())
                 .await
-                .map_err(|e| {
-                    DownloadEngineError::SftpError(format!("authentication error: {e}"))
-                })?;
+                .map_err(|error| map_ssh_error("authentication error", error))?;
             if !auth_result.success() {
                 let _ = session
                     .disconnect(Disconnect::ByApplication, "auth failed", "en")
                     .await;
-                return Err(DownloadEngineError::SftpAuthenticationFailed);
+                return Err(DownloadEngineError::SftpAuthenticationFailed.into());
             }
         } else {
             let auth_result = session
                 .authenticate_password(username.as_str(), "")
                 .await
-                .map_err(|e| {
-                    DownloadEngineError::SftpError(format!("authentication error: {e}"))
-                })?;
+                .map_err(|error| map_ssh_error("authentication error", error))?;
             if !auth_result.success() {
                 let _ = session
                     .disconnect(Disconnect::ByApplication, "auth failed", "en")
                     .await;
-                return Err(DownloadEngineError::SftpAuthenticationFailed);
+                return Err(DownloadEngineError::SftpAuthenticationFailed.into());
             }
         }
 
@@ -344,20 +403,21 @@ where
         let channel = session
             .channel_open_session()
             .await
-            .map_err(|e| DownloadEngineError::SftpError(format!("channel open failed: {e}")))?;
-        channel.request_subsystem(true, "sftp").await.map_err(|e| {
-            DownloadEngineError::SftpError(format!("sftp subsystem request failed: {e}"))
-        })?;
+            .map_err(|error| map_ssh_error("channel open failed", error))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|error| map_ssh_error("sftp subsystem request failed", error))?;
 
-        let sftp = SftpSession::new(channel.into_stream()).await.map_err(|e| {
-            DownloadEngineError::SftpError(format!("sftp session init failed: {e}"))
-        })?;
+        let sftp = SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|error| map_sftp_error("sftp session init failed", error))?;
 
         // Stat the remote file to get size.
         let attrs = sftp
             .metadata(path.as_str())
             .await
-            .map_err(|e| DownloadEngineError::SftpError(format!("stat failed: {e}")))?;
+            .map_err(|error| map_sftp_error("stat failed", error))?;
         let total_bytes = attrs
             .size
             .ok_or_else(|| DownloadEngineError::SftpError("file size unavailable".to_owned()))?;
@@ -366,14 +426,15 @@ where
         if resume_offset > total_bytes {
             return Err(DownloadEngineError::SftpError(
                 "remote file is shorter than the existing partial file".to_owned(),
-            ));
+            )
+            .into());
         }
 
         // Open remote file for reading.
         let mut remote_file = sftp
             .open(path.as_str())
             .await
-            .map_err(|e| DownloadEngineError::SftpError(format!("open failed: {e}")))?;
+            .map_err(|error| map_sftp_error("open failed", error))?;
 
         // A byte offset alone cannot establish that the partial file belongs to
         // the current remote object. Compare the saved prefix before appending.
@@ -389,15 +450,12 @@ where
                 let n = remote_file
                     .read(&mut remote_buf[..chunk_len])
                     .await
-                    .map_err(|e| {
-                        DownloadEngineError::SftpError(format!(
-                            "resume validation read failed: {e}"
-                        ))
-                    })?;
+                    .map_err(|error| map_remote_io_error("resume validation read failed", error))?;
                 if n == 0 {
                     return Err(DownloadEngineError::SftpError(
                         "remote file ended while validating the existing partial file".to_owned(),
-                    ));
+                    )
+                    .into());
                 }
                 local_prefix
                     .read_exact(&mut local_buf[..n])
@@ -406,14 +464,15 @@ where
                 if local_buf[..n] != remote_buf[..n] {
                     return Err(DownloadEngineError::SftpError(
                         "existing partial file does not match the current remote file".to_owned(),
-                    ));
+                    )
+                    .into());
                 }
                 compared += n as u64;
             }
             remote_file
                 .seek(std::io::SeekFrom::Start(resume_offset))
                 .await
-                .map_err(|e| DownloadEngineError::SftpError(format!("seek failed: {e}")))?;
+                .map_err(|error| map_remote_io_error("seek failed", error))?;
         }
 
         // Open local .part file.
@@ -443,26 +502,31 @@ where
         // Download loop.
         loop {
             if *control.cancellation.borrow_and_update() {
+                local_file.flush().await.map_err(DownloadEngineError::Io)?;
                 drop(remote_file);
                 drop(sftp);
                 let _ = session
                     .disconnect(Disconnect::ByApplication, "cancelled", "en")
                     .await;
-                return Err(DownloadEngineError::Cancelled);
+                return Err(DownloadEngineError::Cancelled.into());
             }
             if *control.pause.borrow_and_update() {
+                local_file.flush().await.map_err(DownloadEngineError::Io)?;
                 drop(remote_file);
                 drop(sftp);
                 let _ = session
                     .disconnect(Disconnect::ByApplication, "paused", "en")
                     .await;
-                return Err(DownloadEngineError::Paused);
+                return Err(DownloadEngineError::Paused.into());
             }
 
-            let n = remote_file
-                .read(&mut buf)
-                .await
-                .map_err(|e| DownloadEngineError::SftpError(format!("read failed: {e}")))?;
+            let n = match remote_file.read(&mut buf).await {
+                Ok(n) => n,
+                Err(error) => {
+                    local_file.flush().await.map_err(DownloadEngineError::Io)?;
+                    return Err(map_remote_io_error("read failed", error));
+                }
+            };
             if n == 0 {
                 break;
             }
@@ -512,20 +576,22 @@ where
         if downloaded != total_bytes {
             return Err(DownloadEngineError::SftpError(format!(
                 "remote file size changed during transfer (expected {total_bytes} bytes, received {downloaded})"
-            )));
+            ))
+            .into());
         }
 
         let final_attrs = sftp
             .metadata(path.as_str())
             .await
-            .map_err(|e| DownloadEngineError::SftpError(format!("final stat failed: {e}")))?;
+            .map_err(|error| map_sftp_error("final stat failed", error))?;
         let final_size = final_attrs.size.ok_or_else(|| {
             DownloadEngineError::SftpError("final file size unavailable".to_owned())
         })?;
         if final_size != total_bytes || final_attrs.mtime != initial_mtime {
             return Err(DownloadEngineError::SftpError(
                 "remote file changed during transfer".to_owned(),
-            ));
+            )
+            .into());
         }
 
         // Clean shutdown: drop SFTP objects then disconnect SSH.
@@ -541,7 +607,8 @@ where
         if !destination.exists() {
             return Err(DownloadEngineError::SftpError(
                 "SFTP transfer completed but destination file is missing".to_owned(),
-            ));
+            )
+            .into());
         }
 
         // Final progress snapshot.
@@ -697,6 +764,44 @@ struct SftpClientHandler {
     expected_key_base64: Option<String>,
 }
 
+enum SftpAttemptError {
+    Transient(String),
+    Permanent(DownloadEngineError),
+}
+
+impl From<DownloadEngineError> for SftpAttemptError {
+    fn from(error: DownloadEngineError) -> Self {
+        Self::Permanent(error)
+    }
+}
+
+impl From<StateMachineError> for SftpAttemptError {
+    fn from(error: StateMachineError) -> Self {
+        Self::Permanent(error.into())
+    }
+}
+
+impl From<fetchx_models::DownloadProgressError> for SftpAttemptError {
+    fn from(error: fetchx_models::DownloadProgressError) -> Self {
+        Self::Permanent(error.into())
+    }
+}
+
+impl From<fetchx_models::DownloadItemError> for SftpAttemptError {
+    fn from(error: fetchx_models::DownloadItemError) -> Self {
+        Self::Permanent(error.into())
+    }
+}
+
+impl SftpAttemptError {
+    fn into_download_error(self) -> DownloadEngineError {
+        match self {
+            Self::Transient(message) => DownloadEngineError::SftpError(message),
+            Self::Permanent(error) => error,
+        }
+    }
+}
+
 impl client::Handler for SftpClientHandler {
     type Error = DownloadSftpError;
 
@@ -837,6 +942,120 @@ fn parse_sftp_url(url: &str) -> Result<(String, u16, String, String), DownloadEn
     Ok((host, port, path, username))
 }
 
+fn map_ssh_error(context: &str, error: russh::Error) -> SftpAttemptError {
+    let retryable = match &error {
+        russh::Error::IO(error) => is_transient_io_kind(error.kind()),
+        russh::Error::HUP
+        | russh::Error::Disconnect
+        | russh::Error::ConnectionTimeout
+        | russh::Error::KeepaliveTimeout
+        | russh::Error::InactivityTimeout
+        | russh::Error::SendError
+        | russh::Error::RecvError => true,
+        _ => false,
+    };
+    let message = format!("{context}: {error}");
+    if retryable {
+        SftpAttemptError::Transient(message)
+    } else {
+        SftpAttemptError::Permanent(DownloadEngineError::SftpError(message))
+    }
+}
+
+fn map_connect_error(context: &str, error: DownloadSftpError) -> SftpAttemptError {
+    let retryable = is_transient_transport_message(&error.0);
+    let message = format!("{context}: {error}");
+    if retryable {
+        SftpAttemptError::Transient(message)
+    } else {
+        SftpAttemptError::Permanent(DownloadEngineError::SftpError(message))
+    }
+}
+
+fn map_sftp_error(context: &str, error: russh_sftp::client::error::Error) -> SftpAttemptError {
+    let retryable = match &error {
+        russh_sftp::client::error::Error::IO(message) => is_transient_transport_message(message),
+        russh_sftp::client::error::Error::Timeout => true,
+        russh_sftp::client::error::Error::Status(status) => {
+            matches!(
+                status.status_code,
+                russh_sftp::protocol::StatusCode::Failure
+                    | russh_sftp::protocol::StatusCode::NoConnection
+                    | russh_sftp::protocol::StatusCode::ConnectionLost
+            )
+        }
+        russh_sftp::client::error::Error::UnexpectedBehavior(message) => {
+            message.contains("Connection lost")
+                || message.contains("No connection")
+                || message.contains("Failure:")
+                || message.contains("SendError")
+                || message.contains("RecvError")
+                || is_transient_transport_message(message)
+        }
+        russh_sftp::client::error::Error::Limited(_)
+        | russh_sftp::client::error::Error::UnexpectedPacket => false,
+    };
+    let message = format!("{context}: {error}");
+    if retryable {
+        SftpAttemptError::Transient(message)
+    } else {
+        SftpAttemptError::Permanent(DownloadEngineError::SftpError(message))
+    }
+}
+
+fn map_remote_io_error(context: &str, error: std::io::Error) -> SftpAttemptError {
+    let message = error.to_string();
+    let retryable = is_transient_io_kind(error.kind())
+        || is_transient_transport_message(&message)
+        || message.contains("Failure:");
+    let message = format!("{context}: {message}");
+    if retryable {
+        SftpAttemptError::Transient(message)
+    } else {
+        SftpAttemptError::Permanent(DownloadEngineError::SftpError(message))
+    }
+}
+
+fn is_transient_io_kind(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::WouldBlock
+    )
+}
+
+fn is_transient_transport_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "connection lost",
+        "connection closed",
+        "not connected",
+        "broken pipe",
+        "timed out",
+        "timeout",
+        "connection timeout",
+        "keepalive timeout",
+        "inactivity timeout",
+        "senderror",
+        "recverror",
+        "disconnected",
+        "unexpected eof",
+        "temporarily unavailable",
+        "resource temporarily unavailable",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -849,7 +1068,7 @@ mod tests {
         path::PathBuf,
         sync::{
             Arc,
-            atomic::{AtomicU32, Ordering},
+            atomic::{AtomicU32, AtomicU64, Ordering},
         },
         time::Duration,
     };
@@ -874,6 +1093,29 @@ mod tests {
         BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
         ManagedDownloadEngine,
     };
+
+    #[test]
+    fn sftp_retry_classifier_distinguishes_transport_from_permanent_errors() {
+        assert!(matches!(
+            super::map_ssh_error("connect failed", russh::Error::ConnectionTimeout),
+            super::SftpAttemptError::Transient(_)
+        ));
+        assert!(matches!(
+            super::map_ssh_error("connect failed", russh::Error::UnknownKey),
+            super::SftpAttemptError::Permanent(DownloadEngineError::SftpError(_))
+        ));
+        assert!(matches!(
+            super::map_ssh_error("authentication error", russh::Error::Disconnect),
+            super::SftpAttemptError::Transient(_)
+        ));
+        assert!(matches!(
+            super::map_remote_io_error(
+                "read failed",
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+            ),
+            super::SftpAttemptError::Permanent(DownloadEngineError::SftpError(_))
+        ));
+    }
 
     // ── URL parsing ──────────────────────────────────────────────────────────
 
@@ -1219,6 +1461,12 @@ mod tests {
         modified_at: Arc<AtomicU32>,
         read_offsets: Arc<Mutex<Vec<u64>>>,
         first_read: Arc<Notify>,
+        connection_count: Arc<AtomicU32>,
+        auth_attempts: Arc<AtomicU32>,
+        transient_read_failures: Arc<AtomicU32>,
+        fail_after_offset: Arc<AtomicU64>,
+        transient_failure: Arc<Notify>,
+        session_abort_handles: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
     }
 
     struct TestSftpServer {
@@ -1245,6 +1493,12 @@ mod tests {
                 modified_at: Arc::new(AtomicU32::new(1)),
                 read_offsets: Arc::new(Mutex::new(Vec::new())),
                 first_read: Arc::new(Notify::new()),
+                connection_count: Arc::new(AtomicU32::new(0)),
+                auth_attempts: Arc::new(AtomicU32::new(0)),
+                transient_read_failures: Arc::new(AtomicU32::new(0)),
+                fail_after_offset: Arc::new(AtomicU64::new(u64::MAX)),
+                transient_failure: Arc::new(Notify::new()),
+                session_abort_handles: Arc::new(Mutex::new(Vec::new())),
             };
             let server_state = state.clone();
             let server_config = Arc::new(server::Config {
@@ -1257,13 +1511,20 @@ mod tests {
                 while let Ok((stream, _)) = listener.accept().await {
                     let config = server_config.clone();
                     let state = server_state.clone();
-                    tokio::spawn(async move {
+                    let session_state = state.clone();
+                    let session = tokio::spawn(async move {
                         if let Ok(session) =
-                            server::run_stream(config, stream, TestSshSession::new(state)).await
+                            server::run_stream(config, stream, TestSshSession::new(session_state))
+                                .await
                         {
                             let _ = session.await;
                         }
                     });
+                    state
+                        .session_abort_handles
+                        .lock()
+                        .await
+                        .push(session.abort_handle());
                 }
             });
 
@@ -1290,6 +1551,13 @@ mod tests {
                 ..Default::default()
             }
         }
+
+        fn fail_reads_after(&self, offset: u64, count: u32) {
+            self.state.fail_after_offset.store(offset, Ordering::SeqCst);
+            self.state
+                .transient_read_failures
+                .store(count, Ordering::SeqCst);
+        }
     }
 
     impl Drop for TestSftpServer {
@@ -1305,6 +1573,7 @@ mod tests {
 
     impl TestSshSession {
         fn new(state: TestSftpState) -> Self {
+            state.connection_count.fetch_add(1, Ordering::SeqCst);
             Self {
                 channels: HashMap::new(),
                 state,
@@ -1320,6 +1589,7 @@ mod tests {
             _user: &str,
             password: &str,
         ) -> Result<Auth, Self::Error> {
+            self.state.auth_attempts.fetch_add(1, Ordering::SeqCst);
             Ok(if password == "fixture-password" {
                 Auth::Accept
             } else {
@@ -1414,6 +1684,35 @@ mod tests {
             async move {
                 state.read_offsets.lock().await.push(offset);
                 state.first_read.notify_one();
+                let fail_read = if offset >= state.fail_after_offset.load(Ordering::SeqCst) {
+                    loop {
+                        let remaining = state.transient_read_failures.load(Ordering::SeqCst);
+                        if remaining == 0 {
+                            break false;
+                        }
+                        if state
+                            .transient_read_failures
+                            .compare_exchange(
+                                remaining,
+                                remaining - 1,
+                                Ordering::SeqCst,
+                                Ordering::SeqCst,
+                            )
+                            .is_ok()
+                        {
+                            break true;
+                        }
+                    }
+                } else {
+                    false
+                };
+                if fail_read {
+                    state.transient_failure.notify_one();
+                    if let Some(handle) = state.session_abort_handles.lock().await.pop() {
+                        handle.abort();
+                    }
+                    return Err(StatusCode::Failure);
+                }
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 let contents = state.contents.read().await;
                 let start = usize::try_from(offset).map_err(|_| StatusCode::Failure)?;
@@ -1503,6 +1802,8 @@ mod tests {
             DownloadEngine::download(&engine, id, cancel_rx).await,
             Err(DownloadEngineError::SftpAuthenticationFailed)
         ));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 1);
+        assert_eq!(server.state.auth_attempts.load(Ordering::SeqCst), 1);
         assert!(!destination.exists());
         Ok(())
     }
@@ -1572,6 +1873,7 @@ mod tests {
             DownloadEngine::download(&engine, id, cancel_rx).await,
             Err(DownloadEngineError::SftpError(message)) if message.contains("host key")
         ));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 1);
         assert!(!destination.exists());
         Ok(())
     }
@@ -1622,6 +1924,7 @@ mod tests {
 
         let result = DownloadEngine::download(&engine, id, cancel_rx).await;
         assert!(matches!(result, Err(DownloadEngineError::SftpError(_))));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 1);
         assert_eq!(tokio::fs::read(&partial).await?, saved_partial);
         assert!(!destination.exists());
         Ok(())
@@ -1752,6 +2055,7 @@ mod tests {
         let partial = super::temporary_path(&destination);
         let saved_partial = tokio::fs::read(&partial).await?;
         assert!(!saved_partial.is_empty());
+        let prior_connection_count = server.state.connection_count.load(Ordering::SeqCst);
         *server.state.contents.write().await = vec![b'b'; contents.len()];
 
         let (_retry_cancel_tx, retry_cancel_rx) = watch::channel(false);
@@ -1768,8 +2072,211 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(DownloadEngineError::SftpError(_))));
+        assert_eq!(
+            server.state.connection_count.load(Ordering::SeqCst),
+            prior_connection_count + 1
+        );
         assert_eq!(tokio::fs::read(&partial).await?, saved_partial);
         assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_transient_read_failure_retries_after_prefix_validation()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b't'; 220_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        server.fail_reads_after(32_768, 1);
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+
+        let result = DownloadEngine::download(&engine, id, watch::channel(false).1).await?;
+
+        assert_eq!(result.status(), fetchx_models::DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(destination).await?, contents);
+        assert!(!partial.exists());
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 2);
+        assert!(
+            server
+                .state
+                .read_offsets
+                .lock()
+                .await
+                .iter()
+                .filter(|offset| **offset == 65_536)
+                .count()
+                >= 2,
+            "expected the failed range offset to be revalidated and resumed"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_transient_failures_stop_at_bounded_attempt_limit_and_preserve_partial()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'e'; 220_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        server.fail_reads_after(32_768, 10);
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository.clone(), server.config());
+
+        assert!(matches!(
+            DownloadEngine::download(&engine, id, watch::channel(false).1).await,
+            Err(DownloadEngineError::SftpError(_))
+        ));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 4);
+        assert_eq!(
+            tokio::fs::read(&partial).await?,
+            contents[..65_536].to_vec()
+        );
+        assert!(!destination.exists());
+        assert_eq!(
+            repository
+                .get(id)
+                .await?
+                .expect("failed download remains persisted")
+                .status(),
+            fetchx_models::DownloadStatus::Failed
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_transient_retry_rejects_remote_mutation_before_appending()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'm'; 220_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        server.fail_reads_after(32_768, 1);
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = SftpEngine::with_config(repository, server.config());
+        let transient_failure = server.state.transient_failure.notified();
+        let download = tokio::spawn(async move {
+            DownloadEngine::download(&engine, id, watch::channel(false).1).await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), transient_failure).await?;
+        *server.state.contents.write().await = vec![b'n'; contents.len()];
+        assert!(matches!(
+            download.await?,
+            Err(DownloadEngineError::SftpError(message))
+                if message.contains("does not match the current remote file")
+        ));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            tokio::fs::read(&partial).await?,
+            contents[..65_536].to_vec()
+        );
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_cancellation_interrupts_retry_backoff_and_preserves_partial()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'c'; 220_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        server.fail_reads_after(32_768, 1);
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = Arc::new(SftpEngine::with_config(repository, server.config()));
+        let retry_started = engine.retry_started.notified();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let download_engine = engine.clone();
+        let download = tokio::spawn(async move {
+            DownloadEngine::download(&*download_engine, id, cancel_rx).await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), retry_started).await?;
+        cancel_tx.send(true)?;
+        assert!(matches!(
+            download.await?,
+            Err(DownloadEngineError::Cancelled)
+        ));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            tokio::fs::read(&partial).await?,
+            contents[..65_536].to_vec()
+        );
+        assert!(!destination.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sftp_pause_interrupts_retry_backoff_and_preserves_partial()
+    -> Result<(), Box<dyn Error>> {
+        let contents = vec![b'p'; 220_000];
+        let server = TestSftpServer::start(contents.clone()).await?;
+        server.fail_reads_after(32_768, 1);
+        let db = Database::connect("sqlite::memory:").await?;
+        let repository = db.downloads();
+        let temp = tempfile::tempdir()?;
+        let destination = temp.path().join("download.bin");
+        let partial = super::temporary_path(&destination);
+        let id = insert_sftp_item(&repository, &server.url(), destination.clone()).await?;
+        let engine = Arc::new(SftpEngine::with_config(repository, server.config()));
+        let retry_started = engine.retry_started.notified();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let (pause_tx, pause_rx) = watch::channel(false);
+        let (_connection_tx, connection_limit) = watch::channel(1);
+        let download_engine = engine.clone();
+        let download = tokio::spawn(async move {
+            download_engine
+                .download_managed(
+                    id,
+                    ManagedDownloadControl {
+                        cancellation: cancel_rx,
+                        pause: pause_rx,
+                        connection_limit,
+                        resource_demand: None,
+                        bandwidth: BandwidthControl::default(),
+                    },
+                )
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), retry_started).await?;
+        pause_tx.send(true)?;
+        assert!(matches!(download.await?, Err(DownloadEngineError::Paused)));
+        assert_eq!(server.state.connection_count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            tokio::fs::read(&partial).await?,
+            contents[..65_536].to_vec()
+        );
+        assert!(!destination.exists());
+
+        let result = engine
+            .download_managed(
+                id,
+                ManagedDownloadControl {
+                    cancellation: watch::channel(false).1,
+                    pause: watch::channel(false).1,
+                    connection_limit: watch::channel(1).1,
+                    resource_demand: None,
+                    bandwidth: BandwidthControl::default(),
+                },
+            )
+            .await?;
+        assert_eq!(result.status(), fetchx_models::DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(destination).await?, contents);
         Ok(())
     }
 

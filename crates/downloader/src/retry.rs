@@ -30,6 +30,17 @@ impl RetryPolicy {
         max_backoff: Duration::from_secs(16),
     };
 
+    /// Retry policy for resumable SFTP transfers.
+    ///
+    /// Each attempt reconnects and revalidates remote metadata and the saved
+    /// partial prefix before resuming.
+    pub(crate) const SFTP: Self = Self {
+        max_attempts: 4,
+        max_duration: Duration::from_secs(120),
+        initial_backoff: Duration::from_millis(250),
+        max_backoff: Duration::from_secs(8),
+    };
+
     pub(crate) fn delay(
         self,
         failed_attempt: u8,
@@ -164,6 +175,23 @@ mod tests {
         assert!(
             RetryPolicy::HTTP
                 .delay(1, None, Duration::from_secs(30))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sftp_retry_budget_is_bounded() {
+        assert_eq!(RetryPolicy::SFTP.max_attempts, 4);
+        assert_eq!(RetryPolicy::SFTP.max_duration, Duration::from_secs(120));
+        let first = RetryPolicy::SFTP
+            .delay(1, None, Duration::ZERO)
+            .expect("first SFTP retry");
+        assert!(first >= Duration::from_millis(250));
+        assert!(first < Duration::from_millis(500));
+        assert!(RetryPolicy::SFTP.delay(4, None, Duration::ZERO).is_none());
+        assert!(
+            RetryPolicy::SFTP
+                .delay(1, None, Duration::from_secs(120))
                 .is_none()
         );
     }
