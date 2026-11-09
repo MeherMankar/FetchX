@@ -916,11 +916,131 @@ mod tests {
         TorrentFile, TorrentMetadata, parse_magnet_uri,
     };
     use fetchx_storage::{
-        DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
-        TorrentSourceType,
+        Database, DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow,
+        TorrentSeedState, TorrentSourceType,
     };
     use sha1::{Digest, Sha1};
-    use std::{net::Ipv4Addr, path::PathBuf, time::Duration};
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        path::PathBuf,
+        process::{Command, Stdio},
+        time::Duration,
+    };
+
+    const PROCESS_RECOVERY_PHASE: &str = "FETCHX_TORRENT_RECOVERY_PHASE";
+
+    struct RecoveryWorker(std::process::Child);
+
+    impl RecoveryWorker {
+        fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>, std::io::Error> {
+            self.0.try_wait()
+        }
+
+        fn kill(&mut self) -> Result<(), std::io::Error> {
+            self.0.kill()
+        }
+
+        fn wait(&mut self) -> Result<std::process::ExitStatus, std::io::Error> {
+            self.0.wait()
+        }
+    }
+
+    impl Drop for RecoveryWorker {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    async fn run_process_recovery_worker() -> Result<(), Box<dyn std::error::Error>> {
+        use tokio::sync::watch;
+
+        let db_path = PathBuf::from(std::env::var("FETCHX_TORRENT_RECOVERY_DB")?);
+        let torrent_path = PathBuf::from(std::env::var("FETCHX_TORRENT_RECOVERY_TORRENT")?);
+        let destination = PathBuf::from(std::env::var("FETCHX_TORRENT_RECOVERY_DESTINATION")?);
+        let session_dir = PathBuf::from(std::env::var("FETCHX_TORRENT_RECOVERY_SESSION")?);
+        let phase = std::env::var(PROCESS_RECOVERY_PHASE)?;
+        if !matches!(phase.as_str(), "interrupt" | "resume") {
+            return Err(format!("invalid process recovery phase: {phase}").into());
+        }
+        let id = DownloadId::parse(&std::env::var("FETCHX_TORRENT_RECOVERY_ID")?)?;
+        let peer: SocketAddr = std::env::var("FETCHX_TORRENT_RECOVERY_PEER")?.parse()?;
+        let database = Database::connect_path(db_path).await?;
+        let repository = database.downloads();
+        let item = repository
+            .get(id)
+            .await?
+            .ok_or("recovery worker could not load its persisted download")?;
+        if item.destination() != destination.as_path() {
+            return Err(
+                "recovery worker destination differed from the persisted destination".into(),
+            );
+        }
+        if item.source().torrent_file_path() != Some(torrent_path.clone()) {
+            return Err("recovery worker torrent source differed from the persisted source".into());
+        }
+        let engine = NativeTorrentEngine::new(
+            repository.clone(),
+            NativeTorrentConfig {
+                listen_port: 0,
+                session_dir: Some(session_dir),
+                disable_dht: true,
+                ..NativeTorrentConfig::default()
+            },
+        )
+        .await?
+        .with_torrent_metadata_repository(database.torrent_metadata());
+        let cancellation = watch::channel(false).1;
+        let pause = watch::channel(false).1;
+        let control = ManagedDownloadControl {
+            cancellation,
+            pause,
+            connection_limit: watch::channel(1).1,
+            resource_demand: None,
+            bandwidth: crate::BandwidthControl {
+                per_download: Some(std::sync::Arc::new(crate::BandwidthLimiter::new(
+                    512 * 1024,
+                )?)),
+                ..crate::BandwidthControl::default()
+            },
+        };
+        engine
+            .run_torrent(id, item, control, Some(vec![peer]))
+            .await?;
+        Ok(())
+    }
+
+    fn spawn_process_recovery_worker(
+        phase: &str,
+        db_path: &std::path::Path,
+        torrent_path: &std::path::Path,
+        destination: &std::path::Path,
+        session_dir: &std::path::Path,
+        id: DownloadId,
+        peer: SocketAddr,
+    ) -> Result<RecoveryWorker, Box<dyn std::error::Error>> {
+        let executable = std::env::current_exe()?;
+        Ok(RecoveryWorker(
+            Command::new(executable)
+                .args([
+                    "--exact",
+                    "native_torrent::tests::native_torrent_process_death_recovers_selected_files",
+                    "--nocapture",
+                ])
+                .env(PROCESS_RECOVERY_PHASE, phase)
+                .env("FETCHX_TORRENT_RECOVERY_DB", db_path)
+                .env("FETCHX_TORRENT_RECOVERY_TORRENT", torrent_path)
+                .env("FETCHX_TORRENT_RECOVERY_DESTINATION", destination)
+                .env("FETCHX_TORRENT_RECOVERY_SESSION", session_dir)
+                .env("FETCHX_TORRENT_RECOVERY_ID", id.to_string())
+                .env("FETCHX_TORRENT_RECOVERY_PEER", peer.to_string())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()?,
+        ))
+    }
 
     fn local_torrent_metadata() -> TorrentMetadata {
         TorrentMetadata {
@@ -1368,9 +1488,15 @@ mod tests {
         .await??;
         assert_eq!(completed.status(), DownloadStatus::Seeding);
         assert!(completed.progress().downloaded_bytes() >= partial_progress);
+        let downloaded_selected = tokio::fs::read(destination.join("selected.bin")).await?;
         assert_eq!(
-            tokio::fs::read(destination.join("selected.bin")).await?,
-            selected_payload
+            downloaded_selected, selected_payload,
+            "resumed selected file did not match the fixed seeder payload"
+        );
+        assert_eq!(
+            Sha1::digest(&downloaded_selected),
+            Sha1::digest(&selected_payload),
+            "resumed selected file failed the expected payload hash"
         );
         match tokio::fs::read(destination.join("first.bin")).await {
             Ok(bytes) => assert!(
@@ -1869,6 +1995,255 @@ mod tests {
         }
 
         engine.stop_seeding(id).await?;
+        seeder_session
+            .delete(librqbit::api::TorrentIdOrHash::Id(seeder.id()), false)
+            .await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_torrent_process_death_recovers_selected_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os(PROCESS_RECOVERY_PHASE).is_some() {
+            run_process_recovery_worker().await?;
+            return Ok(());
+        }
+
+        use librqbit::{AddTorrent, AddTorrentOptions, ListenerOptions, Session, SessionOptions};
+
+        let directory = tempfile::tempdir()?;
+        let first_payload = vec![b'a'; 16_384];
+        let selected_payload = vec![b's'; 4 * 1024 * 1024];
+        let torrent_bytes = selected_files_torrent_bytes(&first_payload, &selected_payload);
+        let metadata = fetchx_models::parse_torrent_metainfo(&torrent_bytes)?;
+        let torrent_path = directory.path().join("selected.torrent");
+        let database_path = directory.path().join("fetchx.sqlite");
+        let destination = directory.path().join("download");
+        let session_dir = directory.path().join("seed-session");
+        let worker_session_dir = directory.path().join("worker-session");
+        tokio::fs::write(&torrent_path, &torrent_bytes).await?;
+
+        let seed_output = directory.path().join("seed-output");
+        tokio::fs::create_dir_all(&seed_output).await?;
+        tokio::fs::write(seed_output.join("first.bin"), &first_payload).await?;
+        tokio::fs::write(seed_output.join("selected.bin"), &selected_payload).await?;
+        let seeder_session = Session::new_with_opts(
+            session_dir,
+            SessionOptions {
+                dht: None,
+                persistence: None,
+                disable_trackers: true,
+                disable_local_service_discovery: true,
+                ipv4_only: true,
+                listen: Some(ListenerOptions {
+                    listen_addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                    ipv4_only: true,
+                    ..ListenerOptions::default()
+                }),
+                ..SessionOptions::default()
+            },
+        )
+        .await?;
+        let seeder = seeder_session
+            .add_torrent(
+                AddTorrent::from_bytes(torrent_bytes.clone()),
+                Some(AddTorrentOptions {
+                    overwrite: true,
+                    output_folder: Some(seed_output.to_string_lossy().into_owned()),
+                    ..AddTorrentOptions::default()
+                }),
+            )
+            .await?
+            .into_handle()
+            .ok_or("seeder add did not return a managed torrent")?;
+        tokio::time::timeout(Duration::from_secs(10), seeder.wait_until_initialized()).await??;
+        assert!(
+            seeder.stats().finished,
+            "local seeder payload did not verify"
+        );
+        let peer = seeder_session
+            .listen_addr()
+            .ok_or("seeder did not bind a peer listener")?;
+
+        let database = Database::connect_path(&database_path).await?;
+        let repository = database.downloads();
+        let id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new_torrent_file(&torrent_path, EngineKind::NativeTorrent)?,
+            fetchx_models::FileName::new("bundle")?,
+            destination.clone(),
+            now,
+        );
+        repository.create(&item).await?;
+        let metadata_row = TorrentMetadataRow {
+            download_id: id,
+            source_type: TorrentSourceType::TorrentFile,
+            magnet_uri: None,
+            local_torrent_path: Some(torrent_path.clone()),
+            info_hash: metadata.info_hash.clone(),
+            torrent_name: metadata.name.clone(),
+            torrent_metadata: Some(metadata.clone()),
+            destination: destination.clone(),
+            metadata_state: "ready".to_owned(),
+            selected_file_indexes: vec![1],
+            selected_total_bytes: selected_payload.len() as u64,
+            selection_confirmed: true,
+            aria2_gid: None,
+            seed_state: TorrentSeedState::Downloading,
+            uploaded_bytes: 0,
+            upload_speed_bps: 0,
+            peer_count: 0,
+            seed_count: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        database
+            .torrent_metadata()
+            .create_torrent_metadata(&metadata_row)
+            .await?;
+
+        let mut interrupted = spawn_process_recovery_worker(
+            "interrupt",
+            &database_path,
+            &torrent_path,
+            &destination,
+            &worker_session_dir,
+            id,
+            peer,
+        )?;
+        let partial_path = destination.join("selected.bin");
+        let progress_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let interrupted_item = loop {
+            if let Some(exit) = interrupted.try_wait()? {
+                return Err(format!("worker exited before partial progress: {exit}").into());
+            }
+            let current = repository
+                .get(id)
+                .await?
+                .ok_or("persisted download disappeared during worker run")?;
+            if current.progress().downloaded_bytes() >= 128 * 1024 {
+                break current;
+            }
+            if tokio::time::Instant::now() >= progress_deadline {
+                interrupted.kill()?;
+                let _ = interrupted.wait()?;
+                return Err("worker did not persist partial progress before timeout".into());
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        assert_eq!(interrupted_item.status(), DownloadStatus::Downloading);
+        interrupted.kill()?;
+        let _ = interrupted.wait()?;
+
+        let persisted_prefix = tokio::fs::read(&partial_path).await?;
+        assert!(
+            persisted_prefix.len() >= 16_384,
+            "partial output did not contain a complete piece after the worker was killed"
+        );
+        assert_eq!(
+            &persisted_prefix[..16_384],
+            &selected_payload[..16_384],
+            "the first selected-file piece was not durably written before process death"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let uploaded_before_restart = seeder.stats().uploaded_bytes;
+
+        let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
+        let recovered = state_machine
+            .recover_interrupted(id)
+            .await?
+            .ok_or("startup recovery did not requeue the interrupted download")?;
+        assert_eq!(recovered.status(), DownloadStatus::Queued);
+        let persisted_before_restart = database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("torrent metadata disappeared during process recovery")?;
+        assert_eq!(persisted_before_restart.info_hash, metadata_row.info_hash);
+        assert_eq!(persisted_before_restart.destination, destination);
+        assert_eq!(persisted_before_restart.selected_file_indexes, vec![1]);
+        assert_eq!(persisted_before_restart.aria2_gid, None);
+        assert_eq!(
+            recovered.source().engine(),
+            EngineKind::NativeTorrent,
+            "recovery changed the persisted engine identity"
+        );
+
+        let mut resumed = spawn_process_recovery_worker(
+            "resume",
+            &database_path,
+            &torrent_path,
+            &destination,
+            &worker_session_dir,
+            id,
+            peer,
+        )?;
+        let completion_deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+        loop {
+            if let Some(exit) = resumed.try_wait()? {
+                if !exit.success() {
+                    return Err(format!("resume worker failed with {exit}").into());
+                }
+                break;
+            }
+            if tokio::time::Instant::now() >= completion_deadline {
+                resumed.kill()?;
+                let _ = resumed.wait()?;
+                return Err("resume worker did not complete before timeout".into());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let completed = repository
+            .get(id)
+            .await?
+            .ok_or("resumed download disappeared")?;
+        assert_eq!(completed.status(), DownloadStatus::Seeding);
+        assert_eq!(
+            completed.progress().downloaded_bytes(),
+            selected_payload.len() as u64
+        );
+        let resumed_selected = tokio::fs::read(destination.join("selected.bin")).await?;
+        assert_eq!(
+            Sha1::digest(&resumed_selected),
+            Sha1::digest(&selected_payload),
+            "resumed selected file failed the expected payload hash"
+        );
+        assert_eq!(
+            resumed_selected, selected_payload,
+            "resumed selected file differed from the fixed seeder payload"
+        );
+        let unselected_path = destination.join("first.bin");
+        if tokio::fs::try_exists(&unselected_path).await? {
+            assert_eq!(
+                tokio::fs::metadata(unselected_path).await?.len(),
+                0,
+                "the unselected torrent file contains downloaded data after restart"
+            );
+        }
+        let final_metadata = database
+            .torrent_metadata()
+            .get_torrent_metadata(id)
+            .await?
+            .ok_or("torrent metadata disappeared after restart")?;
+        assert_eq!(final_metadata.info_hash, metadata_row.info_hash);
+        assert_eq!(final_metadata.destination, destination);
+        assert_eq!(final_metadata.selected_file_indexes, vec![1]);
+        assert_eq!(final_metadata.aria2_gid, None);
+        assert_eq!(completed.source().engine(), EngineKind::NativeTorrent);
+
+        let uploaded_after_restart = seeder.stats().uploaded_bytes;
+        let resumed_payload_bytes = uploaded_after_restart.saturating_sub(uploaded_before_restart);
+        eprintln!(
+            "process-recovery peer upload: {resumed_payload_bytes} bytes after restart for a {}-byte selected file",
+            selected_payload.len()
+        );
+        assert!(
+            resumed_payload_bytes < selected_payload.len() as u64,
+            "the seeder sent a full selected-file payload after restart; existing pieces were not evidenced as reused"
+        );
         seeder_session
             .delete(librqbit::api::TorrentIdOrHash::Id(seeder.id()), false)
             .await?;
