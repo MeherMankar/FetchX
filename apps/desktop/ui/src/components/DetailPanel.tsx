@@ -42,6 +42,30 @@ function isHttpSource(url: string): boolean {
   }
 }
 
+function isMediaHttpSource(url: string): boolean {
+  try {
+    const path = new URL(url).pathname;
+    return MEDIA_EXTENSIONS.has(path.split("/").pop()?.split(".").pop()?.toLowerCase() ?? "");
+  } catch {
+    return true;
+  }
+}
+
+function safeSourceSuggestion(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol)
+      && !parsed.username
+      && !parsed.password
+      && !parsed.hash
+      && !isMediaHttpSource(url)
+      ? url
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 interface DetailPanelProps {
   download: Download;
   schedule: DownloadSchedule | null;
@@ -86,6 +110,7 @@ export function DetailPanel({
   const [restartOpen, setRestartOpen] = useState(false);
   const [restartUrl, setRestartUrl] = useState("");
   const [restartDestination, setRestartDestination] = useState("");
+  const [restartConfirmedDirectFile, setRestartConfirmedDirectFile] = useState(false);
   const [restartLoading, setRestartLoading] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [restartedDownloadId, setRestartedDownloadId] = useState<string | null>(null);
@@ -174,6 +199,7 @@ export function DetailPanel({
     && torrentMetadata?.metadata !== null;
   const canRestartAria2 = isAria2
     && isHttpSource(download.url)
+    && !isMediaHttpSource(download.url)
     && download.status !== "completed"
     && download.status !== "stopped"
     && !MEDIA_EXTENSIONS.has(download.filename.split(".").pop()?.toLowerCase() ?? "");
@@ -188,6 +214,7 @@ export function DetailPanel({
         download.id,
         restartUrl,
         restartDestination,
+        restartConfirmedDirectFile,
       );
       setRestartedDownloadId(created.id);
     } catch (cause) {
@@ -232,8 +259,9 @@ export function DetailPanel({
                   <button
                     className="button button-secondary"
                     onClick={() => {
-                      setRestartUrl(download.url);
+                      setRestartUrl(safeSourceSuggestion(download.url));
                       setRestartDestination("");
+                      setRestartConfirmedDirectFile(false);
                       setRestartError(null);
                       setRestartedDownloadId(null);
                       setRestartOpen(true);
@@ -274,6 +302,17 @@ export function DetailPanel({
                     <p className="field-hint">
                       Must be a different, unused path. The old output, partial data, and aria2 sidecar are never reused.
                     </p>
+                    <label className="field-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={restartConfirmedDirectFile}
+                        disabled={restartLoading || restartedDownloadId !== null}
+                        onChange={(event) => setRestartConfirmedDirectFile(event.target.checked)}
+                      />
+                      <span>
+                        I confirm this is a direct file download, not a torrent, Metalink, or media/streaming job.
+                      </span>
+                    </label>
                     {restartError && <p className="detail-error-message">{restartError}</p>}
                     {restartedDownloadId && (
                       <p role="status">
@@ -284,7 +323,11 @@ export function DetailPanel({
                       <button
                         className="button button-primary"
                         type="submit"
-                        disabled={restartLoading || restartedDownloadId !== null}
+                        disabled={
+                          restartLoading ||
+                          restartedDownloadId !== null ||
+                          !restartConfirmedDirectFile
+                        }
                       >
                         {restartLoading ? "Creating…" : "Create separate native download"}
                       </button>

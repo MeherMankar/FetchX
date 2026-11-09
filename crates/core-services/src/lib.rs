@@ -31,6 +31,7 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use fetchx_downloader::{
@@ -263,19 +264,57 @@ fn is_valid_batch_sha256(value: &str) -> bool {
 }
 
 fn batch_destination_key(path: &Path) -> String {
-    let normalized = path
-        .parent()
-        .and_then(|parent| std::fs::canonicalize(parent).ok())
-        .zip(path.file_name())
-        .map(|(parent, filename)| parent.join(filename))
-        .unwrap_or_else(|| path.to_path_buf());
-    normalized.to_string_lossy().to_lowercase()
+    path.to_string_lossy().to_lowercase()
 }
 
 fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut value = path.as_os_str().to_os_string();
     value.push(suffix);
     PathBuf::from(value)
+}
+
+fn strict_destination_keys(path: &Path) -> Vec<String> {
+    let mut keys = vec![batch_destination_key(path)];
+    if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name())
+        && let Ok(canonical_parent) = std::fs::canonicalize(parent)
+    {
+        keys.push(
+            canonical_parent
+                .join(file_name)
+                .to_string_lossy()
+                .to_lowercase(),
+        );
+    }
+    keys
+}
+
+async fn verify_directory_writable(directory: &Path) -> Result<(), BatchDownloadError> {
+    static PROBE_ID: AtomicU64 = AtomicU64::new(0);
+
+    for _ in 0..16 {
+        let id = PROBE_ID.fetch_add(1, Ordering::Relaxed);
+        let probe = directory.join(format!(".fetchx-write-check-{}-{id}", std::process::id()));
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .await
+        {
+            Ok(file) => {
+                drop(file);
+                tokio::fs::remove_file(probe)
+                    .await
+                    .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+                return Ok(());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(BatchDownloadError::Destination(error.to_string())),
+        }
+    }
+
+    Err(BatchDownloadError::Destination(
+        "could not allocate a destination permission check".to_owned(),
+    ))
 }
 
 fn is_media_download_filename(filename: &str) -> bool {
@@ -306,6 +345,12 @@ fn is_media_download_filename(filename: &str) -> bool {
                     | "mpd"
             )
         })
+}
+
+fn is_media_http_url(url: &reqwest::Url) -> bool {
+    url.path_segments()
+        .and_then(Iterator::last)
+        .is_some_and(is_media_download_filename)
 }
 
 async fn unique_batch_destination(
@@ -985,7 +1030,11 @@ impl CoreServices {
         aria2_id: DownloadId,
         current_url: String,
         destination: PathBuf,
+        confirmed_direct_file: bool,
     ) -> Result<DownloadId, BatchDownloadError> {
+        if !confirmed_direct_file {
+            return Err(BatchDownloadError::RestartNotEligible);
+        }
         let original = self
             .repository
             .get(aria2_id)
@@ -1001,6 +1050,7 @@ impl CoreServices {
                 DownloadStatus::Completed | DownloadStatus::Seeding | DownloadStatus::Stopped
             )
             || is_media_download_filename(original.filename().as_str())
+            || is_media_http_url(&original_url)
         {
             return Err(BatchDownloadError::RestartNotEligible);
         }
@@ -1033,6 +1083,9 @@ impl CoreServices {
             .parent()
             .ok_or(BatchDownloadError::InvalidDestination)?;
 
+        tokio::fs::create_dir_all(destination_parent)
+            .await
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
         let items = self
             .repository
             .list()
@@ -1043,23 +1096,25 @@ impl CoreServices {
             append_path_suffix(&destination, ".aria2"),
             append_path_suffix(&destination, ".part"),
         ];
+        let candidate_keys = candidate_paths
+            .iter()
+            .flat_map(|path| strict_destination_keys(path))
+            .collect::<HashSet<_>>();
         for item in &items {
             let existing_paths = [
                 item.destination().to_path_buf(),
                 append_path_suffix(item.destination(), ".aria2"),
                 append_path_suffix(item.destination(), ".part"),
             ];
-            if candidate_paths.iter().any(|candidate| {
-                existing_paths.iter().any(|existing| {
-                    batch_destination_key(candidate) == batch_destination_key(existing)
-                })
+            if existing_paths.iter().any(|existing| {
+                strict_destination_keys(existing)
+                    .iter()
+                    .any(|key| candidate_keys.contains(key))
             }) {
                 return Err(BatchDownloadError::DestinationCollision);
             }
         }
-        tokio::fs::create_dir_all(destination_parent)
-            .await
-            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+        verify_directory_writable(destination_parent).await?;
         for path in &candidate_paths {
             if tokio::fs::try_exists(path)
                 .await
@@ -3563,6 +3618,7 @@ mod tests {
                 legacy_id,
                 "https://current.example/fresh.zip".to_owned(),
                 new_destination.clone(),
+                true,
             )
             .await?;
 
@@ -3621,9 +3677,38 @@ mod tests {
                     legacy_id,
                     "file:///unsafe".to_owned(),
                     root.path().join("downloads/fresh.zip"),
+                    true,
                 )
                 .await,
             Err(BatchDownloadError::InvalidUrl)
+        );
+        for unsafe_url in [
+            "https://user:password@current.example/fresh.zip",
+            "https://current.example/fresh.zip#fragment",
+            "https://current.example/movie.mp4",
+        ] {
+            assert_eq!(
+                services
+                    .restart_aria2_http_with_native(
+                        legacy_id,
+                        unsafe_url.to_owned(),
+                        root.path().join("downloads/fresh-native.zip"),
+                        true,
+                    )
+                    .await,
+                Err(BatchDownloadError::InvalidUrl)
+            );
+        }
+        assert_eq!(
+            services
+                .restart_aria2_http_with_native(
+                    legacy_id,
+                    "https://current.example/fresh.zip".to_owned(),
+                    root.path().join("downloads/unconfirmed.zip"),
+                    false,
+                )
+                .await,
+            Err(BatchDownloadError::RestartNotEligible)
         );
         assert_eq!(
             services
@@ -3631,6 +3716,7 @@ mod tests {
                     legacy_id,
                     "https://current.example/fresh.zip".to_owned(),
                     legacy_destination.clone(),
+                    true,
                 )
                 .await,
             Err(BatchDownloadError::DestinationCollision)
@@ -3641,6 +3727,7 @@ mod tests {
                     legacy_id,
                     "https://current.example/fresh.zip".to_owned(),
                     append_path_suffix(&legacy_destination, ".aria2"),
+                    true,
                 )
                 .await,
             Err(BatchDownloadError::DestinationCollision)
@@ -3651,9 +3738,61 @@ mod tests {
                     legacy_id,
                     "https://current.example/fresh.zip".to_owned(),
                     append_path_suffix(&legacy_destination, ".part"),
+                    true,
                 )
                 .await,
             Err(BatchDownloadError::DestinationCollision)
+        );
+        let occupied_destination = root.path().join("downloads/already-present.zip");
+        tokio::fs::write(&occupied_destination, b"preserve this output").await?;
+        assert_eq!(
+            services
+                .restart_aria2_http_with_native(
+                    legacy_id,
+                    "https://current.example/fresh.zip".to_owned(),
+                    occupied_destination.clone(),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::DestinationCollision)
+        );
+        assert_eq!(
+            tokio::fs::read(&occupied_destination).await?,
+            b"preserve this output"
+        );
+        let occupied_partial = append_path_suffix(&occupied_destination, ".part");
+        tokio::fs::write(&occupied_partial, b"preserve partial").await?;
+        assert_eq!(
+            services
+                .restart_aria2_http_with_native(
+                    legacy_id,
+                    "https://current.example/fresh.zip".to_owned(),
+                    occupied_destination.clone(),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::DestinationCollision)
+        );
+        assert_eq!(
+            tokio::fs::read(&occupied_partial).await?,
+            b"preserve partial"
+        );
+        let occupied_sidecar = append_path_suffix(&occupied_destination, ".aria2");
+        tokio::fs::write(&occupied_sidecar, b"preserve sidecar").await?;
+        assert_eq!(
+            services
+                .restart_aria2_http_with_native(
+                    legacy_id,
+                    "https://current.example/fresh.zip".to_owned(),
+                    occupied_destination.clone(),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::DestinationCollision)
+        );
+        assert_eq!(
+            tokio::fs::read(&occupied_sidecar).await?,
+            b"preserve sidecar"
         );
 
         let mut completed = DownloadItem::new(
@@ -3672,6 +3811,19 @@ mod tests {
                     completed_id,
                     "https://current.example/fresh.zip".to_owned(),
                     root.path().join("downloads/completed-native.zip"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::RestartNotEligible)
+        );
+
+        assert_eq!(
+            services
+                .restart_aria2_http_with_native(
+                    DownloadId::new(),
+                    "https://current.example/fresh.zip".to_owned(),
+                    root.path().join("downloads/missing.zip"),
+                    true,
                 )
                 .await,
             Err(BatchDownloadError::RestartNotEligible)
@@ -3694,6 +3846,27 @@ mod tests {
                     magnet.id(),
                     "https://current.example/fresh.zip".to_owned(),
                     root.path().join("downloads/torrent-native.zip"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::RestartNotEligible)
+        );
+
+        let media = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://old.example/movie.mp4", EngineKind::Aria2)?,
+            FileName::new("movie.mp4")?,
+            root.path().join("downloads/movie.mp4"),
+            Timestamp::now()?,
+        );
+        services.repository.create(&media).await?;
+        assert_eq!(
+            services
+                .restart_aria2_http_with_native(
+                    media.id(),
+                    "https://current.example/movie.mp4".to_owned(),
+                    root.path().join("downloads/movie-native.zip"),
+                    true,
                 )
                 .await,
             Err(BatchDownloadError::RestartNotEligible)

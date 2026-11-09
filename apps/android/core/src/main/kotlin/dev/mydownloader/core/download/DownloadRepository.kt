@@ -106,6 +106,7 @@ interface Aria2NativeRestartRepository {
         downloadId: String,
         currentUrl: String,
         destinationPath: String,
+        confirmedDirectFile: Boolean,
     ): String
 }
 

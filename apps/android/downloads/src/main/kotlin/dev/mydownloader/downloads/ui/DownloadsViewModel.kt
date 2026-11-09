@@ -466,7 +466,12 @@ class DownloadsViewModel(
         }
     }
 
-    fun restartAria2HttpWithNative(downloadId: String, currentUrl: String, destinationPath: String) {
+    fun restartAria2HttpWithNative(
+        downloadId: String,
+        currentUrl: String,
+        destinationPath: String,
+        confirmedDirectFile: Boolean,
+    ) {
         val restartRepository = repository as? Aria2NativeRestartRepository ?: run {
             _aria2NativeRestart.update {
                 it + (downloadId to Aria2NativeRestartUiState(
@@ -485,6 +490,7 @@ class DownloadsViewModel(
                     downloadId,
                     currentUrl,
                     destinationPath,
+                    confirmedDirectFile,
                 )
                 _aria2NativeRestart.update {
                     it + (downloadId to Aria2NativeRestartUiState(newDownloadId = newId))

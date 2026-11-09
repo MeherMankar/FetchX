@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -55,7 +56,7 @@ fun DownloadItemRow(
     onAssessAria2Recovery: () -> Unit = {},
     aria2NativeRestart: Aria2NativeRestartUiState? = null,
     suggestedNativeRestartDestination: String? = null,
-    onRestartAria2WithNative: (String, String) -> Unit = { _, _ -> },
+    onRestartAria2WithNative: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onPrepareAria2NativeRestart: () -> Unit = {},
     onTorrentFileSelected: (Int, Boolean) -> Unit = { _, _ -> },
     onTorrentSelectionAll: (Boolean) -> Unit = {},
@@ -71,6 +72,7 @@ fun DownloadItemRow(
     var newDestination by remember(item.id) {
         mutableStateOf(suggestedNativeRestartDestination.orEmpty())
     }
+    var confirmedDirectFile by remember(item.id) { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -134,8 +136,9 @@ fun DownloadItemRow(
                     TextButton(
                         onClick = {
                             onPrepareAria2NativeRestart()
-                            currentSourceUrl = item.url
+                            currentSourceUrl = safeAria2SourceSuggestion(item.url)
                             newDestination = suggestedNativeRestartDestination.orEmpty()
+                            confirmedDirectFile = false
                             showNativeRestartDialog = true
                         },
                     ) {
@@ -286,68 +289,6 @@ fun DownloadItemRow(
                             TextButton(onClick = onCancel) { Text("Cancel") }
                         }
                     }
-                    if (showNativeRestartDialog) {
-                        AlertDialog(
-                            onDismissRequest = {
-                                if (aria2NativeRestart?.loading != true) showNativeRestartDialog = false
-                            },
-                            title = { Text("Restart as a separate native download") },
-                            text = {
-                                Column {
-                                    Text(
-                                        "The saved URL is only a suggestion. Confirm or enter its current full HTTP(S) URL. " +
-                                            "Choose a new file path inside FetchX's app-specific downloads folder.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                    OutlinedTextField(
-                                        value = currentSourceUrl,
-                                        onValueChange = { currentSourceUrl = it },
-                                        label = { Text("Current HTTP(S) URL") },
-                                        singleLine = true,
-                                        enabled = aria2NativeRestart?.loading != true &&
-                                            aria2NativeRestart?.newDownloadId == null,
-                                    )
-                                    OutlinedTextField(
-                                        value = newDestination,
-                                        onValueChange = { newDestination = it },
-                                        label = { Text("New destination path") },
-                                        singleLine = true,
-                                        enabled = aria2NativeRestart?.loading != true &&
-                                            aria2NativeRestart?.newDownloadId == null,
-                                    )
-                                    aria2NativeRestart?.error?.let { error ->
-                                        Text(error, color = MaterialTheme.colorScheme.error)
-                                    }
-                                    aria2NativeRestart?.newDownloadId?.let { newId ->
-                                        Text(
-                                            "Created separate native download $newId. The aria2 job and files are unchanged.",
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                    }
-                                }
-                            },
-                            confirmButton = {
-                                TextButton(
-                                    onClick = { onRestartAria2WithNative(currentSourceUrl, newDestination) },
-                                    enabled = aria2NativeRestart?.loading != true &&
-                                        aria2NativeRestart?.newDownloadId == null &&
-                                        currentSourceUrl.isNotBlank() && newDestination.isNotBlank(),
-                                ) {
-                                    Text(
-                                        if (aria2NativeRestart?.loading == true) "Creating…" else "Create native download"
-                                    )
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(
-                                    onClick = { showNativeRestartDialog = false },
-                                    enabled = aria2NativeRestart?.loading != true,
-                                ) {
-                                    Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
-                                }
-                            },
-                        )
-                    }
                 }
 
                 is DownloadState.Paused -> {
@@ -496,6 +437,87 @@ fun DownloadItemRow(
                     TextButton(onClick = onRemove) { Text("Remove") }
                 }
             }
+            if (showNativeRestartDialog) {
+                AlertDialog(
+                    onDismissRequest = {
+                        if (aria2NativeRestart?.loading != true) showNativeRestartDialog = false
+                    },
+                    title = { Text("Restart as a separate native download") },
+                    text = {
+                        Column {
+                            Text(
+                                "The saved URL is only a suggestion. Confirm or enter its current full HTTP(S) URL. " +
+                                    "Choose a new file path inside FetchX's app-specific downloads folder.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            OutlinedTextField(
+                                value = currentSourceUrl,
+                                onValueChange = { currentSourceUrl = it },
+                                label = { Text("Current HTTP(S) URL") },
+                                singleLine = true,
+                                enabled = aria2NativeRestart?.loading != true &&
+                                    aria2NativeRestart?.newDownloadId == null,
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = confirmedDirectFile,
+                                    onCheckedChange = { confirmedDirectFile = it },
+                                    enabled = aria2NativeRestart?.loading != true &&
+                                        aria2NativeRestart?.newDownloadId == null,
+                                )
+                                Text(
+                                    "I confirm this is a direct file download, not a torrent, Metalink, or media/streaming job.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            OutlinedTextField(
+                                value = newDestination,
+                                onValueChange = { newDestination = it },
+                                label = { Text("New destination path") },
+                                singleLine = true,
+                                enabled = aria2NativeRestart?.loading != true &&
+                                    aria2NativeRestart?.newDownloadId == null,
+                            )
+                            aria2NativeRestart?.error?.let { error ->
+                                Text(error, color = MaterialTheme.colorScheme.error)
+                            }
+                            aria2NativeRestart?.newDownloadId?.let { newId ->
+                                Text(
+                                    "Created separate native download $newId. The aria2 job and files are unchanged.",
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onRestartAria2WithNative(
+                                    currentSourceUrl,
+                                    newDestination,
+                                    confirmedDirectFile,
+                                )
+                            },
+                            enabled = aria2NativeRestart?.loading != true &&
+                                aria2NativeRestart?.newDownloadId == null &&
+                                currentSourceUrl.isNotBlank() && newDestination.isNotBlank() &&
+                                confirmedDirectFile,
+                        ) {
+                            Text(
+                                if (aria2NativeRestart?.loading == true) "Creating…" else "Create native download"
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { showNativeRestartDialog = false },
+                            enabled = aria2NativeRestart?.loading != true,
+                        ) {
+                            Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -504,6 +526,7 @@ private fun canOfferNativeRestart(item: DownloadItem): Boolean {
     if (!item.engine.equals("aria2", ignoreCase = true)) return false
     val scheme = runCatching { java.net.URI(item.url).scheme?.lowercase() }.getOrNull()
     if (scheme != "http" && scheme != "https") return false
+    if (isMediaHttpSource(item.url)) return false
     if (item.state is DownloadState.Completed ||
         item.state is DownloadState.PublicationPending ||
         item.state is DownloadState.Seeding ||
@@ -514,6 +537,29 @@ private fun canOfferNativeRestart(item: DownloadItem): Boolean {
         "mpd", "mpeg", "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
     )
 }
+
+private fun isMediaHttpSource(url: String): Boolean {
+    val extension = runCatching {
+        java.net.URI(url).path?.substringAfterLast('/')?.substringAfterLast('.')?.lowercase()
+    }.getOrNull()
+    return extension in setOf(
+        "aac", "avi", "flac", "m3u8", "m4a", "m4v", "mkv", "mov", "mp3", "mp4",
+        "mpd", "mpeg", "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
+    )
+}
+
+private fun safeAria2SourceSuggestion(url: String): String =
+    runCatching {
+        val parsed = java.net.URI(url)
+        if ((parsed.scheme.equals("http", ignoreCase = true) ||
+                parsed.scheme.equals("https", ignoreCase = true)) &&
+            parsed.userInfo == null && parsed.fragment == null && !isMediaHttpSource(url)
+        ) {
+            url
+        } else {
+            ""
+        }
+    }.getOrDefault("")
 
 @Composable
 private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {

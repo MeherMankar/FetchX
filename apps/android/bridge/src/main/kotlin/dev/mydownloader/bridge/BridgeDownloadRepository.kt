@@ -425,6 +425,7 @@ class BridgeDownloadRepository(
         downloadId: String,
         currentUrl: String,
         destinationPath: String,
+        confirmedDirectFile: Boolean,
     ): String = withContext(Dispatchers.IO) {
         val destination = File(destinationPath).canonicalFile
         val privateRoot = File(privateDownloadDirectory).canonicalFile
@@ -434,7 +435,12 @@ class BridgeDownloadRepository(
         require(!destination.exists()) {
             "Choose a new destination that does not already exist."
         }
-        service.restartAria2HttpWithNative(downloadId, currentUrl, destination.path)
+        service.restartAria2HttpWithNative(
+            downloadId,
+            currentUrl,
+            destination.path,
+            confirmedDirectFile,
+        )
     }
 
     override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =

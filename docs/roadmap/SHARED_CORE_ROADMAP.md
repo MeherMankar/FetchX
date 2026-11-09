@@ -304,3 +304,10 @@ Next: validate exact partial-piece reuse, process restart, and explicit destinat
 - No shared-core API, desktop/Android action, or test was added; no records, settings, files, GIDs, or schema were changed.
 - Next prerequisite: a user-confirmed current-source flow, followed by a separately selected collision-free destination and a new native CoreServices admission. A provenance/options field for future records would not by itself establish the freshness of existing URLs.
 - All aria2 runtime, legacy-job, helper, RPC, packaging, and licensing removal gates remain in force. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md) for evidence and rationale.
+
+## Prompt 30 — confirmed native HTTP restart
+
+- Implemented desktop and Android opt-in restart for unfinished persisted aria2 HTTP(S) records. The user confirms/re-enters the current URL, selects a separate exact destination, and confirms it is a direct file rather than media/streaming, torrent, or Metalink work.
+- Shared CoreServices validates eligibility and the user URL, rejects known media paths, checks database/disk collisions including aria2 sidecars and partial-output suffixes, verifies write permission, and admits a separate native `DirectHttp` record. It does not alter the old item, GID/torrent metadata, destination, output, sidecar, settings, or files. Android limits the destination to the app-specific downloads directory; desktop accepts an absolute user-entered path. No migration or protocol change.
+- Windows validation: CoreServices 41-test library suite, Android bridge/downloads unit suites, Android app Kotlin compile, desktop UI build, and desktop Tauri `cargo check` passed. Clippy `-D warnings` reports two pre-existing desktop warnings (app.rs:299 collapsible-if; existing batch command at commands.rs:1093 too-many-arguments). No Android device or live aria2/server run.
+- This action does not close aria2-removal gates: legacy daemon/GID/sidecar recovery, protocol parity, Android/device and exact-piece torrent restart evidence, rollback/user disposition, and packaging/license review remain.

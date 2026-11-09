@@ -1648,6 +1648,7 @@ pub async fn restart_aria2_http_with_native(
     id: String,
     current_url: String,
     destination: String,
+    confirmed_direct_file: bool,
 ) -> Result<DownloadDto, IpcError> {
     let aria2_id = parse_download_id(&id)?;
     let core_services = state
@@ -1655,7 +1656,12 @@ pub async fn restart_aria2_http_with_native(
         .as_ref()
         .ok_or_else(IpcError::internal)?;
     let native_id = core_services
-        .restart_aria2_http_with_native(aria2_id, current_url, PathBuf::from(destination))
+        .restart_aria2_http_with_native(
+            aria2_id,
+            current_url,
+            PathBuf::from(destination),
+            confirmed_direct_file,
+        )
         .await
         .map_err(|error| match error {
             fetchx_core_services::BatchDownloadError::InvalidUrl => IpcError::invalid_request(),

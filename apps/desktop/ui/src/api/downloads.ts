@@ -38,11 +38,13 @@ export function restartAria2HttpWithNative(
   id: string,
   currentUrl: string,
   destination: string,
+  confirmedDirectFile: boolean,
 ): Promise<Download> {
   return invoke<Download>("restart_aria2_http_with_native", {
     id,
     current_url: currentUrl,
     destination,
+    confirmed_direct_file: confirmedDirectFile,
   });
 }
 

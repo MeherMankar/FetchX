@@ -413,6 +413,7 @@ impl DownloadService {
         id: String,
         current_url: String,
         destination: String,
+        confirmed_direct_file: bool,
     ) -> Result<String, MobileApiError> {
         let aria2_id = DownloadId::parse(&id)
             .map_err(|_| MobileApiError::Validation("invalid download ID".to_owned()))?;
@@ -423,6 +424,7 @@ impl DownloadService {
                     aria2_id,
                     current_url,
                     PathBuf::from(destination),
+                    confirmed_direct_file,
                 ))
                 .map(|native_id| native_id.to_string())
                 .map_err(|error| MobileApiError::Validation(error.to_string()))

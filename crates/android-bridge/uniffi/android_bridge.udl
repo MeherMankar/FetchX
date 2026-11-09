@@ -252,7 +252,8 @@ interface DownloadService {
     string restart_aria2_http_with_native(
         string id,
         string current_url,
-        string destination
+        string destination,
+        boolean confirmed_direct_file
     );
 
     [Throws=MobileApiError]

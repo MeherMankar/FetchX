@@ -257,8 +257,13 @@ fun DownloadsScreen(
                             aria2NativeRestart = aria2NativeRestart[item.id],
                             suggestedNativeRestartDestination =
                                 viewModel.suggestAria2NativeRestartDestination(item.fileName),
-                            onRestartAria2WithNative = { url, destination ->
-                                viewModel.restartAria2HttpWithNative(item.id, url, destination)
+                            onRestartAria2WithNative = { url, destination, confirmedDirectFile ->
+                                viewModel.restartAria2HttpWithNative(
+                                    item.id,
+                                    url,
+                                    destination,
+                                    confirmedDirectFile,
+                                )
                             },
                             onPrepareAria2NativeRestart = {
                                 viewModel.clearAria2NativeRestartState(item.id)
