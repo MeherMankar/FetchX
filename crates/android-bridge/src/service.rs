@@ -57,6 +57,8 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
         BatchDownloadError::Destination(_) => BatchDownloadErrorCodeDto::Destination,
         BatchDownloadError::Storage(_) => BatchDownloadErrorCodeDto::Storage,
         BatchDownloadError::Queue(_) => BatchDownloadErrorCodeDto::Queue,
+        BatchDownloadError::RestartNotEligible => BatchDownloadErrorCodeDto::InvalidFormat,
+        BatchDownloadError::DestinationCollision => BatchDownloadErrorCodeDto::Destination,
     }
 }
 
@@ -403,6 +405,27 @@ impl DownloadService {
                 .block_on(inner.core.assess_aria2_recovery(download_id))
                 .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
             Ok(assessment.map(aria2_recovery_assessment_to_dto))
+        })
+    }
+
+    pub fn restart_aria2_http_with_native(
+        &self,
+        id: String,
+        current_url: String,
+        destination: String,
+    ) -> Result<String, MobileApiError> {
+        let aria2_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation("invalid download ID".to_owned()))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.restart_aria2_http_with_native(
+                    aria2_id,
+                    current_url,
+                    PathBuf::from(destination),
+                ))
+                .map(|native_id| native_id.to_string())
+                .map_err(|error| MobileApiError::Validation(error.to_string()))
         })
     }
 

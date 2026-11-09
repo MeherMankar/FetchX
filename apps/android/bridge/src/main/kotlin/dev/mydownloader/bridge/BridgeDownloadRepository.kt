@@ -17,6 +17,7 @@ import dev.fetchx.bridge.uniffi.TorrentMetadataDto
 import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.Aria2RecoveryAssessment
 import dev.fetchx.core.download.Aria2RecoveryRepository
+import dev.fetchx.core.download.Aria2NativeRestartRepository
 import dev.fetchx.core.download.Aria2RecoveryState
 import dev.fetchx.core.download.DownloadEvent
 import dev.fetchx.core.download.DownloadItem
@@ -75,10 +76,11 @@ import java.util.concurrent.ConcurrentHashMap
 class BridgeDownloadRepository(
     private val service: DownloadService,
     private val publicDownloadStorage: PublicDownloadStorage,
+    private val privateDownloadDirectory: String,
     private val externalScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : TorrentDownloadRepository, DuplicateDownloadRepository, BatchDownloadRepository,
-    Aria2RecoveryRepository {
+    Aria2RecoveryRepository, Aria2NativeRestartRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
@@ -416,6 +418,25 @@ class BridgeDownloadRepository(
             }
         }
 
+    override fun suggestNativeRestartDestination(fileName: String): String =
+        nativeRestartDestinationSuggestion(privateDownloadDirectory, fileName)
+
+    override suspend fun restartAria2HttpWithNative(
+        downloadId: String,
+        currentUrl: String,
+        destinationPath: String,
+    ): String = withContext(Dispatchers.IO) {
+        val destination = File(destinationPath).canonicalFile
+        val privateRoot = File(privateDownloadDirectory).canonicalFile
+        require(destination.parentFile == privateRoot) {
+            "Choose a destination directly inside FetchX's app-specific downloads folder."
+        }
+        require(!destination.exists()) {
+            "Choose a new destination that does not already exist."
+        }
+        service.restartAria2HttpWithNative(downloadId, currentUrl, destination.path)
+    }
+
     override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =
         withContext(Dispatchers.IO) {
             mapTorrentMetadata(service.inspectTorrentFile(torrentPath))
@@ -700,6 +721,23 @@ class BridgeDownloadRepository(
 
         is DownloadEventDto.Removed -> null
     }
+}
+
+internal fun nativeRestartDestinationSuggestion(
+    privateDownloadDirectory: String,
+    fileName: String,
+): String {
+    val safeName = File(fileName).name
+    require(safeName.isNotBlank() && safeName != "." && safeName != "..") {
+        "A valid filename is required."
+    }
+    val extensionSeparator = safeName.lastIndexOf('.')
+    val suggestedName = if (extensionSeparator > 0) {
+        "${safeName.substring(0, extensionSeparator)} (native)${safeName.substring(extensionSeparator)}"
+    } else {
+        "$safeName (native)"
+    }
+    return File(privateDownloadDirectory, suggestedName).absolutePath
 }
 
 internal fun mapAria2RecoveryState(dto: Aria2RecoveryStateDto): Aria2RecoveryState = when (dto) {

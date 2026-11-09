@@ -105,7 +105,7 @@ object BridgeInitializer {
                 service = svc
 
                 val storage = PublicDownloadStorage(context)
-                val repo = BridgeDownloadRepository(svc, storage)
+                val repo = BridgeDownloadRepository(svc, storage, dlDir.absolutePath)
                 repository = repo
                 publicDownloadStorage = storage
                 initError = null

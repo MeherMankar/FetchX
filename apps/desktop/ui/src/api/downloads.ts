@@ -34,6 +34,18 @@ export function assessAria2Recovery(id: string): Promise<Aria2RecoveryAssessment
   return invoke<Aria2RecoveryAssessment | null>("assess_aria2_recovery", { id });
 }
 
+export function restartAria2HttpWithNative(
+  id: string,
+  currentUrl: string,
+  destination: string,
+): Promise<Download> {
+  return invoke<Download>("restart_aria2_http_with_native", {
+    id,
+    current_url: currentUrl,
+    destination,
+  });
+}
+
 export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
 }

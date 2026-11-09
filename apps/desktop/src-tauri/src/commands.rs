@@ -805,6 +805,20 @@ impl IpcError {
         }
     }
 
+    fn destination_conflict() -> Self {
+        Self {
+            code: IpcErrorCode::Conflict,
+            message: "Choose a new destination that does not exist or overlap another download.",
+        }
+    }
+
+    fn destination_unavailable() -> Self {
+        Self {
+            code: IpcErrorCode::InvalidRequest,
+            message: "The selected destination could not be prepared. Check its path and permissions.",
+        }
+    }
+
     fn internal() -> Self {
         Self {
             code: IpcErrorCode::Internal,
@@ -1626,6 +1640,36 @@ pub async fn assess_aria2_recovery(
         .assess_aria2_recovery(download_id)
         .await
         .map_err(|_| IpcError::internal())
+}
+
+#[tauri::command]
+pub async fn restart_aria2_http_with_native(
+    state: State<'_, AppState>,
+    id: String,
+    current_url: String,
+    destination: String,
+) -> Result<DownloadDto, IpcError> {
+    let aria2_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let native_id = core_services
+        .restart_aria2_http_with_native(aria2_id, current_url, PathBuf::from(destination))
+        .await
+        .map_err(|error| match error {
+            fetchx_core_services::BatchDownloadError::InvalidUrl => IpcError::invalid_request(),
+            fetchx_core_services::BatchDownloadError::DestinationCollision => {
+                IpcError::destination_conflict()
+            }
+            fetchx_core_services::BatchDownloadError::RestartNotEligible => IpcError::conflict(),
+            fetchx_core_services::BatchDownloadError::InvalidDestination
+            | fetchx_core_services::BatchDownloadError::Destination(_) => {
+                IpcError::destination_unavailable()
+            }
+            _ => IpcError::internal(),
+        })?;
+    state.get(native_id).await
 }
 
 #[tauri::command]

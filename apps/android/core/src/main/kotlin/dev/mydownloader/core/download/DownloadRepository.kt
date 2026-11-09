@@ -100,6 +100,15 @@ interface Aria2RecoveryRepository {
     suspend fun assessAria2Recovery(downloadId: String): Aria2RecoveryAssessment?
 }
 
+interface Aria2NativeRestartRepository {
+    fun suggestNativeRestartDestination(fileName: String): String
+    suspend fun restartAria2HttpWithNative(
+        downloadId: String,
+        currentUrl: String,
+        destinationPath: String,
+    ): String
+}
+
 interface TorrentDownloadRepository : DownloadRepository {
     suspend fun addMagnet(magnetUri: String, priority: DownloadPriority): String
     suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata

@@ -636,6 +636,10 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36 99 235 / 10%); }
 
+.aria2-native-restart { margin-top: 12px; }
+.aria2-native-restart form { display: grid; gap: 7px; }
+.aria2-native-restart .field-input { width: 100%; }
+
 .field-select {
   height: 36px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);

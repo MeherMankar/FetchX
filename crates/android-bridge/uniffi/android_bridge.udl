@@ -249,6 +249,13 @@ interface DownloadService {
     Aria2RecoveryAssessmentDto? assess_aria2_recovery(string id);
 
     [Throws=MobileApiError]
+    string restart_aria2_http_with_native(
+        string id,
+        string current_url,
+        string destination
+    );
+
+    [Throws=MobileApiError]
     string add_download(
         string url,
         string filename,

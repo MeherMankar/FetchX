@@ -11,6 +11,7 @@ import dev.fetchx.core.download.DownloadRepository
 import dev.fetchx.core.download.DownloadState
 import dev.fetchx.core.download.Aria2RecoveryAssessment
 import dev.fetchx.core.download.Aria2RecoveryRepository
+import dev.fetchx.core.download.Aria2NativeRestartRepository
 import dev.fetchx.core.download.DuplicateDownloadRepository
 import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
@@ -45,6 +46,12 @@ data class Aria2RecoveryCheckUiState(
     val assessment: Aria2RecoveryAssessment? = null,
     val loading: Boolean = false,
     val error: String? = null,
+)
+
+data class Aria2NativeRestartUiState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val newDownloadId: String? = null,
 )
 
 enum class DownloadSnapshotState {
@@ -106,6 +113,10 @@ class DownloadsViewModel(
     val torrentMetadata: StateFlow<Map<String, TorrentDownloadMetadata>> = _torrentMetadata.asStateFlow()
     private val _aria2Recovery = MutableStateFlow<Map<String, Aria2RecoveryCheckUiState>>(emptyMap())
     val aria2Recovery: StateFlow<Map<String, Aria2RecoveryCheckUiState>> = _aria2Recovery.asStateFlow()
+    private val _aria2NativeRestart =
+        MutableStateFlow<Map<String, Aria2NativeRestartUiState>>(emptyMap())
+    val aria2NativeRestart: StateFlow<Map<String, Aria2NativeRestartUiState>> =
+        _aria2NativeRestart.asStateFlow()
 
     /** All downloads, sorted newest-first. */
     val allDownloads: StateFlow<List<DownloadItem>> = downloads
@@ -439,6 +450,51 @@ class DownloadsViewModel(
                 _aria2Recovery.update {
                     it + (downloadId to Aria2RecoveryCheckUiState(
                         error = "Recovery status could not be checked. The record and files were not changed.",
+                    ))
+                }
+            }
+        }
+    }
+
+    fun suggestAria2NativeRestartDestination(fileName: String): String? =
+        (repository as? Aria2NativeRestartRepository)
+            ?.suggestNativeRestartDestination(fileName)
+
+    fun clearAria2NativeRestartState(downloadId: String) {
+        _aria2NativeRestart.update { current ->
+            current - downloadId
+        }
+    }
+
+    fun restartAria2HttpWithNative(downloadId: String, currentUrl: String, destinationPath: String) {
+        val restartRepository = repository as? Aria2NativeRestartRepository ?: run {
+            _aria2NativeRestart.update {
+                it + (downloadId to Aria2NativeRestartUiState(
+                    error = "Native restart is unavailable in this app build.",
+                ))
+            }
+            return
+        }
+        if (_aria2NativeRestart.value[downloadId]?.loading == true) return
+        _aria2NativeRestart.update {
+            it + (downloadId to Aria2NativeRestartUiState(loading = true))
+        }
+        viewModelScope.launch {
+            try {
+                val newId = restartRepository.restartAria2HttpWithNative(
+                    downloadId,
+                    currentUrl,
+                    destinationPath,
+                )
+                _aria2NativeRestart.update {
+                    it + (downloadId to Aria2NativeRestartUiState(newDownloadId = newId))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _aria2NativeRestart.update {
+                    it + (downloadId to Aria2NativeRestartUiState(
+                        error = "Could not create the native download. Check the URL, destination, and permissions.",
                     ))
                 }
             }

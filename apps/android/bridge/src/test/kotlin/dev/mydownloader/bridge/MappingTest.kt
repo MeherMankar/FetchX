@@ -11,6 +11,7 @@ import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.Aria2RecoveryState
 import dev.fetchx.core.download.DownloadState
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -67,6 +68,14 @@ class MappingTest {
         assertEquals(
             Aria2RecoveryState.CONTROL_FILE_PRESENT,
             mapAria2RecoveryState(Aria2RecoveryStateDto.CONTROL_FILE_PRESENT),
+        )
+    }
+
+    @Test
+    fun nativeRestartDestinationSuggestionUsesSeparateAppSpecificFilename() {
+        assertEquals(
+            File("/private/fetchx", "legacy (native).zip").absolutePath,
+            nativeRestartDestinationSuggestion("/private/fetchx", "legacy.zip"),
         )
     }
 

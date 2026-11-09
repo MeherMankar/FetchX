@@ -297,3 +297,10 @@ Next: validate exact partial-piece reuse, process restart, and explicit destinat
 - Windows test passed four focused runs and once in the full CoreServices suite: `cargo test -p fetchx-core-services core_services_queue_recovers_native_torrent_after_process_death -- --nocapture`. Two repeated runs measured 3,391,488 and 3,096,576 peer-uploaded bytes after restart for a 4,194,304-byte selected file. This aggregate byte count suggests some on-disk reuse but does not prove exact piece/block identity.
 - No production fix was needed: the shared startup recovery and queue dispatch path completed the job without manual intervention. No schema/default change, aria2 compatibility change, or user data mutation was introduced.
 - Android device process-death, live aria2, external trackers, packaged desktop runtimes, and exact piece/block reuse remain unvalidated. Keep aria2 support and all existing removal gates; next evidence is Android device restart and piece/block-level reuse measurement.
+
+## Prompt 29 — legacy aria2 HTTP restart gate
+
+- Decision: do not add conversion behavior for persisted aria2 HTTP(S) rows. The model stores a URL and destination but cannot prove the URL is unexpired, how the row was admitted, or whether the aria2 job depended on global authentication/options absent from the model.
+- No shared-core API, desktop/Android action, or test was added; no records, settings, files, GIDs, or schema were changed.
+- Next prerequisite: a user-confirmed current-source flow, followed by a separately selected collision-free destination and a new native CoreServices admission. A provenance/options field for future records would not by itself establish the freshness of existing URLs.
+- All aria2 runtime, legacy-job, helper, RPC, packaging, and licensing removal gates remain in force. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md) for evidence and rationale.

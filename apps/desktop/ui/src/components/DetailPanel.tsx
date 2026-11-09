@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 
 import {
   assessAria2Recovery,
   getTorrentDownloadMetadata,
   getTorrentTelemetry,
+  restartAria2HttpWithNative,
   selectTorrentFiles,
   setTorrentDirectorySelected,
   setTorrentFileSelected,
@@ -26,6 +28,19 @@ const ENGINE_LABELS: Record<string, string> = {
   native_torrent: "Native torrent",
   yt_dlp: "yt-dlp",
 };
+
+const MEDIA_EXTENSIONS = new Set([
+  "aac", "avi", "flac", "m3u8", "m4a", "m4v", "mkv", "mov", "mp3", "mp4",
+  "mpd", "mpeg", "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
+]);
+
+function isHttpSource(url: string): boolean {
+  try {
+    return ["http:", "https:"].includes(new URL(url).protocol);
+  } catch {
+    return false;
+  }
+}
 
 interface DetailPanelProps {
   download: Download;
@@ -68,6 +83,12 @@ export function DetailPanel({
   const [aria2Recovery, setAria2Recovery] = useState<Aria2RecoveryAssessment | null>(null);
   const [aria2RecoveryLoading, setAria2RecoveryLoading] = useState(false);
   const [aria2RecoveryError, setAria2RecoveryError] = useState<string | null>(null);
+  const [restartOpen, setRestartOpen] = useState(false);
+  const [restartUrl, setRestartUrl] = useState("");
+  const [restartDestination, setRestartDestination] = useState("");
+  const [restartLoading, setRestartLoading] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const [restartedDownloadId, setRestartedDownloadId] = useState<string | null>(null);
   const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
   const [torrentTelemetryError, setTorrentTelemetryError] = useState<string | null>(null);
   const [torrentMetadata, setTorrentMetadata] = useState<TorrentDownloadMetadata | null>(null);
@@ -88,8 +109,11 @@ export function DetailPanel({
   useEffect(() => {
     setAria2Recovery(null);
     setAria2RecoveryError(null);
+    setRestartOpen(false);
+    setRestartError(null);
+    setRestartedDownloadId(null);
     if (isAria2) void refreshAria2Recovery();
-  }, [isAria2, refreshAria2Recovery]);
+  }, [download.id, isAria2, refreshAria2Recovery]);
 
   useEffect(() => {
     setTorrentTelemetry(null);
@@ -148,6 +172,30 @@ export function DetailPanel({
     && download.url.startsWith("magnet:")
     && download.status === "metadata_acquiring"
     && torrentMetadata?.metadata !== null;
+  const canRestartAria2 = isAria2
+    && isHttpSource(download.url)
+    && download.status !== "completed"
+    && download.status !== "stopped"
+    && !MEDIA_EXTENSIONS.has(download.filename.split(".").pop()?.toLowerCase() ?? "");
+
+  const startNativeRestart = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setRestartLoading(true);
+    setRestartError(null);
+    setRestartedDownloadId(null);
+    try {
+      const created = await restartAria2HttpWithNative(
+        download.id,
+        restartUrl,
+        restartDestination,
+      );
+      setRestartedDownloadId(created.id);
+    } catch (cause) {
+      setRestartError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRestartLoading(false);
+    }
+  };
 
   return (
     <aside className="detail-panel" aria-label="Download details">
@@ -178,6 +226,81 @@ export function DetailPanel({
             >
               Check again
             </button>
+            {canRestartAria2 && (
+              <div className="aria2-native-restart">
+                {!restartOpen ? (
+                  <button
+                    className="button button-secondary"
+                    onClick={() => {
+                      setRestartUrl(download.url);
+                      setRestartDestination("");
+                      setRestartError(null);
+                      setRestartedDownloadId(null);
+                      setRestartOpen(true);
+                    }}
+                  >
+                    Restart with native
+                  </button>
+                ) : (
+                  <form onSubmit={(event) => void startNativeRestart(event)}>
+                    <label className="field-label" htmlFor={`restart-url-${download.id}`}>
+                      Current HTTP(S) URL
+                    </label>
+                    <input
+                      id={`restart-url-${download.id}`}
+                      className="field-input"
+                      type="url"
+                      required
+                      value={restartUrl}
+                      disabled={restartLoading || restartedDownloadId !== null}
+                      onChange={(event) => setRestartUrl(event.target.value)}
+                    />
+                    <p className="field-hint">
+                      The saved URL is only a suggestion. Confirm or enter its current full URL.
+                    </p>
+                    <label className="field-label" htmlFor={`restart-destination-${download.id}`}>
+                      New absolute destination
+                    </label>
+                    <input
+                      id={`restart-destination-${download.id}`}
+                      className="field-input"
+                      type="text"
+                      required
+                      value={restartDestination}
+                      disabled={restartLoading || restartedDownloadId !== null}
+                      onChange={(event) => setRestartDestination(event.target.value)}
+                      placeholder="Enter a new full file path"
+                    />
+                    <p className="field-hint">
+                      Must be a different, unused path. The old output, partial data, and aria2 sidecar are never reused.
+                    </p>
+                    {restartError && <p className="detail-error-message">{restartError}</p>}
+                    {restartedDownloadId && (
+                      <p role="status">
+                        Created a separate native download ({restartedDownloadId}). The aria2 job remains unchanged.
+                      </p>
+                    )}
+                    <div className="detail-actions">
+                      <button
+                        className="button button-primary"
+                        type="submit"
+                        disabled={restartLoading || restartedDownloadId !== null}
+                      >
+                        {restartLoading ? "Creating…" : "Create separate native download"}
+                      </button>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        disabled={restartLoading}
+                        onClick={() => setRestartOpen(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
           </section>
         )}
 
