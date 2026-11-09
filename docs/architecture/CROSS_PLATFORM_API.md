@@ -119,3 +119,7 @@ Hosts may coalesce high-frequency progress updates. Core state remains the sourc
 ## Storage/API compatibility
 
 Add fields and operations without changing existing SQLite migration semantics. Transport DTO versions may evolve independently only when the Rust core maintains backward-compatible serialization. Physical database files are not required to be shared across devices, but logical schema versions and migrations must remain compatible.
+
+## Torrent backend compatibility
+
+CoreServices exposes additive explicit-engine operations for magnet and local `.torrent` admission. They accept only aria2 or native torrent and report unavailable engines instead of silently substituting another backend. Existing methods retain their prior aria2-first compatibility behavior. Desktop, CLI, and remote adapters pass an explicit choice when supplied; CLI defaults to aria2, and remote requests without an engine retain aria2-first/native-fallback behavior. This does not change the transport DTOs or persisted schema. Native local-torrent selection uses the existing confirmed, zero-based persisted file indexes; magnet selection parity is not yet implemented. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).

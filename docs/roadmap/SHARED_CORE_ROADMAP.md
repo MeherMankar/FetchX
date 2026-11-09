@@ -222,3 +222,13 @@ Prioritized next work:
 3. Add batch operations to CLI, remote, or browser only if those product surfaces require them; they remain intentionally unexposed.
 4. Fix the browser `TS6133` and desktop Clippy warnings in separately scoped changes.
 5. Before implementing resource resolution, select a bounded protocol/adapter slice and settle probe security, transient-handle lifetime, and older-remote-server fallback as specified in [`GOPEED_RESOLVE_TASK_ANALYSIS.md`](../research/GOPEED_RESOLVE_TASK_ANALYSIS.md).
+
+## Current aria2-to-native-Rust migration
+
+- Pinned and reviewed aria2 source, manual/RPC behavior, license, and focused tests. No upstream source was copied.
+- Reused the existing Rust downloader, CoreServices, queue, storage, models, and `librqbit` engine. Added explicit torrent-backend admission paths and passed confirmed local torrent file indexes to native librqbit.
+- Desktop, CLI, and remote magnet adapters now preserve explicit backend choices. Existing aria2 defaults, supervision, settings, and persisted records remain in place.
+- The native migration is partial. Magnet file selection, broader aria2 restart/recovery and configuration parity, adapter runtime validation, and aria2 removal remain open.
+- Focused Rust tests passed for downloader, storage, CoreServices, CLI, remote-server, and Android bridge. Exact commands and the distinction between automated tests and unperformed runtime validation are recorded in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
+
+Next: implement native magnet metadata/file selection as a separate tested slice. Do not change defaults or remove aria2 packaging/RPC until migration acceptance criteria pass across supported hosts.

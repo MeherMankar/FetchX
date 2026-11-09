@@ -1183,6 +1183,43 @@ impl CoreServices {
         } else {
             return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
         };
+        self.enqueue_magnet_with_metadata(uri, magnet, torrent_engine, priority, destination)
+            .await
+    }
+
+    /// Validates and queues a magnet job with the explicitly selected backend.
+    ///
+    /// This keeps platform engine selection authoritative while preserving
+    /// [`Self::enqueue_magnet`] as the compatibility path for existing callers.
+    pub async fn enqueue_magnet_with_engine(
+        &self,
+        uri: &str,
+        engine: EngineKind,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+    ) -> Result<DownloadId, CoreServicesError> {
+        let magnet = parse_magnet_uri(uri)
+            .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
+        if !matches!(engine, EngineKind::Aria2 | EngineKind::NativeTorrent) {
+            return Err(CoreServicesError::InvalidMagnet(
+                "unsupported torrent engine".to_owned(),
+            ));
+        }
+        if !self.engine_runtime.is_available(engine) {
+            return Err(CoreServicesError::UnavailableEngine(engine));
+        }
+        self.enqueue_magnet_with_metadata(uri, magnet, engine, priority, destination)
+            .await
+    }
+
+    async fn enqueue_magnet_with_metadata(
+        &self,
+        uri: &str,
+        magnet: fetchx_models::MagnetInfo,
+        torrent_engine: EngineKind,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+    ) -> Result<DownloadId, CoreServicesError> {
         let id = DownloadId::new();
         let source = DownloadSource::new(uri, torrent_engine)
             .map_err(|error| CoreServicesError::InvalidMagnet(error.to_string()))?;
@@ -1230,7 +1267,7 @@ impl CoreServices {
         .await
     }
 
-    /// Validates and queues a local `.torrent` file through shared aria2.
+    /// Validates and queues a local `.torrent` file through the selected torrent runtime.
     ///
     /// The download destination is a directory. If omitted, each torrent is
     /// isolated in a directory named from its info hash and download ID.
@@ -1264,6 +1301,45 @@ impl CoreServices {
         destination: Option<PathBuf>,
         selected_file_indexes: Option<Vec<u32>>,
     ) -> Result<DownloadId, CoreServicesError> {
+        self.enqueue_torrent_file_with_selection_inner(
+            torrent_path,
+            None,
+            priority,
+            destination,
+            selected_file_indexes,
+        )
+        .await
+    }
+
+    /// Queues a local torrent file using the explicitly selected backend.
+    ///
+    /// The selection uses zero-based file indexes from the parsed metainfo.
+    pub async fn enqueue_torrent_file_with_selection_and_engine(
+        &self,
+        torrent_path: PathBuf,
+        engine: EngineKind,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+        selected_file_indexes: Option<Vec<u32>>,
+    ) -> Result<DownloadId, CoreServicesError> {
+        self.enqueue_torrent_file_with_selection_inner(
+            torrent_path,
+            Some(engine),
+            priority,
+            destination,
+            selected_file_indexes,
+        )
+        .await
+    }
+
+    async fn enqueue_torrent_file_with_selection_inner(
+        &self,
+        torrent_path: PathBuf,
+        engine: Option<EngineKind>,
+        priority: DownloadPriority,
+        destination: Option<PathBuf>,
+        selected_file_indexes: Option<Vec<u32>>,
+    ) -> Result<DownloadId, CoreServicesError> {
         let (torrent_path, torrent) = load_torrent_metainfo(torrent_path).await?;
         // Validate destination BEFORE engine availability check so security
         // errors are reported even when aria2 is not running.
@@ -1275,12 +1351,21 @@ impl CoreServices {
         let destination = validate_torrent_destination(&destination, &self.downloads_dir)
             .await
             .map_err(|e| CoreServicesError::InvalidTorrent(e.to_string()))?;
-        let torrent_engine = if self.engine_runtime.is_available(EngineKind::Aria2) {
-            EngineKind::Aria2
-        } else if self.engine_runtime.is_available(EngineKind::NativeTorrent) {
-            EngineKind::NativeTorrent
-        } else {
-            return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2));
+        let torrent_engine = match engine {
+            Some(engine) if !matches!(engine, EngineKind::Aria2 | EngineKind::NativeTorrent) => {
+                return Err(CoreServicesError::InvalidTorrent(
+                    "unsupported torrent engine".to_owned(),
+                ));
+            }
+            Some(engine) if !self.engine_runtime.is_available(engine) => {
+                return Err(CoreServicesError::UnavailableEngine(engine));
+            }
+            Some(engine) => engine,
+            None if self.engine_runtime.is_available(EngineKind::Aria2) => EngineKind::Aria2,
+            None if self.engine_runtime.is_available(EngineKind::NativeTorrent) => {
+                EngineKind::NativeTorrent
+            }
+            None => return Err(CoreServicesError::UnavailableEngine(EngineKind::Aria2)),
         };
         let source = DownloadSource::new_torrent_file(&torrent_path, torrent_engine)
             .map_err(|error| CoreServicesError::InvalidTorrent(error.to_string()))?;
@@ -1681,6 +1766,7 @@ impl EngineRuntime {
                 .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
         );
 
+        let native_torrent_metadata = torrent_metadata.clone();
         let (aria2_engine, aria2_supervisor, aria2_avail) =
             init_aria2(repository.clone(), config, runtime_dir, torrent_metadata).await;
         // Clone the runner before moving it into init_ytdlp so we can also
@@ -1689,7 +1775,7 @@ impl EngineRuntime {
         let (yt_dlp_engine, ytdlp_avail) =
             init_ytdlp(repository.clone(), config, runtime_dir, ytdlp_runner).await;
         let (native_torrent_engine, native_torrent_avail) =
-            init_native_torrent(repository.clone(), config).await;
+            init_native_torrent(repository.clone(), config, native_torrent_metadata).await;
 
         log_avail("aria2", &aria2_avail);
         log_avail("yt-dlp", &ytdlp_avail);
@@ -2013,6 +2099,7 @@ async fn init_ytdlp(
 async fn init_native_torrent(
     repository: CoreRepository,
     config: &EngineConfig,
+    torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
 ) -> (
     Option<Arc<NativeTorrentEngine<CoreRepository>>>,
     EngineAvailability,
@@ -2027,6 +2114,11 @@ async fn init_native_torrent(
     };
     match NativeTorrentEngine::new(repository, native_cfg).await {
         Ok(engine) => {
+            let engine = if let Some(torrent_metadata) = torrent_metadata {
+                engine.with_torrent_metadata_repository(torrent_metadata)
+            } else {
+                engine
+            };
             let engine = Arc::new(engine);
             info!("NativeTorrentEngine initialized successfully");
             (
@@ -2110,8 +2202,7 @@ async fn validate_torrent_destination(
     // Reject UNC paths on Windows (\\server\share).
     #[cfg(windows)]
     {
-        let s = destination.to_string_lossy();
-        if s.starts_with("\\\\") {
+        if is_unc_path(destination) {
             return Err("UNC paths are not permitted as torrent destinations".to_owned());
         }
     }
@@ -2231,6 +2322,17 @@ async fn validate_torrent_destination(
     }
 
     Ok(canonical_dest)
+}
+
+#[cfg(windows)]
+fn is_unc_path(path: &std::path::Path) -> bool {
+    use std::path::{Component, Prefix};
+
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..))
+    )
 }
 
 // ============================================================
@@ -2866,6 +2968,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicitly_selected_native_torrent_engine_is_persisted_for_magnet_and_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{ConfigService, EngineConfig, NativeTorrentConfig};
+        use fetchx_storage::Database;
+
+        let root = tempdir()?;
+        let paths = config(root.path());
+        let database = Database::connect_path(&paths.database_path).await?;
+        ConfigService::new(database.config())
+            .save(&EngineConfig {
+                native_torrent: NativeTorrentConfig {
+                    enabled: true,
+                    listen_port: 0,
+                    session_dir: Some(root.path().join("librqbit")),
+                },
+                ..EngineConfig::default()
+            })
+            .await?;
+        drop(database);
+
+        let services = CoreServices::start(paths).await?;
+        services.pause_queue_dispatch().await?;
+
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=native";
+        assert!(matches!(
+            services
+                .enqueue_magnet_with_engine(
+                    magnet,
+                    EngineKind::DirectHttp,
+                    DownloadPriority::Normal,
+                    None,
+                )
+                .await,
+            Err(super::CoreServicesError::InvalidMagnet(_))
+        ));
+        let magnet_id = services
+            .enqueue_magnet_with_engine(
+                magnet,
+                EngineKind::NativeTorrent,
+                DownloadPriority::Normal,
+                None,
+            )
+            .await?;
+        let magnet_item = services
+            .repository
+            .get(magnet_id)
+            .await?
+            .ok_or("native magnet item was not persisted")?;
+        assert_eq!(magnet_item.source().engine(), EngineKind::NativeTorrent);
+
+        let torrent_path = root.path().join("native.torrent");
+        tokio::fs::write(
+            &torrent_path,
+            b"d4:infod6:lengthi1e4:name1:x12:piece lengthi16384e6:pieces20:\
+              01234567890123456789ee",
+        )
+        .await?;
+        assert!(matches!(
+            services
+                .enqueue_torrent_file_with_selection_and_engine(
+                    torrent_path.clone(),
+                    EngineKind::DirectHttp,
+                    DownloadPriority::Normal,
+                    None,
+                    Some(vec![0]),
+                )
+                .await,
+            Err(super::CoreServicesError::InvalidTorrent(_))
+        ));
+        let torrent_id = services
+            .enqueue_torrent_file_with_selection_and_engine(
+                torrent_path,
+                EngineKind::NativeTorrent,
+                DownloadPriority::Normal,
+                None,
+                Some(vec![0]),
+            )
+            .await?;
+        let torrent_item = services
+            .repository
+            .get(torrent_id)
+            .await?
+            .ok_or("native torrent-file item was not persisted")?;
+        assert_eq!(torrent_item.source().engine(), EngineKind::NativeTorrent);
+        let metadata = services
+            .torrent_download_metadata(torrent_id)
+            .await?
+            .ok_or("native torrent metadata was not persisted")?;
+        assert_eq!(metadata.selected_file_indexes, [0]);
+        assert!(metadata.selection_confirmed);
+
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn magnet_file_selection_uses_shared_model_and_persists_size_and_indexes()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
@@ -3070,6 +3268,18 @@ mod tests {
         );
         services.shutdown().await?;
         Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn torrent_destination_unc_check_allows_verbatim_drive_paths_only() {
+        assert!(super::is_unc_path(std::path::Path::new(r"\\server\share")));
+        assert!(super::is_unc_path(std::path::Path::new(
+            r"\\?\UNC\server\share"
+        )));
+        assert!(!super::is_unc_path(std::path::Path::new(
+            r"\\?\C:\downloads"
+        )));
     }
 
     #[tokio::test]

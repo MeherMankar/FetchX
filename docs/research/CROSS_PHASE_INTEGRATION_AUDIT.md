@@ -148,3 +148,14 @@ Earlier cross-phase test/build evidence remains in the linked research reports, 
 - `docs/research/CROSS_PHASE_INTEGRATION_AUDIT.md`
 - `docs/architecture/CAPABILITY_MATRIX.md`
 - `docs/roadmap/SHARED_CORE_ROADMAP.md`
+
+## Prompt 17 — staged aria2/native torrent migration
+
+- The pinned aria2 review and feature-parity table are in [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md). aria2 remains the compatibility backend; this work does not claim a full replacement.
+- Shared queue, priority, storage, and protocol implementations remain Rust-owned. Explicit backend-selection APIs now prevent a requested native torrent engine from being silently replaced by aria2. Legacy callers preserve their previous aria2-first fallback.
+- Confirmed local `.torrent` selections are passed to librqbit. Magnet selection parity remains outstanding. The metadata repository lookup now filters by download ID, with a multi-row regression test.
+- Desktop, CLI, and remote explicit selection are integrated; Android's existing native fallback is unchanged. No UniFFI or transport DTO change, schema migration, new dependency, aria2 setting removal, or existing-download rewrite was made.
+- `cargo fmt --all`; shared-core, storage, CLI, remote-server, Android bridge, and desktop Tauri tests passed. Shared-core/adapter Clippy passed; desktop Clippy passed with two existing warnings in `app.rs` and the batch command in `commands.rs`. These are host-side tests; no live swarm, aria2 daemon, Android device/emulator, packaged desktop application, or live transfer was tested.
+- The next bounded step is native magnet metadata and file selection, with restart/recovery acceptance tests before changing defaults or removing aria2.
+
+See the migration report for the aria2 revision/license, reviewed source files, exact per-capability status, adapter results, and remaining phases: [`ARIA2_NATIVE_RUST_MIGRATION.md`](ARIA2_NATIVE_RUST_MIGRATION.md).

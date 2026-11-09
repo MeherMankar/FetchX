@@ -95,3 +95,7 @@ A new application may be added only by proving:
 3. It handles OS permission/background APIs only.
 4. It does not reimplement URL/category/name, engine, queue, schedule, retry, state-machine, or persistence logic.
 5. It reports capabilities only when the core runtime and platform adapter can support them.
+
+## Torrent engine selection during aria2 migration
+
+Desktop, CLI, and remote adapters may request the native torrent backend through the existing Rust CoreServices boundary; adapters do not implement torrent transfer logic. Explicit requests are validated in CoreServices, while legacy/default selection remains unchanged for compatibility. Android's existing native fallback is unchanged. No target may remove aria2 setup, settings, or persisted records until native magnet selection, restart/recovery, and the applicable runtime acceptance tests are complete. Current target status and limitations are documented in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).

@@ -151,7 +151,7 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
 
     let id = if magnet.is_some() {
         match svc
-            .enqueue_magnet(&canonical_url, priority, opts.destination)
+            .enqueue_magnet_with_engine(&canonical_url, engine_kind, priority, opts.destination)
             .await
         {
             Ok(id) => id,
@@ -162,8 +162,9 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         }
     } else if let Some(torrent_path) = torrent_path {
         match svc
-            .enqueue_torrent_file_with_selection(
+            .enqueue_torrent_file_with_selection_and_engine(
                 torrent_path,
+                engine_kind,
                 priority,
                 opts.destination,
                 selected_file_indexes,
@@ -287,13 +288,14 @@ pub fn parse_engine(s: Option<&str>) -> Result<EngineKind, String> {
     match s.unwrap_or("direct-http").to_ascii_lowercase().as_str() {
         "direct-http" | "direct_http" | "http" => Ok(EngineKind::DirectHttp),
         "aria2" => Ok(EngineKind::Aria2),
+        "native-torrent" | "native_torrent" => Ok(EngineKind::NativeTorrent),
         "yt-dlp" | "yt_dlp" | "ytdlp" => Ok(EngineKind::YtDlp),
         "ftp" => Ok(EngineKind::Ftp),
         "ftps" => Ok(EngineKind::Ftps),
         "sftp" => Ok(EngineKind::Sftp),
         "metalink" => Ok(EngineKind::Metalink),
         other => Err(format!(
-            "unknown engine `{other}`. Valid: direct-http, aria2, yt-dlp, ftp, ftps, sftp, metalink"
+            "unknown engine `{other}`. Valid: direct-http, aria2, native-torrent, yt-dlp, ftp, ftps, sftp, metalink"
         )),
     }
 }
@@ -309,8 +311,8 @@ fn resolve_engine(
             return Ok(EngineKind::Aria2);
         }
         return match parse_engine(engine) {
-            Ok(EngineKind::Aria2) => Ok(EngineKind::Aria2),
-            Ok(_) => Err("magnet and torrent downloads require the aria2 engine".to_owned()),
+            Ok(engine @ (EngineKind::Aria2 | EngineKind::NativeTorrent)) => Ok(engine),
+            Ok(_) => Err("magnet and torrent downloads require a torrent engine".to_owned()),
             Err(error) => Err(error),
         };
     }
@@ -379,7 +381,7 @@ mod tests {
     use fetchx_models::{EngineKind, parse_magnet_uri};
 
     #[test]
-    fn magnet_defaults_to_aria2_and_suggests_a_confined_name() {
+    fn magnet_defaults_to_aria2_and_allows_native_torrent_when_selected() {
         assert_eq!(
             resolve_engine(true, false, None, None),
             Ok(EngineKind::Aria2)
@@ -394,6 +396,10 @@ mod tests {
         .expect("valid test magnet");
         assert_eq!(metadata.suggested_filename(), "unsafename.torrent");
         assert!(resolve_engine(true, false, Some("direct-http"), None).is_err());
+        assert_eq!(
+            resolve_engine(true, false, Some("native-torrent"), None),
+            Ok(EngineKind::NativeTorrent)
+        );
 
         // FTP/FTPS scheme auto-detection.
         assert_eq!(

@@ -164,7 +164,12 @@ impl AppState {
         if magnet.is_some() {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
             let id = core_services
-                .enqueue_magnet(&canonical_url, DownloadPriority::Normal, None)
+                .enqueue_magnet_with_engine(
+                    &canonical_url,
+                    engine_kind,
+                    DownloadPriority::Normal,
+                    None,
+                )
                 .await
                 .map_err(|_| IpcError::internal())?;
             return self.get(id).await;
@@ -173,8 +178,9 @@ impl AppState {
         if let Some(torrent_path) = torrent_path {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
             let id = core_services
-                .enqueue_torrent_file_with_selection(
+                .enqueue_torrent_file_with_selection_and_engine(
                     torrent_path,
+                    engine_kind,
                     DownloadPriority::Normal,
                     None,
                     None,
@@ -405,7 +411,12 @@ impl AppState {
             // Re-enqueue as magnet via CoreServices.
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
             let new_id = core_services
-                .enqueue_magnet(url, fetchx_models::DownloadPriority::Normal, None)
+                .enqueue_magnet_with_engine(
+                    url,
+                    original_engine,
+                    fetchx_models::DownloadPriority::Normal,
+                    None,
+                )
                 .await
                 .map_err(|_| IpcError::internal())?;
             return self.get(new_id).await;
@@ -418,8 +429,9 @@ impl AppState {
                 .ok_or_else(IpcError::invalid_request)?;
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
             let new_id = core_services
-                .enqueue_torrent_file_with_selection(
+                .enqueue_torrent_file_with_selection_and_engine(
                     torrent_path,
+                    original_engine,
                     fetchx_models::DownloadPriority::Normal,
                     None,
                     None,
@@ -978,8 +990,9 @@ pub async fn add_torrent_download(
         .as_ref()
         .ok_or_else(IpcError::internal)?;
     let id = core_services
-        .enqueue_torrent_file_with_selection(
+        .enqueue_torrent_file_with_selection_and_engine(
             Path::new(&torrent_path).to_path_buf(),
+            fetchx_models::EngineKind::NativeTorrent,
             DownloadPriority::Normal,
             None,
             selected_file_indexes,

@@ -121,26 +121,32 @@ pub(crate) async fn dispatch(
         RemoteCommand::DownloadCreate(params) => {
             let priority = params.priority.unwrap_or_default();
             let id = if params.url.starts_with("magnet:") {
-                let selected_engine = if services.engine_runtime.is_available(EngineKind::Aria2) {
-                    Some(EngineKind::Aria2)
-                } else if services
-                    .engine_runtime
-                    .is_available(EngineKind::NativeTorrent)
-                {
-                    Some(EngineKind::NativeTorrent)
-                } else {
-                    None
+                let selected_engine = match params.engine {
+                    Some(engine @ (EngineKind::Aria2 | EngineKind::NativeTorrent))
+                        if services.engine_runtime.is_available(engine) =>
+                    {
+                        Some(engine)
+                    }
+                    Some(_) => None,
+                    None if services.engine_runtime.is_available(EngineKind::Aria2) => {
+                        Some(EngineKind::Aria2)
+                    }
+                    None if services
+                        .engine_runtime
+                        .is_available(EngineKind::NativeTorrent) =>
+                    {
+                        Some(EngineKind::NativeTorrent)
+                    }
+                    None => None,
                 };
-                if params.engine.is_some_and(|requested| {
-                    selected_engine.is_some_and(|selected| requested != selected)
-                }) {
+                let Some(selected_engine) = selected_engine else {
                     return Err(RpcError::new(
                         RpcErrorCode::UnsupportedOperation,
                         "requested torrent engine is not available",
                     ));
-                }
+                };
                 services
-                    .enqueue_magnet(&params.url, priority, None)
+                    .enqueue_magnet_with_engine(&params.url, selected_engine, priority, None)
                     .await
                     .map_err(map_core_error)?
             } else {

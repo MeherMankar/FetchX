@@ -659,6 +659,38 @@ async fn torrent_metadata_insert_reload_and_list_active() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
+async fn torrent_metadata_lookup_filters_by_download_id() -> Result<(), Box<dyn Error>> {
+    let database = Database::connect("sqlite::memory:").await?;
+    let downloads = database.downloads();
+    let metadata = database.torrent_metadata();
+    let first = item(DownloadId::new(), false)?;
+    let second = item(DownloadId::new(), false)?;
+    downloads.create(&first).await?;
+    downloads.create(&second).await?;
+
+    let first_row = torrent_row(first.id());
+    let second_row = TorrentMetadataRow {
+        torrent_name: "Second torrent".to_owned(),
+        selected_file_indexes: vec![1],
+        ..torrent_row(second.id())
+    };
+    metadata.create_torrent_metadata(&first_row).await?;
+    metadata.create_torrent_metadata(&second_row).await?;
+
+    assert_eq!(
+        metadata.get_torrent_metadata(second.id()).await?,
+        Some(second_row)
+    );
+    assert!(
+        metadata
+            .get_torrent_metadata(DownloadId::new())
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn torrent_metadata_update_and_gid_lookup() -> Result<(), Box<dyn Error>> {
     let database = Database::connect("sqlite::memory:").await?;
     let dl_repo = database.downloads();

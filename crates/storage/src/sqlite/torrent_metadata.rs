@@ -168,7 +168,7 @@ impl TorrentMetadataRepository for SqliteTorrentMetadataRepository {
         &self,
         id: DownloadId,
     ) -> Result<Option<TorrentMetadataRow>, StorageError> {
-        let row = sqlx::query(SELECT_COLUMNS)
+        let row = sqlx::query(&format!("{SELECT_COLUMNS} WHERE download_id = ?"))
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await?;

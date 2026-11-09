@@ -112,3 +112,7 @@ The browser extension/native host and Android browser module are platform adapte
 > Platform-specific code supplies storage paths, permissions, lifecycle, UI, notifications, native dialogs, and executable runtimes. Platform-independent business logic is implemented once in Rust crates below `core-services`.
 
 No application should parse transfer state, decide queue eligibility, validate engine availability, allocate segments, perform retries, persist download lifecycle transitions, or implement torrent/media orchestration independently.
+
+## aria2 migration status
+
+The shared Rust core still supports aria2 through its supervisor and JSON-RPC adapter. The native `librqbit` engine remains additive, and this migration has not removed aria2 executables, RPC, configuration, helper management, or persisted task metadata. CoreServices now has explicit torrent-backend admission paths; legacy paths preserve their aria2-first behavior. Confirmed local `.torrent` file indexes are passed to the native engine, while native magnet selection and full aria2 restart/configuration parity remain open. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md) for the coverage table, source/license review, tests, and remaining phases.

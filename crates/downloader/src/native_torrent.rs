@@ -13,7 +13,10 @@
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use fetchx_models::{DownloadId, DownloadItem, DownloadStatus, EngineKind};
-use fetchx_storage::DownloadRepository;
+use fetchx_storage::{
+    DownloadRepository, SqliteTorrentMetadataRepository, TorrentMetadataRepository,
+    TorrentMetadataRow, TorrentSourceType,
+};
 use librqbit::limits::LimitsConfig;
 use librqbit::{
     AddTorrent, AddTorrentOptions, ListenerOptions, ManagedTorrent, Session, SessionOptions,
@@ -57,6 +60,7 @@ impl Default for NativeTorrentConfig {
 pub struct NativeTorrentEngine<R> {
     session: Arc<Session>,
     repository: R,
+    torrent_metadata: Option<SqliteTorrentMetadataRepository>,
     /// Retains handles for active transfers and completed torrents that are
     /// still seeding, so controls can reach the librqbit session.
     handles: Mutex<std::collections::HashMap<DownloadId, Arc<ManagedTorrent>>>,
@@ -124,8 +128,17 @@ where
         Ok(Self {
             session,
             repository,
+            torrent_metadata: None,
             handles: Mutex::new(std::collections::HashMap::new()),
         })
+    }
+
+    pub fn with_torrent_metadata_repository(
+        mut self,
+        repository: SqliteTorrentMetadataRepository,
+    ) -> Self {
+        self.torrent_metadata = Some(repository);
+        self
     }
 
     /// Stops an in-session torrent without deleting its downloaded files.
@@ -317,9 +330,19 @@ where
             .as_ref()
             .map(|limit| limit.bytes_per_second())
             .and_then(|bps| NonZeroU32::new(bps.min(u64::from(u32::MAX)) as u32));
+        let selected_files = match &self.torrent_metadata {
+            Some(repository) => selected_files_from_metadata(
+                repository
+                    .get_torrent_metadata(id)
+                    .await
+                    .map_err(DownloadEngineError::Storage)?,
+            )?,
+            None => None,
+        };
         let add_opts = AddTorrentOptions {
             overwrite: true,
             output_folder: Some(destination.to_string_lossy().into_owned()),
+            only_files: selected_files,
             ratelimits: LimitsConfig {
                 download_bps: rate_bps,
                 upload_bps: None,
@@ -484,6 +507,40 @@ where
     }
 }
 
+fn selected_files_from_metadata(
+    metadata: Option<TorrentMetadataRow>,
+) -> Result<Option<Vec<usize>>, DownloadEngineError> {
+    let Some(metadata) = metadata else {
+        return Ok(None);
+    };
+
+    if metadata.source_type != TorrentSourceType::TorrentFile {
+        return Ok(None);
+    }
+    if !metadata.selection_confirmed {
+        return Err(DownloadEngineError::NativeTorrent(
+            "local torrent file selection is not confirmed".to_owned(),
+        ));
+    }
+    if metadata.selected_file_indexes.is_empty() {
+        return Err(DownloadEngineError::NativeTorrent(
+            "confirmed local torrent selection contains no files".to_owned(),
+        ));
+    }
+
+    metadata
+        .selected_file_indexes
+        .into_iter()
+        .map(usize::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+        .map_err(|error| {
+            DownloadEngineError::NativeTorrent(format!(
+                "selected torrent file index is unsupported on this platform: {error}"
+            ))
+        })
+}
+
 async fn wait_for_signal(receiver: &mut watch::Receiver<bool>) {
     loop {
         if *receiver.borrow() {
@@ -506,8 +563,85 @@ mod tests {
     //! These tests do NOT open network connections. They verify parsing,
     //! security invariants, and engine wiring using in-memory fixtures.
 
-    use super::NativeTorrentConfig;
+    use super::{DownloadEngineError, NativeTorrentConfig, selected_files_from_metadata};
     use fetchx_models::{DownloadSource, EngineKind, parse_magnet_uri};
+    use fetchx_storage::{TorrentMetadataRow, TorrentSeedState, TorrentSourceType};
+    use std::path::PathBuf;
+
+    fn torrent_metadata_row(
+        source_type: TorrentSourceType,
+        selection_confirmed: bool,
+        selected_file_indexes: Vec<u32>,
+    ) -> TorrentMetadataRow {
+        let now = fetchx_models::Timestamp::from_unix_millis(1);
+        TorrentMetadataRow {
+            download_id: fetchx_models::DownloadId::new(),
+            source_type,
+            magnet_uri: None,
+            local_torrent_path: None,
+            info_hash: "0123456789012345678901234567890123456789".to_owned(),
+            torrent_name: "sample".to_owned(),
+            torrent_metadata: None,
+            destination: PathBuf::from("downloads"),
+            metadata_state: "ready".to_owned(),
+            selected_file_indexes,
+            selected_total_bytes: 0,
+            selection_confirmed,
+            aria2_gid: None,
+            seed_state: TorrentSeedState::Downloading,
+            uploaded_bytes: 0,
+            upload_speed_bps: 0,
+            peer_count: 0,
+            seed_count: 0,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn confirmed_local_torrent_selection_is_passed_as_native_file_indexes() {
+        let selected = selected_files_from_metadata(Some(torrent_metadata_row(
+            TorrentSourceType::TorrentFile,
+            true,
+            vec![1, 3],
+        )))
+        .expect("valid persisted indexes should convert");
+
+        assert_eq!(selected, Some(vec![1, 3]));
+    }
+
+    #[test]
+    fn native_engine_requires_confirmed_local_selection_and_ignores_magnet_selection() {
+        assert!(matches!(
+            selected_files_from_metadata(Some(torrent_metadata_row(
+                TorrentSourceType::TorrentFile,
+                false,
+                vec![1],
+            ))),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+        assert!(matches!(
+            selected_files_from_metadata(Some(torrent_metadata_row(
+                TorrentSourceType::Magnet,
+                true,
+                vec![1],
+            ))),
+            Ok(None)
+        ));
+        assert!(matches!(selected_files_from_metadata(None), Ok(None)));
+    }
+
+    #[test]
+    fn native_engine_rejects_empty_confirmed_local_torrent_selection() {
+        assert!(matches!(
+            selected_files_from_metadata(Some(torrent_metadata_row(
+                TorrentSourceType::TorrentFile,
+                true,
+                Vec::new(),
+            ))),
+            Err(DownloadEngineError::NativeTorrent(_))
+        ));
+    }
 
     // ── Bencode test fixtures ─────────────────────────────────────────────
     //

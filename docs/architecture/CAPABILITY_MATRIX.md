@@ -159,3 +159,14 @@ The Prompt 13 target-by-target audit is recorded in [`CROSS_PHASE_INTEGRATION_AU
 - Android sticky restart has host-side unit coverage only; real process-recreation behavior remains unverified.
 
 At the Prompt 14 baseline, phase work was committed through `573c30b`; Prompt 13's duplicate-warning integration and Prompt 14's Android batch integration and documentation are uncommitted. No schema migration or new dependency was introduced. Android batch adapter/device behavior is host-tested only; browser-build, source-access, and desktop Clippy limitations remain documented in the audit and phase reports.
+
+## aria2/native torrent migration status
+
+| Capability | Current status |
+|---|---|
+| Explicit torrent backend choice | CoreServices validates aria2/native-torrent selection; desktop, CLI, and remote magnet paths pass explicit choices. Legacy/default behavior remains aria2-first where previously used. |
+| Native local `.torrent` file selection | Confirmed persisted indexes are passed to librqbit `only_files`; metadata lookup is filtered by download ID. |
+| Native magnet file selection | Not implemented; native metadata selection remains a follow-up. |
+| Other aria2 RPC/process/settings behavior | Retained for compatibility; no removal or migration of existing records. |
+
+This migration has Rust unit and integration test coverage but no device, packaged-desktop, swarm, or live-daemon runtime proof. Detailed platform status and acceptance work are in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).

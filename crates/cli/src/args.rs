@@ -301,11 +301,11 @@ pub struct AddOpts {
     )]
     pub url: Option<String>,
 
-    /// Magnet URI. Magnet and .torrent downloads use aria2.
+    /// Magnet URI. Magnet and .torrent downloads use a torrent engine.
     #[arg(long, value_name = "URI", conflicts_with = "url")]
     pub magnet: Option<String>,
 
-    /// Engine to use: direct-http | aria2 | yt-dlp. Torrent downloads default to aria2.
+    /// Engine to use: direct-http | aria2 | native-torrent | yt-dlp. Torrent downloads default to aria2.
     #[arg(short = 'e', long, value_name = "ENGINE")]
     pub engine: Option<String>,
 
