@@ -247,3 +247,53 @@ Android maps the persisted failure diagnostic to a visible failed row and curren
 5. Keep existing schemas, aria2 settings, credentials, supervisor, RPC, helper packaging, and records unchanged until rollback and removal gates are satisfied.
 
 No persisted engine identity or GID was reinterpreted, and no schema or download file was changed. This documentation-only phase ran source inspection and `git diff --check`; no tests/builds or live aria2, Android device, or process-restart validation were run.
+
+## Prompt 24 — read-only legacy aria2 recovery assessment
+
+Prompt 24 implements the read-only assessment in CoreServices and exposes it through Android UniFFI and desktop Tauri. The persisted engine remains authoritative: the assessment never changes a download, clears/replaces a GID, starts or restarts aria2, dispatches through native Rust, or mutates a destination, partial, `.aria2` control file, or torrent metadata row.
+
+| Assessment state | Evidence and meaning |
+|---|---|
+| `not_aria2` | The persisted download is not assigned to aria2; no aria2 task inspection is attempted. |
+| `not_required` | The persisted aria2 download is completed; engine recovery is unnecessary. |
+| `runtime_unavailable` | The configured runtime is disabled/unavailable on this host. The lookup is a non-starting supervisor peek. |
+| `ready_to_start` | aria2 is reachable and the queued item has no partial progress to reconcile. |
+| `job_available` | aria2 reports the persisted torrent task and its info hash matches the saved metadata when that evidence is available. This is not a guarantee of byte-level continuation. |
+| `missing_torrent_metadata`, `missing_gid`, `stale_gid` | Torrent recovery lacks metadata/GID, or aria2 reports an invalid/removed/error task or mismatching info hash. An inconclusive response remains `unknown`. |
+| `missing_control_file`, `control_file_present` | The expected sibling `.aria2` control file is absent/present for supervised partial work. Presence is explicitly not proof that resume will succeed. |
+| `unknown` | Available RPC/filesystem evidence is inconclusive, including generic work without a persisted/reachable runtime GID. |
+
+CoreServices returns a typed state with a sanitized explanation and next step. Missing download IDs return no assessment. Android shows a per-aria2-row action and the result/next step; desktop exposes the same operation in download details. Both surfaces explicitly state that assessment is read-only. The Android remote aria2 endpoint preference is not treated as the local runtime for persisted jobs. No CLI, FetchX remote JSON-RPC, or browser/native-host operation was added; those clients do not currently expose this assessment.
+
+Focused source coverage verifies missing/malformed and stale/available torrent GIDs, ready/unknown generic jobs, control-file presence/absence, and that CoreServices assessment preserves the persisted record, torrent metadata, partial output, and sidecar bytes. The local Rust checks passed:
+
+```text
+cargo fmt --all
+cargo check -j 1 --tests -p fetchx-downloader -p fetchx-core-services -p fetchx-android-bridge -p fetchx-desktop
+cargo test -j 1 -p fetchx-downloader recovery_assessment -- --test-threads=1
+  5 passed, 0 failed
+cargo test -j 1 -p fetchx-core-services aria2_recovery_assessment_preserves_records_and_download_files -- --test-threads=1
+  1 passed, 0 failed
+cargo test -j 1 -p fetchx-android-bridge aria2_recovery_assessment_dto_preserves_state_and_guidance -- --test-threads=1
+  1 passed, 0 failed
+cargo clippy -j 1 --tests --no-deps -p fetchx-downloader -p fetchx-core-services -p fetchx-android-bridge -p fetchx-desktop
+cargo fmt --all -- --check
+git diff --check
+```
+
+`Set-Location apps\desktop\ui; npm run build` passed TypeScript checking and the Vite production build. The first Android Gradle attempt failed during UniFFI generation with a Rust allocation/stack-buffer-overrun error. Retrying with a single Cargo job, incremental compilation disabled, debug info disabled, and 256 codegen units succeeded:
+
+```powershell
+$env:CARGO_BUILD_JOBS='1'
+$env:CARGO_PROFILE_DEV_INCREMENTAL='false'
+$env:CARGO_PROFILE_DEV_DEBUG='0'
+$env:CARGO_PROFILE_DEV_CODEGEN_UNITS='256'
+Set-Location apps\android
+.\gradlew.bat :downloads:testDebugUnitTest :bridge:testDebugUnitTest
+```
+
+Result: `BUILD SUCCESSFUL`; bridge mapping and downloads ViewModel unit tests ran, including assessment loading/result/error UI state. UniFFI-generated Kotlin emitted two redundant-conversion warnings. Android tests/builds are host-side only; no device run was performed. A real supervised aria2 daemon, process restart, and live network recovery were not tested.
+
+The final Rust test-module type-check, Clippy, formatting, and diff checks passed. Clippy reported two existing desktop warnings outside this change: `collapsible_if` in `app.rs` and `too_many_arguments` in `commands.rs`.
+
+The next dependency boundary remains same-runtime aria2 recovery validation with a live supervised daemon, including GID changes/staleness and partial files with/without sidecars. Do not design cross-engine replacement from an assessment state alone; preserve the aria2 record and files until any future opt-in replacement independently verifies source, selected files, destination, and integrity.

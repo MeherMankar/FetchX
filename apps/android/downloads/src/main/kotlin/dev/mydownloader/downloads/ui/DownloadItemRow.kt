@@ -45,6 +45,8 @@ fun DownloadItemRow(
     onMoveDownInQueue: () -> Unit,
     torrentTelemetry: TorrentTelemetry? = null,
     torrentMetadata: TorrentDownloadMetadata? = null,
+    aria2Recovery: Aria2RecoveryCheckUiState? = null,
+    onAssessAria2Recovery: () -> Unit = {},
     onTorrentFileSelected: (Int, Boolean) -> Unit = { _, _ -> },
     onTorrentSelectionAll: (Boolean) -> Unit = {},
     onTorrentDirectorySelected: (String, Boolean) -> Unit = { _, _ -> },
@@ -79,6 +81,39 @@ fun DownloadItemRow(
                     modifier = Modifier.padding(end = 6.dp),
                 )
                 PriorityBadge(priority = item.priority)
+            }
+            if (item.engine.equals("aria2", ignoreCase = true)) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Recovery check is read-only; it will not change the saved engine or files.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(
+                    onClick = onAssessAria2Recovery,
+                    enabled = aria2Recovery?.loading != true,
+                ) {
+                    Text(if (aria2Recovery?.loading == true) "Checking recovery…" else "Check aria2 recovery")
+                }
+                aria2Recovery?.assessment?.let { assessment ->
+                    Text(
+                        text = assessment.explanation,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = assessment.nextStep,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                aria2Recovery?.error?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
             when (val state = item.state) {
                 is DownloadState.Active -> {

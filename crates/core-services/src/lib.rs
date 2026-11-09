@@ -70,6 +70,8 @@ pub use engine_status::{
     EngineAvailability, EngineRuntimeState, EngineRuntimeStatus, EngineStatusEntry,
 };
 
+mod aria2_recovery;
+pub use aria2_recovery::{Aria2RecoveryAssessment, Aria2RecoveryState};
 mod builtin;
 pub mod config;
 mod engine_status;
@@ -499,6 +501,49 @@ impl CoreServices {
     ) -> Result<Vec<DownloadRuntimeStatus>, fetchx_storage::StorageError> {
         let items = self.repository.list().await?;
         Ok(items.iter().map(DownloadRuntimeStatus::from).collect())
+    }
+
+    pub async fn assess_aria2_recovery(
+        &self,
+        id: DownloadId,
+    ) -> Result<Option<Aria2RecoveryAssessment>, CoreServicesError> {
+        let item = self
+            .repository
+            .get(id)
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?;
+        let Some(item) = item else {
+            return Ok(None);
+        };
+
+        let state = if item.source().engine() != EngineKind::Aria2 {
+            Aria2RecoveryState::NotAria2
+        } else if item.status() == DownloadStatus::Completed {
+            Aria2RecoveryState::NotRequired
+        } else if !matches!(
+            &self.engine_runtime.status.aria2,
+            EngineAvailability::Available { .. }
+        ) {
+            Aria2RecoveryState::RuntimeUnavailable
+        } else {
+            match self
+                .engine_runtime
+                .aria2_engine
+                .assess_recovery(&item)
+                .await
+            {
+                Ok(state) => state.into(),
+                Err(fetchx_downloader::DownloadEngineError::Storage(error)) => {
+                    return Err(CoreServicesError::Database(error.to_string()));
+                }
+                Err(_error) => {
+                    warn!(download_id = %id, "aria2 recovery assessment is inconclusive");
+                    Aria2RecoveryState::Unknown
+                }
+            }
+        };
+
+        Ok(Some(Aria2RecoveryAssessment::new(id.to_string(), state)))
     }
 
     pub async fn find_duplicate_download(
@@ -2590,8 +2635,9 @@ mod tests {
     };
 
     use super::{
-        BatchDownloadDestinationRequest, BatchDownloadError, BatchDownloadRequest, CoreServices,
-        CoreServicesConfig, CoreServicesError, EngineAvailability, suggest_download_package_name,
+        Aria2RecoveryState, BatchDownloadDestinationRequest, BatchDownloadError,
+        BatchDownloadRequest, CoreServices, CoreServicesConfig, CoreServicesError,
+        EngineAvailability, suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
 
@@ -3953,6 +3999,110 @@ mod tests {
             .ok_or("persisted download missing after restart")?;
         assert_eq!(recovered.status(), DownloadStatus::Paused);
         restarted.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aria2_recovery_assessment_preserves_records_and_download_files()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        let now = Timestamp::now()?;
+        let id = DownloadId::new();
+        let destination = root.path().join("downloads").join("partial.bin");
+        let payload = b"existing partial payload";
+        let control_data = b"aria2 control data";
+        tokio::fs::write(&destination, payload).await?;
+        let mut sidecar = destination.as_os_str().to_os_string();
+        sidecar.push(".aria2");
+        let sidecar = std::path::PathBuf::from(sidecar);
+        tokio::fs::write(&sidecar, control_data).await?;
+
+        let aria2_item = DownloadItem::from_parts(
+            id,
+            DownloadSource::new("https://example.test/partial.bin", EngineKind::Aria2)?,
+            FileName::new("partial.bin")?,
+            destination.clone(),
+            DownloadStatus::Paused,
+            DownloadPriority::default(),
+            DownloadProgress::new(4, Some(100), None, None)?,
+            now,
+            now,
+            None,
+        )?;
+        let completed_id = DownloadId::new();
+        let completed = DownloadItem::from_parts(
+            completed_id,
+            DownloadSource::new("https://example.test/complete.bin", EngineKind::Aria2)?,
+            FileName::new("complete.bin")?,
+            root.path().join("downloads").join("complete.bin"),
+            DownloadStatus::Completed,
+            DownloadPriority::default(),
+            DownloadProgress::new(10, Some(10), None, None)?,
+            now,
+            now,
+            None,
+        )?;
+        let direct_id = DownloadId::new();
+        let direct = DownloadItem::from_parts(
+            direct_id,
+            DownloadSource::new("https://example.test/direct.bin", EngineKind::DirectHttp)?,
+            FileName::new("direct.bin")?,
+            root.path().join("downloads").join("direct.bin"),
+            DownloadStatus::Queued,
+            DownloadPriority::default(),
+            DownloadProgress::default(),
+            now,
+            now,
+            None,
+        )?;
+        services.repository.create(&aria2_item).await?;
+        services.repository.create(&completed).await?;
+        services.repository.create(&direct).await?;
+
+        let before = services
+            .repository
+            .get(id)
+            .await?
+            .ok_or("missing aria2 row")?;
+        let assessment = services
+            .assess_aria2_recovery(id)
+            .await?
+            .ok_or("missing aria2 assessment")?;
+        let after = services
+            .repository
+            .get(id)
+            .await?
+            .ok_or("missing aria2 row")?;
+        assert_eq!(assessment.state, Aria2RecoveryState::RuntimeUnavailable);
+        assert_eq!(before, after);
+        assert_eq!(tokio::fs::read(&destination).await?, payload);
+        assert_eq!(tokio::fs::read(&sidecar).await?, control_data);
+
+        assert_eq!(
+            services
+                .assess_aria2_recovery(completed_id)
+                .await?
+                .ok_or("missing completed assessment")?
+                .state,
+            Aria2RecoveryState::NotRequired
+        );
+        assert_eq!(
+            services
+                .assess_aria2_recovery(direct_id)
+                .await?
+                .ok_or("missing direct assessment")?
+                .state,
+            Aria2RecoveryState::NotAria2
+        );
+        assert!(
+            services
+                .assess_aria2_recovery(DownloadId::new())
+                .await?
+                .is_none()
+        );
+
+        services.shutdown().await?;
         Ok(())
     }
 }

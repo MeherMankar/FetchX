@@ -61,11 +61,12 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
 }
 
 use crate::dto::{
-    BatchDownloadAudioFormatDto, BatchDownloadEngineDto, BatchDownloadErrorCodeDto,
-    BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig, DownloadInfoDto,
-    DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto, TorrentFileDto,
-    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, duplicate_match_to_dto, event_to_dto,
-    item_to_dto, priority_from_dto, runtime_status_to_dto,
+    Aria2RecoveryAssessmentDto, BatchDownloadAudioFormatDto, BatchDownloadEngineDto,
+    BatchDownloadErrorCodeDto, BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig,
+    DownloadInfoDto, DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto,
+    TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto,
+    aria2_recovery_assessment_to_dto, duplicate_match_to_dto, event_to_dto, item_to_dto,
+    priority_from_dto, runtime_status_to_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -387,6 +388,21 @@ impl DownloadService {
                 .block_on(inner.core.repository.get(download_id))
                 .map_err(|e| MobileApiError::Storage(e.to_string()))?;
             Ok(item.as_ref().map(item_to_dto))
+        })
+    }
+
+    pub fn assess_aria2_recovery(
+        &self,
+        id: String,
+    ) -> Result<Option<Aria2RecoveryAssessmentDto>, MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        self.with_inner(|inner| {
+            let assessment = inner
+                .runtime
+                .block_on(inner.core.assess_aria2_recovery(download_id))
+                .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
+            Ok(assessment.map(aria2_recovery_assessment_to_dto))
         })
     }
 

@@ -108,6 +108,27 @@ pub struct DownloadRuntimeStatusDto {
     pub updated_at: u64,
 }
 
+pub enum Aria2RecoveryStateDto {
+    NotAria2,
+    NotRequired,
+    RuntimeUnavailable,
+    ReadyToStart,
+    JobAvailable,
+    MissingTorrentMetadata,
+    MissingGid,
+    StaleGid,
+    MissingControlFile,
+    ControlFilePresent,
+    Unknown,
+}
+
+pub struct Aria2RecoveryAssessmentDto {
+    pub download_id: String,
+    pub state: Aria2RecoveryStateDto,
+    pub explanation: String,
+    pub next_step: String,
+}
+
 pub struct DownloadRuntimeProgressDto {
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
@@ -178,6 +199,7 @@ pub enum DownloadEventDto {
 
 // ── Conversion helpers ────────────────────────────────────────────────────
 
+use fetchx_core_services::{Aria2RecoveryAssessment, Aria2RecoveryState};
 use fetchx_models::{
     DownloadItem, DownloadPriority, DownloadProgress, DownloadRuntimeStatus, DownloadStatus,
     DuplicateDownloadMatch, EngineKind,
@@ -289,6 +311,30 @@ pub fn runtime_status_to_dto(status: &DownloadRuntimeStatus) -> DownloadRuntimeS
     }
 }
 
+pub fn aria2_recovery_assessment_to_dto(
+    assessment: Aria2RecoveryAssessment,
+) -> Aria2RecoveryAssessmentDto {
+    let state = match assessment.state {
+        Aria2RecoveryState::NotAria2 => Aria2RecoveryStateDto::NotAria2,
+        Aria2RecoveryState::NotRequired => Aria2RecoveryStateDto::NotRequired,
+        Aria2RecoveryState::RuntimeUnavailable => Aria2RecoveryStateDto::RuntimeUnavailable,
+        Aria2RecoveryState::ReadyToStart => Aria2RecoveryStateDto::ReadyToStart,
+        Aria2RecoveryState::JobAvailable => Aria2RecoveryStateDto::JobAvailable,
+        Aria2RecoveryState::MissingTorrentMetadata => Aria2RecoveryStateDto::MissingTorrentMetadata,
+        Aria2RecoveryState::MissingGid => Aria2RecoveryStateDto::MissingGid,
+        Aria2RecoveryState::StaleGid => Aria2RecoveryStateDto::StaleGid,
+        Aria2RecoveryState::MissingControlFile => Aria2RecoveryStateDto::MissingControlFile,
+        Aria2RecoveryState::ControlFilePresent => Aria2RecoveryStateDto::ControlFilePresent,
+        Aria2RecoveryState::Unknown => Aria2RecoveryStateDto::Unknown,
+    };
+    Aria2RecoveryAssessmentDto {
+        download_id: assessment.download_id,
+        state,
+        explanation: assessment.explanation.to_owned(),
+        next_step: assessment.next_step.to_owned(),
+    }
+}
+
 pub fn duplicate_match_to_dto(item: &DuplicateDownloadMatch) -> DuplicateDownloadMatchDto {
     DuplicateDownloadMatchDto {
         id: item.id().to_string(),
@@ -314,8 +360,27 @@ pub fn event_to_dto(e: DownloadEvent) -> DownloadEventDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fetchx_core_services::{Aria2RecoveryAssessment, Aria2RecoveryState};
     use fetchx_models::{DownloadId, DownloadSource, EngineKind, FileName, Timestamp};
     use std::path::PathBuf;
+
+    #[test]
+    fn aria2_recovery_assessment_dto_preserves_state_and_guidance() {
+        let dto = aria2_recovery_assessment_to_dto(Aria2RecoveryAssessment {
+            download_id: "download-1".to_owned(),
+            state: Aria2RecoveryState::RuntimeUnavailable,
+            explanation: "aria2 is unavailable.",
+            next_step: "Enable aria2 before retrying.",
+        });
+
+        assert_eq!(dto.download_id, "download-1");
+        assert!(matches!(
+            dto.state,
+            Aria2RecoveryStateDto::RuntimeUnavailable
+        ));
+        assert_eq!(dto.explanation, "aria2 is unavailable.");
+        assert_eq!(dto.next_step, "Enable aria2 before retrying.");
+    }
 
     #[test]
     fn runtime_status_dto_uses_shared_progress_shape() -> Result<(), Box<dyn std::error::Error>> {

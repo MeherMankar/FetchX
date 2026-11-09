@@ -76,6 +76,30 @@ data class TorrentDownloadMetadata(
     val selectionConfirmed: Boolean,
 )
 
+enum class Aria2RecoveryState {
+    NOT_ARIA2,
+    NOT_REQUIRED,
+    RUNTIME_UNAVAILABLE,
+    READY_TO_START,
+    JOB_AVAILABLE,
+    MISSING_TORRENT_METADATA,
+    MISSING_GID,
+    STALE_GID,
+    MISSING_CONTROL_FILE,
+    CONTROL_FILE_PRESENT,
+    UNKNOWN,
+}
+
+data class Aria2RecoveryAssessment(
+    val state: Aria2RecoveryState,
+    val explanation: String,
+    val nextStep: String,
+)
+
+interface Aria2RecoveryRepository {
+    suspend fun assessAria2Recovery(downloadId: String): Aria2RecoveryAssessment?
+}
+
 interface TorrentDownloadRepository : DownloadRepository {
     suspend fun addMagnet(magnetUri: String, priority: DownloadPriority): String
     suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata

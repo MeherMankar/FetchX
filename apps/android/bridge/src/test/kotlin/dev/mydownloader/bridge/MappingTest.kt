@@ -4,10 +4,12 @@ import dev.fetchx.bridge.uniffi.DownloadInfoDto
 import dev.fetchx.bridge.uniffi.DownloadPriorityDto
 import dev.fetchx.bridge.uniffi.DownloadProgressDto
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
+import dev.fetchx.bridge.uniffi.Aria2RecoveryStateDto
 import dev.fetchx.bridge.uniffi.BatchDownloadAudioFormatDto
 import dev.fetchx.bridge.uniffi.BatchDownloadEngineDto
 import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.DownloadPriority
+import dev.fetchx.core.download.Aria2RecoveryState
 import dev.fetchx.core.download.DownloadState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -50,6 +52,22 @@ class MappingTest {
         val dto = repo.mapPriorityToDto(DownloadPriority.LOW)
         val back = repo.mapPriorityFromDto(dto)
         assertEquals(DownloadPriority.LOW, back)
+    }
+
+    @Test
+    fun aria2RecoveryStatesMapWithoutLosingActionableStatus() {
+        assertEquals(
+            Aria2RecoveryState.RUNTIME_UNAVAILABLE,
+            mapAria2RecoveryState(Aria2RecoveryStateDto.RUNTIME_UNAVAILABLE),
+        )
+        assertEquals(
+            Aria2RecoveryState.STALE_GID,
+            mapAria2RecoveryState(Aria2RecoveryStateDto.STALE_GID),
+        )
+        assertEquals(
+            Aria2RecoveryState.CONTROL_FILE_PRESENT,
+            mapAria2RecoveryState(Aria2RecoveryStateDto.CONTROL_FILE_PRESENT),
+        )
     }
 
     @Test

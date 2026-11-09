@@ -84,6 +84,27 @@ enum DownloadStatusDto {
     "Stopped",
 };
 
+enum Aria2RecoveryStateDto {
+    "NotAria2",
+    "NotRequired",
+    "RuntimeUnavailable",
+    "ReadyToStart",
+    "JobAvailable",
+    "MissingTorrentMetadata",
+    "MissingGid",
+    "StaleGid",
+    "MissingControlFile",
+    "ControlFilePresent",
+    "Unknown",
+};
+
+dictionary Aria2RecoveryAssessmentDto {
+    string download_id;
+    Aria2RecoveryStateDto state;
+    string explanation;
+    string next_step;
+};
+
 enum DownloadPriorityDto {
     "Low",
     "Normal",
@@ -223,6 +244,9 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     DownloadInfoDto? get_download(string id);
+
+    [Throws=MobileApiError]
+    Aria2RecoveryAssessmentDto? assess_aria2_recovery(string id);
 
     [Throws=MobileApiError]
     string add_download(

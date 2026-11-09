@@ -8,12 +8,16 @@ import dev.fetchx.bridge.uniffi.BatchDownloadAudioFormatDto
 import dev.fetchx.bridge.uniffi.BatchDownloadEngineDto
 import dev.fetchx.bridge.uniffi.BatchDownloadErrorCodeDto
 import dev.fetchx.bridge.uniffi.BatchDownloadRequestDto
+import dev.fetchx.bridge.uniffi.Aria2RecoveryStateDto
 import dev.fetchx.bridge.uniffi.DownloadPriorityDto
 import dev.fetchx.bridge.uniffi.DownloadService
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
 import dev.fetchx.bridge.uniffi.TorrentTelemetryDto
 import dev.fetchx.bridge.uniffi.TorrentMetadataDto
 import dev.fetchx.core.download.TorrentDownloadMetadata
+import dev.fetchx.core.download.Aria2RecoveryAssessment
+import dev.fetchx.core.download.Aria2RecoveryRepository
+import dev.fetchx.core.download.Aria2RecoveryState
 import dev.fetchx.core.download.DownloadEvent
 import dev.fetchx.core.download.DownloadItem
 import dev.fetchx.core.download.DownloadPriority
@@ -73,7 +77,8 @@ class BridgeDownloadRepository(
     private val publicDownloadStorage: PublicDownloadStorage,
     private val externalScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
-) : TorrentDownloadRepository, DuplicateDownloadRepository, BatchDownloadRepository {
+) : TorrentDownloadRepository, DuplicateDownloadRepository, BatchDownloadRepository,
+    Aria2RecoveryRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
@@ -400,6 +405,17 @@ class BridgeDownloadRepository(
             }
         }
 
+    override suspend fun assessAria2Recovery(downloadId: String): Aria2RecoveryAssessment? =
+        withContext(Dispatchers.IO) {
+            service.assessAria2Recovery(downloadId)?.let { assessment ->
+                Aria2RecoveryAssessment(
+                    state = mapAria2RecoveryState(assessment.state),
+                    explanation = assessment.explanation,
+                    nextStep = assessment.nextStep,
+                )
+            }
+        }
+
     override suspend fun inspectTorrentFile(torrentPath: String): TorrentMetadata =
         withContext(Dispatchers.IO) {
             mapTorrentMetadata(service.inspectTorrentFile(torrentPath))
@@ -684,6 +700,20 @@ class BridgeDownloadRepository(
 
         is DownloadEventDto.Removed -> null
     }
+}
+
+internal fun mapAria2RecoveryState(dto: Aria2RecoveryStateDto): Aria2RecoveryState = when (dto) {
+    Aria2RecoveryStateDto.NOT_ARIA2 -> Aria2RecoveryState.NOT_ARIA2
+    Aria2RecoveryStateDto.NOT_REQUIRED -> Aria2RecoveryState.NOT_REQUIRED
+    Aria2RecoveryStateDto.RUNTIME_UNAVAILABLE -> Aria2RecoveryState.RUNTIME_UNAVAILABLE
+    Aria2RecoveryStateDto.READY_TO_START -> Aria2RecoveryState.READY_TO_START
+    Aria2RecoveryStateDto.JOB_AVAILABLE -> Aria2RecoveryState.JOB_AVAILABLE
+    Aria2RecoveryStateDto.MISSING_TORRENT_METADATA -> Aria2RecoveryState.MISSING_TORRENT_METADATA
+    Aria2RecoveryStateDto.MISSING_GID -> Aria2RecoveryState.MISSING_GID
+    Aria2RecoveryStateDto.STALE_GID -> Aria2RecoveryState.STALE_GID
+    Aria2RecoveryStateDto.MISSING_CONTROL_FILE -> Aria2RecoveryState.MISSING_CONTROL_FILE
+    Aria2RecoveryStateDto.CONTROL_FILE_PRESENT -> Aria2RecoveryState.CONTROL_FILE_PRESENT
+    Aria2RecoveryStateDto.UNKNOWN -> Aria2RecoveryState.UNKNOWN
 }
 
 private fun String.withExtension(extension: String): String {

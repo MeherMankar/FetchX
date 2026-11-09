@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
+  assessAria2Recovery,
   getTorrentDownloadMetadata,
   getTorrentTelemetry,
   selectTorrentFiles,
@@ -13,6 +14,7 @@ import { formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTi
 import { canSchedule, canChangePriority, canPause, canResume, canCancel, canRetry } from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
 import type {
+  Aria2RecoveryAssessment,
   DownloadPriority,
   TorrentDownloadMetadata,
   TorrentTelemetry,
@@ -62,10 +64,32 @@ export function DetailPanel({
   const pct = progress.percentage_basis_points;
   const isTorrent = (download.engine === "aria2" || download.engine === "native_torrent")
     && (download.url.startsWith("magnet:") || download.url.startsWith("torrent+file:"));
+  const isAria2 = download.engine === "aria2";
+  const [aria2Recovery, setAria2Recovery] = useState<Aria2RecoveryAssessment | null>(null);
+  const [aria2RecoveryLoading, setAria2RecoveryLoading] = useState(false);
+  const [aria2RecoveryError, setAria2RecoveryError] = useState<string | null>(null);
   const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
   const [torrentTelemetryError, setTorrentTelemetryError] = useState<string | null>(null);
   const [torrentMetadata, setTorrentMetadata] = useState<TorrentDownloadMetadata | null>(null);
   const [torrentMetadataError, setTorrentMetadataError] = useState<string | null>(null);
+
+  const refreshAria2Recovery = useCallback(async () => {
+    setAria2RecoveryLoading(true);
+    setAria2RecoveryError(null);
+    try {
+      setAria2Recovery(await assessAria2Recovery(download.id));
+    } catch (cause) {
+      setAria2RecoveryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAria2RecoveryLoading(false);
+    }
+  }, [download.id]);
+
+  useEffect(() => {
+    setAria2Recovery(null);
+    setAria2RecoveryError(null);
+    if (isAria2) void refreshAria2Recovery();
+  }, [isAria2, refreshAria2Recovery]);
 
   useEffect(() => {
     setTorrentTelemetry(null);
@@ -133,6 +157,30 @@ export function DetailPanel({
       </div>
 
       <div className="detail-body">
+        {isAria2 && (
+          <section className="detail-section" aria-label="aria2 recovery">
+            <p className="detail-section-title">aria2 recovery</p>
+            <p className="field-hint">
+              This check is read-only. It does not change the saved engine, task ID, status, or files.
+            </p>
+            {aria2RecoveryLoading && <p className="field-hint">Checking aria2 task and recovery data…</p>}
+            {aria2RecoveryError && <p className="detail-error-message">{aria2RecoveryError}</p>}
+            {aria2Recovery && (
+              <>
+                <p>{aria2Recovery.explanation}</p>
+                <p className="field-hint">{aria2Recovery.next_step}</p>
+              </>
+            )}
+            <button
+              className="button button-secondary"
+              disabled={aria2RecoveryLoading}
+              onClick={() => void refreshAria2Recovery()}
+            >
+              Check again
+            </button>
+          </section>
+        )}
+
         {/* Status + progress */}
         <section className="detail-section">
           <div className="detail-row detail-status-row">

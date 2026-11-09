@@ -200,3 +200,15 @@ Prompt 22 found no non-torrent download default still routed through aria2 and n
 | User-visible unavailable state | Persisted failure diagnostics are sanitized; no structured recovery assessment currently identifies platform/runtime unavailability. | Failed rows show a sanitized reason and retry/remove controls, but the reason is generic and not Android-specific. |
 
 No native adoption capability is claimed for any persisted aria2 state. The safe next slice is a read-only shared-core recovery assessment, an actionable UI explanation, and tests with a real supervised aria2 runtime before any opt-in conversion design. See the Prompt 23 recovery matrix and validation boundary in [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md).
+
+## Prompt 24 — read-only persisted aria2 recovery assessment
+
+| Surface | Capability and limitation |
+|---|---|
+| Shared Rust CoreServices | `assess_aria2_recovery(id)` returns a typed state, sanitized explanation, and next step. It checks only an already-running aria2 runtime and read-only filesystem evidence; it never changes the record, engine, GID, torrent selection, or files. |
+| Android | UniFFI exposes the typed result. Each aria2 row offers a read-only recovery check and displays its explanation/next step. No local aria2 runtime is configured by default; the separate remote aria2 settings probe is not used for persisted-download dispatch. |
+| Desktop | Tauri exposes the same assessment in download details. The UI labels the action read-only and preserves normal engine-bound controls. |
+| CLI / FetchX remote / browser-native-host | No assessment endpoint or UI was added; capability is unavailable on these surfaces. Existing remote auth/discovery and browser allowlist are unchanged. |
+| Evidence boundary | States distinguish runtime unavailability, queued work ready to start, available/stale/missing torrent GID or metadata, sidecar presence/absence, completed/not-aria2 rows, and unknown. Task availability or sidecar presence does not prove that continuation will succeed. |
+
+Five focused Rust recovery tests, the CoreServices data/file-preservation test, and Android bridge DTO mapping test passed. Rust test modules type-check; the desktop UI production build and Android bridge/downloads unit tests pass (the Android run required constrained Rust build settings for UniFFI generation). No real aria2 daemon, Android device, or process-restart recovery was validated. See [`ARIA2_NATIVE_RUST_MIGRATION.md`](../research/ARIA2_NATIVE_RUST_MIGRATION.md) for exact commands and limitations.

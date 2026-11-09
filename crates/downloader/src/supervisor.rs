@@ -273,6 +273,16 @@ impl Aria2Supervisor {
         }
     }
 
+    pub(crate) async fn existing_client_runtime(&self) -> Option<(Aria2Client, u64)> {
+        let inner = self.inner.lock().await;
+        match (inner.state, inner.client.as_ref()) {
+            (Aria2SupervisorState::Ready { generation }, Some(client)) => {
+                Some((client.clone(), generation))
+            }
+            _ => None,
+        }
+    }
+
     async fn ensure_running(&self) -> Result<(), Aria2SupervisorError> {
         let _lifecycle = self.lifecycle.lock().await;
         self.refresh_state().await?;
@@ -1182,6 +1192,8 @@ mod tests {
         first?;
         second?;
         assert_eq!(supervisor.state().await?, Aria2SupervisorState::Stopped);
+        assert!(supervisor.existing_client_runtime().await.is_none());
+        assert_eq!(launcher.starts(), 1);
         assert_eq!(fs::read_dir(&directory.0)?.count(), 0);
         Ok(())
     }

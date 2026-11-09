@@ -218,6 +218,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::set_torrent_directory_selected,
             commands::inspect_torrent_file,
             commands::get_torrent_telemetry,
+            commands::assess_aria2_recovery,
             commands::stop_torrent_seeding,
             engine_commands::get_engine_config,
             engine_commands::save_engine_config,

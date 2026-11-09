@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   AddDownloadRequest,
+  Aria2RecoveryAssessment,
   BatchDownloadResult,
   DeleteDownloadResponse,
   Download,
@@ -27,6 +28,10 @@ export function listDownloads(): Promise<Download[]> {
 
 export function listRuntimeStatuses(): Promise<DownloadRuntimeStatus[]> {
   return invoke<DownloadRuntimeStatus[]>("list_runtime_statuses");
+}
+
+export function assessAria2Recovery(id: string): Promise<Aria2RecoveryAssessment | null> {
+  return invoke<Aria2RecoveryAssessment | null>("assess_aria2_recovery", { id });
 }
 
 export function addDownload(request: AddDownloadRequest): Promise<Download> {

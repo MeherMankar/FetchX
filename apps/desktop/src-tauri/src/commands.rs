@@ -1613,6 +1613,22 @@ pub async fn get_torrent_telemetry(
 }
 
 #[tauri::command]
+pub async fn assess_aria2_recovery(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<fetchx_core_services::Aria2RecoveryAssessment>, IpcError> {
+    let download_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    core_services
+        .assess_aria2_recovery(download_id)
+        .await
+        .map_err(|_| IpcError::internal())
+}
+
+#[tauri::command]
 pub async fn stop_torrent_seeding(state: State<'_, AppState>, id: String) -> Result<(), IpcError> {
     let download_id = parse_download_id(&id)?;
     let core_services = state

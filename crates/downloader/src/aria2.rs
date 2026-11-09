@@ -720,6 +720,19 @@ async fn validate_torrent_directory(
     Ok(())
 }
 
+async fn inspect_aria2_control_file(destination: &Path) -> Aria2RecoveryState {
+    let mut control_file = destination.as_os_str().to_owned();
+    control_file.push(".aria2");
+    match tokio::fs::symlink_metadata(control_file).await {
+        Ok(metadata) if metadata.file_type().is_file() => Aria2RecoveryState::ControlFilePresent,
+        Ok(_) => Aria2RecoveryState::Unknown,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Aria2RecoveryState::MissingControlFile
+        }
+        Err(_) => Aria2RecoveryState::Unknown,
+    }
+}
+
 fn map_gid_error(error: Aria2ClientError) -> Aria2ClientError {
     match error {
         Aria2ClientError::Rpc { code: 1 } => Aria2ClientError::InvalidGid,
@@ -805,6 +818,18 @@ pub enum Aria2DownloadStatus {
     Complete,
     Error,
     Removed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Aria2RecoveryState {
+    ReadyToStart,
+    JobAvailable,
+    MissingTorrentMetadata,
+    MissingGid,
+    StaleGid,
+    MissingControlFile,
+    ControlFilePresent,
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1101,6 +1126,96 @@ where
         telemetry.peer_count = Some(peers.len() as u64);
         telemetry.completed_peer_count = Some(completed_peer_count as u64);
         Ok(Some(telemetry))
+    }
+
+    pub async fn assess_recovery(
+        &self,
+        item: &DownloadItem,
+    ) -> Result<Aria2RecoveryState, DownloadEngineError> {
+        if item.source().engine() != EngineKind::Aria2 {
+            return Ok(Aria2RecoveryState::Unknown);
+        }
+
+        let client_runtime = match (&self.supervisor, &self.client) {
+            (Some(supervisor), _) => supervisor.existing_client_runtime().await,
+            (None, Some(client)) => Some((client.clone(), 0)),
+            (None, None) => None,
+        };
+        let Some((client, generation)) = client_runtime else {
+            return Ok(Aria2RecoveryState::Unknown);
+        };
+        let runtime_gid = {
+            let gids = self.gids.lock().await;
+            gids.get(&item.id())
+                .filter(|entry| entry.generation == generation)
+                .map(|entry| entry.gid.clone())
+        };
+
+        if item.source().is_magnet() || item.source().is_torrent_file() {
+            let Some(repository) = &self.torrent_metadata else {
+                return Ok(Aria2RecoveryState::MissingTorrentMetadata);
+            };
+            let Some(metadata) = repository.get_torrent_metadata(item.id()).await? else {
+                return Ok(Aria2RecoveryState::MissingTorrentMetadata);
+            };
+            let Some(gid_text) = metadata.aria2_gid.as_deref() else {
+                return Ok(Aria2RecoveryState::MissingGid);
+            };
+            let Ok(gid) = Aria2Gid::new(gid_text.to_owned()) else {
+                return Ok(Aria2RecoveryState::StaleGid);
+            };
+            return Ok(match client.tell_status(&gid).await {
+                Ok(status)
+                    if status.status != Aria2DownloadStatus::Error
+                        && status.status != Aria2DownloadStatus::Removed
+                        && status
+                            .info_hash
+                            .as_deref()
+                            .is_some_and(|hash| hash.eq_ignore_ascii_case(&metadata.info_hash)) =>
+                {
+                    Aria2RecoveryState::JobAvailable
+                }
+                Ok(status)
+                    if status
+                        .info_hash
+                        .as_deref()
+                        .is_some_and(|hash| !hash.eq_ignore_ascii_case(&metadata.info_hash))
+                        || matches!(
+                            status.status,
+                            Aria2DownloadStatus::Error | Aria2DownloadStatus::Removed
+                        ) =>
+                {
+                    Aria2RecoveryState::StaleGid
+                }
+                Err(Aria2ClientError::InvalidGid) => Aria2RecoveryState::StaleGid,
+                Ok(_) | Err(_) => Aria2RecoveryState::Unknown,
+            });
+        }
+
+        if let Some(gid) = runtime_gid {
+            return Ok(match client.tell_status(&gid).await {
+                Ok(status)
+                    if !matches!(
+                        status.status,
+                        Aria2DownloadStatus::Error | Aria2DownloadStatus::Removed
+                    ) =>
+                {
+                    Aria2RecoveryState::JobAvailable
+                }
+                Ok(_) | Err(Aria2ClientError::InvalidGid) => Aria2RecoveryState::StaleGid,
+                Err(_) => Aria2RecoveryState::Unknown,
+            });
+        }
+
+        if item.progress().downloaded_bytes() > 0 && self.supervisor.is_some() {
+            return Ok(inspect_aria2_control_file(item.destination()).await);
+        }
+
+        if item.status() == DownloadStatus::Queued && item.progress().downloaded_bytes() == 0 {
+            return Ok(Aria2RecoveryState::ReadyToStart);
+        }
+
+        Ok(Aria2RecoveryState::Unknown)
     }
 
     async fn current_client(&self) -> Result<(Aria2Client, u64), DownloadEngineError> {
@@ -3549,6 +3664,187 @@ mod tests {
             })
             .await?;
         Ok((id, item))
+    }
+
+    #[tokio::test]
+    async fn recovery_assessment_reports_missing_or_malformed_torrent_gids_read_only()
+    -> Result<(), Box<dyn Error>> {
+        for (gid, expected) in [
+            (None, super::Aria2RecoveryState::MissingGid),
+            (Some("not-a-gid"), super::Aria2RecoveryState::StaleGid),
+        ] {
+            let database = Database::connect("sqlite::memory:").await?;
+            let root = tempfile::tempdir()?;
+            let destination = root.path().join("torrent");
+            let (id, item) = create_torrent_item(&database, &destination, gid).await?;
+            let before = database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .ok_or("missing torrent metadata before assessment")?;
+            let client = make_client(
+                "http://127.0.0.1:1/jsonrpc".to_owned(),
+                Duration::from_millis(50),
+            )?;
+            let engine = Aria2Engine::new(database.downloads(), client)
+                .with_torrent_metadata_repository(database.torrent_metadata());
+
+            assert_eq!(engine.assess_recovery(&item).await?, expected);
+            let after = database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .ok_or("missing torrent metadata after assessment")?;
+            assert_eq!(before, after);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_assessment_checks_torrent_gid_without_mutating_it()
+    -> Result<(), Box<dyn Error>> {
+        for (reply, expected) in [
+            (
+                MockReply::Result(torrent_status_json("paused")),
+                super::Aria2RecoveryState::JobAvailable,
+            ),
+            (MockReply::RpcError(1), super::Aria2RecoveryState::StaleGid),
+        ] {
+            let database = Database::connect("sqlite::memory:").await?;
+            let root = tempfile::tempdir()?;
+            let destination = root.path().join("torrent");
+            let (id, item) =
+                create_torrent_item(&database, &destination, Some("0123456789abcdef")).await?;
+            let before = database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .ok_or("missing torrent metadata before assessment")?;
+            let (endpoint, mut requests, server) = start_server([reply]).await?;
+            let engine = Aria2Engine::new(
+                database.downloads(),
+                make_client(endpoint, Duration::from_secs(1))?,
+            )
+            .with_torrent_metadata_repository(database.torrent_metadata());
+
+            assert_eq!(engine.assess_recovery(&item).await?, expected);
+            assert_eq!(
+                requests
+                    .recv()
+                    .await
+                    .ok_or("missing read-only task query")?["method"],
+                "aria2.tellStatus"
+            );
+            let after = database
+                .torrent_metadata()
+                .get_torrent_metadata(id)
+                .await?
+                .ok_or("missing torrent metadata after assessment")?;
+            assert_eq!(before, after);
+            server.await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_assessment_reports_missing_torrent_metadata() -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let id = DownloadId::new();
+        let item = DownloadItem::new(
+            id,
+            DownloadSource::new(
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567",
+                EngineKind::Aria2,
+            )?,
+            FileName::new("sample")?,
+            root.path().join("sample"),
+            Timestamp::now()?,
+        );
+        database.downloads().create(&item).await?;
+        let client = make_client(
+            "http://127.0.0.1:1/jsonrpc".to_owned(),
+            Duration::from_millis(50),
+        )?;
+        let engine = Aria2Engine::new(database.downloads(), client)
+            .with_torrent_metadata_repository(database.torrent_metadata());
+
+        assert_eq!(
+            engine.assess_recovery(&item).await?,
+            super::Aria2RecoveryState::MissingTorrentMetadata
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_assessment_distinguishes_ready_and_unknown_generic_jobs()
+    -> Result<(), Box<dyn Error>> {
+        let database = Database::connect("sqlite::memory:").await?;
+        let root = tempfile::tempdir()?;
+        let ready_id = create_item(
+            &database,
+            &TestDirectory::new(DownloadId::new())?,
+            EngineKind::Aria2,
+        )
+        .await?;
+        let ready = database
+            .downloads()
+            .get(ready_id)
+            .await?
+            .ok_or("missing queued aria2 item")?;
+        let client = make_client(
+            "http://127.0.0.1:1/jsonrpc".to_owned(),
+            Duration::from_millis(50),
+        )?;
+        let engine = Aria2Engine::new(database.downloads(), client);
+        assert_eq!(
+            engine.assess_recovery(&ready).await?,
+            super::Aria2RecoveryState::ReadyToStart
+        );
+
+        let unknown_id = DownloadId::new();
+        let now = Timestamp::now()?;
+        let unknown = DownloadItem::from_parts(
+            unknown_id,
+            DownloadSource::new("https://example.test/paused.bin", EngineKind::Aria2)?,
+            FileName::new("paused.bin")?,
+            root.path().join("paused.bin"),
+            DownloadStatus::Paused,
+            fetchx_models::DownloadPriority::default(),
+            fetchx_models::DownloadProgress::default(),
+            now,
+            now,
+            None,
+        )?;
+        database.downloads().create(&unknown).await?;
+        assert_eq!(
+            engine.assess_recovery(&unknown).await?,
+            super::Aria2RecoveryState::Unknown
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_assessment_reads_control_file_without_changing_it()
+    -> Result<(), Box<dyn Error>> {
+        let root = tempfile::tempdir()?;
+        let destination = root.path().join("partial.bin");
+        let mut sidecar = destination.as_os_str().to_os_string();
+        sidecar.push(".aria2");
+        let sidecar = PathBuf::from(sidecar);
+
+        assert_eq!(
+            super::inspect_aria2_control_file(&destination).await,
+            super::Aria2RecoveryState::MissingControlFile
+        );
+        let contents = b"existing aria2 control data";
+        tokio::fs::write(&sidecar, contents).await?;
+        assert_eq!(
+            super::inspect_aria2_control_file(&destination).await,
+            super::Aria2RecoveryState::ControlFilePresent
+        );
+        assert_eq!(tokio::fs::read(&sidecar).await?, contents);
+        Ok(())
     }
 
     fn torrent_status_json(status: &str) -> Value {

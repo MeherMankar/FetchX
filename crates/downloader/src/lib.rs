@@ -22,7 +22,7 @@ mod ytdlp;
 pub use adaptive::AdaptiveConfig;
 pub use aria2::{
     Aria2Client, Aria2ClientConfig, Aria2ClientError, Aria2DownloadStatus, Aria2Engine, Aria2Gid,
-    Aria2GlobalStat, Aria2Status, Aria2Version,
+    Aria2GlobalStat, Aria2RecoveryState, Aria2Status, Aria2Version,
 };
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::{EngineDispatcher, is_dash_url};

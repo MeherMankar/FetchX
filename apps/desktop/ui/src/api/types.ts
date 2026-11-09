@@ -77,6 +77,26 @@ export interface DownloadRuntimeStatus {
   updated_at: number;
 }
 
+export type Aria2RecoveryState =
+  | "not_aria2"
+  | "not_required"
+  | "runtime_unavailable"
+  | "ready_to_start"
+  | "job_available"
+  | "missing_torrent_metadata"
+  | "missing_gid"
+  | "stale_gid"
+  | "missing_control_file"
+  | "control_file_present"
+  | "unknown";
+
+export interface Aria2RecoveryAssessment {
+  download_id: string;
+  state: Aria2RecoveryState;
+  explanation: string;
+  next_step: string;
+}
+
 export interface DuplicateDownloadMatch {
   id: string;
   filename: string;
