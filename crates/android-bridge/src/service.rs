@@ -59,6 +59,12 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
         BatchDownloadError::Queue(_) => BatchDownloadErrorCodeDto::Queue,
         BatchDownloadError::RestartNotEligible => BatchDownloadErrorCodeDto::InvalidFormat,
         BatchDownloadError::DestinationCollision => BatchDownloadErrorCodeDto::Destination,
+        BatchDownloadError::InvalidTorrentRestartSource => BatchDownloadErrorCodeDto::InvalidUrl,
+        BatchDownloadError::TorrentSourceMismatch => BatchDownloadErrorCodeDto::InvalidFormat,
+        BatchDownloadError::InvalidTorrentRestartDestination => {
+            BatchDownloadErrorCodeDto::InvalidDestination
+        }
+        BatchDownloadError::TorrentDestinationCollision => BatchDownloadErrorCodeDto::Destination,
     }
 }
 
@@ -428,6 +434,37 @@ impl DownloadService {
                 ))
                 .map(|native_id| native_id.to_string())
                 .map_err(|error| MobileApiError::Validation(error.to_string()))
+        })
+    }
+
+    pub fn restart_aria2_torrent_with_native(
+        &self,
+        id: String,
+        current_magnet_uri: String,
+        destination: String,
+        confirmed_current_source: bool,
+    ) -> Result<String, MobileApiError> {
+        let aria2_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation("invalid download ID".to_owned()))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.restart_aria2_torrent_with_native(
+                    aria2_id,
+                    current_magnet_uri,
+                    PathBuf::from(destination),
+                    confirmed_current_source,
+                ))
+                .map(|native_id| native_id.to_string())
+                .map_err(|error| match error {
+                    fetchx_core_services::BatchDownloadError::UnavailableEngine(engine) => {
+                        MobileApiError::UnavailableEngine(format!("{engine:?}"))
+                    }
+                    error @ fetchx_core_services::BatchDownloadError::RestartNotEligible => {
+                        MobileApiError::InvalidStateTransition(error.to_string())
+                    }
+                    error => MobileApiError::Validation(error.to_string()),
+                })
         })
     }
 

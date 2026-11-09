@@ -80,6 +80,14 @@ class MappingTest {
     }
 
     @Test
+    fun nativeTorrentRestartDestinationSuggestionUsesANewDirectory() {
+        assertEquals(
+            File("/private/fetchx", "legacy (native torrent)").absolutePath,
+            nativeTorrentRestartDestinationSuggestion("/private/fetchx", "legacy.torrent"),
+        )
+    }
+
+    @Test
     fun batchRequestPreservesMediaRoutingChecksumAndStagedDestination() {
         val staged = mutableListOf<String>()
         val request = createBatchDownloadRequestDto(

@@ -229,10 +229,18 @@ pub enum BatchDownloadError {
     Storage(String),
     #[error("could not create download record: {0}")]
     Queue(String),
-    #[error("this aria2 download is not eligible for native HTTP restart")]
+    #[error("this aria2 download is not eligible for native restart")]
     RestartNotEligible,
     #[error("the selected destination conflicts with existing download data")]
     DestinationCollision,
+    #[error("the current source must be a valid BitTorrent magnet URI")]
+    InvalidTorrentRestartSource,
+    #[error("the current magnet does not match the saved aria2 torrent info hash")]
+    TorrentSourceMismatch,
+    #[error("the selected torrent destination must be a new directory under downloads")]
+    InvalidTorrentRestartDestination,
+    #[error("the selected torrent destination overlaps existing download data")]
+    TorrentDestinationCollision,
 }
 
 fn valid_batch_format_options(request: &BatchDownloadRequest) -> bool {
@@ -286,6 +294,40 @@ fn strict_destination_keys(path: &Path) -> Vec<String> {
         );
     }
     keys
+}
+
+fn normalized_path_key(path: &Path) -> String {
+    let value = path.to_string_lossy().to_lowercase();
+    #[cfg(windows)]
+    let value = value.replace('/', "\\");
+    value.trim_end_matches(std::path::MAIN_SEPARATOR).to_owned()
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    let left = normalized_path_key(left);
+    let right = normalized_path_key(right);
+    left == right
+        || left.starts_with(&format!("{right}{}", std::path::MAIN_SEPARATOR))
+        || right.starts_with(&format!("{left}{}", std::path::MAIN_SEPARATOR))
+}
+
+async fn canonical_destination_identity(path: &Path) -> Result<PathBuf, String> {
+    match fs::canonicalize(path).await {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| "destination has no parent directory".to_owned())?;
+            let file_name = path
+                .file_name()
+                .ok_or_else(|| "destination has no directory name".to_owned())?;
+            Ok(fs::canonicalize(parent)
+                .await
+                .map_err(|error| error.to_string())?
+                .join(file_name))
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 async fn verify_directory_writable(directory: &Path) -> Result<(), BatchDownloadError> {
@@ -1149,6 +1191,135 @@ impl CoreServices {
             &mut reserved_destinations,
         )
         .await
+    }
+
+    /// Creates a separate native torrent job from a user-supplied current magnet.
+    ///
+    /// The magnet's info hash must match persisted aria2 torrent metadata. File
+    /// selection is deliberately left to the native job's normal metadata and
+    /// confirmation flow; legacy selection and partial data are never reused.
+    pub async fn restart_aria2_torrent_with_native(
+        &self,
+        aria2_id: DownloadId,
+        current_magnet_uri: String,
+        destination: PathBuf,
+        confirmed_current_source: bool,
+    ) -> Result<DownloadId, BatchDownloadError> {
+        if !confirmed_current_source {
+            return Err(BatchDownloadError::RestartNotEligible);
+        }
+        let original = self
+            .repository
+            .get(aria2_id)
+            .await
+            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?
+            .ok_or(BatchDownloadError::RestartNotEligible)?;
+        if original.source().engine() != EngineKind::Aria2
+            || matches!(
+                original.status(),
+                DownloadStatus::Completed | DownloadStatus::Seeding | DownloadStatus::Stopped
+            )
+        {
+            return Err(BatchDownloadError::RestartNotEligible);
+        }
+
+        let metadata_repository = self.database.torrent_metadata();
+        let legacy_metadata = metadata_repository
+            .get_torrent_metadata(aria2_id)
+            .await
+            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?
+            .ok_or(BatchDownloadError::RestartNotEligible)?;
+        let source_matches = match legacy_metadata.source_type {
+            TorrentSourceType::Magnet => original.source().is_magnet(),
+            TorrentSourceType::TorrentFile => original.source().is_torrent_file(),
+        };
+        let legacy_info_hash = legacy_metadata.info_hash.to_ascii_lowercase();
+        if !source_matches
+            || legacy_info_hash.len() != 40
+            || !legacy_info_hash
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || legacy_metadata.destination != *original.destination()
+            || legacy_metadata
+                .torrent_metadata
+                .as_ref()
+                .is_some_and(|metadata| !metadata.info_hash.eq_ignore_ascii_case(&legacy_info_hash))
+        {
+            return Err(BatchDownloadError::RestartNotEligible);
+        }
+
+        let magnet = parse_magnet_uri(&current_magnet_uri)
+            .map_err(|_| BatchDownloadError::InvalidTorrentRestartSource)?;
+        if magnet.info_hash.len() != 40 || !magnet.info_hash.eq_ignore_ascii_case(&legacy_info_hash)
+        {
+            return Err(BatchDownloadError::TorrentSourceMismatch);
+        }
+        if !self.engine_runtime.is_available(EngineKind::NativeTorrent) {
+            return Err(BatchDownloadError::UnavailableEngine(
+                EngineKind::NativeTorrent,
+            ));
+        }
+        if !destination.is_absolute() {
+            return Err(BatchDownloadError::InvalidTorrentRestartDestination);
+        }
+        let directory_name = destination
+            .file_name()
+            .ok_or(BatchDownloadError::InvalidTorrentRestartDestination)?;
+        FileName::new(directory_name.to_string_lossy().into_owned())
+            .map_err(|_| BatchDownloadError::InvalidTorrentRestartDestination)?;
+        if fs::try_exists(&destination)
+            .await
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?
+        {
+            return Err(BatchDownloadError::TorrentDestinationCollision);
+        }
+
+        let canonical_root = fs::canonicalize(&self.downloads_dir)
+            .await
+            .map_err(|error| BatchDownloadError::Destination(error.to_string()))?;
+        let canonical_destination = canonical_destination_identity(&destination)
+            .await
+            .map_err(BatchDownloadError::Destination)?;
+        if !canonical_destination.starts_with(&canonical_root) {
+            return Err(BatchDownloadError::InvalidTorrentRestartDestination);
+        }
+
+        let items = self
+            .repository
+            .list()
+            .await
+            .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
+        for item in items {
+            for existing in [
+                item.destination().to_path_buf(),
+                append_path_suffix(item.destination(), ".aria2"),
+                append_path_suffix(item.destination(), ".part"),
+            ] {
+                let existing = canonical_destination_identity(&existing)
+                    .await
+                    .map_err(BatchDownloadError::Destination)?;
+                if paths_overlap(&canonical_destination, &existing) {
+                    return Err(BatchDownloadError::TorrentDestinationCollision);
+                }
+            }
+        }
+
+        self.enqueue_magnet(
+            &current_magnet_uri,
+            DownloadPriority::Normal,
+            Some(destination),
+        )
+        .await
+        .map_err(|error| match error {
+            CoreServicesError::UnavailableEngine(engine) => {
+                BatchDownloadError::UnavailableEngine(engine)
+            }
+            CoreServicesError::InvalidMagnet(_) => BatchDownloadError::InvalidTorrentRestartSource,
+            CoreServicesError::Queue(message) | CoreServicesError::Database(message) => {
+                BatchDownloadError::Queue(message)
+            }
+            error => BatchDownloadError::Destination(error.to_string()),
+        })
     }
 
     async fn enqueue_batch_items(
@@ -3866,6 +4037,312 @@ mod tests {
                     media.id(),
                     "https://current.example/movie.mp4".to_owned(),
                     root.path().join("downloads/movie-native.zip"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::RestartNotEligible)
+        );
+
+        services.queue().shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn user_confirmed_aria2_torrent_restart_creates_a_separate_native_job()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        services.pause_queue_dispatch().await?;
+
+        let info_hash = "0123456789abcdef0123456789abcdef01234567";
+        let legacy_destination = root.path().join("downloads/legacy-torrent");
+        tokio::fs::create_dir_all(&legacy_destination).await?;
+        let legacy_output = legacy_destination.join("selected.bin");
+        tokio::fs::write(&legacy_output, b"legacy partial torrent data").await?;
+        let legacy_sidecar = append_path_suffix(&legacy_output, ".aria2");
+        tokio::fs::write(&legacy_sidecar, b"legacy aria2 control data").await?;
+
+        let created_at = Timestamp::now()?;
+        let mut legacy = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(
+                format!("magnet:?xt=urn:btih:{info_hash}"),
+                EngineKind::Aria2,
+            )?,
+            FileName::new("legacy-torrent")?,
+            legacy_destination.clone(),
+            created_at,
+        );
+        legacy.set_status_at(DownloadStatus::Paused, created_at)?;
+        let legacy_id = legacy.id();
+        services.repository.create(&legacy).await?;
+
+        let legacy_metadata = TorrentMetadataRow {
+            download_id: legacy_id,
+            source_type: TorrentSourceType::Magnet,
+            magnet_uri: Some(format!("magnet:?xt=urn:btih:{info_hash}")),
+            local_torrent_path: None,
+            info_hash: info_hash.to_owned(),
+            torrent_name: "legacy-torrent".to_owned(),
+            torrent_metadata: None,
+            destination: legacy_destination.clone(),
+            metadata_state: "pending".to_owned(),
+            selected_file_indexes: vec![1],
+            selected_total_bytes: 123,
+            selection_confirmed: true,
+            aria2_gid: Some("legacy-gid".to_owned()),
+            seed_state: TorrentSeedState::Downloading,
+            uploaded_bytes: 7,
+            upload_speed_bps: 2,
+            peer_count: 3,
+            seed_count: 1,
+            created_at,
+            updated_at: created_at,
+        };
+        services
+            .database
+            .torrent_metadata()
+            .create_torrent_metadata(&legacy_metadata)
+            .await?;
+
+        let current_magnet = format!("magnet:?xt=urn:btih:{info_hash}&dn=current-copy");
+        let new_destination = root.path().join("downloads/native-torrent");
+        let native_id = services
+            .restart_aria2_torrent_with_native(
+                legacy_id,
+                current_magnet.clone(),
+                new_destination.clone(),
+                true,
+            )
+            .await?;
+
+        assert_ne!(native_id, legacy_id);
+        let native = services
+            .repository
+            .get(native_id)
+            .await?
+            .expect("separate native download is persisted");
+        assert_eq!(native.source().engine(), EngineKind::NativeTorrent);
+        assert_eq!(native.source().url(), current_magnet);
+        assert_eq!(
+            native.destination(),
+            tokio::fs::canonicalize(&new_destination).await?
+        );
+        let native_metadata = services
+            .database
+            .torrent_metadata()
+            .get_torrent_metadata(native_id)
+            .await?
+            .expect("native torrent metadata is persisted");
+        assert_eq!(native_metadata.info_hash, info_hash);
+        assert!(native_metadata.selected_file_indexes.is_empty());
+        assert!(!native_metadata.selection_confirmed);
+
+        assert_eq!(services.repository.get(legacy_id).await?, Some(legacy));
+        assert_eq!(
+            services
+                .database
+                .torrent_metadata()
+                .get_torrent_metadata(legacy_id)
+                .await?,
+            Some(legacy_metadata)
+        );
+        assert_eq!(
+            tokio::fs::read(&legacy_output).await?,
+            b"legacy partial torrent data"
+        );
+        assert_eq!(
+            tokio::fs::read(&legacy_sidecar).await?,
+            b"legacy aria2 control data"
+        );
+
+        services.queue().shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aria2_torrent_restart_rejects_mismatches_and_destination_collisions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let services = CoreServices::start(config(root.path())).await?;
+        services.pause_queue_dispatch().await?;
+        let info_hash = "0123456789abcdef0123456789abcdef01234567";
+        let legacy_destination = root.path().join("downloads/legacy-torrent");
+        tokio::fs::create_dir_all(&legacy_destination).await?;
+        let created_at = Timestamp::now()?;
+        let legacy = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new(
+                format!("magnet:?xt=urn:btih:{info_hash}"),
+                EngineKind::Aria2,
+            )?,
+            FileName::new("legacy-torrent")?,
+            legacy_destination.clone(),
+            created_at,
+        );
+        let legacy_id = legacy.id();
+        services.repository.create(&legacy).await?;
+        services
+            .database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: legacy_id,
+                source_type: TorrentSourceType::Magnet,
+                magnet_uri: Some(format!("magnet:?xt=urn:btih:{info_hash}")),
+                local_torrent_path: None,
+                info_hash: info_hash.to_owned(),
+                torrent_name: "legacy-torrent".to_owned(),
+                torrent_metadata: None,
+                destination: legacy_destination.clone(),
+                metadata_state: "pending".to_owned(),
+                selected_file_indexes: Vec::new(),
+                selected_total_bytes: 0,
+                selection_confirmed: false,
+                aria2_gid: Some("legacy-gid".to_owned()),
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at,
+                updated_at: created_at,
+            })
+            .await?;
+
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    format!("magnet:?xt=urn:btih:{info_hash}"),
+                    root.path().join("downloads/unconfirmed"),
+                    false,
+                )
+                .await,
+            Err(BatchDownloadError::RestartNotEligible)
+        );
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    "not-a-magnet".to_owned(),
+                    root.path().join("downloads/invalid"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::InvalidTorrentRestartSource)
+        );
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                    root.path().join("downloads/mismatched"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::TorrentSourceMismatch)
+        );
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    format!("magnet:?xt=urn:btih:{info_hash}"),
+                    legacy_destination.join("new-child"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::TorrentDestinationCollision)
+        );
+        tokio::fs::create_dir_all(root.path().join("outside")).await?;
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    format!("magnet:?xt=urn:btih:{info_hash}"),
+                    root.path().join("downloads"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::TorrentDestinationCollision)
+        );
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    format!("magnet:?xt=urn:btih:{info_hash}"),
+                    root.path().join("outside/native-torrent"),
+                    true,
+                )
+                .await,
+            Err(BatchDownloadError::InvalidTorrentRestartDestination)
+        );
+
+        let legacy_torrent_file = root.path().join("metadata/legacy.torrent");
+        tokio::fs::create_dir_all(legacy_torrent_file.parent().expect("metadata parent")).await?;
+        tokio::fs::write(&legacy_torrent_file, b"saved legacy metainfo").await?;
+        let torrent_file_item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new_torrent_file(&legacy_torrent_file, EngineKind::Aria2)?,
+            FileName::new("legacy-file-torrent")?,
+            root.path().join("downloads/legacy-file-torrent"),
+            created_at,
+        );
+        let torrent_file_id = torrent_file_item.id();
+        services.repository.create(&torrent_file_item).await?;
+        services
+            .database
+            .torrent_metadata()
+            .create_torrent_metadata(&TorrentMetadataRow {
+                download_id: torrent_file_id,
+                source_type: TorrentSourceType::TorrentFile,
+                magnet_uri: None,
+                local_torrent_path: Some(legacy_torrent_file),
+                info_hash: info_hash.to_owned(),
+                torrent_name: "legacy-file-torrent".to_owned(),
+                torrent_metadata: None,
+                destination: torrent_file_item.destination().to_path_buf(),
+                metadata_state: "ready".to_owned(),
+                selected_file_indexes: vec![0],
+                selected_total_bytes: 55,
+                selection_confirmed: true,
+                aria2_gid: Some("legacy-file-gid".to_owned()),
+                seed_state: TorrentSeedState::Downloading,
+                uploaded_bytes: 0,
+                upload_speed_bps: 0,
+                peer_count: 0,
+                seed_count: 0,
+                created_at,
+                updated_at: created_at,
+            })
+            .await?;
+        let file_restart_id = services
+            .restart_aria2_torrent_with_native(
+                torrent_file_id,
+                format!("magnet:?xt=urn:btih:{info_hash}"),
+                root.path().join("downloads/native-from-file-torrent"),
+                true,
+            )
+            .await?;
+        assert_eq!(
+            services
+                .repository
+                .get(file_restart_id)
+                .await?
+                .expect("native job from legacy torrent file exists")
+                .source()
+                .engine(),
+            EngineKind::NativeTorrent
+        );
+
+        let mut completed = legacy.clone();
+        completed.set_status_at(DownloadStatus::Completed, Timestamp::now()?)?;
+        services.repository.update(&completed).await?;
+        assert_eq!(
+            services
+                .restart_aria2_torrent_with_native(
+                    legacy_id,
+                    format!("magnet:?xt=urn:btih:{info_hash}"),
+                    root.path().join("downloads/completed-restart"),
                     true,
                 )
                 .await,

@@ -791,6 +791,20 @@ impl IpcError {
         }
     }
 
+    fn invalid_torrent_restart_source() -> Self {
+        Self {
+            code: IpcErrorCode::InvalidRequest,
+            message: "Enter a valid current BitTorrent magnet URI.",
+        }
+    }
+
+    fn torrent_restart_source_mismatch() -> Self {
+        Self {
+            code: IpcErrorCode::Conflict,
+            message: "The current magnet does not match the saved aria2 torrent info hash.",
+        }
+    }
+
     fn not_found() -> Self {
         Self {
             code: IpcErrorCode::NotFound,
@@ -1672,6 +1686,50 @@ pub async fn restart_aria2_http_with_native(
             fetchx_core_services::BatchDownloadError::InvalidDestination
             | fetchx_core_services::BatchDownloadError::Destination(_) => {
                 IpcError::destination_unavailable()
+            }
+            _ => IpcError::internal(),
+        })?;
+    state.get(native_id).await
+}
+
+#[tauri::command]
+pub async fn restart_aria2_torrent_with_native(
+    state: State<'_, AppState>,
+    id: String,
+    current_magnet_uri: String,
+    destination: String,
+    confirmed_current_source: bool,
+) -> Result<DownloadDto, IpcError> {
+    let aria2_id = parse_download_id(&id)?;
+    let core_services = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let native_id = core_services
+        .restart_aria2_torrent_with_native(
+            aria2_id,
+            current_magnet_uri,
+            PathBuf::from(destination),
+            confirmed_current_source,
+        )
+        .await
+        .map_err(|error| match error {
+            fetchx_core_services::BatchDownloadError::InvalidTorrentRestartSource => {
+                IpcError::invalid_torrent_restart_source()
+            }
+            fetchx_core_services::BatchDownloadError::TorrentSourceMismatch => {
+                IpcError::torrent_restart_source_mismatch()
+            }
+            fetchx_core_services::BatchDownloadError::RestartNotEligible => IpcError::conflict(),
+            fetchx_core_services::BatchDownloadError::InvalidTorrentRestartDestination
+            | fetchx_core_services::BatchDownloadError::Destination(_) => {
+                IpcError::destination_unavailable()
+            }
+            fetchx_core_services::BatchDownloadError::TorrentDestinationCollision => {
+                IpcError::destination_conflict()
+            }
+            fetchx_core_services::BatchDownloadError::UnavailableEngine(engine) => {
+                IpcError::engine_unavailable(engine)
             }
             _ => IpcError::internal(),
         })?;

@@ -460,6 +460,10 @@ class DownloadsViewModel(
         (repository as? Aria2NativeRestartRepository)
             ?.suggestNativeRestartDestination(fileName)
 
+    fun suggestAria2NativeTorrentRestartDestination(fileName: String): String? =
+        (repository as? Aria2NativeRestartRepository)
+            ?.suggestNativeTorrentRestartDestination(fileName)
+
     fun clearAria2NativeRestartState(downloadId: String) {
         _aria2NativeRestart.update { current ->
             current - downloadId
@@ -502,6 +506,45 @@ class DownloadsViewModel(
                     it + (downloadId to Aria2NativeRestartUiState(
                         error = "Could not create the native download. Check the URL, destination, and permissions.",
                     ))
+                }
+            }
+        }
+    }
+
+    fun restartAria2TorrentWithNative(
+        downloadId: String,
+        currentMagnetUri: String,
+        destinationPath: String,
+        confirmedCurrentSource: Boolean,
+    ) {
+        val restartRepository = repository as? Aria2NativeRestartRepository ?: run {
+            _aria2NativeRestart.update {
+                it + (downloadId to Aria2NativeRestartUiState(
+                    error = "Native torrent restart is unavailable in this app build.",
+                ))
+            }
+            return
+        }
+        if (_aria2NativeRestart.value[downloadId]?.loading == true) return
+        _aria2NativeRestart.update {
+            it + (downloadId to Aria2NativeRestartUiState(loading = true))
+        }
+        viewModelScope.launch {
+            try {
+                val newId = restartRepository.restartAria2TorrentWithNative(
+                    downloadId,
+                    currentMagnetUri,
+                    destinationPath,
+                    confirmedCurrentSource,
+                )
+                _aria2NativeRestart.update {
+                    it + (downloadId to Aria2NativeRestartUiState(newDownloadId = newId))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _aria2NativeRestart.update {
+                    it + (downloadId to Aria2NativeRestartUiState(error = e.message ?: "Could not create the native torrent."))
                 }
             }
         }

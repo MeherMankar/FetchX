@@ -257,6 +257,14 @@ interface DownloadService {
     );
 
     [Throws=MobileApiError]
+    string restart_aria2_torrent_with_native(
+        string id,
+        string current_magnet_uri,
+        string destination,
+        boolean confirmed_current_source
+    );
+
+    [Throws=MobileApiError]
     string add_download(
         string url,
         string filename,

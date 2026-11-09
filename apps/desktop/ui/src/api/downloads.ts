@@ -48,6 +48,20 @@ export function restartAria2HttpWithNative(
   });
 }
 
+export function restartAria2TorrentWithNative(
+  id: string,
+  currentMagnetUri: string,
+  destination: string,
+  confirmedCurrentSource: boolean,
+): Promise<Download> {
+  return invoke<Download>("restart_aria2_torrent_with_native", {
+    id,
+    current_magnet_uri: currentMagnetUri,
+    destination,
+    confirmed_current_source: confirmedCurrentSource,
+  });
+}
+
 export function addDownload(request: AddDownloadRequest): Promise<Download> {
   return invoke<Download>("add_download", { request });
 }

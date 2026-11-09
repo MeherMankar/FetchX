@@ -57,6 +57,8 @@ fun DownloadItemRow(
     aria2NativeRestart: Aria2NativeRestartUiState? = null,
     suggestedNativeRestartDestination: String? = null,
     onRestartAria2WithNative: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    suggestedNativeTorrentRestartDestination: String? = null,
+    onRestartAria2TorrentWithNative: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onPrepareAria2NativeRestart: () -> Unit = {},
     onTorrentFileSelected: (Int, Boolean) -> Unit = { _, _ -> },
     onTorrentSelectionAll: (Boolean) -> Unit = {},
@@ -73,6 +75,12 @@ fun DownloadItemRow(
         mutableStateOf(suggestedNativeRestartDestination.orEmpty())
     }
     var confirmedDirectFile by remember(item.id) { mutableStateOf(false) }
+    var showNativeTorrentRestartDialog by remember(item.id) { mutableStateOf(false) }
+    var currentMagnetUri by remember(item.id) { mutableStateOf("") }
+    var newTorrentDestination by remember(item.id) {
+        mutableStateOf(suggestedNativeTorrentRestartDestination.orEmpty())
+    }
+    var confirmedCurrentMagnet by remember(item.id) { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -143,6 +151,20 @@ fun DownloadItemRow(
                         },
                     ) {
                         Text("Restart with native")
+                    }
+                }
+                if (canOfferNativeTorrentRestart(item)) {
+                    TextButton(
+                        onClick = {
+                            onPrepareAria2NativeRestart()
+                            currentMagnetUri = ""
+                            newTorrentDestination =
+                                suggestedNativeTorrentRestartDestination.orEmpty()
+                            confirmedCurrentMagnet = false
+                            showNativeTorrentRestartDialog = true
+                        },
+                    ) {
+                        Text("Restart torrent with native")
                     }
                 }
             }
@@ -518,6 +540,94 @@ fun DownloadItemRow(
                     },
                 )
             }
+            if (showNativeTorrentRestartDialog) {
+                AlertDialog(
+                    onDismissRequest = {
+                        if (aria2NativeRestart?.loading != true) {
+                            showNativeTorrentRestartDialog = false
+                        }
+                    },
+                    title = { Text("Restart torrent as a separate native download") },
+                    text = {
+                        Column {
+                            Text(
+                                "Enter the current magnet URI. FetchX verifies its info hash against the saved aria2 torrent. " +
+                                    "The new download will require a fresh file selection.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            OutlinedTextField(
+                                value = currentMagnetUri,
+                                onValueChange = { currentMagnetUri = it },
+                                label = { Text("Current magnet URI") },
+                                singleLine = true,
+                                enabled = aria2NativeRestart?.loading != true &&
+                                    aria2NativeRestart?.newDownloadId == null,
+                            )
+                            OutlinedTextField(
+                                value = newTorrentDestination,
+                                onValueChange = { newTorrentDestination = it },
+                                label = { Text("New destination directory") },
+                                singleLine = true,
+                                enabled = aria2NativeRestart?.loading != true &&
+                                    aria2NativeRestart?.newDownloadId == null,
+                            )
+                            Text(
+                                "Choose a new directory inside FetchX's app-specific downloads folder. Existing output and partial data are never reused.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = confirmedCurrentMagnet,
+                                    onCheckedChange = { confirmedCurrentMagnet = it },
+                                    enabled = aria2NativeRestart?.loading != true &&
+                                        aria2NativeRestart?.newDownloadId == null,
+                                )
+                                Text(
+                                    "I confirm this is the current source for the saved torrent and will select files on the new job.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            aria2NativeRestart?.error?.let { error ->
+                                Text(error, color = MaterialTheme.colorScheme.error)
+                            }
+                            aria2NativeRestart?.newDownloadId?.let { newId ->
+                                Text(
+                                    "Created separate native torrent $newId. Open it to review the file list and confirm a fresh selection. The aria2 job is unchanged.",
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                onRestartAria2TorrentWithNative(
+                                    currentMagnetUri,
+                                    newTorrentDestination,
+                                    confirmedCurrentMagnet,
+                                )
+                            },
+                            enabled = aria2NativeRestart?.loading != true &&
+                                aria2NativeRestart?.newDownloadId == null &&
+                                currentMagnetUri.startsWith("magnet:") &&
+                                newTorrentDestination.isNotBlank() &&
+                                confirmedCurrentMagnet,
+                        ) {
+                            Text(
+                                if (aria2NativeRestart?.loading == true) "Creating…" else "Create native torrent"
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { showNativeTorrentRestartDialog = false },
+                            enabled = aria2NativeRestart?.loading != true,
+                        ) {
+                            Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
+                        }
+                    },
+                )
+            }
         }
     }
 }
@@ -536,6 +646,17 @@ private fun canOfferNativeRestart(item: DownloadItem): Boolean {
         "aac", "avi", "flac", "m3u8", "m4a", "m4v", "mkv", "mov", "mp3", "mp4",
         "mpd", "mpeg", "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
     )
+}
+
+private fun canOfferNativeTorrentRestart(item: DownloadItem): Boolean {
+    if (!item.engine.equals("aria2", ignoreCase = true)) return false
+    if (!item.url.startsWith("magnet:", ignoreCase = true) &&
+        !item.url.startsWith("torrent+file:", ignoreCase = true)
+    ) return false
+    return item.state !is DownloadState.Completed &&
+        item.state !is DownloadState.PublicationPending &&
+        item.state !is DownloadState.Seeding &&
+        item.state !is DownloadState.Stopped
 }
 
 private fun isMediaHttpSource(url: String): Boolean {

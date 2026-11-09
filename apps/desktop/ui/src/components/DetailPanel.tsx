@@ -6,6 +6,7 @@ import {
   getTorrentDownloadMetadata,
   getTorrentTelemetry,
   restartAria2HttpWithNative,
+  restartAria2TorrentWithNative,
   selectTorrentFiles,
   setTorrentDirectorySelected,
   setTorrentFileSelected,
@@ -114,6 +115,13 @@ export function DetailPanel({
   const [restartLoading, setRestartLoading] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [restartedDownloadId, setRestartedDownloadId] = useState<string | null>(null);
+  const [torrentRestartOpen, setTorrentRestartOpen] = useState(false);
+  const [torrentRestartMagnet, setTorrentRestartMagnet] = useState("");
+  const [torrentRestartDestination, setTorrentRestartDestination] = useState("");
+  const [torrentRestartConfirmed, setTorrentRestartConfirmed] = useState(false);
+  const [torrentRestartLoading, setTorrentRestartLoading] = useState(false);
+  const [torrentRestartError, setTorrentRestartError] = useState<string | null>(null);
+  const [restartedTorrentDownloadId, setRestartedTorrentDownloadId] = useState<string | null>(null);
   const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
   const [torrentTelemetryError, setTorrentTelemetryError] = useState<string | null>(null);
   const [torrentMetadata, setTorrentMetadata] = useState<TorrentDownloadMetadata | null>(null);
@@ -137,6 +145,9 @@ export function DetailPanel({
     setRestartOpen(false);
     setRestartError(null);
     setRestartedDownloadId(null);
+    setTorrentRestartOpen(false);
+    setTorrentRestartError(null);
+    setRestartedTorrentDownloadId(null);
     if (isAria2) void refreshAria2Recovery();
   }, [download.id, isAria2, refreshAria2Recovery]);
 
@@ -203,6 +214,11 @@ export function DetailPanel({
     && download.status !== "completed"
     && download.status !== "stopped"
     && !MEDIA_EXTENSIONS.has(download.filename.split(".").pop()?.toLowerCase() ?? "");
+  const canRestartAria2Torrent = isAria2
+    && (download.url.startsWith("magnet:") || download.url.startsWith("torrent+file:"))
+    && download.status !== "completed"
+    && download.status !== "seeding"
+    && download.status !== "stopped";
 
   const startNativeRestart = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -221,6 +237,26 @@ export function DetailPanel({
       setRestartError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setRestartLoading(false);
+    }
+  };
+
+  const startNativeTorrentRestart = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTorrentRestartLoading(true);
+    setTorrentRestartError(null);
+    setRestartedTorrentDownloadId(null);
+    try {
+      const created = await restartAria2TorrentWithNative(
+        download.id,
+        torrentRestartMagnet,
+        torrentRestartDestination,
+        torrentRestartConfirmed,
+      );
+      setRestartedTorrentDownloadId(created.id);
+    } catch (cause) {
+      setTorrentRestartError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setTorrentRestartLoading(false);
     }
   };
 
@@ -336,6 +372,97 @@ export function DetailPanel({
                         type="button"
                         disabled={restartLoading}
                         onClick={() => setRestartOpen(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+            {canRestartAria2Torrent && (
+              <div className="aria2-native-restart">
+                {!torrentRestartOpen ? (
+                  <button
+                    className="button button-secondary"
+                    onClick={() => {
+                      setTorrentRestartMagnet("");
+                      setTorrentRestartDestination("");
+                      setTorrentRestartConfirmed(false);
+                      setTorrentRestartError(null);
+                      setRestartedTorrentDownloadId(null);
+                      setTorrentRestartOpen(true);
+                    }}
+                  >
+                    Restart torrent with native
+                  </button>
+                ) : (
+                  <form onSubmit={(event) => void startNativeTorrentRestart(event)}>
+                    <label className="field-label" htmlFor={`torrent-restart-magnet-${download.id}`}>
+                      Current magnet URI
+                    </label>
+                    <input
+                      id={`torrent-restart-magnet-${download.id}`}
+                      className="field-input"
+                      type="text"
+                      required
+                      value={torrentRestartMagnet}
+                      disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
+                      onChange={(event) => setTorrentRestartMagnet(event.target.value)}
+                    />
+                    <p className="field-hint">
+                      Enter the current magnet URI. FetchX verifies its info hash against the saved aria2 torrent.
+                    </p>
+                    <label className="field-label" htmlFor={`torrent-restart-destination-${download.id}`}>
+                      New destination directory
+                    </label>
+                    <input
+                      id={`torrent-restart-destination-${download.id}`}
+                      className="field-input"
+                      type="text"
+                      required
+                      value={torrentRestartDestination}
+                      disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
+                      onChange={(event) => setTorrentRestartDestination(event.target.value)}
+                      placeholder="Absolute directory inside FetchX downloads"
+                    />
+                    <p className="field-hint">
+                      Choose a new, non-existing directory. The old torrent output, partial files, and aria2 sidecar are never reused.
+                    </p>
+                    <label className="field-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={torrentRestartConfirmed}
+                        disabled={torrentRestartLoading || restartedTorrentDownloadId !== null}
+                        onChange={(event) => setTorrentRestartConfirmed(event.target.checked)}
+                      />
+                      <span>
+                        I confirm this is the current source for the saved torrent. I will review and select files on the new native job.
+                      </span>
+                    </label>
+                    {torrentRestartError && <p className="detail-error-message">{torrentRestartError}</p>}
+                    {restartedTorrentDownloadId && (
+                      <p role="status">
+                        Created separate native torrent {restartedTorrentDownloadId}. Open that job to review its files and confirm a fresh selection; the aria2 job remains unchanged.
+                      </p>
+                    )}
+                    <div className="detail-actions">
+                      <button
+                        className="button button-primary"
+                        type="submit"
+                        disabled={
+                          torrentRestartLoading ||
+                          restartedTorrentDownloadId !== null ||
+                          !torrentRestartConfirmed
+                        }
+                      >
+                        {torrentRestartLoading ? "Creating…" : "Create separate native torrent"}
+                      </button>
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        disabled={torrentRestartLoading}
+                        onClick={() => setTorrentRestartOpen(false)}
                       >
                         Cancel
                       </button>

@@ -421,6 +421,9 @@ class BridgeDownloadRepository(
     override fun suggestNativeRestartDestination(fileName: String): String =
         nativeRestartDestinationSuggestion(privateDownloadDirectory, fileName)
 
+    override fun suggestNativeTorrentRestartDestination(fileName: String): String =
+        nativeTorrentRestartDestinationSuggestion(privateDownloadDirectory, fileName)
+
     override suspend fun restartAria2HttpWithNative(
         downloadId: String,
         currentUrl: String,
@@ -440,6 +443,28 @@ class BridgeDownloadRepository(
             currentUrl,
             destination.path,
             confirmedDirectFile,
+        )
+    }
+
+    override suspend fun restartAria2TorrentWithNative(
+        downloadId: String,
+        currentMagnetUri: String,
+        destinationPath: String,
+        confirmedCurrentSource: Boolean,
+    ): String = withContext(Dispatchers.IO) {
+        val destination = File(destinationPath).canonicalFile
+        val privateRoot = File(privateDownloadDirectory).canonicalFile
+        require(destination.parentFile == privateRoot) {
+            "Choose a destination directory directly inside FetchX's app-specific downloads folder."
+        }
+        require(!destination.exists()) {
+            "Choose a new destination directory that does not already exist."
+        }
+        service.restartAria2TorrentWithNative(
+            downloadId,
+            currentMagnetUri,
+            destination.path,
+            confirmedCurrentSource,
         )
     }
 
@@ -744,6 +769,18 @@ internal fun nativeRestartDestinationSuggestion(
         "$safeName (native)"
     }
     return File(privateDownloadDirectory, suggestedName).absolutePath
+}
+
+internal fun nativeTorrentRestartDestinationSuggestion(
+    privateDownloadDirectory: String,
+    fileName: String,
+): String {
+    val safeName = File(fileName).name
+    require(safeName.isNotBlank() && safeName != "." && safeName != "..") {
+        "A valid torrent name is required."
+    }
+    val name = safeName.substringBeforeLast('.', safeName).trim().ifBlank { "torrent" }
+    return File(privateDownloadDirectory, "$name (native torrent)").absolutePath
 }
 
 internal fun mapAria2RecoveryState(dto: Aria2RecoveryStateDto): Aria2RecoveryState = when (dto) {

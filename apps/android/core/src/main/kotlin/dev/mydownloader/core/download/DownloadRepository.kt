@@ -102,11 +102,18 @@ interface Aria2RecoveryRepository {
 
 interface Aria2NativeRestartRepository {
     fun suggestNativeRestartDestination(fileName: String): String
+    fun suggestNativeTorrentRestartDestination(fileName: String): String
     suspend fun restartAria2HttpWithNative(
         downloadId: String,
         currentUrl: String,
         destinationPath: String,
         confirmedDirectFile: Boolean,
+    ): String
+    suspend fun restartAria2TorrentWithNative(
+        downloadId: String,
+        currentMagnetUri: String,
+        destinationPath: String,
+        confirmedCurrentSource: Boolean,
     ): String
 }
 
