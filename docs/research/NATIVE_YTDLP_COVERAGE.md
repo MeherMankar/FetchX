@@ -35,6 +35,20 @@ The native `JwPlatformExtractor` handles the direct JW Platform media routes plu
 
 Requests use FetchX's public-address DNS pinning and bounded-body helper, explicit redirect validation (including HTTPS downgrade rejection), a five-redirect limit, a 4 MiB response limit, and a 30-second maximum timeout. Cookies and caller headers are not sent; those cases return unsupported so the existing yt-dlp fallback can handle them. Only one playlist item is accepted. Direct HTTP media and HLS/DASH manifest URLs are classified; manifest variant expansion, SMIL, RTMP, subtitles, playlists, DRM, access-controlled responses, and unrecognized page markup remain unsupported. The corresponding four ledger rows remain `in progress`; this is not full JW Platform or site parity.
 
+## Prompt 9 — Brightcove, Kaltura, and Vimeo shared-family slices
+
+These Rust translations use the authorized [MeherMankar/yt-dlp](https://github.com/MeherMankar/yt-dlp) fork at pinned revision `d58c4588a54271fe74172e2fc2f09a4a44f70679` (root `LICENSE`: Unlicense). Upstream behavior reviewed:
+
+- Brightcove: `yt_dlp/extractor/brightcove.py`, `ninenews.py`, `craftsy.py`, `amcnetworks.py`, and registry entries in `_extractors.py`.
+- Kaltura: `yt_dlp/extractor/kaltura.py`, `azmedien.py`, `inc.py`, `unitednations.py`, and registry entries in `_extractors.py`.
+- Vimeo: `yt_dlp/extractor/vimeo.py`, `aeonco.py`, `amara.py`, `croatianfilm.py`, and registry entries in `_extractors.py`.
+
+The selected Brightcove routes are Nine News, Craftsy, and AMC Networks. They resolve a page's known player reference, retrieve public player config/policy-key data, then call Brightcove's public Playback API and map the returned direct sources. The Kaltura routes are AZ Medien, Inc., and UN Web TV. They discover the selected page's partner/entry identifiers, issue the public widget-session multirequest for entry metadata and ready flavor assets, and map `serveFlavor` sources. The Vimeo routes are Aeon, Amara, and Croatian Film. Their page/API metadata resolves to a Vimeo video ID, then the shared player config maps progressive sources and classifies supplied HLS/DASH manifest URLs.
+
+The code is in `crates/media-extractor/src/{provider_http,brightcove,kaltura,vimeo}.rs`; all three extractors are registered in CoreServices after YouTube/JW Platform and before Generic and the existing yt-dlp fallback. The provider HTTP helper reuses FetchX public-address DNS pinning and bounded-body reading, caps responses at 4 MiB, limits GET redirects to five while rejecting HTTPS downgrades, rejects POST redirects, and applies a 30-second maximum extractor timeout. No caller cookies or arbitrary headers are sent; if supplied, these native provider extractors decline and allow the existing fallback to run.
+
+This is not parity or a live-compatibility claim. Brightcove supports only the selected wrapper page shapes and returned sources; authentication, DRM, playlists, and manifest expansion remain unimplemented. Kaltura supports only the selected wrappers and ready non-DRM flavor assets; direct Kaltura URLs, captions, playlists, session-bound formats, and HLS expansion remain unsupported. Vimeo supports only public single videos; login, password/private/embed-only access, playlists, subtitles, and manifest expansion remain unsupported. Region/access errors are not bypassed. All nine selected site rows and the shared Kaltura/Vimeo backend rows remain `in progress`; see the CSV ledger for per-route scope.
+
 ## YouTube native scope and limits
 
 `YoutubeIE` recognizes 11-character video IDs in YouTube watch, `youtu.be`, Shorts, embed, and live URL forms. It tries the pinned yt-dlp default unauthenticated client order: `tv_samsung`, `visionos`, then `web`. The first two do not require GVS PO tokens for HTTPS media under this pinned policy; `web` is not requested unless a caller supplies a `web.gvs` token. Successful responses map title, duration, the highest-dimension thumbnail, and at most 64 entries from `streamingData.formats` and `adaptiveFormats`.

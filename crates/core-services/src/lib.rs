@@ -42,8 +42,9 @@ use fetchx_downloader::{
     save_http_multi_source_set, validate_http_source_url,
 };
 use fetchx_media_extractor::{
-    ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry, GenericExtractor,
-    JwPlatformExtractor, UnsupportedExtractor, YoutubeExtractor, YtDlpExtractor,
+    BrightcoveExtractor, ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry,
+    GenericExtractor, JwPlatformExtractor, KalturaExtractor, UnsupportedExtractor, VimeoExtractor,
+    YoutubeExtractor, YtDlpExtractor,
 };
 use fetchx_models::{
     ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
@@ -2743,6 +2744,9 @@ impl EngineRuntime {
             let mut registry = ExtractorRegistry::new();
             registry.register(Arc::new(YoutubeExtractor));
             registry.register(Arc::new(JwPlatformExtractor));
+            registry.register(Arc::new(BrightcoveExtractor));
+            registry.register(Arc::new(KalturaExtractor));
+            registry.register(Arc::new(VimeoExtractor));
             registry.register(Arc::new(GenericExtractor));
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
                 // Use the resolved executable path captured before the engine was moved.
@@ -3295,11 +3299,45 @@ mod tests {
         }
     }
 
+    async fn start_test_services(
+        root: &std::path::Path,
+    ) -> Result<CoreServices, Box<dyn std::error::Error>> {
+        let mut engine_config = EngineConfig::default();
+        engine_config.native_torrent.listen_port = 0;
+        engine_config.native_torrent.session_dir = Some(root.join("runtime/native-torrent"));
+        let services =
+            CoreServices::start_with_engine_config(config(root), Some(engine_config)).await?;
+        if let EngineAvailability::Unavailable { reason } =
+            &services.engine_runtime.status.native_torrent
+        {
+            return Err(format!("native torrent test engine unavailable: {reason}").into());
+        }
+        Ok(services)
+    }
+
+    async fn persist_test_torrent_config(
+        paths: &CoreServicesConfig,
+        session_dir: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let database = Database::connect_path(&paths.database_path).await?;
+        ConfigService::new(database.config())
+            .save(&EngineConfig {
+                native_torrent: NativeTorrentConfig {
+                    enabled: true,
+                    listen_port: 0,
+                    session_dir: Some(session_dir.to_path_buf()),
+                },
+                ..EngineConfig::default()
+            })
+            .await?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn http_multi_source_admission_rejects_ambiguous_source_sets()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         let too_few = services
             .enqueue_http_multi_source(
                 HttpMultiSourceRequest {
@@ -3655,7 +3693,7 @@ mod tests {
     async fn starts_shared_graph_and_shutdown_is_idempotent()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
 
         assert!(services.engine_runtime.is_available(EngineKind::DirectHttp));
         assert!(services.engine_runtime.is_available(EngineKind::Hls));
@@ -3898,7 +3936,7 @@ mod tests {
     async fn batch_admission_keeps_successes_when_other_inputs_are_invalid_or_duplicate()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
 
         let results = services
@@ -4009,7 +4047,7 @@ mod tests {
     async fn user_confirmed_aria2_http_restart_creates_a_separate_native_record()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
 
         let legacy_destination = root.path().join("downloads/legacy.zip");
@@ -4072,7 +4110,7 @@ mod tests {
     async fn aria2_http_restart_rejects_invalid_sources_ineligible_rows_and_collisions()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
 
         let legacy_destination = root.path().join("downloads/legacy.zip");
@@ -4297,7 +4335,7 @@ mod tests {
     async fn user_confirmed_aria2_torrent_restart_creates_a_separate_native_job()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
 
         let info_hash = "0123456789abcdef0123456789abcdef01234567";
@@ -4429,7 +4467,7 @@ mod tests {
     async fn aria2_torrent_restart_rejects_mismatches_and_destination_collisions()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
         let info_hash = "0123456789abcdef0123456789abcdef01234567";
         let legacy_destination = root.path().join("downloads/legacy-torrent");
@@ -4622,7 +4660,7 @@ mod tests {
     async fn aria2_torrent_file_restart_checks_identity_selection_and_preserves_legacy_data()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
         let tracker_url = "http://127.0.0.1:9/announce";
         let unselected = vec![b'u'; 16_384];
@@ -4832,7 +4870,7 @@ mod tests {
     async fn explicit_destination_batch_preserves_partial_results_and_resolves_collisions()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
         let destination = root
             .path()
@@ -4905,7 +4943,7 @@ mod tests {
     #[tokio::test]
     async fn batch_admission_keeps_output_names_unique() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
         let filename = FileName::new("file")?;
         let existing = DownloadItem::new(
@@ -4958,7 +4996,7 @@ mod tests {
     async fn batch_admission_groups_links_by_source_unless_package_is_explicit()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         services.pause_queue_dispatch().await?;
         let requests = [
             ("https://alpha.example.com/one.bin", None),
@@ -5021,7 +5059,7 @@ mod tests {
     #[tokio::test]
     async fn empty_batch_returns_no_outcomes() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
 
         assert!(
             services
@@ -5038,7 +5076,7 @@ mod tests {
     async fn cancelling_batch_admission_keeps_items_already_accepted_by_the_queue()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = std::sync::Arc::new(CoreServices::start(config(root.path())).await?);
+        let services = std::sync::Arc::new(start_test_services(root.path()).await?);
         services.pause_queue_dispatch().await?;
         let requests = (0..500)
             .map(|index| BatchDownloadRequest {
@@ -5077,7 +5115,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let database_path = root.path().join("fetchx.db");
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
 
         let snapshot = services.diagnostics_snapshot().await;
         let serialized = serde_json::to_string(&snapshot)?;
@@ -5191,8 +5229,8 @@ mod tests {
         let first_root = tempdir()?;
         let second_root = tempdir()?;
         let (first, second) = tokio::try_join!(
-            CoreServices::start(config(first_root.path())),
-            CoreServices::start(config(second_root.path()))
+            start_test_services(first_root.path()),
+            start_test_services(second_root.path())
         )?;
 
         let (first_result, second_result) = tokio::join!(first.shutdown(), second.shutdown());
@@ -5204,7 +5242,7 @@ mod tests {
     #[tokio::test]
     async fn persists_configuration_and_reports_optional_engine_start_failure()
     -> Result<(), Box<dyn std::error::Error>> {
-        use super::{Aria2Config, ConfigService, EngineConfig, YtDlpConfig};
+        use super::{Aria2Config, ConfigService, EngineConfig, NativeTorrentConfig, YtDlpConfig};
         use fetchx_storage::Database;
 
         let root = tempdir()?;
@@ -5220,6 +5258,11 @@ mod tests {
             yt_dlp: YtDlpConfig {
                 enabled: true,
                 executable_path: Some(root.path().join("missing-yt-dlp")),
+            },
+            native_torrent: NativeTorrentConfig {
+                enabled: true,
+                listen_port: 0,
+                session_dir: Some(root.path().join("runtime/native-torrent")),
             },
             ..EngineConfig::default()
         };
@@ -5386,7 +5429,7 @@ mod tests {
     async fn magnet_file_selection_uses_shared_model_and_persists_size_and_indexes()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         let id = DownloadId::new();
         let now = Timestamp::now()?;
         let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=sample";
@@ -5515,7 +5558,7 @@ mod tests {
     async fn native_magnet_remote_selection_revalidates_hash_and_persists_explicit_choice()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         let id = DownloadId::new();
         let now = Timestamp::now()?;
         let info_hash = "0123456789abcdef0123456789abcdef01234567";
@@ -5781,7 +5824,7 @@ mod tests {
     async fn local_torrent_inspection_returns_metadata_without_queueing()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         let torrent_path = root.path().join("inspect.torrent");
         tokio::fs::write(
             &torrent_path,
@@ -5804,7 +5847,7 @@ mod tests {
     #[tokio::test]
     async fn torrent_destination_traversal_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
         let valid_torrent = root.path().join("valid.torrent");
         tokio::fs::write(
             &valid_torrent,
@@ -5860,7 +5903,7 @@ mod tests {
     #[tokio::test]
     async fn magnet_destination_traversal_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let services = CoreServices::start(config(root.path())).await?;
+        let services = start_test_services(root.path()).await?;
 
         let traversal_dest = root
             .path()
@@ -5999,6 +6042,7 @@ mod tests {
     async fn restart_recovers_persisted_download_state() -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let paths = config(root.path());
+        persist_test_torrent_config(&paths, &root.path().join("runtime/native-torrent")).await?;
         let services = CoreServices::start(paths.clone()).await?;
         let now = Timestamp::now()?;
         let id = DownloadId::new();
@@ -6033,6 +6077,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
         let paths = config(root.path());
+        persist_test_torrent_config(&paths, &root.path().join("runtime/native-torrent")).await?;
         let services = CoreServices::start(paths.clone()).await?;
         let now = Timestamp::now()?;
         let id = DownloadId::new();

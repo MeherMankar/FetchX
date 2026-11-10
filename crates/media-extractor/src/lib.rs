@@ -18,16 +18,20 @@
 
 #![forbid(unsafe_code)]
 
+mod brightcove;
 mod engine;
 mod extractor;
 mod format_selector;
 mod generic;
 mod jwplatform;
+mod kaltura;
 mod models;
+mod provider_http;
 mod registry;
 pub mod security;
 mod unsupported;
 mod validation;
+mod vimeo;
 mod youtube;
 mod youtube_js;
 pub mod ytdlp;
@@ -35,6 +39,7 @@ pub mod ytdlp;
 #[cfg(test)]
 mod tests;
 
+pub use brightcove::BrightcoveExtractor;
 pub use engine::format_to_engine_kind;
 pub use extractor::{
     ExtractOptions, ExtractionError, MediaExtractor, YoutubePlayerClient, YoutubePoToken,
@@ -43,10 +48,12 @@ pub use extractor::{
 pub use format_selector::{FormatPreference, FormatSelector, SelectionCriteria, select_format};
 pub use generic::GenericExtractor;
 pub use jwplatform::JwPlatformExtractor;
+pub use kaltura::KalturaExtractor;
 pub use models::{MediaFormat, MediaInfo, MediaProtocol};
 pub use registry::ExtractorRegistry;
 pub use security::{CookieTempFile, filter_safe_headers};
 pub use unsupported::UnsupportedExtractor;
 pub use validation::{is_safe_media_url, sanitise_title_for_filename};
+pub use vimeo::VimeoExtractor;
 pub use youtube::YoutubeExtractor;
 pub use ytdlp::YtDlpExtractor;
