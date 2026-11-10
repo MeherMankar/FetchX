@@ -22,6 +22,7 @@ mod engine;
 mod extractor;
 mod format_selector;
 mod generic;
+mod jwplatform;
 mod models;
 mod registry;
 pub mod security;
@@ -41,6 +42,7 @@ pub use extractor::{
 };
 pub use format_selector::{FormatPreference, FormatSelector, SelectionCriteria, select_format};
 pub use generic::GenericExtractor;
+pub use jwplatform::JwPlatformExtractor;
 pub use models::{MediaFormat, MediaInfo, MediaProtocol};
 pub use registry::ExtractorRegistry;
 pub use security::{CookieTempFile, filter_safe_headers};

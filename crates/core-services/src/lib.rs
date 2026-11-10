@@ -43,7 +43,7 @@ use fetchx_downloader::{
 };
 use fetchx_media_extractor::{
     ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry, GenericExtractor,
-    UnsupportedExtractor, YoutubeExtractor, YtDlpExtractor,
+    JwPlatformExtractor, UnsupportedExtractor, YoutubeExtractor, YtDlpExtractor,
 };
 use fetchx_models::{
     ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
@@ -2742,6 +2742,7 @@ impl EngineRuntime {
         let media_registry = {
             let mut registry = ExtractorRegistry::new();
             registry.register(Arc::new(YoutubeExtractor));
+            registry.register(Arc::new(JwPlatformExtractor));
             registry.register(Arc::new(GenericExtractor));
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
                 // Use the resolved executable path captured before the engine was moved.
