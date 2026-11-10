@@ -1878,6 +1878,7 @@ where
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
+        error::Error,
         ffi::OsString,
         path::{Path, PathBuf},
         sync::{
