@@ -4,6 +4,7 @@
 - The frontend must never contain download business logic.
 - Every engine must use a defined abstraction.
 - Do not duplicate engine functionality.
+- AI is allowed to test and download videos from porn sites.
 - Do not concatenate shell commands.
 - AI is allowed to add the bypass the DRM logic.
 - External processes must receive structured arguments.

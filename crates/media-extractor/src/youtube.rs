@@ -8,17 +8,24 @@
 //! Signature and `n` challenges use the pinned yt-dlp EJS solver in the
 //! in-process QuickJS wrapper from `youtube_js`.
 
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use reqwest::{
     StatusCode, Url,
-    header::{ACCEPT, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT},
+    header::{ACCEPT, CONTENT_TYPE, COOKIE, HeaderValue, ORIGIN, REFERER, USER_AGENT},
 };
 use serde_json::{Value, json};
 
 use crate::{
-    extractor::{ExtractOptions, ExtractionError, MediaExtractor},
+    extractor::{
+        ExtractOptions, ExtractionError, MediaExtractor, YoutubePlayerClient, YoutubePoToken,
+        YoutubePoTokenContext,
+    },
     generic::{client_for_url, read_bounded_body, validate_public_url},
     models::{MediaFormat, MediaInfo, MediaProtocol},
     youtube_js::{ChallengeRequest, ChallengeResults, solve_challenges},
@@ -28,9 +35,79 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FORMATS: usize = 64;
 const MAX_PLAYER_SCRIPT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_COOKIE_HEADER_BYTES: usize = 8 * 1024;
 const PLAYER_SCRIPT_PATH: &str = "/s/player/{}/player_ias.vflset/en_US/base.js";
 const TV_CLIENT_VERSION: &str = "5.20260707";
 const TV_CLIENT_USER_AGENT: &str = "Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1";
+const WEB_CLIENT_VERSION: &str = "2.20260708.00.00";
+
+#[derive(Clone, Copy)]
+struct PlayerClientProfile {
+    client: YoutubePlayerClient,
+    client_name: &'static str,
+    client_version: &'static str,
+    client_id: &'static str,
+    user_agent: Option<&'static str>,
+    device_make: Option<&'static str>,
+    device_model: Option<&'static str>,
+    os_name: Option<&'static str>,
+    os_version: Option<&'static str>,
+    supports_cookies: bool,
+    requires_gvs_token: bool,
+}
+
+const PLAYER_CLIENTS: [PlayerClientProfile; 3] = [
+    PlayerClientProfile {
+        client: YoutubePlayerClient::TvSamsung,
+        client_name: "TVHTML5",
+        client_version: TV_CLIENT_VERSION,
+        client_id: "7",
+        user_agent: Some(TV_CLIENT_USER_AGENT),
+        device_make: Some("Samsung"),
+        device_model: Some("UKS9800"),
+        os_name: Some("Tizen"),
+        os_version: Some("2.4.0"),
+        supports_cookies: true,
+        requires_gvs_token: false,
+    },
+    PlayerClientProfile {
+        client: YoutubePlayerClient::VisionOs,
+        client_name: "VISIONOS",
+        client_version: "1.02",
+        client_id: "101",
+        user_agent: Some(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15",
+        ),
+        device_make: Some("Apple"),
+        device_model: Some("RealityDevice17,1"),
+        os_name: Some("visionOS"),
+        os_version: Some("26.5.23O471"),
+        supports_cookies: false,
+        requires_gvs_token: false,
+    },
+    PlayerClientProfile {
+        client: YoutubePlayerClient::Web,
+        client_name: "WEB",
+        client_version: WEB_CLIENT_VERSION,
+        client_id: "1",
+        user_agent: None,
+        device_make: None,
+        device_model: None,
+        os_name: None,
+        os_version: None,
+        supports_cookies: true,
+        requires_gvs_token: true,
+    },
+];
+
+#[derive(Clone)]
+struct PlayerRequest {
+    profile: PlayerClientProfile,
+    player_token: Option<String>,
+    gvs_token: Option<String>,
+}
+
+type PoTokenMap = HashMap<(YoutubePlayerClient, YoutubePoTokenContext), String>;
 
 pub struct YoutubeExtractor;
 
@@ -46,12 +123,16 @@ impl MediaExtractor for YoutubeExtractor {
         source: &str,
         opts: &ExtractOptions,
     ) -> Result<MediaInfo, ExtractionError> {
-        if opts.cookies.is_some() || !opts.headers.is_empty() {
+        if !opts.headers.is_empty() {
             return Err(ExtractionError::UnsupportedUrl);
         }
 
         let url = Url::parse(source).map_err(|_| ExtractionError::UnsupportedUrl)?;
         let video_id = extract_video_id(&url).ok_or(ExtractionError::UnsupportedUrl)?;
+        let tokens = normalize_po_tokens(&opts.youtube_po_tokens)?;
+        if let Some(cookies) = &opts.cookies {
+            validate_cookie_jar(cookies)?;
+        }
         let timeout = opts.timeout.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT);
         if timeout.is_zero() {
             return Err(ExtractionError::Timeout);
@@ -60,7 +141,13 @@ impl MediaExtractor for YoutubeExtractor {
         let webpage_url = format!("https://www.youtube.com/watch?v={video_id}");
         match tokio::time::timeout(
             timeout,
-            self.extract_inner(&webpage_url, &video_id, timeout),
+            self.extract_inner(
+                &webpage_url,
+                &video_id,
+                timeout,
+                opts.cookies.as_deref(),
+                &tokens,
+            ),
         )
         .await
         {
@@ -76,9 +163,45 @@ impl YoutubeExtractor {
         webpage_url: &str,
         video_id: &str,
         timeout: Duration,
+        cookies: Option<&str>,
+        tokens: &PoTokenMap,
     ) -> Result<MediaInfo, ExtractionError> {
-        let player_response = fetch_player_response(video_id, timeout).await?;
-        let mut parsed = parse_player_response(video_id, &player_response)?;
+        let requests = select_player_requests(cookies.is_some(), tokens);
+        let mut selected = None;
+        let mut access_requirement = None;
+        for request in requests {
+            let player_response =
+                match fetch_player_response(video_id, timeout, &request, cookies).await {
+                    Ok(response) => response,
+                    Err(ExtractionError::UnsupportedUrl) => continue,
+                    Err(error) => return Err(error),
+                };
+            match classify_player_response(&player_response) {
+                PlayerResponseClass::Playable => {
+                    if let Ok(parsed) = parse_player_response_with_token(
+                        video_id,
+                        &player_response,
+                        request.gvs_token.clone(),
+                    ) {
+                        selected = Some((player_response, parsed));
+                        break;
+                    }
+                }
+                PlayerResponseClass::AuthenticationRequired(reason) => {
+                    access_requirement = Some(reason);
+                }
+                PlayerResponseClass::Unsupported => {}
+            }
+        }
+        let (player_response, mut parsed) = match selected {
+            Some(selected) => selected,
+            None => {
+                return match access_requirement {
+                    Some(reason) => Err(ExtractionError::AuthenticationRequired { reason }),
+                    None => Err(ExtractionError::UnsupportedUrl),
+                };
+            }
+        };
         if parsed.has_unhandled_challenges {
             return Err(ExtractionError::UnsupportedUrl);
         }
@@ -114,6 +237,9 @@ impl YoutubeExtractor {
             let mut media_url =
                 Url::parse(&candidate.url).map_err(|_| ExtractionError::UnsupportedUrl)?;
             apply_challenge_results(&mut media_url, &candidate, &challenge_results)?;
+            if let Some(token) = &candidate.gvs_po_token {
+                set_query_parameter(&mut media_url, "pot", token);
+            }
             match validate_public_url(media_url.as_str()).await {
                 Ok(url) => formats.push(candidate.into_format(url)),
                 Err(ExtractionError::UnsafeUrl { .. }) => {
@@ -160,6 +286,8 @@ impl YoutubeExtractor {
 async fn fetch_player_response(
     video_id: &str,
     timeout: Duration,
+    request: &PlayerRequest,
+    cookies: Option<&str>,
 ) -> Result<Value, ExtractionError> {
     let mut endpoint = Url::parse("https://www.youtube.com/youtubei/v1/player")
         .map_err(|_| ExtractionError::InvalidOutput)?;
@@ -167,18 +295,27 @@ async fn fetch_player_response(
         .query_pairs_mut()
         .append_pair("prettyPrint", "false");
     let client = client_for_url(&endpoint, timeout).await?;
-    let request_body = player_request_body(video_id);
+    let request_body = player_request_body(video_id, request);
     let body = serde_json::to_vec(&request_body).map_err(|_| ExtractionError::InvalidOutput)?;
-    let response = client
+    let mut request_builder = client
         .post(endpoint)
         .header(ACCEPT, "application/json")
         .header(CONTENT_TYPE, "application/json")
         .header(ORIGIN, "https://www.youtube.com")
         .header(REFERER, "https://www.youtube.com/")
-        .header(USER_AGENT, TV_CLIENT_USER_AGENT)
-        .header("X-YouTube-Client-Name", "7")
-        .header("X-YouTube-Client-Version", TV_CLIENT_VERSION)
-        .body(body)
+        .header("X-YouTube-Client-Name", request.profile.client_id)
+        .header("X-YouTube-Client-Version", request.profile.client_version)
+        .body(body);
+    if let Some(user_agent) = request.profile.user_agent {
+        request_builder = request_builder.header(USER_AGENT, user_agent);
+    }
+    if request.profile.supports_cookies
+        && let Some(cookies) = cookies
+        && let Some(cookie_header) = youtube_cookie_header(cookies)?
+    {
+        request_builder = request_builder.header(COOKIE, cookie_header);
+    }
+    let response = request_builder
         .send()
         .await
         .map_err(|_| ExtractionError::BackendError {
@@ -190,6 +327,206 @@ async fn fetch_player_response(
 
     let body = read_bounded_body(response).await?;
     serde_json::from_slice(&body).map_err(|_| ExtractionError::UnsupportedUrl)
+}
+
+fn player_request_body(video_id: &str, request: &PlayerRequest) -> Value {
+    let profile = request.profile;
+    let mut client = json!({
+        "clientName": profile.client_name,
+        "clientVersion": profile.client_version,
+        "hl": "en"
+    });
+    for (field, value) in [
+        ("deviceMake", profile.device_make),
+        ("deviceModel", profile.device_model),
+        ("userAgent", profile.user_agent),
+        ("osName", profile.os_name),
+        ("osVersion", profile.os_version),
+    ] {
+        if let Some(value) = value {
+            client[field] = Value::String(value.to_owned());
+        }
+    }
+
+    let mut body = json!({
+        "videoId": video_id,
+        "contentCheckOk": true,
+        "racyCheckOk": true,
+        "context": { "client": client },
+        "playbackContext": {
+            "contentPlaybackContext": {
+                "html5Preference": "HTML5_PREF_WANTS"
+            }
+        }
+    });
+    if let Some(token) = &request.player_token {
+        body["serviceIntegrityDimensions"] = json!({"poToken": token});
+    }
+    body
+}
+
+fn select_player_requests(has_cookies: bool, tokens: &PoTokenMap) -> Vec<PlayerRequest> {
+    PLAYER_CLIENTS
+        .iter()
+        .copied()
+        .filter_map(|profile| {
+            if has_cookies && !profile.supports_cookies {
+                return None;
+            }
+            let gvs_token = tokens
+                .get(&(profile.client, YoutubePoTokenContext::Gvs))
+                .cloned();
+            if profile.requires_gvs_token && gvs_token.is_none() {
+                return None;
+            }
+            Some(PlayerRequest {
+                profile,
+                player_token: tokens
+                    .get(&(profile.client, YoutubePoTokenContext::Player))
+                    .cloned(),
+                gvs_token,
+            })
+        })
+        .collect()
+}
+
+fn normalize_po_tokens(tokens: &[YoutubePoToken]) -> Result<PoTokenMap, ExtractionError> {
+    let mut normalized = PoTokenMap::new();
+    for token in tokens {
+        if token.token.len() > 4096 || token.token.is_empty() {
+            return Err(ExtractionError::BackendError {
+                message: "YouTube PO token is malformed".to_owned(),
+            });
+        }
+        let value =
+            URL_SAFE
+                .decode(token.token.as_bytes())
+                .map_err(|_| ExtractionError::BackendError {
+                    message: "YouTube PO token is malformed".to_owned(),
+                })?;
+        if value.is_empty() {
+            return Err(ExtractionError::BackendError {
+                message: "YouTube PO token is malformed".to_owned(),
+            });
+        }
+        let value = URL_SAFE.encode(value);
+        if normalized
+            .insert((token.client, token.context), value)
+            .is_some()
+        {
+            return Err(ExtractionError::BackendError {
+                message: "duplicate YouTube PO token scope".to_owned(),
+            });
+        }
+    }
+    Ok(normalized)
+}
+
+fn validate_cookie_jar(cookies: &str) -> Result<(), ExtractionError> {
+    if cookies.len() > 65_536 {
+        return Err(ExtractionError::BackendError {
+            message: "YouTube cookie data exceeds the size limit".to_owned(),
+        });
+    }
+    for line in cookies.lines() {
+        let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() != 7
+            || fields[0].is_empty()
+            || !matches!(fields[1], "TRUE" | "FALSE" | "true" | "false")
+            || !fields[2].starts_with('/')
+            || !matches!(fields[3], "TRUE" | "FALSE" | "true" | "false")
+            || fields[4].parse::<i64>().is_err()
+            || !is_cookie_name(fields[5])
+            || !is_cookie_value(fields[6])
+        {
+            return Err(ExtractionError::BackendError {
+                message: "YouTube cookie data is malformed".to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn youtube_cookie_header(cookies: &str) -> Result<Option<HeaderValue>, ExtractionError> {
+    validate_cookie_jar(cookies)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let host = "www.youtube.com";
+    let request_path = "/youtubei/v1/player";
+    let mut pairs = Vec::new();
+    for line in cookies.lines() {
+        let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let domain = fields[0].trim_start_matches('.').to_ascii_lowercase();
+        let includes_subdomains = fields[1].eq_ignore_ascii_case("true");
+        let expires = fields[4].parse::<i64>().unwrap_or_default();
+        let domain_matches = host == domain
+            || domain == "youtube.com" && includes_subdomains && host.ends_with(".youtube.com");
+        let path_matches = request_path == fields[2]
+            || request_path
+                .strip_prefix(fields[2])
+                .is_some_and(|suffix| fields[2].ends_with('/') || suffix.starts_with('/'));
+        if !domain_matches || !path_matches {
+            continue;
+        }
+        if expires > 0 && expires <= now {
+            continue;
+        }
+        pairs.push(format!("{}={}", fields[5], fields[6]));
+    }
+    if pairs.is_empty() {
+        return Ok(None);
+    }
+    let value = pairs.join("; ");
+    if value.len() > MAX_COOKIE_HEADER_BYTES {
+        return Err(ExtractionError::BackendError {
+            message: "YouTube cookie header exceeds the size limit".to_owned(),
+        });
+    }
+    HeaderValue::from_str(&value)
+        .map(Some)
+        .map_err(|_| ExtractionError::BackendError {
+            message: "YouTube cookie data is malformed".to_owned(),
+        })
+}
+
+fn is_cookie_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn is_cookie_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| (0x21..=0x7e).contains(&byte) && !matches!(byte, b'"' | b',' | b';' | b'\\'))
 }
 fn player_script_url(response: &Value) -> Result<Option<Url>, ExtractionError> {
     let Some(raw) = response
@@ -279,33 +616,6 @@ async fn fetch_player_script(url: &Url, timeout: Duration) -> Result<String, Ext
     String::from_utf8(body).map_err(|_| ExtractionError::UnsupportedUrl)
 }
 
-fn player_request_body(video_id: &str) -> Value {
-    json!({
-        "videoId": video_id,
-        "contentCheckOk": true,
-        "racyCheckOk": true,
-        "context": {
-            "client": {
-                "clientName": "TVHTML5",
-                "clientVersion": TV_CLIENT_VERSION,
-                "deviceMake": "Samsung",
-                "deviceModel": "UKS9800",
-                "userAgent": TV_CLIENT_USER_AGENT,
-                "osName": "Tizen",
-                "osVersion": "2.4.0",
-                "hl": "en",
-                "timeZone": "UTC",
-                "utcOffsetMinutes": 0
-            }
-        },
-        "playbackContext": {
-            "contentPlaybackContext": {
-                "html5Preference": "HTML5_PREF_WANTS"
-            }
-        }
-    })
-}
-
 pub(crate) fn is_youtube_host(url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
@@ -382,6 +692,7 @@ struct ParsedPlayerResponse {
 struct DirectFormat {
     id: String,
     url: String,
+    gvs_po_token: Option<String>,
     signature_param: Option<String>,
     signature_challenge: Option<String>,
     signature_value: Option<String>,
@@ -395,6 +706,54 @@ struct DirectFormat {
     fps: Option<f64>,
     bitrate: Option<u64>,
     filesize: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlayerResponseClass {
+    Playable,
+    AuthenticationRequired(&'static str),
+    Unsupported,
+}
+
+fn classify_player_response(response: &Value) -> PlayerResponseClass {
+    let status = response
+        .pointer("/playabilityStatus/status")
+        .and_then(Value::as_str);
+    let reason = response
+        .pointer("/playabilityStatus/reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match status {
+        Some("OK") | None => PlayerResponseClass::Playable,
+        Some("LOGIN_REQUIRED") => {
+            PlayerResponseClass::AuthenticationRequired(access_reason(&reason))
+        }
+        Some("AGE_CHECK_REQUIRED") => PlayerResponseClass::AuthenticationRequired("age-restricted"),
+        Some("UNPLAYABLE") if reason.contains("age") => {
+            PlayerResponseClass::AuthenticationRequired("age-restricted")
+        }
+        Some("UNPLAYABLE")
+            if reason.contains("sign in")
+                || reason.contains("verify")
+                || reason.contains("not a bot")
+                || reason.contains("robot") =>
+        {
+            PlayerResponseClass::AuthenticationRequired(access_reason(&reason))
+        }
+        Some(_) => PlayerResponseClass::Unsupported,
+    }
+}
+
+fn access_reason(reason: &str) -> &'static str {
+    if reason.contains("age") {
+        "age-restricted"
+    } else if reason.contains("verify") || reason.contains("not a bot") || reason.contains("robot")
+    {
+        "verification-required"
+    } else {
+        "sign-in-required"
+    }
 }
 
 impl DirectFormat {
@@ -422,9 +781,18 @@ impl DirectFormat {
     }
 }
 
+#[cfg(test)]
 fn parse_player_response(
     requested_video_id: &str,
     response: &Value,
+) -> Result<ParsedPlayerResponse, ExtractionError> {
+    parse_player_response_with_token(requested_video_id, response, None)
+}
+
+fn parse_player_response_with_token(
+    requested_video_id: &str,
+    response: &Value,
+    gvs_po_token: Option<String>,
 ) -> Result<ParsedPlayerResponse, ExtractionError> {
     if response
         .get("playabilityStatus")
@@ -505,7 +873,9 @@ fn parse_player_response(
                     {
                         continue;
                     }
-                    if let Some(format) = parse_direct_format(stream) {
+                    if let Some(format) =
+                        parse_direct_format_with_token(stream, gvs_po_token.as_deref())
+                    {
                         formats.push(format);
                         if formats.len() == MAX_FORMATS {
                             break;
@@ -533,7 +903,15 @@ fn parse_player_response(
     })
 }
 
+#[cfg(test)]
 fn parse_direct_format(stream: &Value) -> Option<DirectFormat> {
+    parse_direct_format_with_token(stream, None)
+}
+
+fn parse_direct_format_with_token(
+    stream: &Value,
+    gvs_po_token: Option<&str>,
+) -> Option<DirectFormat> {
     if stream
         .get("drmFamilies")
         .and_then(Value::as_array)
@@ -608,6 +986,7 @@ fn parse_direct_format(stream: &Value) -> Option<DirectFormat> {
     Some(DirectFormat {
         id,
         url,
+        gvs_po_token: gvs_po_token.map(str::to_owned),
         signature_param,
         signature_challenge,
         signature_value,
@@ -862,7 +1241,14 @@ mod tests {
 
     #[test]
     fn builds_public_tv_player_request_without_tokens_or_credentials() {
-        let request = player_request_body(VIDEO_ID);
+        let request = player_request_body(
+            VIDEO_ID,
+            &PlayerRequest {
+                profile: PLAYER_CLIENTS[0],
+                player_token: None,
+                gvs_token: None,
+            },
+        );
         assert_eq!(request["videoId"].as_str(), Some(VIDEO_ID));
         assert_eq!(
             request["context"]["client"]["clientName"].as_str(),
@@ -877,6 +1263,137 @@ mod tests {
             Some(TV_CLIENT_USER_AGENT)
         );
         assert!(request.get("serviceIntegrityDimensions").is_none());
+    }
+
+    #[test]
+    fn selects_only_pinned_clients_with_the_required_user_token() {
+        let without_tokens = select_player_requests(false, &PoTokenMap::new());
+        assert_eq!(
+            without_tokens
+                .iter()
+                .map(|request| request.profile.client)
+                .collect::<Vec<_>>(),
+            [
+                YoutubePlayerClient::TvSamsung,
+                YoutubePlayerClient::VisionOs
+            ]
+        );
+
+        let web_token = URL_SAFE.encode(b"user-provided-web-gvs-token");
+        let tokens = [(
+            (YoutubePlayerClient::Web, YoutubePoTokenContext::Gvs),
+            web_token.clone(),
+        )]
+        .into_iter()
+        .collect();
+        let with_web_token = select_player_requests(false, &tokens);
+        assert_eq!(
+            with_web_token
+                .iter()
+                .map(|request| request.profile.client)
+                .collect::<Vec<_>>(),
+            [
+                YoutubePlayerClient::TvSamsung,
+                YoutubePlayerClient::VisionOs,
+                YoutubePlayerClient::Web
+            ]
+        );
+        assert_eq!(
+            with_web_token[2].gvs_token.as_deref(),
+            Some(web_token.as_str())
+        );
+        assert!(
+            select_player_requests(true, &PoTokenMap::new())
+                .iter()
+                .all(|request| request.profile.client != YoutubePlayerClient::VisionOs)
+        );
+    }
+
+    #[test]
+    fn puts_only_caller_supplied_player_token_in_player_request() {
+        let player_token = URL_SAFE.encode(b"provided-player-token");
+        let request = PlayerRequest {
+            profile: PLAYER_CLIENTS[0],
+            player_token: Some(player_token.clone()),
+            gvs_token: None,
+        };
+        let body = player_request_body(VIDEO_ID, &request);
+        assert_eq!(
+            body["serviceIntegrityDimensions"]["poToken"].as_str(),
+            Some(player_token.as_str())
+        );
+        assert_eq!(
+            body["context"]["client"]["clientName"].as_str(),
+            Some("TVHTML5")
+        );
+    }
+
+    #[test]
+    fn classifies_player_response_access_reasons_without_preserving_server_text() {
+        for (status, reason, expected) in [
+            (
+                "LOGIN_REQUIRED",
+                "Sign in to confirm you are not a bot",
+                PlayerResponseClass::AuthenticationRequired("verification-required"),
+            ),
+            (
+                "LOGIN_REQUIRED",
+                "Sign in to continue",
+                PlayerResponseClass::AuthenticationRequired("sign-in-required"),
+            ),
+            (
+                "UNPLAYABLE",
+                "Sign in to confirm your age",
+                PlayerResponseClass::AuthenticationRequired("age-restricted"),
+            ),
+            ("ERROR", "Unknown error", PlayerResponseClass::Unsupported),
+            ("OK", "", PlayerResponseClass::Playable),
+        ] {
+            let response = json!({
+                "playabilityStatus": {
+                    "status": status,
+                    "reason": reason
+                }
+            });
+            assert_eq!(classify_player_response(&response), expected);
+        }
+    }
+
+    #[test]
+    fn forwards_only_valid_youtube_scoped_cookies_and_redacts_secrets() {
+        let cookies = concat!(
+            "# Netscape HTTP Cookie File\n",
+            "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tcaller-secret\n",
+            ".googlevideo.com\tTRUE\t/\tTRUE\t0\tOTHER\tshould-not-forward\n",
+        );
+        let header = youtube_cookie_header(cookies)
+            .expect("valid Netscape cookie jar")
+            .expect("youtube cookie");
+        assert_eq!(header.to_str().ok(), Some("SID=caller-secret"));
+        assert!(
+            !format!(
+                "{:?}",
+                YoutubePoToken {
+                    client: YoutubePlayerClient::Web,
+                    context: YoutubePoTokenContext::Gvs,
+                    token: URL_SAFE.encode(b"token-secret")
+                }
+            )
+            .contains("token-secret")
+        );
+        let options = ExtractOptions {
+            cookies: Some(cookies.to_owned()),
+            youtube_po_tokens: vec![YoutubePoToken {
+                client: YoutubePlayerClient::Web,
+                context: YoutubePoTokenContext::Gvs,
+                token: URL_SAFE.encode(b"token-secret"),
+            }],
+            ..ExtractOptions::default()
+        };
+        let debug = format!("{options:?}");
+        assert!(!debug.contains("caller-secret"));
+        assert!(!debug.contains("should-not-forward"));
+        assert!(!debug.contains("token-secret"));
     }
 
     #[test]
@@ -1066,6 +1583,39 @@ mod tests {
     }
 
     #[test]
+    fn attaches_only_the_client_scoped_caller_gvs_token_to_stream_urls() {
+        let token = URL_SAFE.encode(b"caller-gvs-token");
+        let response = json!({
+            "videoDetails": {"videoId": VIDEO_ID, "title": "Sample"},
+            "streamingData": {
+                "formats": [{
+                    "itag": 18,
+                    "url": "https://rr.googlevideo.com/videoplayback?keep=yes",
+                    "mimeType": "video/mp4; codecs=\"avc1\""
+                }]
+            }
+        });
+        let parsed = parse_player_response_with_token(VIDEO_ID, &response, Some(token.clone()))
+            .expect("format response");
+        let format = parsed.formats.into_iter().next().expect("direct format");
+        let mut url = Url::parse(&format.url).expect("valid stream URL");
+        if let Some(token) = &format.gvs_po_token {
+            set_query_parameter(&mut url, "pot", token);
+        }
+        let query = url
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            query.get("pot").map(|value| value.as_ref()),
+            Some(token.as_str())
+        );
+        assert_eq!(query.get("keep").map(|value| value.as_ref()), Some("yes"));
+        let no_token = parse_player_response(VIDEO_ID, &response)
+            .expect("format response without supplied token");
+        assert!(no_token.formats[0].gvs_po_token.is_none());
+    }
+
+    #[test]
     fn malformed_or_unsupported_challenges_defer_the_video_to_fallback() {
         let response = json!({
             "videoDetails":{"videoId":VIDEO_ID,"title":"Sample"},
@@ -1139,21 +1689,34 @@ mod tests {
     #[tokio::test]
     async fn declines_caller_credentials_and_zero_timeout_without_networking() {
         let url = format!("https://www.youtube.com/watch?v={VIDEO_ID}");
-        for options in [
-            ExtractOptions {
-                cookies: Some("session=secret".to_owned()),
-                ..ExtractOptions::default()
-            },
-            ExtractOptions {
-                headers: vec![("X-Api-Key".to_owned(), "secret".to_owned())],
-                ..ExtractOptions::default()
-            },
-        ] {
-            assert!(matches!(
-                YoutubeExtractor.extract(&url, &options).await,
-                Err(ExtractionError::UnsupportedUrl)
-            ));
-        }
+        let invalid_cookie_format = ExtractOptions {
+            cookies: Some("session=secret".to_owned()),
+            ..ExtractOptions::default()
+        };
+        assert!(matches!(
+            YoutubeExtractor.extract(&url, &invalid_cookie_format).await,
+            Err(ExtractionError::BackendError { .. })
+        ));
+        let extra_headers = ExtractOptions {
+            headers: vec![("X-Api-Key".to_owned(), "secret".to_owned())],
+            ..ExtractOptions::default()
+        };
+        assert!(matches!(
+            YoutubeExtractor.extract(&url, &extra_headers).await,
+            Err(ExtractionError::UnsupportedUrl)
+        ));
+        let invalid_token = ExtractOptions {
+            youtube_po_tokens: vec![YoutubePoToken {
+                client: YoutubePlayerClient::Web,
+                context: YoutubePoTokenContext::Gvs,
+                token: "not-base64?".to_owned(),
+            }],
+            ..ExtractOptions::default()
+        };
+        assert!(matches!(
+            YoutubeExtractor.extract(&url, &invalid_token).await,
+            Err(ExtractionError::BackendError { .. })
+        ));
         assert!(matches!(
             YoutubeExtractor
                 .extract(

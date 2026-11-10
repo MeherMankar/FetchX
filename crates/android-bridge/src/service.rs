@@ -77,8 +77,9 @@ use crate::dto::{
     BatchDownloadAudioFormatDto, BatchDownloadEngineDto, BatchDownloadErrorCodeDto,
     BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig, DownloadInfoDto,
     DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto, TorrentFileDto,
-    TorrentMetadataDto, TorrentTelemetryDto, YtDlpFormatDto, duplicate_match_to_dto, event_to_dto,
-    item_to_dto, priority_from_dto, runtime_status_to_dto,
+    TorrentMetadataDto, TorrentTelemetryDto, YoutubePlayerClientDto, YoutubePoTokenContextDto,
+    YoutubePoTokenDto, YtDlpFormatDto, duplicate_match_to_dto, event_to_dto, item_to_dto,
+    priority_from_dto, runtime_status_to_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -832,19 +833,63 @@ impl DownloadService {
         &self,
         url: String,
     ) -> Result<Vec<YtDlpFormatDto>, MobileApiError> {
+        self.discover_media_formats_with_options(url, None, Vec::new())
+    }
+
+    pub fn discover_media_formats_with_access(
+        &self,
+        url: String,
+        cookies: Option<String>,
+        po_tokens: Vec<YoutubePoTokenDto>,
+    ) -> Result<Vec<YtDlpFormatDto>, MobileApiError> {
+        self.discover_media_formats_with_options(url, cookies, po_tokens)
+    }
+
+    fn discover_media_formats_with_options(
+        &self,
+        url: String,
+        cookies: Option<String>,
+        po_tokens: Vec<YoutubePoTokenDto>,
+    ) -> Result<Vec<YtDlpFormatDto>, MobileApiError> {
         if url.trim().is_empty() {
             return Err(MobileApiError::Validation(
                 "URL must not be empty".to_string(),
             ));
         }
+        let youtube_po_tokens = po_tokens
+            .into_iter()
+            .map(|token| fetchx_media_extractor::YoutubePoToken {
+                client: match token.client {
+                    YoutubePlayerClientDto::TvSamsung => {
+                        fetchx_media_extractor::YoutubePlayerClient::TvSamsung
+                    }
+                    YoutubePlayerClientDto::VisionOs => {
+                        fetchx_media_extractor::YoutubePlayerClient::VisionOs
+                    }
+                    YoutubePlayerClientDto::Web => fetchx_media_extractor::YoutubePlayerClient::Web,
+                },
+                context: match token.context {
+                    YoutubePoTokenContextDto::Player => {
+                        fetchx_media_extractor::YoutubePoTokenContext::Player
+                    }
+                    YoutubePoTokenContextDto::Gvs => {
+                        fetchx_media_extractor::YoutubePoTokenContext::Gvs
+                    }
+                },
+                token: token.token,
+            })
+            .collect();
         self.with_inner(|inner| {
             let info = inner
                 .runtime
-                .block_on(
-                    inner
-                        .core
-                        .extract_media(&url, fetchx_media_extractor::ExtractOptions::default()),
-                )
+                .block_on(inner.core.extract_media(
+                    &url,
+                    fetchx_media_extractor::ExtractOptions {
+                        cookies,
+                        youtube_po_tokens,
+                        ..fetchx_media_extractor::ExtractOptions::default()
+                    },
+                ))
                 .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
             Ok(info
                 .formats

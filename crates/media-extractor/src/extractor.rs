@@ -1,6 +1,6 @@
 //! [`MediaExtractor`] trait, [`ExtractOptions`], and [`ExtractionError`].
 
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use async_trait::async_trait;
 
@@ -30,14 +30,19 @@ pub trait MediaExtractor: Send + Sync {
 /// Options forwarded to the extractor backend.
 ///
 /// # Security
-/// `cookies` is written to a temp file and passed via `--cookies`; it is never
-/// embedded in argument strings or log lines. `headers` are validated before
-/// being forwarded.
-#[derive(Clone, Debug, Default)]
+/// `cookies` are never embedded in logs; the yt-dlp adapter writes them to a
+/// temporary cookie file and the native YouTube extractor filters them for
+/// its player requests. `headers` are validated before being forwarded.
+#[derive(Clone, Default)]
 pub struct ExtractOptions {
-    /// Netscape-format cookie string. Maximum 65,536 bytes. Written to a temp
-    /// file; never embedded in process arguments or logs.
+    /// Netscape-format cookie string. Maximum 65,536 bytes. The yt-dlp adapter
+    /// writes it to a temporary file; the native YouTube path sends only
+    /// eligible YouTube-scoped cookies. Never embedded in logs or arguments.
     pub cookies: Option<String>,
+
+    /// User-provided YouTube PO tokens, scoped to a player client and token
+    /// context. Tokens are never acquired automatically or included in logs.
+    pub youtube_po_tokens: Vec<YoutubePoToken>,
 
     /// Extra HTTP headers forwarded to the extractor.
     /// Each name must match `[A-Za-z0-9\-]+` (max 128 bytes).
@@ -47,6 +52,75 @@ pub struct ExtractOptions {
 
     /// Request timeout. Defaults to 30 seconds when `None`.
     pub timeout: Option<Duration>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum YoutubePlayerClient {
+    TvSamsung,
+    VisionOs,
+    Web,
+}
+
+impl YoutubePlayerClient {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TvSamsung => "tv_samsung",
+            Self::VisionOs => "visionos",
+            Self::Web => "web",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum YoutubePoTokenContext {
+    Player,
+    Gvs,
+}
+
+impl YoutubePoTokenContext {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Player => "player",
+            Self::Gvs => "gvs",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct YoutubePoToken {
+    pub client: YoutubePlayerClient,
+    pub context: YoutubePoTokenContext,
+    pub token: String,
+}
+
+impl fmt::Debug for YoutubePoToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("YoutubePoToken")
+            .field("client", &self.client)
+            .field("context", &self.context)
+            .field("token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl fmt::Debug for ExtractOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExtractOptions")
+            .field("cookies", &self.cookies.as_ref().map(|_| "[REDACTED]"))
+            .field("youtube_po_tokens", &self.youtube_po_tokens)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 /// Errors produced by an extractor or the registry.
@@ -59,6 +133,10 @@ pub enum ExtractionError {
     /// No extractor in the registry can handle this URL.
     #[error("no extractor is available for this URL")]
     UnsupportedUrl,
+
+    /// YouTube requires an access state the caller did not provide.
+    #[error("YouTube requires additional access data: {reason}")]
+    AuthenticationRequired { reason: &'static str },
 
     /// Extraction timed out.
     #[error("extraction timed out")]

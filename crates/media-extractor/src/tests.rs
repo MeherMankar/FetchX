@@ -24,6 +24,7 @@ struct PrefixExtractor {
 }
 
 struct ExplicitlyUnsupportedExtractor;
+struct AuthenticationRequiredExtractor;
 
 #[async_trait]
 impl MediaExtractor for ExplicitlyUnsupportedExtractor {
@@ -37,6 +38,23 @@ impl MediaExtractor for ExplicitlyUnsupportedExtractor {
         _opts: &ExtractOptions,
     ) -> Result<MediaInfo, ExtractionError> {
         Err(ExtractionError::UnsupportedUrl)
+    }
+}
+
+#[async_trait]
+impl MediaExtractor for AuthenticationRequiredExtractor {
+    fn can_handle(&self, url: &str) -> bool {
+        url.starts_with("https://example.com/watch/")
+    }
+
+    async fn extract(
+        &self,
+        _url: &str,
+        _opts: &ExtractOptions,
+    ) -> Result<MediaInfo, ExtractionError> {
+        Err(ExtractionError::AuthenticationRequired {
+            reason: "sign-in-required",
+        })
     }
 }
 
@@ -265,6 +283,7 @@ fn test_http_protocol_maps_to_direct_http_engine() {
 fn test_extract_options_default_is_empty() {
     let opts = ExtractOptions::default();
     assert!(opts.cookies.is_none());
+    assert!(opts.youtube_po_tokens.is_empty());
     assert!(opts.headers.is_empty());
     assert!(opts.timeout.is_none());
 }
@@ -309,6 +328,40 @@ async fn test_registry_falls_back_only_after_explicit_unsupported_result() {
         .expect("second extractor should handle the unsupported page");
 
     assert_eq!(result.extractor_name, "fallback");
+}
+
+#[tokio::test]
+async fn test_registry_falls_back_after_authentication_required() {
+    let url = "https://example.com/watch/secure";
+    let mut registry = ExtractorRegistry::new();
+    registry.register(Arc::new(AuthenticationRequiredExtractor));
+    registry.register(Arc::new(PrefixExtractor {
+        prefix: "https://example.com/watch/",
+        name: "fallback",
+    }));
+
+    let info = registry
+        .extract(url, ExtractOptions::default())
+        .await
+        .expect("fallback should run after authentication is required");
+    assert_eq!(info.extractor_name, "fallback");
+}
+
+#[tokio::test]
+async fn test_registry_preserves_authentication_requirement_without_fallback() {
+    let mut registry = ExtractorRegistry::new();
+    registry.register(Arc::new(AuthenticationRequiredExtractor));
+    assert!(matches!(
+        registry
+            .extract(
+                "https://example.com/watch/secure",
+                ExtractOptions::default()
+            )
+            .await,
+        Err(ExtractionError::AuthenticationRequired {
+            reason: "sign-in-required"
+        })
+    ));
 }
 
 #[tokio::test]

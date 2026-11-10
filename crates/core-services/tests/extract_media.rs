@@ -96,10 +96,10 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
     )
     .await?;
 
-    // The native YouTube extractor defers pages that need request context. The
-    // Generic extractor also declines YouTube URLs, so the registry reaches the
-    // YtDlpExtractor backed by our stub runner. `extract_media` must surface the
-    // legacy runner's error. The stub's
+    // The native YouTube extractor declines arbitrary caller headers before
+    // making a request. The Generic extractor also declines YouTube URLs, so
+    // the registry reaches the YtDlpExtractor backed by our stub runner.
+    // `extract_media` must surface the legacy runner's error. The stub's
     // `discover_formats` returns `FormatDiscoveryUnsupported`, which the
     // adapter maps to `RunnerError::Unsupported` and the extractor maps to
     // `ExtractionError::UnsupportedUrl`.
@@ -107,7 +107,7 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         .extract_media(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             ExtractOptions {
-                cookies: Some("example.com\tFALSE\t/\tFALSE\t0\ttest\tvalue\n".to_owned()),
+                headers: vec![("X-Test-Context".to_owned(), "caller-provided".to_owned())],
                 ..ExtractOptions::default()
             },
         )

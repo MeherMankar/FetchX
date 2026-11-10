@@ -130,6 +130,23 @@ pub struct YtDlpFormatDto {
     pub platform: Option<String>,
 }
 
+pub enum YoutubePlayerClientDto {
+    TvSamsung,
+    VisionOs,
+    Web,
+}
+
+pub enum YoutubePoTokenContextDto {
+    Player,
+    Gvs,
+}
+
+pub struct YoutubePoTokenDto {
+    pub client: YoutubePlayerClientDto,
+    pub context: YoutubePoTokenContextDto,
+    pub token: String,
+}
+
 pub struct TorrentTelemetryDto {
     pub download_speed_bps: Option<u64>,
     pub upload_speed_bps: Option<u64>,

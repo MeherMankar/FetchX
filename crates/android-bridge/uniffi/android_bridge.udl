@@ -32,6 +32,23 @@ dictionary YtDlpFormatDto {
     string? platform;
 };
 
+enum YoutubePlayerClientDto {
+    "TvSamsung",
+    "VisionOs",
+    "Web",
+};
+
+enum YoutubePoTokenContextDto {
+    "Player",
+    "Gvs",
+};
+
+dictionary YoutubePoTokenDto {
+    YoutubePlayerClientDto client;
+    YoutubePoTokenContextDto context;
+    string token;
+};
+
 dictionary TorrentTelemetryDto {
     u64? download_speed_bps;
     u64? upload_speed_bps;
@@ -322,6 +339,13 @@ interface DownloadService {
 
     [Throws=MobileApiError]
     sequence<YtDlpFormatDto> discover_media_formats(string url);
+
+    [Throws=MobileApiError]
+    sequence<YtDlpFormatDto> discover_media_formats_with_access(
+        string url,
+        string? cookies,
+        sequence<YoutubePoTokenDto> po_tokens
+    );
 
     [Throws=MobileApiError]
     void pause_download(string id);

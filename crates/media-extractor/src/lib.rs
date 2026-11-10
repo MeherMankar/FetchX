@@ -35,7 +35,10 @@ pub mod ytdlp;
 mod tests;
 
 pub use engine::format_to_engine_kind;
-pub use extractor::{ExtractOptions, ExtractionError, MediaExtractor};
+pub use extractor::{
+    ExtractOptions, ExtractionError, MediaExtractor, YoutubePlayerClient, YoutubePoToken,
+    YoutubePoTokenContext,
+};
 pub use format_selector::{FormatPreference, FormatSelector, SelectionCriteria, select_format};
 pub use generic::GenericExtractor;
 pub use models::{MediaFormat, MediaInfo, MediaProtocol};

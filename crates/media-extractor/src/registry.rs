@@ -11,8 +11,9 @@ use crate::{
 /// Ordered registry of [`MediaExtractor`] implementations.
 ///
 /// Extractors are tried in insertion order. An explicit
-/// [`ExtractionError::UnsupportedUrl`] result advances to the next matching
-/// extractor; other failures are surfaced without fallback.
+/// [`ExtractionError::UnsupportedUrl`] or
+/// [`ExtractionError::AuthenticationRequired`] result advances to the next
+/// matching extractor; other failures are surfaced without fallback.
 ///
 /// The registry validates the URL with [`is_safe_media_url`] before delegating
 /// to any extractor.
@@ -56,6 +57,7 @@ impl ExtractorRegistry {
         opts: ExtractOptions,
     ) -> Result<MediaInfo, ExtractionError> {
         is_safe_media_url(url)?;
+        let mut authentication_required = None;
         for extractor in self.extractors.iter().filter(|e| e.can_handle(url)) {
             match extractor.extract(url, &opts).await {
                 Ok(mut info) => {
@@ -68,10 +70,13 @@ impl ExtractorRegistry {
                     return Ok(info);
                 }
                 Err(ExtractionError::UnsupportedUrl) => continue,
+                Err(error @ ExtractionError::AuthenticationRequired { .. }) => {
+                    authentication_required = Some(error);
+                }
                 Err(error) => return Err(error),
             }
         }
-        Err(ExtractionError::UnsupportedUrl)
+        Err(authentication_required.unwrap_or(ExtractionError::UnsupportedUrl))
     }
 }
 

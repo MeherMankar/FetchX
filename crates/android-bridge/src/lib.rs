@@ -11,7 +11,7 @@ pub use dto::{
     DownloadInfoDto, DownloadPriorityDto, DownloadProgressDto, DownloadRuntimeProgressDto,
     DownloadRuntimeStatusDto, DownloadStatusDto, DuplicateDownloadMatchDto,
     TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto,
-    YtDlpFormatDto,
+    YoutubePlayerClientDto, YoutubePoTokenContextDto, YoutubePoTokenDto, YtDlpFormatDto,
 };
 pub use error::MobileApiError;
 
