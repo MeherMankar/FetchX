@@ -536,6 +536,10 @@ mod tests {
 
     #[test]
     fn parses_selected_wrapper_embeds_without_accepting_arbitrary_ids() {
+        let az_medien = r#"<div data-kaltura-id="1_anruz3wy"></div>"#;
+        assert_eq!(find_embedded_entry_id(az_medien).unwrap(), "1_anruz3wy");
+        assert!(find_embedded_entry_id(r#"<div data-kaltura-id="../private"></div>"#).is_err());
+
         let inc = r#"var _bizo_data_partner_id = "123456"; id="kaltura_player_1_abcd1234";"#;
         assert_eq!(
             parse_inc_entry(inc).unwrap(),

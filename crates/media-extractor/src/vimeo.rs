@@ -163,6 +163,10 @@ async fn resolve_amara(display_id: &str, timeout: Duration) -> Result<String, Ex
         .map_err(|_| ExtractionError::InvalidOutput)?;
     url.query_pairs_mut().append_pair("format", "json");
     let response = get_json(&url, timeout).await?;
+    parse_amara_response(&response)
+}
+
+fn parse_amara_response(response: &Value) -> Result<String, ExtractionError> {
     let urls = response
         .get("all_urls")
         .and_then(Value::as_array)
@@ -184,6 +188,10 @@ async fn resolve_croatian_film(
     ))
     .map_err(|_| ExtractionError::InvalidOutput)?;
     let response = get_json(&url, timeout).await?;
+    parse_croatian_film_response(&response)
+}
+
+fn parse_croatian_film_response(response: &Value) -> Result<String, ExtractionError> {
     if response.get("errors").is_some() {
         return Err(ExtractionError::UnsupportedUrl);
     }
@@ -431,6 +439,44 @@ mod tests {
         assert_eq!(
             vimeo_id_from_url("https://youtube.com/watch?v=123456789"),
             None
+        );
+    }
+
+    #[test]
+    fn parses_amara_and_croatian_film_api_fixtures_safely() {
+        let amara = serde_json::json!({
+            "all_urls": [
+                "https://vimeo.com/18622084",
+                "https://youtube.com/watch?v=other"
+            ]
+        });
+        assert_eq!(parse_amara_response(&amara).unwrap(), "18622084");
+        assert!(
+            parse_amara_response(&serde_json::json!({
+                "all_urls": ["https://youtube.com/watch?v=other"]
+            }))
+            .is_err()
+        );
+        assert!(parse_amara_response(&serde_json::json!({ "all_urls": null })).is_err());
+
+        let croatian_film = serde_json::json!({
+            "video": { "vimeoURL": "https://player.vimeo.com/video/1078340774" }
+        });
+        assert_eq!(
+            parse_croatian_film_response(&croatian_film).unwrap(),
+            "1078340774"
+        );
+        assert!(
+            parse_croatian_film_response(&serde_json::json!({
+                "errors": [{"code": "INVALID_COUNTRY"}]
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_croatian_film_response(&serde_json::json!({
+                "video": { "vimeoURL": "https://example.com/video/123456789" }
+            }))
+            .is_err()
         );
     }
 
