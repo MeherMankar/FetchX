@@ -4,7 +4,15 @@
 //!
 //! Deterministic: the injected runner is a stub that never spawns yt-dlp.
 
-use std::{ffi::OsString, path::Path, sync::Arc, time::Duration};
+use std::{
+    ffi::OsString,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use fetchx_core_services::{CoreServices, CoreServicesConfig, EngineConfig, YtDlpConfig};
 use fetchx_downloader::{
@@ -17,7 +25,9 @@ use tokio::sync::{mpsc, watch};
 /// A stub `YtDlpProcessRunner` whose `discover_formats` always fails with
 /// `YtDlpError::FormatDiscoveryUnsupported`, proving the error propagates
 /// through the adapter → extractor → registry → `CoreServices::extract_media`.
-struct UnsupportedDiscoveryRunner;
+struct UnsupportedDiscoveryRunner {
+    discover_calls: Arc<AtomicUsize>,
+}
 
 impl YtDlpProcessRunner for UnsupportedDiscoveryRunner {
     fn validate_version<'a>(
@@ -49,6 +59,7 @@ impl YtDlpProcessRunner for UnsupportedDiscoveryRunner {
         _url: &'a str,
         _timeout: Duration,
     ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
+        self.discover_calls.fetch_add(1, Ordering::Relaxed);
         Box::pin(async { Err(YtDlpError::FormatDiscoveryUnsupported) })
     }
 }
@@ -75,22 +86,26 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         ..Default::default()
     };
 
+    let discover_calls = Arc::new(AtomicUsize::new(0));
     let services = CoreServices::start_with_engine_config_and_ytdlp_runner(
         cfg,
         Some(engine_config),
-        Some(Arc::new(UnsupportedDiscoveryRunner)),
+        Some(Arc::new(UnsupportedDiscoveryRunner {
+            discover_calls: Arc::clone(&discover_calls),
+        })),
     )
     .await?;
 
-    // The native Generic extractor defers pages that need request context. The
-    // registry then reaches the YtDlpExtractor backed by our stub runner.
-    // `extract_media` must surface the legacy runner's error. The stub's
+    // The native YouTube extractor defers pages that need request context. The
+    // Generic extractor also declines YouTube URLs, so the registry reaches the
+    // YtDlpExtractor backed by our stub runner. `extract_media` must surface the
+    // legacy runner's error. The stub's
     // `discover_formats` returns `FormatDiscoveryUnsupported`, which the
     // adapter maps to `RunnerError::Unsupported` and the extractor maps to
     // `ExtractionError::UnsupportedUrl`.
     let result = services
         .extract_media(
-            "https://example.com/video",
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             ExtractOptions {
                 cookies: Some("example.com\tFALSE\t/\tFALSE\t0\ttest\tvalue\n".to_owned()),
                 ..ExtractOptions::default()
@@ -103,6 +118,7 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         matches!(err, ExtractionError::UnsupportedUrl),
         "expected ExtractionError::UnsupportedUrl from the stub runner, got {err:?}"
     );
+    assert_eq!(discover_calls.load(Ordering::Relaxed), 1);
 
     services.shutdown().await?;
     Ok(())

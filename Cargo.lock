@@ -2003,6 +2003,7 @@ dependencies = [
  "fetchx-models",
  "reqwest 0.12.28",
  "scraper",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

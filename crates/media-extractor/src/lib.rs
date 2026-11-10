@@ -3,10 +3,10 @@
 //! Owns the single responsibility of "turn a URL into a structured list of
 //! downloadable formats." This crate performs no downloading. It defines the
 //! [`MediaExtractor`] trait, the [`MediaInfo`]/[`MediaFormat`] model pair, an
-//! [`ExtractorRegistry`] for runtime dispatch, a native [`GenericExtractor`]
-//! for common HTML media declarations, a [`YtDlpExtractor`] that wraps the
-//! existing yt-dlp process runner, an [`UnsupportedExtractor`] stub,
-//! format-to-engine mapping, and URL safety validation.
+//! [`ExtractorRegistry`] for runtime dispatch, native YouTube and Generic
+//! extractors, a [`YtDlpExtractor`] that wraps the existing yt-dlp process
+//! runner, an [`UnsupportedExtractor`] stub, format-to-engine mapping, and URL
+//! safety validation.
 //!
 //! # Android note
 //! [`YtDlpExtractor`] spawns a subprocess and is a **desktop/CLI feature only**.
@@ -27,6 +27,7 @@ mod registry;
 pub mod security;
 mod unsupported;
 mod validation;
+mod youtube;
 pub mod ytdlp;
 
 #[cfg(test)]
@@ -41,4 +42,5 @@ pub use registry::ExtractorRegistry;
 pub use security::{CookieTempFile, filter_safe_headers};
 pub use unsupported::UnsupportedExtractor;
 pub use validation::{is_safe_media_url, sanitise_title_for_filename};
+pub use youtube::YoutubeExtractor;
 pub use ytdlp::YtDlpExtractor;

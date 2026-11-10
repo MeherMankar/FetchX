@@ -22,6 +22,7 @@ use crate::{
     extractor::{ExtractOptions, ExtractionError, MediaExtractor},
     models::{MediaFormat, MediaInfo, MediaProtocol},
     validation::is_safe_media_url,
+    youtube::is_youtube_host,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -41,7 +42,8 @@ pub struct GenericExtractor;
 #[async_trait]
 impl MediaExtractor for GenericExtractor {
     fn can_handle(&self, url: &str) -> bool {
-        Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        Url::parse(url)
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && !is_youtube_host(&url))
     }
 
     async fn extract(
@@ -222,7 +224,7 @@ async fn fetch_html_page(source: &str, timeout: Duration) -> Result<FetchedPage,
     Err(ExtractionError::UnsupportedUrl)
 }
 
-async fn read_bounded_body(mut response: Response) -> Result<Vec<u8>, ExtractionError> {
+pub(crate) async fn read_bounded_body(mut response: Response) -> Result<Vec<u8>, ExtractionError> {
     let mut body = Vec::new();
     loop {
         let chunk = response
@@ -238,7 +240,10 @@ async fn read_bounded_body(mut response: Response) -> Result<Vec<u8>, Extraction
     }
 }
 
-async fn client_for_url(url: &Url, timeout: Duration) -> Result<Client, ExtractionError> {
+pub(crate) async fn client_for_url(
+    url: &Url,
+    timeout: Duration,
+) -> Result<Client, ExtractionError> {
     let host = url.host_str().ok_or(ExtractionError::UnsafeUrl {
         reason: "URL has no host",
     })?;
@@ -260,7 +265,7 @@ async fn client_for_url(url: &Url, timeout: Duration) -> Result<Client, Extracti
         })
 }
 
-async fn validate_public_url(source: &str) -> Result<Url, ExtractionError> {
+pub(crate) async fn validate_public_url(source: &str) -> Result<Url, ExtractionError> {
     let url = Url::parse(source).map_err(|_| ExtractionError::UnsafeUrl {
         reason: "media URL is malformed",
     })?;
