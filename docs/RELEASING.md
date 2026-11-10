@@ -24,21 +24,41 @@ Tag-triggered releases always build every platform.
 Tag-triggered releases use the tag name as the Android APK's displayed
 version. Cargo and Tauri package versions remain defined by their manifests.
 Local Android builds default to `0.0.0-dev` unless an `appVersion` Gradle
-property is supplied.
+property is supplied. Release APKs use the normalized release version as their
+Android version name, and the GitHub Actions run number as their version code.
+The installed app also shows its version under **Browser settings → About**.
 For Windows prerelease builds, the workflow adds the numeric GitHub Actions run
 number as Tauri version build metadata so WiX can create the MSI. This does not
 change the app's displayed release version.
 
-## Optional signing secrets
+## Android signing secrets
 
-Without Android signing secrets, the release APK is unsigned and is not suitable
-for normal installation or future signed updates. Configure all of these
-repository secrets to produce a signed APK:
+Android release builds require a persistent signing key. Generate a keystore
+once and keep a secure backup: every future update must use the same key. If
+the key is lost or replaced, users will have to uninstall the app before
+installing the newly signed version.
+
+Generate a key with `keytool`:
+
+```sh
+keytool -genkeypair -v -storetype JKS -keystore fetchx-release.jks -alias fetchx \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Add these repository secrets under **Settings → Secrets and variables →
+Actions**:
 
 - `ANDROID_KEYSTORE_BASE64`: base64-encoded JKS/PKCS12 keystore
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 - `ANDROID_STORE_PASSWORD`
+
+Encode the keystore without line breaks before saving it as
+`ANDROID_KEYSTORE_BASE64` (for example, `base64 -w0 fetchx-release.jks` on
+Linux, or `[Convert]::ToBase64String([IO.File]::ReadAllBytes("fetchx-release.jks")) | Set-Clipboard`
+in PowerShell). Never commit the keystore or its passwords. The Android
+release job fails early if any of the four secrets are missing, and Gradle
+signs release variants with this key; debug builds do not require it.
 
 For macOS distribution outside development, configure Apple signing and
 notarization secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`,
