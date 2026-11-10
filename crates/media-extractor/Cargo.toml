@@ -11,10 +11,14 @@ tempfile = "3"
 reqwest = { workspace = true, features = ["stream"] }
 scraper = "0.24"
 serde_json.workspace = true
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std", "bindgen"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt"] }

@@ -28,6 +28,7 @@ pub mod security;
 mod unsupported;
 mod validation;
 mod youtube;
+mod youtube_js;
 pub mod ytdlp;
 
 #[cfg(test)]

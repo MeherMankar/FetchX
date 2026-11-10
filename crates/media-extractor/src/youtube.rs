@@ -5,8 +5,8 @@
 //! https://github.com/MeherMankar/yt-dlp, revision
 //! d58c4588a54271fe74172e2fc2f09a4a44f70679 (Unlicense):
 //! `yt_dlp/extractor/youtube/_video.py` and `_base.py`.
-//! This adapts one unauthenticated `tv_samsung` player request and direct-format
-//! metadata only; it does not port alternate clients or challenge solving.
+//! Signature and `n` challenges use the pinned yt-dlp EJS solver in the
+//! in-process QuickJS wrapper from `youtube_js`.
 
 use std::time::Duration;
 
@@ -21,11 +21,14 @@ use crate::{
     extractor::{ExtractOptions, ExtractionError, MediaExtractor},
     generic::{client_for_url, read_bounded_body, validate_public_url},
     models::{MediaFormat, MediaInfo, MediaProtocol},
+    youtube_js::{ChallengeRequest, ChallengeResults, solve_challenges},
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_FORMATS: usize = 64;
+const MAX_PLAYER_SCRIPT_BYTES: usize = 4 * 1024 * 1024;
+const PLAYER_SCRIPT_PATH: &str = "/s/player/{}/player_ias.vflset/en_US/base.js";
 const TV_CLIENT_VERSION: &str = "5.20260707";
 const TV_CLIENT_USER_AGENT: &str = "Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1";
 
@@ -75,12 +78,43 @@ impl YoutubeExtractor {
         timeout: Duration,
     ) -> Result<MediaInfo, ExtractionError> {
         let player_response = fetch_player_response(video_id, timeout).await?;
-        let parsed = parse_player_response(video_id, &player_response)?;
+        let mut parsed = parse_player_response(video_id, &player_response)?;
+        if parsed.has_unhandled_challenges {
+            return Err(ExtractionError::UnsupportedUrl);
+        }
+
+        let mut request = ChallengeRequest::default();
+        for format in &parsed.formats {
+            if let Some(challenge) = &format.signature_challenge {
+                request.signatures.push(challenge.clone());
+            }
+            if let Some(challenge) = &format.n_challenge {
+                request.n.push(challenge.clone());
+            }
+        }
+        request.signatures.sort();
+        request.signatures.dedup();
+        request.n.sort();
+        request.n.dedup();
+
+        let challenge_results = if request.signatures.is_empty() && request.n.is_empty() {
+            ChallengeResults::default()
+        } else {
+            let script_url = match player_script_url(&player_response)? {
+                Some(url) => url,
+                None => fetch_player_script_url(timeout).await?,
+            };
+            let player_script = fetch_player_script(&script_url, timeout).await?;
+            solve_challenges(player_script, request).await?
+        };
 
         let mut formats = Vec::new();
         let mut rejected_unsafe_urls = 0;
-        for candidate in parsed.formats.into_iter().take(MAX_FORMATS) {
-            match validate_public_url(&candidate.url).await {
+        for candidate in parsed.formats.drain(..).take(MAX_FORMATS) {
+            let mut media_url =
+                Url::parse(&candidate.url).map_err(|_| ExtractionError::UnsupportedUrl)?;
+            apply_challenge_results(&mut media_url, &candidate, &challenge_results)?;
+            match validate_public_url(media_url.as_str()).await {
                 Ok(url) => formats.push(candidate.into_format(url)),
                 Err(ExtractionError::UnsafeUrl { .. }) => {
                     rejected_unsafe_urls += 1;
@@ -156,6 +190,93 @@ async fn fetch_player_response(
 
     let body = read_bounded_body(response).await?;
     serde_json::from_slice(&body).map_err(|_| ExtractionError::UnsupportedUrl)
+}
+fn player_script_url(response: &Value) -> Result<Option<Url>, ExtractionError> {
+    let Some(raw) = response
+        .pointer("/assets/js")
+        .or_else(|| response.pointer("/playerConfig/assets/js"))
+    else {
+        return Ok(None);
+    };
+    let raw = raw.as_str().ok_or(ExtractionError::UnsupportedUrl)?;
+    let base =
+        Url::parse("https://www.youtube.com/").map_err(|_| ExtractionError::InvalidOutput)?;
+    let url = base
+        .join(raw)
+        .map_err(|_| ExtractionError::UnsupportedUrl)?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("www.youtube.com")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some_and(|port| port != 443)
+        || !url.path().starts_with("/s/player/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ExtractionError::UnsupportedUrl);
+    }
+    Ok(Some(url))
+}
+
+async fn fetch_player_script_url(timeout: Duration) -> Result<Url, ExtractionError> {
+    let endpoint = Url::parse("https://www.youtube.com/iframe_api")
+        .map_err(|_| ExtractionError::InvalidOutput)?;
+    let client = client_for_url(&endpoint, timeout).await?;
+    let response = client
+        .get(endpoint)
+        .header(ACCEPT, "text/javascript,*/*")
+        .header(USER_AGENT, TV_CLIENT_USER_AGENT)
+        .send()
+        .await
+        .map_err(|_| ExtractionError::BackendError {
+            message: "YouTube player version request failed".to_owned(),
+        })?;
+    if response.status() != StatusCode::OK {
+        return Err(ExtractionError::UnsupportedUrl);
+    }
+    let body = read_bounded_body(response).await?;
+    let body = String::from_utf8(body).map_err(|_| ExtractionError::UnsupportedUrl)?;
+    let normalized = body.replace("\\/", "/");
+    let player_id = extract_player_id(&normalized).ok_or(ExtractionError::UnsupportedUrl)?;
+    let path = PLAYER_SCRIPT_PATH.replacen("{}", &player_id, 1);
+    let url = Url::parse(&format!("https://www.youtube.com{path}"))
+        .map_err(|_| ExtractionError::UnsupportedUrl)?;
+    Ok(url)
+}
+
+fn extract_player_id(iframe_api: &str) -> Option<String> {
+    iframe_api.match_indices("/player/").find_map(|(index, _)| {
+        let version = iframe_api.get(index + "/player/".len()..)?;
+        let id = version.get(..8)?;
+        if id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && version.as_bytes().get(8) == Some(&b'/')
+        {
+            Some(id.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+async fn fetch_player_script(url: &Url, timeout: Duration) -> Result<String, ExtractionError> {
+    let client = client_for_url(url, timeout).await?;
+    let response = client
+        .get(url.clone())
+        .header(ACCEPT, "text/javascript,*/*")
+        .header(USER_AGENT, TV_CLIENT_USER_AGENT)
+        .send()
+        .await
+        .map_err(|_| ExtractionError::BackendError {
+            message: "YouTube player script request failed".to_owned(),
+        })?;
+    if response.status() != StatusCode::OK {
+        return Err(ExtractionError::UnsupportedUrl);
+    }
+    let body = read_bounded_body(response).await?;
+    if body.len() > MAX_PLAYER_SCRIPT_BYTES {
+        return Err(ExtractionError::UnsupportedUrl);
+    }
+    String::from_utf8(body).map_err(|_| ExtractionError::UnsupportedUrl)
 }
 
 fn player_request_body(video_id: &str) -> Value {
@@ -255,11 +376,16 @@ struct ParsedPlayerResponse {
     duration: Option<f64>,
     thumbnail_url: Option<String>,
     formats: Vec<DirectFormat>,
+    has_unhandled_challenges: bool,
 }
 
 struct DirectFormat {
     id: String,
     url: String,
+    signature_param: Option<String>,
+    signature_challenge: Option<String>,
+    signature_value: Option<String>,
+    n_challenge: Option<String>,
     ext: String,
     quality: Option<String>,
     video_codec: Option<String>,
@@ -362,6 +488,7 @@ fn parse_player_response(
         });
 
     let mut formats = Vec::new();
+    let mut has_unhandled_challenges = false;
     if let Some(streaming_data) = response.get("streamingData").and_then(Value::as_object)
         && !streaming_data
             .get("licenseInfos")
@@ -371,11 +498,20 @@ fn parse_player_response(
         for key in ["formats", "adaptiveFormats"] {
             if let Some(streams) = streaming_data.get(key).and_then(Value::as_array) {
                 for stream in streams {
+                    if stream
+                        .get("drmFamilies")
+                        .and_then(Value::as_array)
+                        .is_some_and(|families| !families.is_empty())
+                    {
+                        continue;
+                    }
                     if let Some(format) = parse_direct_format(stream) {
                         formats.push(format);
                         if formats.len() == MAX_FORMATS {
                             break;
                         }
+                    } else if stream_has_challenges(stream) {
+                        has_unhandled_challenges = true;
                     }
                 }
             }
@@ -393,29 +529,59 @@ fn parse_player_response(
         duration,
         thumbnail_url,
         formats,
+        has_unhandled_challenges,
     })
 }
 
 fn parse_direct_format(stream: &Value) -> Option<DirectFormat> {
-    if stream.get("signatureCipher").is_some()
-        || stream.get("cipher").is_some()
-        || stream
-            .get("drmFamilies")
-            .and_then(Value::as_array)
-            .is_some_and(|families| !families.is_empty())
+    if stream
+        .get("drmFamilies")
+        .and_then(Value::as_array)
+        .is_some_and(|families| !families.is_empty())
     {
         return None;
     }
 
-    let url = stream.get("url")?.as_str()?;
-    let parsed_url = Url::parse(url).ok()?;
+    let (url, signature_param, signature_challenge, signature_value) =
+        if let Some(url) = stream.get("url").and_then(Value::as_str) {
+            (url.to_owned(), None, None, None)
+        } else {
+            let cipher = match (stream.get("signatureCipher"), stream.get("cipher")) {
+                (Some(signature_cipher), None) | (None, Some(signature_cipher)) => {
+                    signature_cipher.as_str()?
+                }
+                (Some(signature_cipher), Some(cipher))
+                    if signature_cipher.as_str()? == cipher.as_str()? =>
+                {
+                    signature_cipher.as_str()?
+                }
+                (None, None) | (Some(_), Some(_)) => return None,
+            };
+            let parsed = parse_signature_cipher(cipher)?;
+            (
+                parsed.url,
+                Some(parsed.parameter),
+                parsed.challenge,
+                parsed.signature,
+            )
+        };
+    let parsed_url = Url::parse(&url).ok()?;
     if parsed_url.scheme() != "https"
         || !is_googlevideo_host(parsed_url.host_str()?)
         || !parsed_url.username().is_empty()
         || parsed_url.password().is_some()
         || parsed_url.port().is_some_and(|port| port != 443)
-        || parsed_url.query_pairs().any(|(key, _)| key == "n")
     {
+        return None;
+    }
+    let n_values = parsed_url
+        .query_pairs()
+        .filter_map(|(key, value)| (key == "n").then_some(value.into_owned()))
+        .collect::<Vec<_>>();
+    if n_values.len() > 1 || n_values.first().is_some_and(String::is_empty) {
+        return None;
+    }
+    if signature_param.as_deref() == Some("n") && !n_values.is_empty() {
         return None;
     }
 
@@ -441,7 +607,11 @@ fn parse_direct_format(stream: &Value) -> Option<DirectFormat> {
 
     Some(DirectFormat {
         id,
-        url: url.to_owned(),
+        url,
+        signature_param,
+        signature_challenge,
+        signature_value,
+        n_challenge: n_values.into_iter().next(),
         ext: ext.to_owned(),
         quality,
         video_codec,
@@ -458,6 +628,107 @@ fn parse_direct_format(stream: &Value) -> Option<DirectFormat> {
         bitrate: stream.get("bitrate").and_then(parse_u64),
         filesize: stream.get("contentLength").and_then(parse_u64),
     })
+}
+
+struct ParsedSignatureCipher {
+    url: String,
+    parameter: String,
+    challenge: Option<String>,
+    signature: Option<String>,
+}
+
+fn parse_signature_cipher(cipher: &str) -> Option<ParsedSignatureCipher> {
+    let mut url = None;
+    let mut challenge = None;
+    let mut signature = None;
+    let mut parameter = None;
+    for (key, value) in url::form_urlencoded::parse(cipher.as_bytes()) {
+        match key.as_ref() {
+            "url" if url.is_none() => url = Some(value.into_owned()),
+            "s" if challenge.is_none() => challenge = Some(value.into_owned()),
+            "sig" | "signature" if signature.is_none() => {
+                signature = Some(value.into_owned());
+            }
+            "sp" if parameter.is_none() => parameter = Some(value.into_owned()),
+            "url" | "s" | "sig" | "signature" | "sp" => return None,
+            _ => {}
+        }
+    }
+    if challenge.as_deref().is_some_and(str::is_empty)
+        || signature.as_deref().is_some_and(str::is_empty)
+        || challenge.is_some() && signature.is_some()
+        || challenge.is_none() && signature.is_none()
+    {
+        return None;
+    }
+    let parameter = parameter.unwrap_or_else(|| "signature".to_owned());
+    if !is_safe_query_key(&parameter) {
+        return None;
+    }
+    Some(ParsedSignatureCipher {
+        url: url?,
+        parameter,
+        challenge,
+        signature,
+    })
+}
+
+fn is_safe_query_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn stream_has_challenges(stream: &Value) -> bool {
+    stream.get("signatureCipher").is_some()
+        || stream.get("cipher").is_some()
+        || stream
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(|url| Url::parse(url).ok())
+            .is_some_and(|url| url.query_pairs().any(|(key, _)| key == "n"))
+}
+
+fn apply_challenge_results(
+    url: &mut Url,
+    format: &DirectFormat,
+    results: &ChallengeResults,
+) -> Result<(), ExtractionError> {
+    if let Some(parameter) = &format.signature_param {
+        let signature = if let Some(challenge) = &format.signature_challenge {
+            results
+                .signatures
+                .get(challenge)
+                .ok_or(ExtractionError::UnsupportedUrl)?
+        } else {
+            format
+                .signature_value
+                .as_ref()
+                .ok_or(ExtractionError::UnsupportedUrl)?
+        };
+        set_query_parameter(url, parameter, signature);
+    }
+    if let Some(challenge) = &format.n_challenge {
+        let transformed = results
+            .n
+            .get(challenge)
+            .ok_or(ExtractionError::UnsupportedUrl)?;
+        set_query_parameter(url, "n", transformed);
+    }
+    Ok(())
+}
+
+fn set_query_parameter(url: &mut Url, key: &str, value: &str) {
+    let mut query = url
+        .query_pairs()
+        .filter(|(existing, _)| existing != key)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    query.push((key.to_owned(), value.to_owned()));
+    url.set_query(None);
+    url.query_pairs_mut().extend_pairs(query);
 }
 
 fn parse_mime_type(mime_type: &str) -> Option<(&str, &str, Option<&str>)> {
@@ -644,7 +915,7 @@ mod tests {
                     },
                     {
                         "itag": 137,
-                        "signatureCipher": "s=encrypted",
+                        "signatureCipher": "url=https%3A%2F%2Frr5.googlevideo.com%2Fvideoplayback%3Fx%3D1&s=encrypted&sp=sig",
                         "mimeType": "video/mp4; codecs=\"avc1.640028\""
                     },
                     {
@@ -669,7 +940,8 @@ mod tests {
             parsed.thumbnail_url.as_deref(),
             Some("https://i.ytimg.com/vi/sample/hq.jpg")
         );
-        assert_eq!(parsed.formats.len(), 2);
+        assert_eq!(parsed.formats.len(), 4);
+        assert!(!parsed.has_unhandled_challenges);
 
         let video = &parsed.formats[0];
         assert_eq!(video.id, "18");
@@ -688,6 +960,14 @@ mod tests {
         assert_eq!(audio.ext, "webm");
         assert_eq!(audio.audio_codec.as_deref(), Some("opus"));
         assert_eq!(audio.quality.as_deref(), Some("MEDIUM"));
+
+        let ciphered = &parsed.formats[2];
+        assert_eq!(ciphered.id, "137");
+        assert_eq!(ciphered.signature_challenge.as_deref(), Some("encrypted"));
+        assert_eq!(ciphered.signature_param.as_deref(), Some("sig"));
+        assert_eq!(ciphered.n_challenge, None);
+        assert_eq!(parsed.formats[3].id, "248");
+        assert_eq!(parsed.formats[3].n_challenge.as_deref(), Some("challenge"));
     }
 
     #[test]
@@ -728,14 +1008,7 @@ mod tests {
         for stream in [
             json!({
                 "itag":1,
-                "url":"https://rr.googlevideo.com/videoplayback",
-                "mimeType":"video/mp4; codecs=\"avc1\"",
                 "signatureCipher":"s=encrypted"
-            }),
-            json!({
-                "itag":1,
-                "url":"https://rr.googlevideo.com/videoplayback?n=challenge",
-                "mimeType":"video/mp4; codecs=\"avc1\""
             }),
             json!({
                 "itag":1,
@@ -760,6 +1033,107 @@ mod tests {
         ] {
             assert!(parse_direct_format(&stream).is_none());
         }
+    }
+
+    #[test]
+    fn applies_transformed_signature_and_n_without_dropping_other_query_pairs() {
+        let stream = json!({
+            "itag":137,
+            "signatureCipher":"url=https%3A%2F%2Frr5.googlevideo.com%2Fvideoplayback%3Fn%3Dabc123%26keep%3Dyes&s=encrypted&sp=signature",
+            "mimeType":"video/mp4; codecs=\"avc1.640028\""
+        });
+        let format = parse_direct_format(&stream).expect("well-formed cipher");
+        let mut url = Url::parse(&format.url).expect("valid media URL");
+        let results = ChallengeResults {
+            n: [("abc123".to_owned(), "321cba".to_owned())]
+                .into_iter()
+                .collect(),
+            signatures: [("encrypted".to_owned(), "detpyrcne".to_owned())]
+                .into_iter()
+                .collect(),
+        };
+        apply_challenge_results(&mut url, &format, &results)
+            .expect("all challenges have validated results");
+        let query = url
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            query.get("signature").map(|value| value.as_ref()),
+            Some("detpyrcne")
+        );
+        assert_eq!(query.get("n").map(|value| value.as_ref()), Some("321cba"));
+        assert_eq!(query.get("keep").map(|value| value.as_ref()), Some("yes"));
+    }
+
+    #[test]
+    fn malformed_or_unsupported_challenges_defer_the_video_to_fallback() {
+        let response = json!({
+            "videoDetails":{"videoId":VIDEO_ID,"title":"Sample"},
+            "streamingData":{
+                "formats":[{
+                    "itag":18,
+                    "url":"https://rr.googlevideo.com/videoplayback",
+                    "mimeType":"video/mp4; codecs=\"avc1\""
+                }],
+                "adaptiveFormats":[{
+                    "itag":137,
+                    "signatureCipher":"s=encrypted",
+                    "mimeType":"video/mp4; codecs=\"avc1\""
+                }]
+            }
+        });
+        let parsed = parse_player_response(VIDEO_ID, &response).expect("direct format exists");
+        assert!(parsed.has_unhandled_challenges);
+
+        let mut url =
+            Url::parse("https://rr.googlevideo.com/videoplayback?n=abc").expect("valid URL");
+        let format = parse_direct_format(&json!({
+            "itag":18,
+            "url":"https://rr.googlevideo.com/videoplayback?n=abc",
+            "mimeType":"video/mp4; codecs=\"avc1\""
+        }))
+        .expect("n challenge format");
+        assert!(matches!(
+            apply_challenge_results(&mut url, &format, &ChallengeResults::default()),
+            Err(ExtractionError::UnsupportedUrl)
+        ));
+    }
+
+    #[test]
+    fn accepts_only_player_script_urls_on_youtube_and_extracts_iframe_version() {
+        let response =
+            json!({"assets":{"js":"/s/player/12345678/player_ias.vflset/en_US/base.js"}});
+        assert_eq!(
+            player_script_url(&response)
+                .expect("safe player script URL")
+                .as_ref()
+                .map(Url::as_str),
+            Some("https://www.youtube.com/s/player/12345678/player_ias.vflset/en_US/base.js")
+        );
+        for raw in [
+            "https://evil.example/s/player/12345678/player.js",
+            "//127.0.0.1/s/player/12345678/player.js",
+            "/youtubei/v1/player",
+        ] {
+            let response = json!({"assets":{"js":raw}});
+            assert!(
+                matches!(
+                    player_script_url(&response),
+                    Err(ExtractionError::UnsupportedUrl)
+                ),
+                "{raw}"
+            );
+        }
+        assert!(
+            player_script_url(&json!({}))
+                .expect("missing script URL uses iframe fallback")
+                .is_none()
+        );
+        assert_eq!(
+            extract_player_id("var api='/player/1234abcd/iframe_api';").as_deref(),
+            Some("1234abcd")
+        );
+        assert!(extract_player_id("var api='/player/not-a-version/';").is_none());
     }
 
     #[tokio::test]
