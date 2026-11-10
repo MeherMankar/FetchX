@@ -227,6 +227,7 @@ where
         if let Err(e) = fs::create_dir_all(&temp_dir).await {
             return Err(DownloadEngineError::Io(e));
         }
+        let preserve_verified_chunks = files.iter().any(|file| !file.chunk_checksums.is_empty());
 
         // Transition to Downloading.
         let mut tracked = if item.status() == DownloadStatus::Preparing {
@@ -243,12 +244,15 @@ where
         for mf in &files {
             // Cooperative check between files.
             if *control.cancellation.borrow_and_update() {
-                // Cleanup temp dir.
-                let _ = fs::remove_dir_all(&temp_dir).await;
+                if !preserve_verified_chunks {
+                    let _ = fs::remove_dir_all(&temp_dir).await;
+                }
                 return Err(DownloadEngineError::Cancelled);
             }
             if *control.pause.borrow_and_update() {
-                let _ = fs::remove_dir_all(&temp_dir).await;
+                if !preserve_verified_chunks {
+                    let _ = fs::remove_dir_all(&temp_dir).await;
+                }
                 return Err(DownloadEngineError::Paused);
             }
 
@@ -283,11 +287,15 @@ where
                     }
                 }
                 Err(DownloadEngineError::Cancelled) => {
-                    let _ = fs::remove_dir_all(&temp_dir).await;
+                    if !preserve_verified_chunks {
+                        let _ = fs::remove_dir_all(&temp_dir).await;
+                    }
                     return Err(DownloadEngineError::Cancelled);
                 }
                 Err(DownloadEngineError::Paused) => {
-                    let _ = fs::remove_dir_all(&temp_dir).await;
+                    if !preserve_verified_chunks {
+                        let _ = fs::remove_dir_all(&temp_dir).await;
+                    }
                     return Err(DownloadEngineError::Paused);
                 }
                 Err(e) => {
@@ -329,6 +337,72 @@ where
             fs::create_dir_all(&chunk_dir)
                 .await
                 .map_err(DownloadEngineError::Io)?;
+            match self.download_chunk_ranges(mf, &chunk_dir, control).await {
+                Ok(()) => {
+                    let parent = final_path.parent().unwrap_or_else(|| Path::new("."));
+                    fs::create_dir_all(parent)
+                        .await
+                        .map_err(DownloadEngineError::Io)?;
+                    let assembled_path = parent.join(format!(
+                        ".fetchx-metalink-{}-{}.{}",
+                        parent_id,
+                        sanitize_filename(&mf.name),
+                        DownloadId::new()
+                    ));
+                    let assembled_path = assemble_verified_chunks(
+                        &chunk_dir,
+                        &assembled_path,
+                        &mf.chunk_checksums[0],
+                    )
+                    .await?;
+                    if let Err(error) =
+                        verify_chunk_checksums(&assembled_path, mf.size, &mf.chunk_checksums).await
+                    {
+                        let _ = fs::remove_file(&assembled_path).await;
+                        return Err(error);
+                    }
+                    if let Err(error) = verify_checksums(&assembled_path, &mf.hashes).await {
+                        let _ = fs::remove_file(&assembled_path).await;
+                        return Err(error);
+                    }
+                    match fs::hard_link(&assembled_path, final_path).await {
+                        Ok(()) => {}
+                        Err(error) => {
+                            let _ = fs::remove_file(&assembled_path).await;
+                            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                                return Err(DownloadEngineError::DestinationExists);
+                            }
+                            return Err(DownloadEngineError::Io(error));
+                        }
+                    }
+                    if let Err(error) = fs::remove_file(&assembled_path).await {
+                        warn!(
+                            path = %assembled_path.display(),
+                            %error,
+                            "Metalink: could not remove assembled staging file after publication"
+                        );
+                    }
+                    let progress = DownloadProgress::new(1, Some(1), None, None)?;
+                    tracked.set_progress_at(progress, next_ts(tracked.updated_at())?)?;
+                    if let Err(error) = self.repository.update(tracked).await {
+                        warn!("Metalink: parent progress persist error: {error}");
+                    }
+                    return Ok(());
+                }
+                Err(DownloadEngineError::Cancelled) => {
+                    return Err(DownloadEngineError::Cancelled);
+                }
+                Err(DownloadEngineError::Paused) => return Err(DownloadEngineError::Paused),
+                Err(error @ DownloadEngineError::MetalinkChunkChecksumMismatch { .. }) => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    warn!(
+                        "Metalink: range-based piece transfer unavailable for '{}': {}; trying safe whole-file mirrors",
+                        mf.name, error
+                    );
+                }
+            }
         }
 
         let mut last_error: Option<DownloadEngineError> = None;
@@ -508,6 +582,142 @@ where
         // All mirrors exhausted.
         Err(last_error.unwrap_or_else(|| {
             DownloadEngineError::MetalinkError(format!("all mirrors failed for file '{}'", mf.name))
+        }))
+    }
+
+    async fn download_chunk_ranges(
+        &self,
+        mf: &MetalinkFile,
+        chunk_dir: &Path,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<(), DownloadEngineError> {
+        cleanup_chunk_attempts(chunk_dir).await?;
+        let mut total_size = mf.size;
+        if let Some(size) = total_size {
+            validate_chunk_metadata(Some(size), &mf.chunk_checksums)?;
+        }
+        let mut last_error = None;
+        let mut remaining = (0..mf.chunk_checksums[0].hashes.len()).collect::<Vec<_>>();
+
+        for mirror in &mf.mirrors {
+            if remaining.is_empty() {
+                return Ok(());
+            }
+            if *control.cancellation.borrow_and_update() {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow_and_update() {
+                return Err(DownloadEngineError::Paused);
+            }
+
+            let (mut probe, probed_total) = match self
+                .direct_http
+                .request_metalink_range(&mirror.url, 0, 0, total_size, control)
+                .await
+            {
+                Ok(probe) => probe,
+                Err(error @ (DownloadEngineError::Cancelled | DownloadEngineError::Paused)) => {
+                    return Err(error);
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+            if let Err(error) = consume_probe(&mut probe, control).await {
+                if matches!(
+                    error,
+                    DownloadEngineError::Cancelled | DownloadEngineError::Paused
+                ) {
+                    return Err(error);
+                }
+                last_error = Some(error);
+                continue;
+            }
+            if let Err(error) = validate_chunk_metadata(Some(probed_total), &mf.chunk_checksums) {
+                last_error = Some(error);
+                continue;
+            }
+            total_size = Some(probed_total);
+            remaining = validate_staged_chunks(chunk_dir, total_size, &mf.chunk_checksums).await?;
+            if remaining.is_empty() {
+                return Ok(());
+            }
+
+            let mut mirror_failed = false;
+            for index in remaining.iter().copied() {
+                if *control.cancellation.borrow_and_update() {
+                    return Err(DownloadEngineError::Cancelled);
+                }
+                if *control.pause.borrow_and_update() {
+                    return Err(DownloadEngineError::Paused);
+                }
+                let first = &mf.chunk_checksums[0];
+                let start = (index as u64)
+                    .checked_mul(first.chunk_length)
+                    .ok_or_else(|| {
+                        DownloadEngineError::MetalinkError("chunk range offset overflow".to_owned())
+                    })?;
+                let end = start
+                    .checked_add(first.chunk_length.min(probed_total - start) - 1)
+                    .ok_or_else(|| {
+                        DownloadEngineError::MetalinkError("chunk range overflow".to_owned())
+                    })?;
+                let (mut response, _) = match self
+                    .direct_http
+                    .request_metalink_range(&mirror.url, start, end, total_size, control)
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(error @ (DownloadEngineError::Cancelled | DownloadEngineError::Paused)) => {
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        last_error = Some(error);
+                        mirror_failed = true;
+                        break;
+                    }
+                };
+                let piece_path = chunk_dir.join(format!("{index:08}.piece"));
+                match receive_and_verify_piece(
+                    &mut response,
+                    &piece_path,
+                    index,
+                    end - start + 1,
+                    &mf.chunk_checksums,
+                    control,
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(error @ (DownloadEngineError::Cancelled | DownloadEngineError::Paused)) => {
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        last_error = Some(error);
+                        mirror_failed = true;
+                        break;
+                    }
+                }
+            }
+
+            remaining = validate_staged_chunks(chunk_dir, total_size, &mf.chunk_checksums).await?;
+            if remaining.is_empty() {
+                return Ok(());
+            }
+            if !mirror_failed {
+                last_error = Some(DownloadEngineError::MetalinkError(format!(
+                    "mirror '{}' did not provide all required Metalink pieces",
+                    mirror.url
+                )));
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            DownloadEngineError::MetalinkError(format!(
+                "no mirror provided the missing pieces for '{}'",
+                mf.name
+            ))
         }))
     }
 
@@ -1023,6 +1233,249 @@ async fn verify_checksums(
     Ok(())
 }
 
+async fn consume_probe(
+    response: &mut reqwest::Response,
+    control: &mut ManagedDownloadControl,
+) -> Result<(), DownloadEngineError> {
+    let mut received = 0_usize;
+    loop {
+        let chunk = tokio::select! {
+            changed = control.cancellation.changed() => {
+                if changed.is_err() || *control.cancellation.borrow_and_update() {
+                    return Err(DownloadEngineError::Cancelled);
+                }
+                continue;
+            }
+            changed = control.pause.changed() => {
+                if changed.is_err() || *control.pause.borrow() {
+                    return Err(DownloadEngineError::Paused);
+                }
+                continue;
+            }
+            chunk = response.chunk() => chunk.map_err(DownloadEngineError::Request)?,
+        };
+        match chunk {
+            Some(bytes) => {
+                received = received
+                    .checked_add(bytes.len())
+                    .ok_or(DownloadEngineError::ByteCountOverflow)?;
+                if received > 1 {
+                    return Err(DownloadEngineError::RangeMismatch);
+                }
+            }
+            None => break,
+        }
+    }
+    if received != 1 {
+        return Err(DownloadEngineError::RangeMismatch);
+    }
+    Ok(())
+}
+
+async fn receive_and_verify_piece(
+    response: &mut reqwest::Response,
+    piece_path: &Path,
+    index: usize,
+    expected_length: u64,
+    checksums: &[MetalinkChunkChecksum],
+    control: &mut ManagedDownloadControl,
+) -> Result<(), DownloadEngineError> {
+    let attempt_path = piece_path.with_extension(format!("attempt-{}", DownloadId::new()));
+    let result = async {
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&attempt_path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let mut hashers = checksums
+            .iter()
+            .map(|checksum| new_chunk_hasher(&checksum.algorithm))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut received = 0_u64;
+        loop {
+            let chunk = tokio::select! {
+                changed = control.cancellation.changed() => {
+                    if changed.is_err() || *control.cancellation.borrow_and_update() {
+                        return Err(DownloadEngineError::Cancelled);
+                    }
+                    continue;
+                }
+                changed = control.pause.changed() => {
+                    if changed.is_err() || *control.pause.borrow() {
+                        return Err(DownloadEngineError::Paused);
+                    }
+                    continue;
+                }
+                chunk = response.chunk() => chunk.map_err(DownloadEngineError::Request)?,
+            };
+            let Some(bytes) = chunk else {
+                break;
+            };
+            let chunk_size =
+                u64::try_from(bytes.len()).map_err(|_| DownloadEngineError::ByteCountOverflow)?;
+            received = received
+                .checked_add(chunk_size)
+                .ok_or(DownloadEngineError::ByteCountOverflow)?;
+            if received > expected_length {
+                return Err(DownloadEngineError::RangeMismatch);
+            }
+            for hasher in &mut hashers {
+                hasher.update(&bytes);
+            }
+            output
+                .write_all(&bytes)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
+        if received != expected_length {
+            return Err(DownloadEngineError::RangeMismatch);
+        }
+        output.flush().await.map_err(DownloadEngineError::Io)?;
+        drop(output);
+
+        for (checksum, hasher) in checksums.iter().zip(hashers) {
+            let actual = hex::encode(hasher.finalize());
+            let expected = &checksum.hashes[index];
+            if actual != *expected {
+                return Err(DownloadEngineError::MetalinkChunkChecksumMismatch {
+                    algorithm: checksum.algorithm.clone(),
+                    chunk_index: index,
+                    expected: expected.clone(),
+                    actual,
+                });
+            }
+        }
+
+        fs::rename(&attempt_path, piece_path)
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        Ok(())
+    }
+    .await;
+
+    if result.is_err() {
+        match fs::remove_file(&attempt_path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        }
+    }
+    result
+}
+
+async fn validate_staged_chunks(
+    chunk_dir: &Path,
+    total_size: Option<u64>,
+    checksums: &[MetalinkChunkChecksum],
+) -> Result<Vec<usize>, DownloadEngineError> {
+    let Some(total_size) = total_size else {
+        return Ok((0..checksums[0].hashes.len()).collect());
+    };
+    validate_chunk_metadata(Some(total_size), checksums)?;
+    let first = &checksums[0];
+    let mut missing = Vec::new();
+    for index in 0..first.hashes.len() {
+        let piece_path = chunk_dir.join(format!("{index:08}.piece"));
+        let metadata = match fs::symlink_metadata(&piece_path).await {
+            Ok(metadata) if metadata.file_type().is_file() => metadata,
+            Ok(_) => {
+                fs::remove_file(&piece_path)
+                    .await
+                    .map_err(DownloadEngineError::Io)?;
+                missing.push(index);
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(index);
+                continue;
+            }
+            Err(error) => return Err(DownloadEngineError::Io(error)),
+        };
+        let offset = (index as u64)
+            .checked_mul(first.chunk_length)
+            .ok_or_else(|| {
+                DownloadEngineError::MetalinkError("chunk offset overflow".to_owned())
+            })?;
+        let expected_length = (total_size - offset).min(first.chunk_length);
+        let valid = if metadata.len() == expected_length {
+            verify_chunk_file(&piece_path, index, expected_length, checksums).await?
+        } else {
+            false
+        };
+        if !valid {
+            fs::remove_file(&piece_path)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            missing.push(index);
+        }
+    }
+    Ok(missing)
+}
+
+async fn cleanup_chunk_attempts(chunk_dir: &Path) -> Result<(), DownloadEngineError> {
+    let mut entries = fs::read_dir(chunk_dir)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(DownloadEngineError::Io)?
+    {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some((index, suffix)) = name.split_once(".attempt-") else {
+            continue;
+        };
+        if index.len() == 8 && index.bytes().all(|byte| byte.is_ascii_digit()) && !suffix.is_empty()
+        {
+            fs::remove_file(entry.path())
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
+    }
+    Ok(())
+}
+
+async fn verify_chunk_file(
+    path: &Path,
+    index: usize,
+    expected_length: u64,
+    checksums: &[MetalinkChunkChecksum],
+) -> Result<bool, DownloadEngineError> {
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(DownloadEngineError::Io)?;
+    let mut hashers = checksums
+        .iter()
+        .map(|checksum| new_chunk_hasher(&checksum.algorithm))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut remaining = expected_length;
+    let mut buffer = [0_u8; 16 * 1024];
+    while remaining > 0 {
+        let limit = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+        let read = file
+            .read(&mut buffer[..limit])
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        if read == 0 {
+            return Ok(false);
+        }
+        for hasher in &mut hashers {
+            hasher.update(&buffer[..read]);
+        }
+        remaining -= read as u64;
+    }
+    for (checksum, hasher) in checksums.iter().zip(hashers) {
+        if hex::encode(hasher.finalize()) != checksum.hashes[index] {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 async fn stage_verified_chunks(
     path: &Path,
     expected_size: Option<u64>,
@@ -1066,26 +1519,19 @@ async fn stage_verified_chunks(
         ));
     }
 
-    let mut first_mismatch = None;
     let mut file = fs::File::open(path)
         .await
         .map_err(DownloadEngineError::Io)?;
-    for index in 0..chunk_count {
+    let missing = validate_staged_chunks(chunk_dir, Some(file_size), checksums).await?;
+    for index in missing {
         let piece_path = chunk_dir.join(format!("{index:08}.piece"));
-        match fs::metadata(&piece_path).await {
-            Ok(metadata) if metadata.is_file() => continue,
-            Ok(_) => {
-                return Err(DownloadEngineError::MetalinkError(
-                    "verified chunk path is not a regular file".to_owned(),
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(DownloadEngineError::Io(error)),
-        }
 
-        let offset = index.checked_mul(first.chunk_length).ok_or_else(|| {
-            DownloadEngineError::MetalinkError("chunk checksum offset overflow".to_owned())
-        })?;
+        let offset = u64::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(first.chunk_length))
+            .ok_or_else(|| {
+                DownloadEngineError::MetalinkError("chunk checksum offset overflow".to_owned())
+            })?;
         let chunk_size = (file_size - offset).min(first.chunk_length);
         file.seek(std::io::SeekFrom::Start(offset))
             .await
@@ -1094,10 +1540,6 @@ async fn stage_verified_chunks(
             .iter()
             .map(|checksum| new_chunk_hasher(&checksum.algorithm))
             .collect::<Result<Vec<_>, _>>()?;
-        let attempt_path = piece_path.with_extension("attempt");
-        let mut attempt = fs::File::create(&attempt_path)
-            .await
-            .map_err(DownloadEngineError::Io)?;
         let mut remaining = chunk_size;
         let mut buffer = [0_u8; 16 * 1024];
         while remaining > 0 {
@@ -1108,7 +1550,6 @@ async fn stage_verified_chunks(
                 .await
                 .map_err(DownloadEngineError::Io)?;
             if read == 0 {
-                let _ = fs::remove_file(&attempt_path).await;
                 return Err(DownloadEngineError::MetalinkError(
                     "downloaded file ended inside a checksummed chunk".to_owned(),
                 ));
@@ -1116,63 +1557,68 @@ async fn stage_verified_chunks(
             for hasher in &mut hashers {
                 hasher.update(&buffer[..read]);
             }
-            attempt
-                .write_all(&buffer[..read])
-                .await
-                .map_err(DownloadEngineError::Io)?;
             remaining -= read as u64;
         }
-        attempt.flush().await.map_err(DownloadEngineError::Io)?;
-        drop(attempt);
 
-        let mut mismatch = None;
         for (checksum, hasher) in checksums.iter().zip(hashers) {
             let actual = hex::encode(hasher.finalize());
-            let expected = &checksum.hashes[index as usize];
+            let expected = &checksum.hashes[index];
             if actual != *expected {
-                mismatch = Some(DownloadEngineError::MetalinkChunkChecksumMismatch {
+                return Err(DownloadEngineError::MetalinkChunkChecksumMismatch {
                     algorithm: checksum.algorithm.clone(),
-                    chunk_index: index as usize,
+                    chunk_index: index,
                     expected: expected.clone(),
                     actual,
                 });
-                break;
             }
         }
-        if let Some(error) = mismatch {
-            let _ = fs::remove_file(&attempt_path).await;
-            if first_mismatch.is_none() {
-                first_mismatch = Some(error);
+
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(DownloadEngineError::Io)?;
+        let attempt_path = piece_path.with_extension(format!("attempt-{}", DownloadId::new()));
+        let result = async {
+            let mut attempt = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&attempt_path)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            let mut remaining = chunk_size;
+            while remaining > 0 {
+                let read_limit =
+                    usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+                let read = file
+                    .read(&mut buffer[..read_limit])
+                    .await
+                    .map_err(DownloadEngineError::Io)?;
+                if read == 0 {
+                    return Err(DownloadEngineError::MetalinkError(
+                        "downloaded file ended inside a checksummed chunk".to_owned(),
+                    ));
+                }
+                attempt
+                    .write_all(&buffer[..read])
+                    .await
+                    .map_err(DownloadEngineError::Io)?;
+                remaining -= read as u64;
             }
-        } else {
+            attempt.flush().await.map_err(DownloadEngineError::Io)?;
+            drop(attempt);
             fs::rename(&attempt_path, &piece_path)
                 .await
                 .map_err(DownloadEngineError::Io)?;
+            Ok(())
         }
-    }
-
-    let mut all_chunks_staged = true;
-    for index in 0..chunk_count {
-        match fs::metadata(chunk_dir.join(format!("{index:08}.piece"))).await {
-            Ok(metadata) if metadata.is_file() => {}
-            Ok(_) => {
-                return Err(DownloadEngineError::MetalinkError(
-                    "verified chunk path is not a regular file".to_owned(),
-                ));
+        .await;
+        if let Err(error) = result {
+            match fs::remove_file(&attempt_path).await {
+                Ok(()) => {}
+                Err(remove_error) if remove_error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(remove_error) => return Err(DownloadEngineError::Io(remove_error)),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                all_chunks_staged = false;
-                break;
-            }
-            Err(error) => return Err(DownloadEngineError::Io(error)),
+            return Err(error);
         }
-    }
-    if !all_chunks_staged {
-        return Err(first_mismatch.unwrap_or_else(|| {
-            DownloadEngineError::MetalinkError(
-                "one or more checksummed chunks are unavailable from this mirror".to_owned(),
-            )
-        }));
     }
 
     Ok(())
@@ -1183,18 +1629,30 @@ async fn assemble_verified_chunks(
     output_path: &Path,
     checksum: &MetalinkChunkChecksum,
 ) -> Result<PathBuf, DownloadEngineError> {
-    let mut output = fs::File::create(output_path)
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_path)
         .await
         .map_err(DownloadEngineError::Io)?;
-    for index in 0..checksum.hashes.len() {
-        let mut piece = fs::File::open(chunk_dir.join(format!("{index:08}.piece")))
-            .await
-            .map_err(DownloadEngineError::Io)?;
-        tokio::io::copy(&mut piece, &mut output)
-            .await
-            .map_err(DownloadEngineError::Io)?;
+    let result = async {
+        for index in 0..checksum.hashes.len() {
+            let mut piece = fs::File::open(chunk_dir.join(format!("{index:08}.piece")))
+                .await
+                .map_err(DownloadEngineError::Io)?;
+            tokio::io::copy(&mut piece, &mut output)
+                .await
+                .map_err(DownloadEngineError::Io)?;
+        }
+        output.flush().await.map_err(DownloadEngineError::Io)?;
+        Ok(())
     }
-    output.flush().await.map_err(DownloadEngineError::Io)?;
+    .await;
+    drop(output);
+    if let Err(error) = result {
+        let _ = fs::remove_file(output_path).await;
+        return Err(error);
+    }
     Ok(output_path.to_path_buf())
 }
 
@@ -1722,7 +2180,10 @@ mod tests {
         let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
         let chunk_hash = compute_hash("sha-256", &body)?;
 
-        let responses = vec![crate::tests::scripted_response(200, &[], &body)];
+        let responses = vec![
+            crate::tests::scripted_response(206, &[("Content-Range", "bytes 0-0/5")], &body[..1]),
+            crate::tests::scripted_response(206, &[("Content-Range", "bytes 0-4/5")], &body),
+        ];
         let (url, server) = start_scripted_server(responses).await?;
 
         let db = Database::connect("sqlite::memory:").await?;
@@ -1772,10 +2233,17 @@ mod tests {
             .chunks(4)
             .map(|chunk| compute_hash("sha-256", chunk))
             .collect::<Result<Vec<_>, _>>()?;
-        let (bad_url, bad_server) =
-            start_scripted_server(vec![scripted_response(200, &[], corrupt)]).await?;
-        let (good_url, good_server) =
-            start_scripted_server(vec![scripted_response(200, &[], expected)]).await?;
+        let (bad_url, bad_server) = start_scripted_server(vec![
+            scripted_response(206, &[("Content-Range", "bytes 0-0/8")], &expected[..1]),
+            scripted_response(206, &[("Content-Range", "bytes 0-3/8")], &expected[..4]),
+            scripted_response(206, &[("Content-Range", "bytes 4-7/8")], &corrupt[4..]),
+        ])
+        .await?;
+        let (good_url, good_server) = start_scripted_server(vec![
+            scripted_response(206, &[("Content-Range", "bytes 0-0/8")], &expected[..1]),
+            scripted_response(206, &[("Content-Range", "bytes 4-7/8")], &expected[4..]),
+        ])
+        .await?;
 
         let db = Database::connect("sqlite::memory:").await?;
         let (engine, _) = make_engine(&db).await;
@@ -1799,8 +2267,155 @@ mod tests {
         let result = DownloadEngine::download(&engine, id, cancellation).await;
         assert!(result.is_ok(), "expected mirror retry, got {result:?}");
         assert_eq!(std::fs::read(destination)?, expected);
-        bad_server.await?;
-        good_server.await?;
+        let bad_requests = bad_server.await?;
+        let good_requests = good_server.await?;
+        assert!(
+            bad_requests[0]
+                .to_ascii_lowercase()
+                .contains("range: bytes=0-0")
+        );
+        assert!(
+            bad_requests[1]
+                .to_ascii_lowercase()
+                .contains("range: bytes=0-3")
+        );
+        assert!(
+            bad_requests[2]
+                .to_ascii_lowercase()
+                .contains("range: bytes=4-7")
+        );
+        assert!(
+            good_requests[0]
+                .to_ascii_lowercase()
+                .contains("range: bytes=0-0")
+        );
+        assert!(
+            good_requests[1]
+                .to_ascii_lowercase()
+                .contains("range: bytes=4-7")
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metalink_invalid_ranges_are_rejected_before_next_mirror() -> Result<(), Box<dyn Error>>
+    {
+        use crate::tests::{scripted_response, start_scripted_server};
+
+        let body = b"good";
+        let hash = compute_hash("sha-256", body)?;
+        for invalid_response in 0..5 {
+            let bad_responses = match invalid_response {
+                0 => vec![scripted_response(200, &[], body)],
+                1 => vec![scripted_response(
+                    206,
+                    &[("Content-Range", "bytes 0-0/5")],
+                    &body[..1],
+                )],
+                2 => vec![
+                    scripted_response(206, &[("Content-Range", "bytes 0-0/4")], &body[..1]),
+                    scripted_response(206, &[("Content-Range", "bytes 1-3/4")], &body[1..]),
+                ],
+                3 => vec![
+                    scripted_response(206, &[("Content-Range", "bytes 0-0/4")], &body[..1]),
+                    scripted_response(206, &[("Content-Range", "bytes 0-3/4")], &body[..2]),
+                ],
+                _ => vec![
+                    scripted_response(206, &[("Content-Range", "bytes 0-0/4")], &body[..1]),
+                    scripted_response(206, &[("Content-Range", "bytes 0-3/4")], b"good!"),
+                ],
+            };
+            let (bad_url, bad_server) = start_scripted_server(bad_responses).await?;
+            let (good_url, good_server) = start_scripted_server(vec![
+                scripted_response(206, &[("Content-Range", "bytes 0-0/4")], &body[..1]),
+                scripted_response(206, &[("Content-Range", "bytes 0-3/4")], body),
+            ])
+            .await?;
+            let db = Database::connect("sqlite::memory:").await?;
+            let (engine, _) = make_engine(&db).await;
+            let dir = tempfile::tempdir()?;
+            let manifest = format!(
+                r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="range.bin">
+<size>4</size><pieces type="sha-256" length="4"><hash>{hash}</hash></pieces>
+<url priority="1">{bad_url}</url><url priority="2">{good_url}</url></file></metalink>"#
+            );
+            let manifest_path = dir.path().join("ranges.meta4");
+            std::fs::write(&manifest_path, manifest)?;
+            let destination = dir.path().join("range.bin");
+            let item = make_metalink_item(&manifest_path, &destination)?;
+            let id = item.id();
+            db.downloads().create(&item).await?;
+
+            let (_cancel_tx, cancellation) = watch::channel(false);
+            let result = DownloadEngine::download(&engine, id, cancellation).await;
+            assert!(
+                result.is_ok(),
+                "invalid range case {invalid_response} should fail over: {result:?}"
+            );
+            assert_eq!(std::fs::read(destination)?, body);
+            let bad_requests = bad_server.await?;
+            let good_requests = good_server.await?;
+            assert!(
+                bad_requests[0]
+                    .to_ascii_lowercase()
+                    .contains("range: bytes=0-0")
+            );
+            assert!(
+                good_requests
+                    .iter()
+                    .all(|request| request.to_ascii_lowercase().contains("range:")),
+                "good mirror should only receive range requests"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metalink_ignored_range_uses_verified_whole_file_fallback() -> Result<(), Box<dyn Error>>
+    {
+        use crate::tests::{scripted_response, start_scripted_server};
+
+        let body = b"fallback";
+        let hash = compute_hash("sha-256", body)?;
+        let chunk_hash = compute_hash("sha-256", body)?;
+        let (url, server) = start_scripted_server(vec![
+            scripted_response(200, &[], body),
+            scripted_response(200, &[], body),
+        ])
+        .await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let (engine, _) = make_engine(&db).await;
+        let dir = tempfile::tempdir()?;
+        let manifest = format!(
+            r#"<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="fallback.bin">
+<size>8</size><hash type="sha-256">{hash}</hash>
+<pieces type="sha-256" length="8"><hash>{chunk_hash}</hash></pieces>
+<url priority="1">{url}</url></file></metalink>"#
+        );
+        let manifest_path = dir.path().join("fallback.meta4");
+        std::fs::write(&manifest_path, manifest)?;
+        let destination = dir.path().join("fallback.bin");
+        let item = make_metalink_item(&manifest_path, &destination)?;
+        let id = item.id();
+        db.downloads().create(&item).await?;
+
+        let (_cancel_tx, cancellation) = watch::channel(false);
+        let result = DownloadEngine::download(&engine, id, cancellation).await;
+        assert!(
+            result.is_ok(),
+            "expected safe whole-file fallback: {result:?}"
+        );
+        assert_eq!(std::fs::read(destination)?, body);
+        let requests = server.await?;
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("range: bytes=0-0")
+        );
+        assert!(
+            !requests[1].to_ascii_lowercase().contains("range:"),
+            "fallback must be a whole-file request, not the ignored range response"
+        );
         Ok(())
     }
 
@@ -1812,10 +2427,16 @@ mod tests {
         let expected = b"expected";
         let corrupt = b"corrupt!";
         let expected_hash = compute_hash("sha-256", expected)?;
-        let (url1, server1) =
-            start_scripted_server(vec![scripted_response(200, &[], corrupt)]).await?;
-        let (url2, server2) =
-            start_scripted_server(vec![scripted_response(200, &[], corrupt)]).await?;
+        let (url1, server1) = start_scripted_server(vec![
+            scripted_response(206, &[("Content-Range", "bytes 0-0/8")], &corrupt[..1]),
+            scripted_response(206, &[("Content-Range", "bytes 0-7/8")], corrupt),
+        ])
+        .await?;
+        let (url2, server2) = start_scripted_server(vec![
+            scripted_response(206, &[("Content-Range", "bytes 0-0/8")], &corrupt[..1]),
+            scripted_response(206, &[("Content-Range", "bytes 0-7/8")], corrupt),
+        ])
+        .await?;
 
         let db = Database::connect("sqlite::memory:").await?;
         let (engine, _) = make_engine(&db).await;
@@ -1956,11 +2577,63 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn metalink_cancel() -> Result<(), Box<dyn Error>> {
-        use crate::tests::{scripted_response, start_scripted_server};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+            sync::oneshot,
+        };
 
-        let body = b"hello";
-        let hash = compute_hash("sha-256", body)?;
-        let (url, server) = start_scripted_server(vec![scripted_response(200, &[], body)]).await?;
+        let body = b"helloworld".to_vec();
+        let hash = compute_hash("sha-256", &body)?;
+        let chunk_hashes = body
+            .chunks(5)
+            .map(|chunk| compute_hash("sha-256", chunk))
+            .collect::<Result<Vec<_>, _>>()?;
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let (piece_started_tx, piece_started_rx) = oneshot::channel();
+        let (release_piece_tx, release_piece_rx) = oneshot::channel();
+        let server_body = body.clone();
+        let server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            let mut piece_started_tx = Some(piece_started_tx);
+            let mut release_piece_rx = Some(release_piece_rx);
+            for request_index in 0..5 {
+                let (mut stream, _) = listener.accept().await?;
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).await?;
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                requests.push(String::from_utf8_lossy(&request).into_owned());
+                if request_index == 2 {
+                    if let Some(started) = piece_started_tx.take() {
+                        let _ = started.send(());
+                    }
+                    if let Some(release) = release_piece_rx.take() {
+                        let _ = release.await;
+                    }
+                }
+                let (start, end, bytes) = match request_index {
+                    0 | 3 => (0, 0, server_body[0..1].to_vec()),
+                    1 => (0, 4, server_body[0..5].to_vec()),
+                    _ => (5, 9, server_body[5..10].to_vec()),
+                };
+                let headers = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/10\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(headers.as_bytes()).await;
+                let _ = stream.write_all(&bytes).await;
+                let _ = stream.flush().await;
+            }
+            Ok::<_, std::io::Error>(requests)
+        });
+        let url = format!("http://{address}/file");
         let db = Database::connect("sqlite::memory:").await?;
         let (engine, _) = make_engine(&db).await;
         let dir = tempfile::tempdir()?;
@@ -1969,12 +2642,13 @@ mod tests {
             r#"<?xml version="1.0"?>
 <metalink xmlns="urn:ietf:params:xml:ns:metalink">
   <file name="cancel.bin">
-    <size>5</size>
+    <size>10</size>
     <hash type="sha-256">{hash}</hash>
-    <pieces type="sha-256" length="5"><hash>{hash}</hash></pieces>
+    <pieces type="sha-256" length="5"><hash>{}</hash><hash>{}</hash></pieces>
     <url priority="1">{url}</url>
   </file>
-</metalink>"#
+</metalink>"#,
+            chunk_hashes[0], chunk_hashes[1]
         );
         let manifest_path = dir.path().join("cancel.meta4");
         std::fs::write(&manifest_path, manifest)?;
@@ -1984,10 +2658,9 @@ mod tests {
         let id = item.id();
         db.downloads().create(&item).await?;
 
-        // Signal cancellation before starting.
-        let (cancel_tx, cancel_rx) = watch::channel(true);
-        let (_, pause) = watch::channel(false);
-        let (_, connection_limit) = watch::channel(1_usize);
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (_pause_tx, pause) = watch::channel(false);
+        let (_limit_tx, connection_limit) = watch::channel(1_usize);
         let control = ManagedDownloadControl {
             cancellation: cancel_rx,
             pause,
@@ -1995,18 +2668,43 @@ mod tests {
             resource_demand: None,
             bandwidth: BandwidthControl::default(),
         };
-        let result = ManagedDownloadEngine::download_managed(&engine, id, control).await;
-        drop(cancel_tx);
+        let download = ManagedDownloadEngine::download_managed(&engine, id, control);
+        tokio::pin!(download);
+        tokio::select! {
+            result = &mut download => panic!("download completed before cancellation: {result:?}"),
+            started = piece_started_rx => {
+                started?;
+                cancel_tx.send(true)?;
+            }
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), download)
+            .await
+            .map_err(|error| format!("cancellation timed out: {error}"))?;
         assert!(
             matches!(result, Err(DownloadEngineError::Cancelled)),
             "expected Cancelled, got: {result:?}"
         );
         assert!(!dest.exists(), "cancelled download must not publish output");
+        let chunk_dir = std::env::temp_dir()
+            .join(format!("fetchx-metalink-{id}"))
+            .join(format!("{id}-cancel.bin-verified-chunks"));
+        assert!(
+            chunk_dir.join("00000000.piece").exists(),
+            "first verified chunk should survive cancellation"
+        );
+        release_piece_tx
+            .send(())
+            .map_err(|_| "range test server stopped before resume")?;
         let (_cancel_tx, cancellation) = watch::channel(false);
         let resumed = DownloadEngine::download(&engine, id, cancellation).await;
         assert!(resumed.is_ok(), "expected clean restart, got {resumed:?}");
         assert_eq!(std::fs::read(dest)?, body);
-        server.await?;
+        let requests = server.await??;
+        assert!(
+            requests[4]
+                .to_ascii_lowercase()
+                .contains("range: bytes=5-9")
+        );
         Ok(())
     }
 }

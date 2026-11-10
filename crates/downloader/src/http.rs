@@ -318,6 +318,70 @@ where
         self.download(id, cancellation).await
     }
 
+    pub(crate) async fn request_metalink_range(
+        &self,
+        source: &str,
+        start: u64,
+        end: u64,
+        expected_total: Option<u64>,
+        control: &mut ManagedDownloadControl,
+    ) -> Result<(Response, u64), DownloadEngineError> {
+        if end < start {
+            return Err(DownloadEngineError::InvalidContentRange);
+        }
+        let url =
+            parse_http_url_with_private_policy(source, self.allow_loopback_benchmark_target())?;
+        let response = loop {
+            if *control.cancellation.borrow_and_update() {
+                return Err(DownloadEngineError::Cancelled);
+            }
+            if *control.pause.borrow() {
+                return Err(DownloadEngineError::Paused);
+            }
+            tokio::select! {
+                changed = control.cancellation.changed() => {
+                    if changed.is_err() || *control.cancellation.borrow_and_update() {
+                        return Err(DownloadEngineError::Cancelled);
+                    }
+                }
+                changed = control.pause.changed() => {
+                    if changed.is_err() || *control.pause.borrow() {
+                        return Err(DownloadEngineError::Paused);
+                    }
+                }
+                response = self.send_redirect_chain(&url, Some(start), Some(end), None, &[]) => {
+                    break response?;
+                }
+            }
+        };
+
+        if response.status() != StatusCode::PARTIAL_CONTENT
+            || !same_http_target(response.url(), &url)
+        {
+            return Err(DownloadEngineError::RangeMismatch);
+        }
+        let range = parse_content_range(&response)?;
+        let total = range
+            .total
+            .ok_or(DownloadEngineError::InvalidContentRange)?;
+        let expected_length = end
+            .checked_sub(start)
+            .and_then(|length| length.checked_add(1))
+            .ok_or(DownloadEngineError::ByteCountOverflow)?;
+        if range.start != start
+            || range.end != end
+            || expected_total.is_some_and(|expected| expected != total)
+            || parse_content_length(&response)?.is_some_and(|length| length != expected_length)
+            || response
+                .headers()
+                .get(reqwest::header::CONTENT_ENCODING)
+                .is_some_and(|encoding| !encoding.as_bytes().eq_ignore_ascii_case(b"identity"))
+        {
+            return Err(DownloadEngineError::RangeMismatch);
+        }
+        Ok((response, total))
+    }
+
     /// Writes browser context headers into the per-download context store so they
     /// are available when `download_prepared` constructs the `ResourceIdentity`.
     async fn persist_context_headers(
@@ -1365,6 +1429,7 @@ where
             if let Some(start) = range_start {
                 let end = range_end.map_or_else(String::new, |end| end.to_string());
                 request = request.header(RANGE, format!("bytes={start}-{end}"));
+                request = request.header(reqwest::header::ACCEPT_ENCODING, "identity");
                 if let Some(validator) = if_range {
                     request = request.header(IF_RANGE, validator);
                 }
