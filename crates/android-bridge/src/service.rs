@@ -52,6 +52,8 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
         BatchDownloadError::InvalidPackageName => BatchDownloadErrorCodeDto::InvalidPackageName,
         BatchDownloadError::InvalidFormat => BatchDownloadErrorCodeDto::InvalidFormat,
         BatchDownloadError::InvalidChecksum => BatchDownloadErrorCodeDto::InvalidChecksum,
+        BatchDownloadError::InvalidSourceSet => BatchDownloadErrorCodeDto::InvalidFormat,
+        BatchDownloadError::InvalidMultiSourceUrl => BatchDownloadErrorCodeDto::InvalidUrl,
         BatchDownloadError::InvalidDestination => BatchDownloadErrorCodeDto::InvalidDestination,
         BatchDownloadError::UnavailableEngine(_) => BatchDownloadErrorCodeDto::UnavailableEngine,
         BatchDownloadError::Destination(_) => BatchDownloadErrorCodeDto::Destination,
@@ -1467,13 +1469,17 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{AndroidYtDlpProcessRunner, DownloadService, engine_for_url, is_direct_media_url};
+    use super::{
+        AndroidYtDlpProcessRunner, DownloadService, batch_error_code, engine_for_url,
+        is_direct_media_url,
+    };
     use crate::YtDlpRuntime;
     use crate::dto::{
         BatchDownloadEngineDto, BatchDownloadErrorCodeDto, BatchDownloadRequestDto, CoreConfig,
         DownloadEventDto, DownloadPriorityDto,
     };
     use crate::error::MobileApiError;
+    use fetchx_core_services::BatchDownloadError;
     use fetchx_downloader::{YtDlpError, YtDlpProcessRunner};
     use fetchx_models::EngineKind;
 
@@ -1486,6 +1492,28 @@ mod tests {
             yt_dlp_executable_path: None,
         };
         (config, dir)
+    }
+
+    #[test]
+    fn multi_source_errors_map_to_sanitized_stable_codes() {
+        let invalid_source_set = BatchDownloadError::InvalidSourceSet;
+        assert!(matches!(
+            batch_error_code(&invalid_source_set),
+            BatchDownloadErrorCodeDto::InvalidFormat
+        ));
+        let invalid_multi_source_url = BatchDownloadError::InvalidMultiSourceUrl;
+        assert!(matches!(
+            batch_error_code(&invalid_multi_source_url),
+            BatchDownloadErrorCodeDto::InvalidUrl
+        ));
+
+        for error in [invalid_source_set, invalid_multi_source_url] {
+            let message = error.to_string();
+            assert!(!message.contains("https://"));
+            assert!(!message.contains("user:password"));
+            assert!(!message.contains("C:\\"));
+            assert!(!message.contains("server response"));
+        }
     }
 
     struct SlowVersionRuntime;

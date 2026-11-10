@@ -318,4 +318,8 @@ For Metalink files with piece hashes, DirectHTTP now requires an exact `206` pro
 
 Loopback fixtures cover bad/short/oversized/wrong-offset ranges, inconsistent totals, ignored ranges and whole-file fallback, mirror switching with only missing-piece requests, verified-piece resume after cancellation, whole-file mismatch, and destination preservation. Aria2's indexed offset, final short piece, and per-piece validation behavior were adapted from the pinned `IteratableChunkChecksumValidator.cc`; no aria2 source was copied. Full external protocol and device coverage remains unverified.
 
-Windows validation passed: 22 focused Metalink tests, 286 downloader tests (2 ignored), 2 lifecycle integration tests, strict downloader Clippy, formatting, diff check, and desktop `cargo check`. Workspace check remains blocked by unrelated Android-bridge handling of two existing `BatchDownloadError` variants.
+Windows validation passed: 22 focused Metalink tests, 286 downloader tests (2 ignored), 2 lifecycle integration tests, strict downloader Clippy, formatting, diff check, and desktop `cargo check`. Prompt 42 subsequently fixed the Android-bridge mappings for `InvalidSourceSet` and `InvalidMultiSourceUrl`; `cargo check --workspace` now passes.
+
+### Prompt 42 — Android batch error mapping
+
+The Android bridge converts `InvalidSourceSet` and `InvalidMultiSourceUrl` into existing stable DTO codes (`InvalidFormat` and `InvalidUrl`). The DTO carries no raw message or input values, preventing URLs, credentials, paths, and server text from leaking. Focused mapping tests and bridge/CoreServices/downloader suites pass; `cargo check --workspace`, strict Clippy, formatting, and diff checks pass. No CoreServices behavior or platform API changed. Android device validation remains unperformed, and external aria2 remains removed.
