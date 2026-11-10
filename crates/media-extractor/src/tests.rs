@@ -23,6 +23,40 @@ struct PrefixExtractor {
     name: &'static str,
 }
 
+struct ExplicitlyUnsupportedExtractor;
+
+#[async_trait]
+impl MediaExtractor for ExplicitlyUnsupportedExtractor {
+    fn can_handle(&self, url: &str) -> bool {
+        url.starts_with("https://")
+    }
+
+    async fn extract(
+        &self,
+        _url: &str,
+        _opts: &ExtractOptions,
+    ) -> Result<MediaInfo, ExtractionError> {
+        Err(ExtractionError::UnsupportedUrl)
+    }
+}
+
+struct TimeoutExtractor;
+
+#[async_trait]
+impl MediaExtractor for TimeoutExtractor {
+    fn can_handle(&self, url: &str) -> bool {
+        url.starts_with("https://")
+    }
+
+    async fn extract(
+        &self,
+        _url: &str,
+        _opts: &ExtractOptions,
+    ) -> Result<MediaInfo, ExtractionError> {
+        Err(ExtractionError::Timeout)
+    }
+}
+
 #[async_trait]
 impl MediaExtractor for PrefixExtractor {
     fn can_handle(&self, url: &str) -> bool {
@@ -236,7 +270,7 @@ fn test_extract_options_default_is_empty() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: Registry tries extractors in order (first match wins)
+// Test 6: Registry tries extractors in order
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -258,6 +292,40 @@ async fn test_registry_tries_extractors_in_order() {
         .expect("extraction should succeed");
 
     assert_eq!(result.extractor_name, "first");
+}
+
+#[tokio::test]
+async fn test_registry_falls_back_only_after_explicit_unsupported_result() {
+    let mut registry = ExtractorRegistry::new();
+    registry.register(Arc::new(ExplicitlyUnsupportedExtractor));
+    registry.register(Arc::new(PrefixExtractor {
+        prefix: "https://",
+        name: "fallback",
+    }));
+
+    let result = registry
+        .extract("https://example.com/watch", ExtractOptions::default())
+        .await
+        .expect("second extractor should handle the unsupported page");
+
+    assert_eq!(result.extractor_name, "fallback");
+}
+
+#[tokio::test]
+async fn test_registry_does_not_fall_back_after_non_unsupported_error() {
+    let mut registry = ExtractorRegistry::new();
+    registry.register(Arc::new(TimeoutExtractor));
+    registry.register(Arc::new(PrefixExtractor {
+        prefix: "https://",
+        name: "must-not-run",
+    }));
+
+    let error = registry
+        .extract("https://example.com/watch", ExtractOptions::default())
+        .await
+        .expect_err("timeout must be surfaced");
+
+    assert!(matches!(error, ExtractionError::Timeout));
 }
 
 // ---------------------------------------------------------------------------

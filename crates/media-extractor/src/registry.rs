@@ -10,9 +10,9 @@ use crate::{
 
 /// Ordered registry of [`MediaExtractor`] implementations.
 ///
-/// Extractors are tried in insertion order. The first extractor whose
-/// [`MediaExtractor::can_handle`] returns `true` is used; there is no fallback
-/// to later extractors on failure.
+/// Extractors are tried in insertion order. An explicit
+/// [`ExtractionError::UnsupportedUrl`] result advances to the next matching
+/// extractor; other failures are surfaced without fallback.
 ///
 /// The registry validates the URL with [`is_safe_media_url`] before delegating
 /// to any extractor.
@@ -56,15 +56,22 @@ impl ExtractorRegistry {
         opts: ExtractOptions,
     ) -> Result<MediaInfo, ExtractionError> {
         is_safe_media_url(url)?;
-        let extractor = self.find(url).ok_or(ExtractionError::UnsupportedUrl)?;
-        let mut info = extractor.extract(url, &opts).await?;
-        // Enforce per-format SSRF/header safety at the registry boundary so the
-        // invariant holds regardless of which extractor produced `info`.
-        info.sanitise_format_urls();
-        if info.formats.is_empty() {
-            return Err(ExtractionError::NoFormats);
+        for extractor in self.extractors.iter().filter(|e| e.can_handle(url)) {
+            match extractor.extract(url, &opts).await {
+                Ok(mut info) => {
+                    // Enforce per-format SSRF/header safety at the registry boundary so the
+                    // invariant holds regardless of which extractor produced `info`.
+                    info.sanitise_format_urls();
+                    if info.formats.is_empty() {
+                        return Err(ExtractionError::NoFormats);
+                    }
+                    return Ok(info);
+                }
+                Err(ExtractionError::UnsupportedUrl) => continue,
+                Err(error) => return Err(error),
+            }
         }
-        Ok(info)
+        Err(ExtractionError::UnsupportedUrl)
     }
 }
 

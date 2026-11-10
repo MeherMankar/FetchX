@@ -42,7 +42,7 @@ use fetchx_downloader::{
     save_http_multi_source_set, validate_http_source_url,
 };
 use fetchx_media_extractor::{
-    ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry,
+    ExtractOptions as MediaExtractOptions, ExtractionError, ExtractorRegistry, GenericExtractor,
     UnsupportedExtractor, YtDlpExtractor,
 };
 use fetchx_models::{
@@ -2741,6 +2741,7 @@ impl EngineRuntime {
         // to that runner; otherwise it spawns yt-dlp itself (desktop/CLI).
         let media_registry = {
             let mut registry = ExtractorRegistry::new();
+            registry.register(Arc::new(GenericExtractor));
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
                 // Use the resolved executable path captured before the engine was moved.
                 let executable = ytdlp_executable.unwrap_or_else(|| {

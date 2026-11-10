@@ -15,12 +15,12 @@ pub struct MediaInfo {
     /// The canonical URL of the page that was extracted.
     pub webpage_url: String,
 
-    /// Name of the extractor that produced this result (e.g. "Youtube", "Vimeo").
-    /// Populated from yt-dlp's `extractor_key` field.
+    /// Name of the extractor that produced this result (e.g. "Youtube", "Vimeo",
+    /// or "generic").
     pub extractor_name: String,
 
     /// All available downloadable formats, in the order returned by the extractor.
-    /// At least one format is always present (enforced by [`crate::YtDlpExtractor`]).
+    /// At least one format is always present (enforced by the registry).
     pub formats: Vec<MediaFormat>,
 }
 
@@ -29,7 +29,7 @@ pub struct MediaInfo {
 pub struct MediaFormat {
     /// Opaque format identifier used to re-select this format for download.
     /// For yt-dlp formats this is the `format_id` (possibly with `+bestaudio`
-    /// suffix as produced by `parse_format_output`).
+    /// suffix); native extractors may define their own stable identifier.
     pub id: String,
 
     /// File extension without the leading dot (e.g. `"mp4"`, `"webm"`).
@@ -63,9 +63,10 @@ pub struct MediaFormat {
     /// Extra headers that must be sent with requests for this format's URL.
     ///
     /// # Security
-    /// These headers are extracted from yt-dlp's `http_headers` JSON field.
-    /// Before forwarding to the download engine the caller MUST apply the same
-    /// name/value validation rules (character whitelist, blocklist for
+    /// These headers may be supplied by an extractor (yt-dlp's `http_headers`
+    /// field, for example). Before forwarding to the download engine, the
+    /// caller MUST apply the same name/value validation rules (character
+    /// whitelist, blocklist for
     /// `Authorization`, `Cookie`, etc.) to prevent auth tokens leaking to
     /// unrelated domains. See the security design doc for details.
     pub required_headers: Vec<(String, String)>,

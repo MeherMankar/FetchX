@@ -82,13 +82,20 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
     )
     .await?;
 
-    // The registry is wired with the YtDlpExtractor backed by our stub runner.
-    // `extract_media` must reach the runner and surface its error. The stub's
+    // The native Generic extractor defers pages that need request context. The
+    // registry then reaches the YtDlpExtractor backed by our stub runner.
+    // `extract_media` must surface the legacy runner's error. The stub's
     // `discover_formats` returns `FormatDiscoveryUnsupported`, which the
     // adapter maps to `RunnerError::Unsupported` and the extractor maps to
     // `ExtractionError::UnsupportedUrl`.
     let result = services
-        .extract_media("https://example.com/video", ExtractOptions::default())
+        .extract_media(
+            "https://example.com/video",
+            ExtractOptions {
+                cookies: Some("example.com\tFALSE\t/\tFALSE\t0\ttest\tvalue\n".to_owned()),
+                ..ExtractOptions::default()
+            },
+        )
         .await;
 
     let err = result.expect_err("extract_media should propagate the runner error");
