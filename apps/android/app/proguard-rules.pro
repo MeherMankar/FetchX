@@ -4,6 +4,18 @@
 # Keep Kotlin metadata for reflection
 -keepattributes *Annotation*, Signature, Exception
 
+# UniFFI reaches Rust through JNA-generated proxies and reflected structure fields.
+-keep class dev.fetchx.bridge.uniffi.** { *; }
+-keep interface dev.fetchx.bridge.uniffi.** { *; }
+-keep class com.sun.jna.** { *; }
+-keep interface com.sun.jna.** { *; }
+
+# JNA also contains optional desktop AWT integrations, which Android does not provide.
+-dontwarn java.awt.Component
+-dontwarn java.awt.GraphicsEnvironment
+-dontwarn java.awt.HeadlessException
+-dontwarn java.awt.Window
+
 # Keep Compose runtime
 -keep class androidx.compose.** { *; }
 

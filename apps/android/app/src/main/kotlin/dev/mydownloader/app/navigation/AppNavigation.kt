@@ -326,30 +326,6 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                         },
                         ongoingDownloadCount = ongoingDownloadCount,
                         downloads = downloads,
-                        onPlayVideo = { url ->
-                            val scheme = try {
-                                android.net.Uri.parse(url).scheme?.lowercase()
-                            } catch (_: Exception) {
-                                null
-                            }
-                            if (scheme == "http" || scheme == "https") {
-                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                    setDataAndType(android.net.Uri.parse(url), "video/*")
-                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                try {
-                                    context.startActivity(intent)
-                                } catch (_: ActivityNotFoundException) {
-                                    Toast.makeText(context, "No video player is installed", Toast.LENGTH_LONG).show()
-                                }
-                            } else {
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "This URL cannot be opened in a video player",
-                                    android.widget.Toast.LENGTH_LONG,
-                                ).show()
-                            }
-                        },
                         onThemeColorChange = { newSeed ->
                             browserThemeSeed = newSeed
                             browserDataPreferences.edit()

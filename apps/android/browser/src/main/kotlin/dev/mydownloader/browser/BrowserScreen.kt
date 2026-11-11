@@ -206,7 +206,6 @@ fun BrowserScreen(
     onInterceptBrowserDownload: suspend (url: String, filename: String?) -> Unit = { _, _ -> },
     ongoingDownloadCount: Int = 0,
     downloads: List<DownloadItem> = emptyList(),
-    onPlayVideo: (String) -> Unit = {},
     browserVersionName: String = "unknown",
     initialNavigateUrl: String? = null,
     viewModel: BrowserViewModel = composeViewModel(factory = BrowserViewModel.Factory),
@@ -1227,7 +1226,16 @@ fun BrowserScreen(
                                     Spacer(Modifier.width(4.dp))
                                     IconButton(
                                         onClick = {
-                                            onPlayVideo(video.url)
+                                            if (isHttpOrHttpsPageUrl(video.url)) {
+                                                showPicker = false
+                                                viewModel.navigate(video.url)
+                                            } else {
+                                                Toast.makeText(
+                                                    context,
+                                                    "This video URL cannot be opened in FetchX",
+                                                    Toast.LENGTH_LONG,
+                                                ).show()
+                                            }
                                         },
                                         modifier = Modifier.size(48.dp),
                                     ) {

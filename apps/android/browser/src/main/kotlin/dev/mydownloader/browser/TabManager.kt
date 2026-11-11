@@ -1,6 +1,8 @@
 package dev.fetchx.browser
 
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.webkit.URLUtil
 import androidx.annotation.OptIn
@@ -757,7 +759,6 @@ class TabManager(
                 val newId = UUID.randomUUID().toString()
                 val openerTab = store.findTab(tabId)
                 val newSession = buildSession(newId, openerTab?.desktopSiteEnabled == true)
-                newSession.open(runtime)
                 trackerBlockingController.registerTab(newId)
                 sessions[newId] = newSession
                 val normalized = if (uri.isNotBlank()) normalizeUrl(uri) else "about:blank"
@@ -769,7 +770,11 @@ class TabManager(
                         desktopSiteEnabled = openerTab?.desktopSiteEnabled == true,
                     ),
                 )
-                onStateChanged?.invoke()
+                Handler(Looper.getMainLooper()).post {
+                    if (sessions[newId] === newSession) {
+                        onStateChanged?.invoke()
+                    }
+                }
                 return GeckoResult.fromValue(newSession)
             }
 
