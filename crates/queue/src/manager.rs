@@ -1878,7 +1878,6 @@ where
 mod tests {
     use std::{
         collections::{HashMap, HashSet},
-        error::Error,
         ffi::OsString,
         path::{Path, PathBuf},
         sync::{
@@ -1887,6 +1886,9 @@ mod tests {
         },
         time::Duration,
     };
+
+    #[cfg(feature = "phase30-queue-fault-injection")]
+    use std::error::Error;
 
     use fetchx_core::DownloadStateMachine;
     #[cfg(feature = "phase30-queue-fault-injection")]
@@ -2337,7 +2339,7 @@ mod tests {
             oneshot::Sender<()>,
             JoinHandle<()>,
         ),
-        Box<dyn Error>,
+        Box<dyn std::error::Error>,
     > {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -2411,8 +2413,10 @@ mod tests {
     }
 
     #[cfg(feature = "phase30-queue-fault-injection")]
-    async fn direct_http_queue()
-    -> Result<(Database, SqliteDownloadRepository, QueueManager), Box<dyn Error>> {
+    async fn direct_http_queue() -> Result<
+        (Database, SqliteDownloadRepository, QueueManager),
+        Box<dyn std::error::Error>,
+    > {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
@@ -2973,7 +2977,7 @@ mod tests {
 
     #[cfg(feature = "phase30-queue-fault-injection")]
     #[tokio::test]
-    async fn real_http_filesystem_failure_releases_queue_resources() -> Result<(), Box<dyn Error>> {
+    async fn real_http_filesystem_failure_releases_queue_resources() -> Result<(), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -3085,7 +3089,7 @@ mod tests {
     #[cfg(feature = "phase30-queue-fault-injection")]
     #[tokio::test]
     async fn cancellation_during_retry_backoff_releases_queue_and_continues()
-    -> Result<(), Box<dyn Error>> {
+    -> Result<(), Box<dyn std::error::Error>> {
         let (_database, repository, manager) = direct_http_queue().await?;
         let (base_url, retry_started, _active_retry_started, _release, server) =
             start_retry_fixture().await?;
@@ -3157,7 +3161,7 @@ mod tests {
     #[cfg(feature = "phase30-queue-fault-injection")]
     #[tokio::test]
     async fn cancellation_during_active_retry_releases_queue_and_continues()
-    -> Result<(), Box<dyn Error>> {
+    -> Result<(), Box<dyn std::error::Error>> {
         let (_database, repository, manager) = direct_http_queue().await?;
         let (base_url, retry_started, active_retry_started, release, server) =
             start_retry_fixture().await?;

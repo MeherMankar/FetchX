@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 mod brightcove;
+mod cbc;
 mod engine;
 mod extractor;
 mod format_selector;
@@ -26,7 +27,9 @@ mod generic;
 mod jwplatform;
 mod kaltura;
 mod models;
+mod polskieradio;
 mod provider_http;
+mod radiofrance;
 mod registry;
 pub mod security;
 mod unsupported;
@@ -40,6 +43,7 @@ pub mod ytdlp;
 mod tests;
 
 pub use brightcove::BrightcoveExtractor;
+pub use cbc::CbcExtractor;
 pub use engine::format_to_engine_kind;
 pub use extractor::{
     ExtractOptions, ExtractionError, MediaExtractor, YoutubePlayerClient, YoutubePoToken,
@@ -50,6 +54,8 @@ pub use generic::GenericExtractor;
 pub use jwplatform::JwPlatformExtractor;
 pub use kaltura::KalturaExtractor;
 pub use models::{MediaFormat, MediaInfo, MediaProtocol};
+pub use polskieradio::PolskieRadioExtractor;
+pub use radiofrance::RadioFranceExtractor;
 pub use registry::ExtractorRegistry;
 pub use security::{CookieTempFile, filter_safe_headers};
 pub use unsupported::UnsupportedExtractor;
