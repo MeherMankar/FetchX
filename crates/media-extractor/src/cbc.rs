@@ -165,11 +165,11 @@ fn parse_route(source: &str) -> Option<Route> {
         .collect::<Vec<_>>();
     if segments.first() == Some(&"player") && segments.get(1) == Some(&"play") {
         let id = match segments.get(2) {
-            Some(value) if *value == "video" => segments.get(3).map(|value| *value),
+            Some(value) if *value == "video" => segments.get(3).copied(),
             Some(value) => Some(*value),
             None => None,
         };
-        if let Some(id) = id.and_then(|value| media_id(value)) {
+        if let Some(id) = id.and_then(media_id) {
             return Some(Route::Player(id));
         }
     }
@@ -187,9 +187,7 @@ fn parse_route(source: &str) -> Option<Route> {
 }
 
 fn numeric_id(value: &str) -> Option<String> {
-    let digits = value
-        .split_once('-')
-        .map_or(value, |(digits, _)| digits);
+    let digits = value.split_once('-').map_or(value, |(digits, _)| digits);
     (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
         .then(|| digits.to_owned())
 }
@@ -221,33 +219,11 @@ fn parse_article_media_ids(html: &str) -> Result<Vec<String>, ExtractionError> {
                 .map(|(_, value)| value.into_owned())
                 .or_else(|| {
                     url.path_segments()
-                        .and_then(|segments| segments.filter(|part| !part.is_empty()).next_back())
+                        .and_then(|mut segments| segments.rfind(|part| !part.is_empty()))
                         .and_then(media_id)
                 })
         {
             ids.push(id);
-        }
-        let mut remaining = html;
-        while let Some((index, _)) = remaining.match_indices("CBC.APP.Caffeine.initInstance(").next() {
-            let after_marker = &remaining[index..];
-            if let Some(value) = json_after_marker(after_marker, "initInstance(")
-                && let Some(id) = value.get("mediaId").and_then(Value::as_str).and_then(media_id)
-            {
-                ids.push(id);
-            }
-            remaining = &remaining[index + "CBC.APP.Caffeine.initInstance(".len()..];
-        }
-        if let Some(state) = json_after_marker(html, "window.__INITIAL_STATE__") {
-            let mut state_ids = Vec::new();
-            if let Some(id) = state.pointer("/app/contentId").and_then(Value::as_str).and_then(media_id)
-            {
-                state_ids.push(id);
-            }
-            collect_polopoly_media_ids(
-                state.pointer("/detail/content/body").unwrap_or(&Value::Null),
-                &mut state_ids,
-            );
-            ids.extend(state_ids);
         }
         if let Some(id) = element
             .value()
@@ -257,6 +233,39 @@ fn parse_article_media_ids(html: &str) -> Result<Vec<String>, ExtractionError> {
         {
             ids.push(id);
         }
+    }
+    let mut remaining = html;
+    while let Some((index, _)) = remaining
+        .match_indices("CBC.APP.Caffeine.initInstance(")
+        .next()
+    {
+        let after_marker = &remaining[index..];
+        if let Some(value) = json_after_marker(after_marker, "initInstance(")
+            && let Some(id) = value
+                .get("mediaId")
+                .and_then(Value::as_str)
+                .and_then(media_id)
+        {
+            ids.push(id);
+        }
+        remaining = &remaining[index + "CBC.APP.Caffeine.initInstance(".len()..];
+    }
+    if let Some(state) = json_after_marker(html, "window.__INITIAL_STATE__") {
+        let mut state_ids = Vec::new();
+        if let Some(id) = state
+            .pointer("/app/contentId")
+            .and_then(Value::as_str)
+            .and_then(media_id)
+        {
+            state_ids.push(id);
+        }
+        collect_polopoly_media_ids(
+            state
+                .pointer("/detail/content/body")
+                .unwrap_or(&Value::Null),
+            &mut state_ids,
+        );
+        ids.extend(state_ids);
     }
     ids.sort();
     ids.dedup();
@@ -366,7 +375,10 @@ fn parse_medianet_asset(asset: &Value) -> Option<ParsedFormat> {
         return None;
     };
     Some(ParsedFormat {
-        id: format!("{ext}-{}", asset.get("id").and_then(Value::as_str).unwrap_or("source")),
+        id: format!(
+            "{ext}-{}",
+            asset.get("id").and_then(Value::as_str).unwrap_or("source")
+        ),
         url: url.to_owned(),
         ext: ext.to_owned(),
         protocol,
@@ -421,12 +433,21 @@ fn extension(url: &Url, content_type: Option<&str>) -> String {
     if let Some(ext) = url
         .path_segments()
         .and_then(|mut segments| segments.next_back())
-        .and_then(|segment| segment.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()))
+        .and_then(|segment| {
+            segment
+                .rsplit_once('.')
+                .map(|(_, ext)| ext.to_ascii_lowercase())
+        })
         .filter(|ext| matches!(ext.as_str(), "mp3" | "m4a" | "aac" | "mp4" | "m3u8" | "mpd"))
     {
         return ext;
     }
-    match content_type.unwrap_or_default().split(';').next().unwrap_or_default() {
+    match content_type
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+    {
         "audio/mpeg" => "mp3",
         "audio/aac" => "aac",
         "audio/mp4" => "m4a",
@@ -538,17 +559,21 @@ mod tests {
         let parsed = parse_medianet_asset(&asset).unwrap();
         assert_eq!(parsed.ext, "mp3");
         assert_eq!(parsed.protocol, MediaProtocol::Http);
-        assert!(parse_medianet_asset(&serde_json::json!({
-            "url": "https://media.example/encrypted.mp4",
-            "protection": {"keySystems": ["widevine"]},
-            "params": [{"name": "contentType", "value": "video/mp4"}]
-        }))
-        .is_none());
-        assert!(parse_medianet_asset(&serde_json::json!({
-            "url": "https://media.example/unknown",
-            "params": [{"name": "contentType", "value": "application/octet-stream"}]
-        }))
-        .is_none());
+        assert!(
+            parse_medianet_asset(&serde_json::json!({
+                "url": "https://media.example/encrypted.mp4",
+                "protection": {"keySystems": ["widevine"]},
+                "params": [{"name": "contentType", "value": "video/mp4"}]
+            }))
+            .is_none()
+        );
+        assert!(
+            parse_medianet_asset(&serde_json::json!({
+                "url": "https://media.example/unknown",
+                "params": [{"name": "contentType", "value": "application/octet-stream"}]
+            }))
+            .is_none()
+        );
     }
 
     #[test]
@@ -563,7 +588,13 @@ mod tests {
             }
         }))
         .is_err());
-        assert!(json_after_marker("window.__INITIAL_STATE__ = {broken};", "window.__INITIAL_STATE__").is_none());
+        assert!(
+            json_after_marker(
+                "window.__INITIAL_STATE__ = {broken};",
+                "window.__INITIAL_STATE__"
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]

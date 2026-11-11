@@ -2413,10 +2413,8 @@ mod tests {
     }
 
     #[cfg(feature = "phase30-queue-fault-injection")]
-    async fn direct_http_queue() -> Result<
-        (Database, SqliteDownloadRepository, QueueManager),
-        Box<dyn std::error::Error>,
-    > {
+    async fn direct_http_queue()
+    -> Result<(Database, SqliteDownloadRepository, QueueManager), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let direct_http = Arc::new(DirectHttpEngine::new(repository.clone())?);
@@ -2977,7 +2975,8 @@ mod tests {
 
     #[cfg(feature = "phase30-queue-fault-injection")]
     #[tokio::test]
-    async fn real_http_filesystem_failure_releases_queue_resources() -> Result<(), Box<dyn std::error::Error>> {
+    async fn real_http_filesystem_failure_releases_queue_resources()
+    -> Result<(), Box<dyn std::error::Error>> {
         let database = Database::connect("sqlite::memory:").await?;
         let repository = database.downloads();
         let listener = TcpListener::bind("127.0.0.1:0").await?;

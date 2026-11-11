@@ -120,10 +120,7 @@ fn parse_route(source: &str) -> Option<Route> {
         .path_segments()?
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
-    if host == "maison.radiofrance.fr"
-        && segments.len() >= 2
-        && segments[0] == "radiovisions"
-    {
+    if host == "maison.radiofrance.fr" && segments.len() >= 2 && segments[0] == "radiovisions" {
         return Some(Route::Legacy {
             id: segments[1].to_owned(),
         });
@@ -137,7 +134,11 @@ fn parse_route(source: &str) -> Option<Route> {
                 return Some(Route::FranceCulture { id: id.to_owned() });
             }
         }
-        if segments.len() == 1 || segments.get(1).is_some_and(|segment| segment.starts_with("radio-")) {
+        if segments.len() == 1
+            || segments
+                .get(1)
+                .is_some_and(|segment| segment.starts_with("radio-"))
+        {
             return Some(Route::Live {
                 station: station.to_owned(),
             });
@@ -202,10 +203,9 @@ fn find_typed_audio_object(value: &Value) -> Option<&Value> {
 
 fn parse_legacy_page(page: &str) -> Result<ParsedInfo, ExtractionError> {
     let document = Html::parse_document(page);
-    let title_selector =
-        Selector::parse("h1").map_err(|_| ExtractionError::InvalidOutput)?;
-    let source_selector = Selector::parse(".jp-jplayer[data-source]")
-        .map_err(|_| ExtractionError::InvalidOutput)?;
+    let title_selector = Selector::parse("h1").map_err(|_| ExtractionError::InvalidOutput)?;
+    let source_selector =
+        Selector::parse(".jp-jplayer[data-source]").map_err(|_| ExtractionError::InvalidOutput)?;
     let title = document
         .select(&title_selector)
         .next()
@@ -236,9 +236,13 @@ fn parse_legacy_sources(source: &str) -> Result<Vec<ParsedFormat>, ExtractionErr
         if id.is_empty() || url.is_empty() {
             continue;
         }
-        if let Ok(format) = format_from_url(id, url, None) {
-            formats.push(format);
+        let Ok(format) = format_from_url(id, url, None) else {
+            continue;
+        };
+        if format.ext == "m3u8" || format.protocol == MediaProtocol::Hls {
+            continue;
         }
+        formats.push(format);
         if index >= MAX_FORMATS {
             break;
         }
@@ -274,20 +278,22 @@ fn parse_live_response(response: &Value) -> Result<ParsedInfo, ExtractionError> 
     let title = response
         .pointer("/visual/legend")
         .and_then(Value::as_str)
+        .map(str::to_owned)
         .or_else(|| {
-            let first = response.pointer("/now/firstLine/title").and_then(Value::as_str);
-            let second = response.pointer("/now/secondLine/title").and_then(Value::as_str);
+            let first = response
+                .pointer("/now/firstLine/title")
+                .and_then(Value::as_str);
+            let second = response
+                .pointer("/now/secondLine/title")
+                .and_then(Value::as_str);
             match (first, second) {
-                (Some(first), Some(second)) => None.or(Some(Box::leak(
-                    format!("{first} - {second}").into_boxed_str(),
-                ) as &str)),
-                (Some(first), None) => Some(first),
+                (Some(first), Some(second)) => Some(format!("{first} - {second}")),
+                (Some(first), None) => Some(first.to_owned()),
                 _ => None,
             }
         })
         .filter(|title| !title.trim().is_empty())
-        .ok_or(ExtractionError::UnsupportedUrl)?
-        .to_owned();
+        .ok_or(ExtractionError::UnsupportedUrl)?;
     Ok(ParsedInfo {
         title,
         duration: None,
@@ -492,11 +498,6 @@ fn parse_iso_duration(value: &Value) -> Option<f64> {
     (current.is_empty() && seconds.is_finite()).then_some(seconds)
 }
 
-fn parse_f64(value: &Value) -> Option<f64> {
-    let value = value.as_f64().or_else(|| value.as_str()?.parse().ok())?;
-    (value.is_finite() && value >= 0.0).then_some(value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,7 +513,10 @@ mod tests {
         ] {
             assert!(RadioFranceExtractor.can_handle(url), "{url}");
         }
-        assert!(!RadioFranceExtractor.can_handle("https://www.radiofrance.fr/franceinter/podcasts/series"));
+        assert!(
+            !RadioFranceExtractor
+                .can_handle("https://www.radiofrance.fr/franceinter/podcasts/series")
+        );
         assert!(!RadioFranceExtractor.can_handle("https://example.com/franceinter"));
     }
 
@@ -547,6 +551,15 @@ mod tests {
         assert_eq!(parsed.title, "France Inter");
         assert_eq!(parsed.formats.len(), 2);
         assert_eq!(parsed.formats[1].protocol, MediaProtocol::Hls);
+        let composed_title = parse_live_response(&serde_json::json!({
+            "now": {
+                "firstLine": {"title": "First"},
+                "secondLine": {"title": "Second"},
+                "media": {"sources": [{"url": "https://cdn.example/live.aac"}]}
+            }
+        }))
+        .unwrap();
+        assert_eq!(composed_title.title, "First - Second");
         assert!(parse_live_response(&serde_json::json!({})).is_err());
     }
 

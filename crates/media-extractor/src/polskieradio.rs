@@ -115,13 +115,8 @@ impl PolskieRadioExtractor {
                     .map_err(|_| ExtractionError::InvalidOutput)?;
                 let body = serde_json::to_vec(&serde_json::json!({"guids": [id]}))
                     .map_err(|_| ExtractionError::InvalidOutput)?;
-                let response = provider_http::post(
-                    &api_url,
-                    "application/json",
-                    body,
-                    timeout,
-                )
-                .await?;
+                let response =
+                    provider_http::post(&api_url, "application/json", body, timeout).await?;
                 if !response.status.is_success()
                     || !response
                         .content_type
@@ -162,9 +157,9 @@ fn parse_route(source: &str) -> Option<Route> {
     }
     if matches!(host, "polskieradio.pl" | "polskieradio24.pl")
         && segments.len() >= 4
-        && segments[..2].iter().all(|segment| {
-            !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit())
-        })
+        && segments[..2]
+            .iter()
+            .all(|segment| !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit()))
         && segments[2].eq_ignore_ascii_case("artykul")
         && segments[3]
             .split(',')
@@ -197,18 +192,15 @@ fn parse_route(source: &str) -> Option<Route> {
 fn valid_guid(value: &str) -> bool {
     let parts = value.split('-').collect::<Vec<_>>();
     parts.len() == 5
-        && [8, 4, 4, 4, 12]
-            .iter()
-            .zip(parts)
-            .all(|(length, part)| {
-                part.len() == *length && part.bytes().all(|byte| byte.is_ascii_hexdigit())
-            })
+        && [8, 4, 4, 4, 12].iter().zip(parts).all(|(length, part)| {
+            part.len() == *length && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
 }
 
 fn parse_nextjs_state(page: &str) -> Result<Value, ExtractionError> {
     let document = Html::parse_document(page);
-    let selector = Selector::parse("script#__NEXT_DATA__")
-        .map_err(|_| ExtractionError::InvalidOutput)?;
+    let selector =
+        Selector::parse("script#__NEXT_DATA__").map_err(|_| ExtractionError::InvalidOutput)?;
     let text = document
         .select(&selector)
         .next()
@@ -229,7 +221,13 @@ fn parse_modern_attachments(article: &Value) -> Result<Vec<AudioEntry>, Extracti
             let url = attachment.get("file")?.as_str()?;
             let id = nonempty_string(attachment.get("id"))
                 .or_else(|| uuid_from_url(url))
-                .or_else(|| Url::parse(url).ok()?.path_segments()?.next_back().map(str::to_owned))
+                .or_else(|| {
+                    Url::parse(url)
+                        .ok()?
+                        .path_segments()?
+                        .next_back()
+                        .map(str::to_owned)
+                })
                 .unwrap_or_else(|| format!("audio-{}", url.len()));
             Some(AudioEntry {
                 id,
@@ -243,7 +241,9 @@ fn parse_modern_attachments(article: &Value) -> Result<Vec<AudioEntry>, Extracti
         .collect())
 }
 
-fn parse_legacy_players(content: &str) -> Result<(Vec<AudioEntry>, Option<String>), ExtractionError> {
+fn parse_legacy_players(
+    content: &str,
+) -> Result<(Vec<AudioEntry>, Option<String>), ExtractionError> {
     let document = Html::parse_document(content);
     let selector = Selector::parse("[data-media]").map_err(|_| ExtractionError::InvalidOutput)?;
     let mut entries = Vec::new();
@@ -261,7 +261,8 @@ fn parse_legacy_players(content: &str) -> Result<(Vec<AudioEntry>, Option<String
             continue;
         };
         entries.push(AudioEntry {
-            id: nonempty_string(value.get("id")).unwrap_or_else(|| format!("legacy-{}", entries.len() + 1)),
+            id: nonempty_string(value.get("id"))
+                .unwrap_or_else(|| format!("legacy-{}", entries.len() + 1)),
             url: url.to_owned(),
             title: Some(title),
             duration: value.get("length").and_then(parse_f64),
@@ -352,14 +353,19 @@ async fn get_html(source: &str, timeout: Duration) -> Result<String, ExtractionE
 fn uuid_from_url(value: &str) -> Option<String> {
     let url = Url::parse(value).ok()?;
     url.path_segments()?
-        .filter_map(|segment| valid_guid(segment).then(|| segment.to_ascii_lowercase()))
+        .filter(|segment| valid_guid(segment))
+        .map(str::to_ascii_lowercase)
         .next()
 }
 
 fn audio_extension(url: &Url) -> String {
     url.path_segments()
         .and_then(|mut segments| segments.next_back())
-        .and_then(|segment| segment.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()))
+        .and_then(|segment| {
+            segment
+                .rsplit_once('.')
+                .map(|(_, ext)| ext.to_ascii_lowercase())
+        })
         .filter(|ext| matches!(ext.as_str(), "mp3" | "m4a" | "aac" | "ogg" | "opus" | "wav"))
         .unwrap_or_else(|| "mp3".to_owned())
 }
@@ -410,9 +416,11 @@ mod tests {
         assert_eq!(audio.len(), 1);
         assert_eq!(audio[0].title.as_deref(), Some("Episode"));
         assert_eq!(audio[0].duration, Some(321.0));
-        assert!(parse_modern_attachments(&serde_json::json!({"attachments": []}))
-            .unwrap()
-            .is_empty());
+        assert!(
+            parse_modern_attachments(&serde_json::json!({"attachments": []}))
+                .unwrap()
+                .is_empty()
+        );
         assert!(parse_modern_attachments(&serde_json::json!({})).is_err());
     }
 
@@ -424,10 +432,12 @@ mod tests {
         assert_eq!(entries[0].id, "42");
         let many = format!("{content}{content}");
         assert_eq!(parse_legacy_players(&many).unwrap().0.len(), 2);
-        assert!(parse_legacy_players("<div data-media='not json'></div>")
-            .unwrap()
-            .0
-            .is_empty());
+        assert!(
+            parse_legacy_players("<div data-media='not json'></div>")
+                .unwrap()
+                .0
+                .is_empty()
+        );
     }
 
     #[test]
@@ -443,7 +453,11 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].filesize, Some(999));
         assert!(parse_podcast_response(&serde_json::json!({})).is_err());
-        assert!(parse_podcast_response(&serde_json::json!([])).unwrap().is_empty());
+        assert!(
+            parse_podcast_response(&serde_json::json!([]))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
