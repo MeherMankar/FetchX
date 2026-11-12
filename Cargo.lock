@@ -1951,6 +1951,7 @@ dependencies = [
  "fetchx-media-extractor",
  "fetchx-models",
  "fetchx-queue",
+ "fetchx-remote-protocol",
  "fetchx-remote-server",
  "fetchx-scheduler",
  "fetchx-storage",

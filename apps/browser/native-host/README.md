@@ -19,6 +19,11 @@ the selected target, writes the response to stdout, and exits. The browser opens
 a new host process for each request. Local download operations continue through
 the desktop's existing CoreServices and queue.
 
+For a local download or video-quality action, if FetchX is not running, the host
+tries to start the desktop executable located beside or near the native host,
+then waits up to 20 seconds for the desktop IPC endpoint. Status checks do not
+start the desktop. Remote requests are never used to launch a local app.
+
 ## Security model
 
 - The host binds to `127.0.0.1` only.  No LAN or internet exposure.

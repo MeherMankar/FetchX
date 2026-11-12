@@ -25,7 +25,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{self, BufReader, BufWriter};
+use std::{
+    io::{self, BufReader, BufWriter},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
 
 use fetchx_browser_protocol::{
     BrowserErrorCode, BrowserRequest, BrowserRequestBody, BrowserResponse, BrowserRpcTarget,
@@ -35,12 +40,15 @@ use fetchx_remote_protocol::DOWNLOAD_CREATE;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    time::timeout,
+    time::{sleep, timeout},
 };
 use tracing::{debug, error, info, warn};
 
 mod ipc;
 mod remote;
+
+const DESKTOP_START_TIMEOUT: Duration = Duration::from_secs(20);
+const DESKTOP_START_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 fn main() {
     // All diagnostics to stderr — stdout is protocol traffic only.
@@ -141,17 +149,7 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
         &request.body,
         BrowserRequestBody::Rpc(rpc) if rpc.request.method == DOWNLOAD_CREATE
     );
-    let state = match ipc::read_desktop_state() {
-        Ok(s) => s,
-        Err(e) => {
-            warn!(%e, "could not read desktop state file");
-            return Ok(BrowserResponse::error(
-                None,
-                BrowserErrorCode::DesktopUnavailable,
-                "FetchX does not appear to be running. Please start the application.",
-            ));
-        }
-    };
+    let may_launch_desktop = can_launch_desktop_for(&request);
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -160,29 +158,59 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
         .map_err(|e| HostError::Runtime(e.to_string()))?;
 
     rt.block_on(async {
-        let connect_result = timeout(
-            std::time::Duration::from_secs(5),
-            TcpStream::connect(("127.0.0.1", state.port)),
-        )
-        .await;
+        let started_at = Instant::now();
+        let mut launch_attempted = false;
+        let (state, mut stream) = loop {
+            match ipc::read_desktop_state() {
+                Ok(state) => {
+                    match timeout(
+                        Duration::from_secs(1),
+                        TcpStream::connect(("127.0.0.1", state.port)),
+                    )
+                    .await
+                    {
+                        Ok(Ok(stream)) => break (state, stream),
+                        Ok(Err(error)) => {
+                            warn!(%error, "could not connect to desktop browser endpoint");
+                        }
+                        Err(_) => {
+                            warn!("connection to desktop browser endpoint timed out");
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, "could not read desktop state file");
+                }
+            }
 
-        let mut stream = match connect_result {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                warn!(%e, "could not connect to desktop browser endpoint");
+            if may_launch_desktop && !launch_attempted {
+                launch_attempted = true;
+                if let Err(error) = launch_desktop() {
+                    warn!(%error, "could not start FetchX desktop application");
+                    return Ok(BrowserResponse::error(
+                        None,
+                        BrowserErrorCode::DesktopUnavailable,
+                        "Could not start FetchX automatically. Open the FetchX desktop app and try again.",
+                    ));
+                }
+                info!("started FetchX desktop application for browser request");
+            }
+
+            if !may_launch_desktop {
                 return Ok(BrowserResponse::error(
                     None,
                     BrowserErrorCode::DesktopUnavailable,
-                    "FetchX is not responding. Please check that it is running.",
+                    "FetchX is not running. Start the desktop app and try again.",
                 ));
             }
-            Err(_) => {
+            if started_at.elapsed() >= DESKTOP_START_TIMEOUT {
                 return Ok(BrowserResponse::error(
                     None,
                     BrowserErrorCode::DesktopUnavailable,
-                    "Connection to FetchX timed out.",
+                    "FetchX did not finish starting in time. Open the desktop app and try again.",
                 ));
             }
+            sleep(DESKTOP_START_POLL_INTERVAL).await;
         };
 
         // Send token + request as a single JSON message prefixed by 4-byte LE length.
@@ -257,6 +285,142 @@ fn forward_to_desktop(request: BrowserRequest) -> Result<BrowserResponse, HostEr
             }
         }
     })
+}
+
+fn can_launch_desktop_for(request: &BrowserRequest) -> bool {
+    let BrowserRequestBody::Rpc(rpc) = &request.body else {
+        return false;
+    };
+    if !matches!(rpc.target, BrowserRpcTarget::Local) {
+        return false;
+    }
+    matches!(
+        rpc.request.method.as_str(),
+        DOWNLOAD_CREATE | "media.extractFormats" | "media.addFormat"
+    )
+}
+
+fn desktop_executable_candidates(host_executable: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let executable_names = if cfg!(windows) {
+        ["FetchX.exe", "fetchx-desktop.exe"]
+    } else {
+        ["fetchx-desktop", "FetchX"]
+    };
+
+    if let Some(host_directory) = host_executable.parent() {
+        for name in executable_names {
+            candidates.push(host_directory.join(name));
+        }
+        if host_directory
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("engines"))
+            && let Some(resources_directory) = host_directory.parent()
+            && resources_directory
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case("resources"))
+            && let Some(application_directory) = resources_directory.parent()
+        {
+            for name in executable_names {
+                candidates.push(application_directory.join(name));
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let mut bases = vec![
+            std::env::var_os("ProgramFiles").map(PathBuf::from),
+            std::env::var_os("ProgramFiles(x86)").map(PathBuf::from),
+        ];
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            bases.push(Some(local_app_data.clone()));
+            bases.push(Some(local_app_data.join("Programs")));
+        }
+        for base in bases.into_iter().flatten() {
+            for name in executable_names {
+                candidates.push(base.join("FetchX").join(name));
+            }
+        }
+    }
+
+    candidates
+}
+
+fn launch_desktop() -> Result<(), String> {
+    let host_executable = std::env::current_exe()
+        .map_err(|error| format!("could not locate native host: {error}"))?;
+    let executable = desktop_executable_candidates(&host_executable)
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| "could not locate FetchX desktop executable".to_owned())?;
+
+    let mut command = Command::new(&executable);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(directory) = executable.parent() {
+        command.current_dir(directory);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("could not launch {}: {error}", executable.display()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use fetchx_browser_protocol::{BrowserRpcRequest, PROTOCOL_VERSION};
+    use fetchx_remote_protocol::{RpcId, RpcRequest};
+
+    use super::{can_launch_desktop_for, desktop_executable_candidates};
+
+    fn local_rpc(method: &str) -> super::BrowserRequest {
+        super::BrowserRequest {
+            version: PROTOCOL_VERSION,
+            body: super::BrowserRequestBody::Rpc(BrowserRpcRequest {
+                target: super::BrowserRpcTarget::Local,
+                request: RpcRequest {
+                    jsonrpc: "2.0".to_owned(),
+                    id: Some(RpcId::Number(1)),
+                    method: method.to_owned(),
+                    params: None,
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn starts_desktop_only_for_local_user_actions() {
+        assert!(can_launch_desktop_for(&local_rpc("download.create")));
+        assert!(can_launch_desktop_for(&local_rpc("media.extractFormats")));
+        assert!(can_launch_desktop_for(&local_rpc("media.addFormat")));
+        assert!(!can_launch_desktop_for(&local_rpc("system.discover")));
+        assert!(!can_launch_desktop_for(&local_rpc("download.list")));
+    }
+
+    #[test]
+    fn finds_install_locations_around_native_host() {
+        let host_path =
+            std::path::Path::new("C:\\FetchX\\resources\\engines\\fetchx-native-host.exe");
+        let candidates = desktop_executable_candidates(host_path);
+        assert!(
+            candidates
+                .iter()
+                .any(|path| { path == std::path::Path::new("C:\\FetchX\\FetchX.exe") })
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|path| { path == std::path::Path::new("C:\\FetchX\\fetchx-desktop.exe") })
+        );
+    }
 }
 
 fn response_error(

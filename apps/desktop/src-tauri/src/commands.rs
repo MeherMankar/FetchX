@@ -268,7 +268,10 @@ impl AppState {
         self.get(id).await
     }
 
-    async fn extract_media_formats(&self, source_url: &str) -> Result<MediaInfoDto, IpcError> {
+    pub(crate) async fn extract_media_formats(
+        &self,
+        source_url: &str,
+    ) -> Result<MediaInfoDto, IpcError> {
         let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
         core_services
             .extract_media(
@@ -278,6 +281,25 @@ impl AppState {
             .await
             .map(media_info_to_dto)
             .map_err(|_| IpcError::internal())
+    }
+
+    pub(crate) async fn add_media_format_from_browser(
+        &self,
+        url: String,
+        format_id: String,
+        extension: String,
+    ) -> Result<DownloadDto, IpcError> {
+        self.add_with_ytdlp_format(
+            AddDownloadRequest {
+                url,
+                engine_kind: Some(EngineKind::YtDlp),
+                ..Default::default()
+            },
+            Some(format_id),
+            Some(extension),
+            None,
+        )
+        .await
     }
 
     /// Adds a download from the browser integration IPC path.

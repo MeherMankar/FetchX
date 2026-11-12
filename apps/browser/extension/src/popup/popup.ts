@@ -19,6 +19,11 @@ const statusText     = q<HTMLElement>("#status-text");
 const urlInput       = q<HTMLInputElement>("#url-input");
 const useTabBtn      = q<HTMLButtonElement>("#use-tab-btn");
 const submitBtn      = q<HTMLButtonElement>("#submit-btn");
+const fetchFormatsBtn = q<HTMLButtonElement>("#fetch-formats-btn");
+const qualityPanel   = q<HTMLElement>("#quality-panel");
+const qualityTitle   = q<HTMLElement>("#quality-title");
+const qualityList    = q<HTMLElement>("#quality-list");
+const downloadAllFormatsBtn = q<HTMLButtonElement>("#download-all-formats-btn");
 const btnText        = q<HTMLElement>("#btn-text");
 const resultBanner   = q<HTMLElement>("#result-banner");
 const taskList       = q<HTMLElement>("#task-list");
@@ -93,13 +98,35 @@ function validateUrl(url: string): string | null {
 }
 
 function updateSubmit() {
-  submitBtn.disabled = validateUrl(urlInput.value.trim()) !== null;
+  const invalid = validateUrl(urlInput.value.trim()) !== null;
+  submitBtn.disabled = invalid;
+  fetchFormatsBtn.disabled = invalid;
 }
 
-urlInput.addEventListener("input", () => { clearResult(); updateSubmit(); });
+interface MediaFormat {
+  format_id: string;
+  label: string;
+  ext: string;
+}
+
+interface MediaInfo {
+  title: string;
+  formats: MediaFormat[];
+}
+
+let availableFormats: MediaFormat[] = [];
+
+urlInput.addEventListener("input", () => {
+  clearResult();
+  availableFormats = [];
+  qualityPanel.classList.add("hidden");
+  updateSubmit();
+});
 urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !submitBtn.disabled) void submit(); });
 
 useTabBtn.addEventListener("click", () => void fillTab());
+fetchFormatsBtn.addEventListener("click", () => void fetchVideoFormats());
+downloadAllFormatsBtn.addEventListener("click", () => void downloadFormats(availableFormats));
 
 async function fillTab() {
   try {
@@ -136,6 +163,146 @@ async function submit() {
     btnText.textContent = "Download with FetchX";
     updateSubmit();
   }
+}
+
+async function fetchVideoFormats() {
+  const url = urlInput.value.trim();
+  const err = validateUrl(url);
+  if (err) { showResult("error", err); return; }
+  fetchFormatsBtn.disabled = true;
+  fetchFormatsBtn.textContent = "Finding qualities…";
+  clearResult();
+  try {
+    const target = await selectedRpcTarget();
+    if (target.kind !== "local") {
+      throw new Error("Video quality selection is currently available for This PC only.");
+    }
+    const response = await callTargetRpc(target, {
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "media.extractFormats",
+      params: { url },
+    });
+    const rpcResponse = getRpcResponse(response);
+    if ("error" in rpcResponse) {
+      throw new Error(rpcErrorMessage(rpcResponse) ?? "Could not fetch video qualities.");
+    }
+    const info = parseMediaInfo(rpcResponse.result);
+    availableFormats = info.formats;
+    qualityTitle.textContent = info.title || "Available formats";
+    renderVideoFormats();
+    qualityPanel.classList.remove("hidden");
+    if (availableFormats.length === 0) {
+      showResult("error", "No downloadable video qualities were found.");
+    }
+  } catch (error) {
+    showResult("error", error instanceof Error ? error.message : "Could not fetch video qualities.");
+  } finally {
+    fetchFormatsBtn.textContent = "Fetch video qualities";
+    updateSubmit();
+  }
+}
+
+function renderVideoFormats() {
+  qualityList.replaceChildren();
+  availableFormats.forEach((format, index) => {
+    const row = document.createElement("div");
+    row.className = "quality-item";
+    const label = document.createElement("span");
+    label.className = "quality-label";
+    label.textContent = `${index + 1}. ${format.label || format.ext}`;
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "btn-text";
+    download.textContent = "Download";
+    download.addEventListener("click", () => void downloadFormats([format]));
+    row.append(label, download);
+    qualityList.append(row);
+  });
+  downloadAllFormatsBtn.disabled = availableFormats.length === 0;
+}
+
+async function downloadFormats(formats: MediaFormat[]) {
+  if (!formats.length) return;
+  const url = urlInput.value.trim();
+  const err = validateUrl(url);
+  if (err) { showResult("error", err); return; }
+  downloadAllFormatsBtn.disabled = true;
+  for (const button of Array.from(qualityList.querySelectorAll<HTMLButtonElement>("button"))) {
+    button.disabled = true;
+  }
+  let added = 0;
+  let failed = 0;
+  try {
+    const target = await selectedRpcTarget();
+    if (target.kind !== "local") {
+      throw new Error("Video quality selection is currently available for This PC only.");
+    }
+    for (const format of formats) {
+      const response = await callTargetRpc(target, {
+        jsonrpc: "2.0",
+        id: crypto.randomUUID(),
+        method: "media.addFormat",
+        params: { url, format_id: format.format_id, extension: format.ext },
+      });
+      const rpcResponse = getRpcResponse(response);
+      if ("error" in rpcResponse) {
+        failed++;
+      } else {
+        added++;
+      }
+    }
+    const message = failed === 0
+      ? `✓ Added ${added} format${added === 1 ? "" : "s"} to FetchX`
+      : `${added} added, ${failed} failed. Check yt-dlp in FetchX settings.`;
+    showResult(failed === 0 ? "success" : "error", message);
+  } catch (error) {
+    showResult("error", error instanceof Error ? error.message : "Could not add the selected formats.");
+  } finally {
+    downloadAllFormatsBtn.disabled = availableFormats.length === 0;
+    for (const button of Array.from(qualityList.querySelectorAll<HTMLButtonElement>("button"))) {
+      button.disabled = false;
+    }
+  }
+}
+
+function rpcErrorMessage(response: Record<string, unknown>): string | undefined {
+  const error = response.error;
+  if (typeof error !== "object" || error === null) return undefined;
+  const message = (error as Record<string, unknown>).message;
+  return typeof message === "string" ? message : undefined;
+}
+
+function getRpcResponse(response: BrowserResponse): Record<string, unknown> {
+  if (isError(response)) {
+    throw new Error(userMessageForCode(response.error.code));
+  }
+  if (!("rpc_response" in response) || typeof response.rpc_response !== "object"
+    || response.rpc_response === null) {
+    throw new Error("FetchX returned an invalid media response.");
+  }
+  const rpcResponse = response.rpc_response;
+  if (rpcResponse.jsonrpc !== "2.0") {
+    throw new Error("FetchX returned an invalid media response.");
+  }
+  return rpcResponse;
+}
+
+function parseMediaInfo(value: unknown): MediaInfo {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("FetchX returned invalid video qualities.");
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.title !== "string" || !Array.isArray(candidate.formats)) {
+    throw new Error("FetchX returned invalid video qualities.");
+  }
+  const formats = candidate.formats.filter((format): format is MediaFormat =>
+    typeof format === "object" && format !== null
+      && typeof (format as Record<string, unknown>).format_id === "string"
+      && typeof (format as Record<string, unknown>).label === "string"
+      && typeof (format as Record<string, unknown>).ext === "string"
+  );
+  return { title: candidate.title, formats };
 }
 
 // ──Tasks tab ─────────────────────────────────────────────────────────────

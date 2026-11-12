@@ -54,6 +54,7 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
   return new Promise<BrowserResponse>((resolve, reject) => {
     let port: NativePort;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
 
     const cleanup = () => {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
@@ -68,19 +69,24 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     }
 
     timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       cleanup();
       reject(new NativeHostError("Native host did not respond in time.", undefined, true));
     }, RESPONSE_TIMEOUT_MS);
 
-    port.onDisconnect.addListener((disconnectedPort) => {
+    port.onDisconnect.addListener(() => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      const firefoxError = "error" in disconnectedPort ? disconnectedPort.error : undefined;
+      const firefoxError = "error" in port ? port.error : undefined;
       const runtimeError = typeof browser === "undefined" ? chrome.runtime.lastError : undefined;
       const errorMessage = firefoxError?.message ?? runtimeError?.message;
       const hostUnavailable = isNativeHostUnavailableError(errorMessage);
       reject(
         new NativeHostError(
-          errorMessage ?? "Native host disconnected unexpectedly.",
+          errorMessage
+            ?? "FetchX's native host stopped before replying. Make sure FetchX is running, repair the native host in Settings → Browser extensions, then restart your browser.",
           undefined,
           !hostUnavailable,
         ),
@@ -88,6 +94,8 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     });
 
     port.onMessage.addListener((message: unknown) => {
+      if (settled) return;
+      settled = true;
       cleanup();
       if (!isValidResponse(message)) {
         reject(
@@ -105,6 +113,8 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     try {
       port.postMessage(request);
     } catch (error) {
+      if (settled) return;
+      settled = true;
       cleanup();
       reject(new NativeHostError("Could not send the request to the native host.", error, true));
     }

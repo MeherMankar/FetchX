@@ -16,6 +16,7 @@ fetchx-downloader = { path = "../../../crates/downloader" }
 fetchx-media-extractor = { path = "../../../crates/media-extractor" }
 fetchx-models = { path = "../../../crates/models" }
 fetchx-queue = { path = "../../../crates/queue" }
+fetchx-remote-protocol = { path = "../../../crates/remote-protocol" }
 fetchx-remote-server = { path = "../../../crates/remote-server" }
 fetchx-scheduler = { path = "../../../crates/scheduler" }
 fetchx-storage = { path = "../../../crates/storage" }

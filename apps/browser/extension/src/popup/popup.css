@@ -152,6 +152,23 @@ body {
 .btn-primary-sm { width: auto; height: 28px; padding: 0 11px; font-size: 12px; }
 .btn-icon-lead  { font-size: 13px; }
 
+.btn-secondary {
+  width: 100%; min-height: 32px; padding: 5px 9px;
+  background: var(--bg-raised); color: var(--text-2);
+  border: 1px solid var(--border-mid); border-radius: var(--r-sm);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.btn-secondary:not(:disabled):hover { color: var(--text); border-color: var(--accent); }
+.btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+.quality-panel { display: flex; flex-direction: column; gap: 5px; }
+.quality-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.quality-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.quality-list { display: flex; flex-direction: column; gap: 3px; max-height: 190px; overflow-y: auto; }
+.quality-item { display: flex; align-items: center; gap: 7px; padding: 5px 7px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.quality-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 11px; }
+.quality-item button { flex-shrink: 0; }
+.quality-item button:disabled, .quality-header button:disabled { opacity: 0.4; cursor: not-allowed; }
+
 .btn-text {
   background: transparent; border: none; color: var(--accent);
   font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: var(--r-xs);

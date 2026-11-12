@@ -123,6 +123,12 @@ browsers use **Load unpacked**. Firefox's **Load Temporary Add-on** is removed
 when Firefox exits. Store-based installation can be enabled once the listings
 are published.
 
+If the popup reports that the native host disconnected, make sure the FetchX
+desktop app is running, check **Settings → Browser extensions** for native-host
+registration errors, repair the host if needed, and restart the browser. The
+popup cannot distinguish a host launch failure from a host process that exits
+before replying.
+
 ## Security model
 
 - The IPC server binds to `127.0.0.1` only — never `0.0.0.0`.
@@ -152,9 +158,9 @@ See [`apps/browser/extension/README.md`](../apps/browser/extension/README.md) an
 - The extension already has an optional browser-download interception setting.
   Phase 21I does not introduce or expand interception or download-engine behavior;
   broader browser download handling remains outside this integration phase.
-- Engine selection (aria2/yt-dlp) is not exposed through the extension.  All
-  browser-initiated downloads use Direct HTTP.  The user can change the engine in
-  the desktop UI after the download is created.
+- Ordinary browser-initiated downloads use Direct HTTP. The popup also supports
+  selecting yt-dlp video formats for the local **This PC** target; remote-target
+  video format extraction is not exposed.
 - Signed release packaging and store distribution remain in Phase 26A.
 
 ## Phase 21I — Browser remote integration

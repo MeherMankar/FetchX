@@ -27,8 +27,10 @@ use fetchx_browser_protocol::{
     BrowserErrorCode, BrowserRequest, BrowserRequestBody, BrowserResponse, MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION, validate_url,
 };
+use fetchx_remote_protocol::{RpcId, RpcRequest};
 use fetchx_remote_server::dispatch_local_rpc;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -221,6 +223,20 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
         }
 
         BrowserRequestBody::Rpc(browser_rpc) => {
+            if matches!(
+                browser_rpc.target,
+                fetchx_browser_protocol::BrowserRpcTarget::Local
+            ) {
+                match browser_rpc.request.method.as_str() {
+                    "media.extractFormats" => {
+                        return dispatch_media_extract(browser_rpc.request, app_state).await;
+                    }
+                    "media.addFormat" => {
+                        return dispatch_media_add(browser_rpc.request, app_state).await;
+                    }
+                    _ => {}
+                }
+            }
             let Some(services) = app_state.core_services.as_deref() else {
                 return BrowserResponse::error(
                     None,
@@ -290,6 +306,110 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
             }
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtractMediaFormatsParams {
+    url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddMediaFormatParams {
+    url: String,
+    format_id: String,
+    extension: String,
+}
+
+async fn dispatch_media_extract(request: RpcRequest, app_state: &AppState) -> BrowserResponse {
+    if request.jsonrpc != "2.0" || request.id.is_none() {
+        return media_rpc_error(request.id, -32600, "Invalid JSON-RPC request.");
+    }
+    let params = match serde_json::from_value::<ExtractMediaFormatsParams>(
+        request.params.unwrap_or(Value::Null),
+    ) {
+        Ok(params) => params,
+        Err(_) => {
+            return media_rpc_error(request.id, -32602, "A valid media URL is required.");
+        }
+    };
+    let url = match validate_url(&params.url) {
+        Ok(url) => url,
+        Err(_) => {
+            return media_rpc_error(request.id, -32602, "A valid HTTP(S) media URL is required.");
+        }
+    };
+    match app_state.extract_media_formats(&url).await {
+        Ok(info) => match serde_json::to_value(info) {
+            Ok(result) => media_rpc_success(request.id, result),
+            Err(_) => media_rpc_error(request.id, -32603, "Could not encode media formats."),
+        },
+        Err(_) => media_rpc_error(
+            request.id,
+            -32010,
+            "Could not extract video qualities. Check that yt-dlp is installed and the URL is supported.",
+        ),
+    }
+}
+
+async fn dispatch_media_add(request: RpcRequest, app_state: &AppState) -> BrowserResponse {
+    if request.jsonrpc != "2.0" || request.id.is_none() {
+        return media_rpc_error(request.id, -32600, "Invalid JSON-RPC request.");
+    }
+    let params =
+        match serde_json::from_value::<AddMediaFormatParams>(request.params.unwrap_or(Value::Null))
+        {
+            Ok(params) => params,
+            Err(_) => {
+                return media_rpc_error(request.id, -32602, "A valid media format is required.");
+            }
+        };
+    let url = match validate_url(&params.url) {
+        Ok(url) => url,
+        Err(_) => {
+            return media_rpc_error(request.id, -32602, "A valid HTTP(S) media URL is required.");
+        }
+    };
+    match app_state
+        .add_media_format_from_browser(url, params.format_id, params.extension)
+        .await
+    {
+        Ok(download) => match serde_json::to_value(download) {
+            Ok(result) => media_rpc_success(request.id, result),
+            Err(_) => media_rpc_error(request.id, -32603, "Could not encode the download result."),
+        },
+        Err(_) => media_rpc_error(
+            request.id,
+            -32010,
+            "Could not add this format. Check that yt-dlp is available in FetchX.",
+        ),
+    }
+}
+
+fn media_rpc_success(id: Option<RpcId>, result: Value) -> BrowserResponse {
+    BrowserResponse::rpc(
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }),
+    )
+}
+
+fn media_rpc_error(id: Option<RpcId>, code: i32, message: &str) -> BrowserResponse {
+    BrowserResponse::rpc(
+        None,
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": code,
+                "message": message,
+            },
+        }),
+    )
 }
 
 /// Writes a 4-byte length-prefixed JSON response.
