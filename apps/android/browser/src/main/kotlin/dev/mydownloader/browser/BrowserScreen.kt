@@ -3500,19 +3500,21 @@ internal fun TabGridSheet(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = secondaryTextColor,
                                 )
-                                Surface(
-                                    onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = spaceAccentColor,
-                                    modifier = Modifier.heightIn(min = 48.dp),
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                if (searchQuery.isBlank()) {
+                                    Surface(
+                                        onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = spaceAccentColor,
+                                        modifier = Modifier.heightIn(min = 48.dp),
                                     ) {
-                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Text("Open new tab", fontWeight = FontWeight.Medium)
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Text("Open new tab", fontWeight = FontWeight.Medium)
+                                        }
                                     }
                                 }
                             }
@@ -3590,7 +3592,11 @@ internal fun TabGridSheet(
                                     Surface(
                                         onClick = { onSelect(tab.id) },
                                         shape = RoundedCornerShape(16.dp),
-                                        color = cardBg,
+                                        color = if (isActive) {
+                                            MaterialTheme.colorScheme.surfaceContainerHigh
+                                        } else {
+                                            cardBg
+                                        },
                                         border = BorderStroke(
                                             width = 1.dp,
                                             color = if (isActive) spaceAccentColor.copy(alpha = 0.72f) else cardBorder,
@@ -3795,14 +3801,15 @@ private fun BrowserTabStrip(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -3825,73 +3832,81 @@ private fun BrowserTabStrip(
 
                 Surface(
                     onClick = { onSelectTab(tab.id) },
-                    shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp, bottomStart = 4.dp, bottomEnd = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
                     color = if (isActive) {
                         MaterialTheme.colorScheme.surfaceContainerHigh
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerLow
-                    },
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = if (isActive) {
-                            spaceAccentColor.copy(alpha = 0.6f)
-                        } else {
-                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        },
-                    ),
+                    } else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, Color.Transparent),
                     modifier = Modifier
-                        .widthIn(min = 160.dp, max = 220.dp)
-                        .height(48.dp)
+                        .widthIn(min = 144.dp, max = 220.dp)
+                        .height(52.dp)
                         .semantics { selected = isActive },
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Language,
-                            contentDescription = null,
-                            tint = if (isActive) spaceAccentColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Text(
-                            text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(
-                            onClick = { onCloseTab(tab.id) },
-                            modifier = Modifier.size(48.dp),
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(start = 10.dp, end = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close ${tab.title?.takeIf(String::isNotBlank) ?: tabHost} tab",
+                                imageVector = Icons.Default.Language,
+                                contentDescription = null,
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(12.dp),
+                                modifier = Modifier.size(16.dp),
                             )
+                            Text(
+                                text = tab.title?.takeIf { it.isNotBlank() } ?: tabHost,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (isActive) FontWeight.Medium else FontWeight.Normal,
+                                color = if (isActive) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(
+                                onClick = { onCloseTab(tab.id) },
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close ${tab.title?.takeIf(String::isNotBlank) ?: tabHost} tab",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
                         }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(2.dp)
+                                .background(if (isActive) spaceAccentColor else Color.Transparent),
+                        )
                     }
                 }
             }
 
-            // '+' New Tab button
-            IconButton(
+            Surface(
                 onClick = onNewTab,
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.size(48.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "New Tab",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "New tab",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
         }
     }
