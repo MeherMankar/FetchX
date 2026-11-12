@@ -571,6 +571,12 @@ function policyForProfile(
   return profiles[profile] ?? { ...current, profile };
 }
 
+function formatBandwidthLimit(bytesPerSecond: number | null): string {
+  return bytesPerSecond === null
+    ? ""
+    : (bytesPerSecond / (1024 * 1024)).toFixed(2).replace(/\.?0+$/, "");
+}
+
 function ResourcePolicySection({
   cfg,
   onSaved,
@@ -622,12 +628,22 @@ function ResourcePolicySection({
       "per_download_bandwidth_bytes_per_second",
     value: string,
   ) => {
-    const parsed = value === "" ? null : Number.parseInt(value, 10);
+    const parsed = value === "" ? null : Number.parseFloat(value);
     setPolicy((current) => ({
       ...current,
       profile: "custom",
-      [key]: parsed !== null && Number.isFinite(parsed) ? parsed : null,
+      [key]: parsed !== null && Number.isFinite(parsed)
+        ? Math.round(parsed * 1024 * 1024)
+        : null,
     }));
+  };
+
+  const profileDescription: Record<ResourceProfile, string> = {
+    unlimited: "No bandwidth cap; allows up to 8 active downloads and 64 connections.",
+    normal: "No bandwidth cap; balanced defaults of 3 active downloads and 16 connections.",
+    limited: "Caps total speed at 2 MiB/s and each download at 1 MiB/s.",
+    night: "Caps total speed at 0.5 MiB/s and each download at 0.25 MiB/s.",
+    custom: "Custom connection and bandwidth limits.",
   };
 
   return (
@@ -650,12 +666,13 @@ function ResourcePolicySection({
               }
             }}
           >
-            <option value="unlimited">Unlimited (bounded safety ceilings)</option>
-            <option value="normal">Normal</option>
-            <option value="limited">Limited</option>
-            <option value="night">Night</option>
+            <option value="unlimited">High — no speed cap</option>
+            <option value="normal">Normal — balanced</option>
+            <option value="limited">Low — 2 MiB/s total</option>
+            <option value="night">Night — 0.5 MiB/s total</option>
             <option value="custom">Custom</option>
           </select>
+          <p className="settings-hint">{profileDescription[policy.profile]}</p>
         </div>
       </div>
       <div className="settings-row">
@@ -686,22 +703,23 @@ function ResourcePolicySection({
         </div>
       </div>
       <div className="settings-row">
-        <label className="settings-label" htmlFor="resource-global-bandwidth">Global bandwidth (bytes/s)</label>
+        <label className="settings-label" htmlFor="resource-global-bandwidth">Global speed limit (MiB/s)</label>
         <div className="settings-control">
-          <input id="resource-global-bandwidth" type="number" min={1}
+          <input id="resource-global-bandwidth" type="number" min={0.01} step={0.01}
             className="settings-input settings-input-sm"
-            value={policy.global_bandwidth_bytes_per_second ?? ""} disabled={busy}
+            value={formatBandwidthLimit(policy.global_bandwidth_bytes_per_second)} disabled={busy}
             onChange={(event) => updateBandwidth("global_bandwidth_bytes_per_second", event.target.value)} />
           <p className="settings-hint">Leave empty for unlimited.</p>
         </div>
       </div>
       <div className="settings-row">
-        <label className="settings-label" htmlFor="resource-download-bandwidth">Bandwidth per download (bytes/s)</label>
+        <label className="settings-label" htmlFor="resource-download-bandwidth">Per-download limit (MiB/s)</label>
         <div className="settings-control">
-          <input id="resource-download-bandwidth" type="number" min={1}
+          <input id="resource-download-bandwidth" type="number" min={0.01} step={0.01}
             className="settings-input settings-input-sm"
-            value={policy.per_download_bandwidth_bytes_per_second ?? ""} disabled={busy}
+            value={formatBandwidthLimit(policy.per_download_bandwidth_bytes_per_second)} disabled={busy}
             onChange={(event) => updateBandwidth("per_download_bandwidth_bytes_per_second", event.target.value)} />
+          <p className="settings-hint">Leave empty for unlimited.</p>
         </div>
       </div>
       <p className="settings-hint">
