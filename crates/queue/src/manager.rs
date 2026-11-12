@@ -1887,9 +1887,6 @@ mod tests {
         time::Duration,
     };
 
-    #[cfg(feature = "phase30-queue-fault-injection")]
-    use std::error::Error;
-
     use fetchx_core::DownloadStateMachine;
     #[cfg(feature = "phase30-queue-fault-injection")]
     use fetchx_downloader::inject_next_write_failure;
