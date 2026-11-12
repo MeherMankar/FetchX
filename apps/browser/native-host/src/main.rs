@@ -376,6 +376,8 @@ fn launch_desktop() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use fetchx_browser_protocol::{BrowserRpcRequest, PROTOCOL_VERSION};
     use fetchx_remote_protocol::{RpcId, RpcRequest};
 
@@ -407,18 +409,35 @@ mod tests {
 
     #[test]
     fn finds_install_locations_around_native_host() {
-        let host_path =
-            std::path::Path::new("C:\\FetchX\\resources\\engines\\fetchx-native-host.exe");
-        let candidates = desktop_executable_candidates(host_path);
+        let host_path = PathBuf::from("FetchX")
+            .join("resources")
+            .join("engines")
+            .join(if cfg!(windows) {
+                "fetchx-native-host.exe"
+            } else {
+                "fetchx-native-host"
+            });
+        let candidates = desktop_executable_candidates(&host_path);
+        let first_executable = if cfg!(windows) {
+            "FetchX.exe"
+        } else {
+            "fetchx-desktop"
+        };
+        let second_executable = if cfg!(windows) {
+            "fetchx-desktop.exe"
+        } else {
+            "FetchX"
+        };
+        let expected_directory = PathBuf::from("FetchX");
         assert!(
             candidates
                 .iter()
-                .any(|path| { path == std::path::Path::new("C:\\FetchX\\FetchX.exe") })
+                .any(|path| path == &expected_directory.join(first_executable))
         );
         assert!(
             candidates
                 .iter()
-                .any(|path| { path == std::path::Path::new("C:\\FetchX\\fetchx-desktop.exe") })
+                .any(|path| path == &expected_directory.join(second_executable))
         );
     }
 }
