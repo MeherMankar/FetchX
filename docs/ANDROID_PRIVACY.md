@@ -2,7 +2,7 @@
 
 This document describes privacy behavior implemented by the Android browser in
 FetchX, using the pinned GeckoView dependency
-`org.mozilla.geckoview:geckoview-arm64-v8a:137.0.20250325171416`.
+`org.mozilla.geckoview:geckoview-arm64-v8a:158.0.20261007201254`.
 It distinguishes native GeckoView settings from behavior that FetchX has not
 implemented.
 
@@ -17,7 +17,8 @@ reset when the browser ViewModel is recreated.
 
 | Control | Default | GeckoView behavior |
 |---|---:|---|
-| Tracker blocking | On | `ContentBlocking.AntiTracking.AD`, `ANALYTIC`, and `SOCIAL` |
+| GeckoView tracking protection | On | `ContentBlocking.AntiTracking.AD`, `ANALYTIC`, and `SOCIAL` |
+| uBlock Origin | On | Bundled WebExtension enable/disable state managed independently of GeckoView protections |
 | Fingerprinting protection | On | `GeckoRuntimeSettings.setFingerprintingProtection(true)` and the `AntiTracking.FINGERPRINTING` category |
 | Cryptomining protection | On | `ContentBlocking.AntiTracking.CRYPTOMINING` |
 | Third-party cookie isolation | On | `CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS` |

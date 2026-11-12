@@ -2,7 +2,7 @@
 
 This document describes the implemented Phase 20K foundation in the Android
 GeckoView browser. The verified dependency is
-`org.mozilla.geckoview:geckoview-arm64-v8a:137.0.20250325171416`.
+`org.mozilla.geckoview:geckoview-arm64-v8a:158.0.20261007201254`.
 
 ## Architecture
 
@@ -127,10 +127,11 @@ and credentials are not logged or copied into the extension model.
 ## Security and current limitations
 
 - Local XPI imports cannot request permissions. The local-package exception
-  above is limited to the official uBlock Origin ID;
-  the bundled signed release is pinned to 1.75.0 and should be updated with
-  FetchX releases. Its GPL-3.0 license and corresponding source are available
-  from [uBlock Origin](https://github.com/gorhill/uBlock/tree/1.75.0).
+  above is limited to the official uBlock Origin ID; FetchX manages it as a
+  user-controlled built-in extension and keeps it separate from GeckoView
+  tracking-protection state. The bundled signed release is pinned to 1.75.0 and
+  should be updated with FetchX releases. Its GPL-3.0 license and corresponding
+  source are available from [uBlock Origin](https://github.com/gorhill/uBlock/tree/1.75.0).
 - Marketplace search and install are limited to the Firefox Add-ons API and
   Mozilla's XPI download host; arbitrary remote installation is not exposed.
   Update checks run when the extension manager initializes and when the user

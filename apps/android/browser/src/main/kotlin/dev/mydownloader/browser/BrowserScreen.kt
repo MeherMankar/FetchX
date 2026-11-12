@@ -1521,7 +1521,8 @@ fun BrowserScreen(
     if (uiState.showPrivacySettings) {
         PrivacySettingsDialog(
             settings = uiState.privacySettings,
-            onAdBlockingChange = viewModel::setAdBlockingEnabled,
+            onGeckoTrackingProtectionChange = viewModel::setGeckoTrackingProtectionEnabled,
+            onUBlockOriginChange = viewModel::setUBlockOriginEnabled,
             onFingerprintingProtectionChange = viewModel::setFingerprintingProtectionEnabled,
             onCryptominingProtectionChange = viewModel::setCryptominingProtectionEnabled,
             onThirdPartyCookieIsolationChange = viewModel::setThirdPartyCookieIsolationEnabled,
@@ -4452,7 +4453,8 @@ private fun SettingsActionRow(
 @Composable
 private fun PrivacySettingsDialog(
     settings: PrivacySettings,
-    onAdBlockingChange: (Boolean) -> Unit,
+    onGeckoTrackingProtectionChange: (Boolean) -> Unit,
+    onUBlockOriginChange: (Boolean) -> Unit,
     onFingerprintingProtectionChange: (Boolean) -> Unit,
     onCryptominingProtectionChange: (Boolean) -> Unit,
     onThirdPartyCookieIsolationChange: (Boolean) -> Unit,
@@ -4474,10 +4476,16 @@ private fun PrivacySettingsDialog(
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
                 PrivacySwitchRow(
-                    title = "Block ads",
-                    description = "Block known ad requests using GeckoView's built-in protection list. Some ads may still appear.",
-                    checked = settings.adBlockingEnabled,
-                    onCheckedChange = onAdBlockingChange,
+                    title = "GeckoView Tracking Protection",
+                    description = "Enable GeckoView's built-in ad, analytics, and social anti-tracking categories.",
+                    checked = settings.geckoTrackingProtectionEnabled,
+                    onCheckedChange = onGeckoTrackingProtectionChange,
+                )
+                PrivacySwitchRow(
+                    title = "uBlock Origin",
+                    description = "Enable or disable the bundled uBlock Origin extension independently from GeckoView's built-in protections.",
+                    checked = settings.uBlockOriginEnabled,
+                    onCheckedChange = onUBlockOriginChange,
                 )
                 PrivacySwitchRow(
                     title = "Fingerprinting protection",

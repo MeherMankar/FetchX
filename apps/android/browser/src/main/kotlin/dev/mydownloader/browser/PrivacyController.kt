@@ -9,7 +9,8 @@ import java.net.URI
 import java.util.Locale
 
 data class PrivacySettings(
-    val adBlockingEnabled: Boolean = true,
+    val geckoTrackingProtectionEnabled: Boolean = true,
+    val uBlockOriginEnabled: Boolean = true,
     val fingerprintingProtectionEnabled: Boolean = false, // off by default — causes significant slowdown
     val cryptominingProtectionEnabled: Boolean = true,
     val thirdPartyCookieIsolationEnabled: Boolean = false, // off by default — breaks many sites
@@ -40,8 +41,14 @@ class PrivacyController(initialSettings: PrivacySettings = PrivacySettings()) {
     @Volatile
     var onSettingsChanged: (() -> Unit)? = null
 
+    fun setGeckoTrackingProtectionEnabled(enabled: Boolean) =
+        update { it.copy(geckoTrackingProtectionEnabled = enabled) }
+
+    fun setUBlockOriginEnabled(enabled: Boolean) =
+        update { it.copy(uBlockOriginEnabled = enabled) }
+
     fun setAdBlockingEnabled(enabled: Boolean) =
-        update { it.copy(adBlockingEnabled = enabled) }
+        setGeckoTrackingProtectionEnabled(enabled)
 
     fun setFingerprintingProtectionEnabled(enabled: Boolean) =
         update { it.copy(fingerprintingProtectionEnabled = enabled) }
@@ -81,7 +88,7 @@ internal fun geckoPrivacyConfiguration(
     settings: PrivacySettings,
 ): GeckoPrivacyConfiguration {
     var categories = trackerAntiTrackingCategories(trackerBlockingEnabled)
-    categories = if (settings.adBlockingEnabled) {
+    categories = if (settings.geckoTrackingProtectionEnabled) {
         categories or ContentBlocking.AntiTracking.AD
     } else {
         categories and ContentBlocking.AntiTracking.AD.inv()

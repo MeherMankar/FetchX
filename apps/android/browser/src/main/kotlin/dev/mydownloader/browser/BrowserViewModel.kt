@@ -1093,8 +1093,15 @@ class BrowserViewModel internal constructor(
         _uiState.update { it.copy(showPrivacySettings = false) }
     }
 
-    fun setAdBlockingEnabled(enabled: Boolean) {
-        privacyController.setAdBlockingEnabled(enabled)
+    fun setGeckoTrackingProtectionEnabled(enabled: Boolean) {
+        privacyController.setGeckoTrackingProtectionEnabled(enabled)
+        applyPrivacySettings()
+    }
+
+    fun setAdBlockingEnabled(enabled: Boolean) = setGeckoTrackingProtectionEnabled(enabled)
+
+    fun setUBlockOriginEnabled(enabled: Boolean) {
+        privacyController.setUBlockOriginEnabled(enabled)
         applyPrivacySettings()
         syncUBlockWithAdBlockingSetting()
     }
@@ -1317,10 +1324,10 @@ class BrowserViewModel internal constructor(
         } ?: return
         if (uBlockNeedsStateChange(
                 extensionState = uBlock.state,
-                adBlockingEnabled = privacyController.settings.value.adBlockingEnabled,
+                adBlockingEnabled = privacyController.settings.value.uBlockOriginEnabled,
             )
         ) {
-            if (privacyController.settings.value.adBlockingEnabled) {
+            if (privacyController.settings.value.uBlockOriginEnabled) {
                 manager.enable(uBlock.id)
             } else {
                 manager.disable(uBlock.id)
@@ -1683,16 +1690,32 @@ class BrowserViewModel internal constructor(
             Context.MODE_PRIVATE,
         )?.also { browserDataPreferences = it } ?: return
 
-        if (!prefs.contains(PRIVACY_AD_BLOCKING_KEY)) return
+        if (!prefs.contains(PRIVACY_AD_BLOCKING_KEY) &&
+            !prefs.contains(PRIVACY_GECKO_TRACKING_KEY) &&
+            !prefs.contains(PRIVACY_UBLOCK_ORIGIN_KEY)
+        ) return
 
+        val legacyAdBlockingEnabled = when {
+            prefs.contains(PRIVACY_AD_BLOCKING_KEY) -> prefs.getBoolean(PRIVACY_AD_BLOCKING_KEY, true)
+            prefs.contains(PRIVACY_GECKO_TRACKING_KEY) -> prefs.getBoolean(PRIVACY_GECKO_TRACKING_KEY, true)
+            else -> true
+        }
         val settings = PrivacySettings(
-            adBlockingEnabled = prefs.getBoolean(PRIVACY_AD_BLOCKING_KEY, true),
+            geckoTrackingProtectionEnabled = prefs.getBoolean(
+                PRIVACY_GECKO_TRACKING_KEY,
+                prefs.getBoolean(PRIVACY_AD_BLOCKING_KEY, legacyAdBlockingEnabled),
+            ),
+            uBlockOriginEnabled = prefs.getBoolean(
+                PRIVACY_UBLOCK_ORIGIN_KEY,
+                prefs.getBoolean(PRIVACY_AD_BLOCKING_KEY, legacyAdBlockingEnabled),
+            ),
             fingerprintingProtectionEnabled = prefs.getBoolean(PRIVACY_FINGERPRINT_KEY, true),
             cryptominingProtectionEnabled = prefs.getBoolean(PRIVACY_CRYPTOMINING_KEY, true),
             thirdPartyCookieIsolationEnabled = prefs.getBoolean(PRIVACY_COOKIE_ISOLATION_KEY, true),
             httpsOnlyEnabled = prefs.getBoolean(PRIVACY_HTTPS_ONLY_KEY, false),
         )
-        privacyController.setAdBlockingEnabled(settings.adBlockingEnabled)
+        privacyController.setGeckoTrackingProtectionEnabled(settings.geckoTrackingProtectionEnabled)
+        privacyController.setUBlockOriginEnabled(settings.uBlockOriginEnabled)
         privacyController.setFingerprintingProtectionEnabled(settings.fingerprintingProtectionEnabled)
         privacyController.setCryptominingProtectionEnabled(settings.cryptominingProtectionEnabled)
         privacyController.setThirdPartyCookieIsolationEnabled(settings.thirdPartyCookieIsolationEnabled)
@@ -1706,7 +1729,9 @@ class BrowserViewModel internal constructor(
         )?.also { browserDataPreferences = it } ?: return
 
         prefs.edit()
-            .putBoolean(PRIVACY_AD_BLOCKING_KEY, settings.adBlockingEnabled)
+            .putBoolean(PRIVACY_AD_BLOCKING_KEY, settings.geckoTrackingProtectionEnabled)
+            .putBoolean(PRIVACY_GECKO_TRACKING_KEY, settings.geckoTrackingProtectionEnabled)
+            .putBoolean(PRIVACY_UBLOCK_ORIGIN_KEY, settings.uBlockOriginEnabled)
             .putBoolean(PRIVACY_FINGERPRINT_KEY, settings.fingerprintingProtectionEnabled)
             .putBoolean(PRIVACY_CRYPTOMINING_KEY, settings.cryptominingProtectionEnabled)
             .putBoolean(PRIVACY_COOKIE_ISOLATION_KEY, settings.thirdPartyCookieIsolationEnabled)
@@ -1831,6 +1856,8 @@ class BrowserViewModel internal constructor(
         private const val SAVED_BOOKMARKS_KEY = "saved_bookmarks"
         private const val SAVED_HISTORY_KEY = "saved_browser_history"
         private const val PRIVACY_AD_BLOCKING_KEY = "privacy_ad_blocking"
+        private const val PRIVACY_GECKO_TRACKING_KEY = "privacy_gecko_tracking"
+        private const val PRIVACY_UBLOCK_ORIGIN_KEY = "privacy_ublock_origin"
         private const val PRIVACY_FINGERPRINT_KEY = "privacy_fingerprint"
         private const val PRIVACY_CRYPTOMINING_KEY = "privacy_cryptomining"
         private const val PRIVACY_COOKIE_ISOLATION_KEY = "privacy_cookie_isolation"
