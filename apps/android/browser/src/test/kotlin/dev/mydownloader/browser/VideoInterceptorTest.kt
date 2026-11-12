@@ -73,6 +73,26 @@ class VideoInterceptorTest {
     }
 
     @Test
+    fun `extractQuality reads quality from media path`() {
+        assertEquals("720p", VideoInterceptor.extractQuality("https://cdn.com/808341_720p.mp4/"))
+    }
+
+    @Test
+    fun `extractQuality normalizes mobile suffix used by page source links`() {
+        assertEquals("2160p", VideoInterceptor.extractQuality("https://cdn.com/93823017_2160m.mp4/"))
+    }
+
+    @Test
+    fun `extractQuality reads numeric resolution query`() {
+        assertEquals("1080p", VideoInterceptor.extractQuality("https://cdn.com/video.mp4?height=1080"))
+    }
+
+    @Test
+    fun `extractQuality returns null when URL has no resolution`() {
+        assertNull(VideoInterceptor.extractQuality("https://cdn.com/video.mp4?id=720"))
+    }
+
+    @Test
     fun `isVideoUrl returns false for html page`() {
         assertFalse(VideoInterceptor.isVideoUrl("https://example.com/page.html"))
     }
@@ -80,6 +100,11 @@ class VideoInterceptorTest {
     @Test
     fun `isVideoUrl returns false for image`() {
         assertFalse(VideoInterceptor.isVideoUrl("https://example.com/image.png"))
+    }
+
+    @Test
+    fun `isVideoUrl ignores preview mp4`() {
+        assertFalse(VideoInterceptor.isVideoUrl("https://cdn.example.com/video_preview.mp4"))
     }
 
     // ── suggestFilename ───────────────────────────────────────────────────
@@ -164,6 +189,17 @@ class VideoInterceptorTest {
             url = "https://example.com/image.png",
             mimeType = null,
             contentLength = null,
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `detect ignores preview even when response has video MIME`() {
+        val result = VideoInterceptor.detect(
+            tabId = "tab-preview",
+            url = "https://cdn.example.com/previews/clip.mp4",
+            mimeType = "video/mp4",
+            contentLength = 100L,
         )
         assertNull(result)
     }

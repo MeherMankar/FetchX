@@ -1122,6 +1122,10 @@ fun BrowserScreen(
             ) {
                 var showPicker by remember { mutableStateOf(false) }
                 val count = uiState.detectedVideos.size
+                val detectedQualities = uiState.detectedVideos
+                    .mapNotNull { VideoInterceptor.extractQuality(it.url) ?: VideoInterceptor.extractQuality(it.suggestedFilename) }
+                    .distinct()
+                val qualitySummary = detectedQualities.joinToString(", ")
 
                 Surface(
                     tonalElevation = 6.dp,
@@ -1143,8 +1147,11 @@ fun BrowserScreen(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (count == 1) "1 video detected — tap to choose quality"
-                            else "$count videos detected — tap to choose",
+                            if (qualitySummary.isNotEmpty()) {
+                                "$count videos detected ($qualitySummary) — tap to choose quality"
+                            } else {
+                                "$count videos detected — tap to view quality options"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.weight(1f),
@@ -1202,14 +1209,17 @@ fun BrowserScreen(
                                     Spacer(Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            video.suggestedFilename,
+                                            VideoInterceptor.extractQuality(video.url)
+                                                ?: VideoInterceptor.extractQuality(video.suggestedFilename)
+                                                ?: video.suggestedFilename,
                                             style = MaterialTheme.typography.bodyMedium,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                         Text(
                                             video.mimeType?.substringBefore(";") ?: video.url.let {
-                                                val ext = it.substringBefore("?").substringAfterLast(".", "")
+                                                val path = it.substringBefore("?").substringBefore("#").trimEnd('/')
+                                                val ext = path.substringAfterLast(".", "")
                                                 if (ext.isNotEmpty()) ext.uppercase() else "Video"
                                             },
                                             style = MaterialTheme.typography.labelSmall,

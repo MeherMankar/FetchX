@@ -17,6 +17,7 @@ const VIDEO_PATH_PATTERNS = [
 ];
 
 const SKIP_PATTERNS = [
+  /(?:^|[\/_-])previews?(?:[\/_.-]|$)/i,
   /\binit[-_v]/i,    // init-v1-a1.mp4 etc.
   /_TPL_/i,          // template placeholders
   /\/seg-\d+/i,      // individual HLS transport segments
@@ -47,9 +48,13 @@ function isVideoUrl(url) {
   return VIDEO_PATH_PATTERNS.some(re => re.test(url));
 }
 
-function extractQuality(url) {
-  const m = url.match(/(\d{3,4}p)/i);
-  return m ? m[1] : null;
+function extractQuality(url, label) {
+  const labeled = (label || "").match(/(\d{3,4})p/i);
+  if (labeled) return `${labeled[1]}p`;
+  const explicit = url.match(/(\d{3,4})(?:p|m)\b/i);
+  if (explicit) return `${explicit[1]}p`;
+  const height = url.match(/[?&](?:quality|resolution|height|video_height)=["']?(\d{3,4})/i);
+  return height ? `${height[1]}p` : null;
 }
 
 function suggestFilename(url) {
@@ -158,10 +163,19 @@ browser.webNavigation.onCompleted.addListener((details) => {
         try {
           var sources = [];
           var seen = new Set();
-          var pageVideoId = location.pathname.match(/\/video\/(\d+)/i);
+          var pageVideoId = location.pathname.match(/\/videos?\/(\d+)/i);
           pageVideoId = pageVideoId && pageVideoId[1];
 
-          function addSource(value) {
+          function qualityFor(value, label) {
+            var labeled = (label || "").match(/(\d{3,4})p/i);
+            if (labeled) return labeled[1] + "p";
+            var explicit = value.match(/(\d{3,4})(?:p|m)\b/i);
+            if (explicit) return explicit[1] + "p";
+            var height = value.match(/[?&](?:quality|resolution|height|video_height)=["']?(\d{3,4})/i);
+            return height ? height[1] + "p" : "";
+          }
+
+          function addSource(value, label) {
             if (typeof value !== "string" || !value) return;
             value = value.replace(/\\u002f/gi, "/").replace(/\\\//g, "/");
             var url;
@@ -173,20 +187,25 @@ browser.webNavigation.onCompleted.addListener((details) => {
                 !new RegExp("/" + pageVideoId + "(?:[_./-]|$)").test(url.pathname)) return;
             if (seen.has(url.href)) return;
             seen.add(url.href);
-            var quality = url.pathname.match(/(\d{3,4}p)/i);
+            var quality = qualityFor(url.href, label);
             var extension = url.pathname.replace(/\/+$/, "").split(".").pop();
             sources.push({
               url: url.href,
-              quality: quality ? quality[1] : "",
-              filename: (quality ? quality[1] : "video") + "." + extension
+              quality: quality || "",
+              filename: (quality || "video") + "." + extension
             });
           }
 
           document.querySelectorAll("video").forEach(function(video) {
-            addSource(video.currentSrc);
-            addSource(video.src);
+            addSource(video.currentSrc, video.getAttribute("label"));
+            addSource(video.src, video.getAttribute("label"));
             video.querySelectorAll("source[src]").forEach(function(source) {
-              addSource(source.src);
+              addSource(
+                source.src,
+                source.getAttribute("label") ||
+                  source.getAttribute("data-quality") ||
+                  source.getAttribute("title"),
+              );
             });
           });
 

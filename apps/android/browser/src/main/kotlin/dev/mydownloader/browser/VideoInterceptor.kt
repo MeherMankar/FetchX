@@ -55,9 +55,29 @@ object VideoInterceptor {
     fun isVideoUrl(url: String): Boolean {
         val lower = url.lowercase(Locale.ROOT)
         val path = lower.substringBefore("?").substringBefore("#").trimEnd('/')
+        if (isPreviewUrl(path)) return false
         val ext = path.substringAfterLast(".", "")
         if (ext in VIDEO_EXTENSIONS) return true
         return VIDEO_PATH_HINTS.any { lower.contains(it) }
+    }
+
+    private fun isPreviewUrl(url: String): Boolean =
+        Regex("""(?:^|[/_-])previews?(?:[/_.-]|$)""", RegexOption.IGNORE_CASE).containsMatchIn(url)
+
+    fun extractQuality(url: String): String? {
+        Regex("""(\d{3,4})(?:p|m)\b""", RegexOption.IGNORE_CASE)
+            .find(url)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return "${it}p" }
+
+        val height = Regex("""(?:quality|resolution|height|video_height)=["']?(\d{3,4})""", RegexOption.IGNORE_CASE)
+            .find(url)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?: return null
+        return "${height}p"
     }
 
     fun isVideoMimeType(mimeType: String?): Boolean {
@@ -72,10 +92,7 @@ object VideoInterceptor {
         val base = raw.takeIf { it.isNotBlank() } ?: "video"
         val hasVideoExt = base.substringAfterLast(".").lowercase() in VIDEO_EXTENSIONS
         val extension = base.substringAfterLast(".").lowercase()
-        val quality = Regex("""\d{3,4}p""", RegexOption.IGNORE_CASE)
-            .find(path)
-            ?.value
-            ?.lowercase(Locale.ROOT)
+        val quality = extractQuality(path)
         return when {
             hasVideoExt && quality != null -> "$quality.$extension"
             hasVideoExt -> base
@@ -94,6 +111,7 @@ object VideoInterceptor {
         mimeType: String?,
         contentLength: Long?,
     ): DetectedVideo? {
+        if (isPreviewUrl(url.substringBefore("?").substringBefore("#"))) return null
         if (isNoisySegment(url)) return null
         val isMime = isVideoMimeType(mimeType)
         val isUrl = isVideoUrl(url)
