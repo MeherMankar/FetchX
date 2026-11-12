@@ -35,6 +35,14 @@ only the `pipe` input protocol enabled, caps output at 100 GiB by default (confi
 up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal
 tests independent of FFmpeg. The optional yt-dlp engine is configured as an external
 process adapter and uses fake runners in tests; no installed yt-dlp is required for CI.
+An initial native Rust MP4 path now probes MP4 metadata and remuxes supported H.264/AAC
+streams without re-encoding. Compatible H.264/AAC merges also use native stream copy;
+duration mismatches fall back to FFmpeg to preserve its shortest-stream behavior.
+Unsupported MP4 remuxes fall back to FFmpeg; other containers, transcoding, and Android
+yt-dlp merging still use FFmpeg. This original FetchX implementation takes FFmpeg's
+stream-copy behavior as a functional reference and does not copy FFmpeg source code.
+MP4 container handling uses the MIT-licensed
+[`mp4` crate](https://crates.io/crates/mp4).
 Historical aria2 records remain readable but the external aria2 runtime, daemon RPC,
 process supervision, packaging, settings, and fallback have been removed. Supported
 new work uses FetchX's shared Rust engines; eligible old records can be restarted as

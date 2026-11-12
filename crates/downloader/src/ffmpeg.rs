@@ -5,7 +5,10 @@ use std::{
     path::{Path, PathBuf},
     pin::Pin,
     process::{ExitStatus, Stdio},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -17,10 +20,12 @@ use tokio::{
     process::{Child, Command},
     sync::{Semaphore, mpsc, watch},
     task::JoinHandle,
-    time::{Instant, sleep_until, timeout},
+    time::{Instant, sleep, sleep_until, timeout},
 };
-use tracing::warn;
+use tracing::{debug, warn};
 use uuid::Uuid;
+
+use crate::native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor};
 
 const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 6);
 const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 24);
@@ -262,6 +267,8 @@ pub enum FfmpegError {
     CleanupFailedAfterCancellation,
     #[error("media operation was cancelled")]
     Cancelled,
+    #[error("native MP4 processing failed: {0}")]
+    NativeMp4(#[from] NativeMp4Error),
 }
 
 pub trait FfmpegProcessRunner: Send + Sync {
@@ -381,6 +388,27 @@ impl FfmpegProcessor {
     ) -> Result<MediaInfo, FfmpegError> {
         let _permit = self.acquire_slot(cancellation.clone()).await?;
         let input = canonical_input(input.as_ref()).await?;
+        if is_mp4_path(&input) {
+            let native_input = input.clone();
+            match run_native_mp4_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMp4Processor::probe_with_cancel(&native_input, || {
+                        cancelled.load(Ordering::Relaxed) || *receiver.borrow()
+                    })
+                },
+            )
+            .await
+            {
+                Ok(info) => return Ok(media_info_from_native_mp4(info)),
+                Err(FfmpegError::NativeMp4(NativeMp4Error::InvalidInput))
+                | Err(FfmpegError::NativeMp4(NativeMp4Error::UnsupportedCodec)) => {
+                    debug!("native MP4 probe unsupported; falling back to ffprobe");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let input_file = tokio::fs::File::open(&input)
             .await
             .map_err(|_| FfmpegError::InvalidInput)?;
@@ -424,6 +452,44 @@ impl FfmpegProcessor {
         );
         if tokio::fs::symlink_metadata(&destination).await.is_ok() {
             return Err(FfmpegError::DestinationExists);
+        }
+
+        if is_mp4_path(&video) && is_mp4_path(&audio) && uses_mp4_output(&destination) {
+            let native_video = video.clone();
+            let native_audio = audio.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_mp4_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMp4Processor::merge_h264_aac(
+                        &native_video,
+                        &native_audio,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(info) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes: info.size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMp4(
+                    NativeMp4Error::InvalidInput
+                    | NativeMp4Error::UnsupportedCodec
+                    | NativeMp4Error::RequiredTrackMissing
+                    | NativeMp4Error::UnsupportedTiming,
+                )) => {
+                    debug!("native MP4 merge unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
         }
 
         let workspace = create_workspace(&destination).await?;
@@ -502,10 +568,48 @@ impl FfmpegProcessor {
     ) -> Result<MediaProcessOutput, FfmpegError> {
         let _permit = self.acquire_slot(cancellation.clone()).await?;
         let input = canonical_input(&request.input).await?;
+        let destination = resolve_destination(&request.output, &input).await?;
+        if is_mp4_path(&input)
+            && matches!(
+                request.operation,
+                MediaOperation::Remux {
+                    container: MediaContainer::Mp4
+                }
+            )
+        {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_mp4_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMp4Processor::remux(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(info) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes: info.size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMp4(NativeMp4Error::InvalidInput))
+                | Err(FfmpegError::NativeMp4(NativeMp4Error::UnsupportedCodec)) => {
+                    debug!("native MP4 remux unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let input_file = tokio::fs::File::open(&input)
             .await
             .map_err(|_| FfmpegError::InvalidInput)?;
-        let destination = resolve_destination(&request.output, &input).await?;
         let workspace = create_workspace(&destination).await?;
         let temporary_output = workspace.join(format!("output.{}", request.operation.extension()));
         let arguments = build_process_arguments(&request.operation, &temporary_output);
@@ -672,6 +776,100 @@ impl MediaOperation {
                 TranscodePreset::FlacAudio => "flac",
             },
         }
+    }
+}
+
+fn is_mp4_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+}
+
+fn uses_mp4_output(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("mkv"))
+}
+
+fn media_info_from_native_mp4(info: NativeMp4Info) -> MediaInfo {
+    let streams = info
+        .tracks
+        .into_iter()
+        .map(|track| MediaStream {
+            kind: match track.media_type.as_str() {
+                "video" => MediaStreamKind::Video,
+                "audio" => MediaStreamKind::Audio,
+                "subtitle" => MediaStreamKind::Subtitle,
+                _ => MediaStreamKind::Other,
+            },
+            codec: track.codec,
+            width: track.width.map(u32::from),
+            height: track.height.map(u32::from),
+            frame_rate: None,
+            sample_rate_hz: track.sample_rate_hz,
+            channels: track.channels,
+        })
+        .collect();
+    let bit_rate_bits_per_second = (info.duration.as_nanos() > 0).then(|| {
+        u64::try_from((u128::from(info.size_bytes) * 8 * 1_000_000_000) / info.duration.as_nanos())
+            .ok()
+    });
+    MediaInfo {
+        duration: Some(info.duration),
+        format_name: Some("mp4".to_owned()),
+        size_bytes: Some(info.size_bytes),
+        bit_rate_bits_per_second: bit_rate_bits_per_second.flatten(),
+        streams,
+    }
+}
+
+async fn run_native_mp4_task<T, F>(
+    process_timeout: Duration,
+    mut cancellation: watch::Receiver<bool>,
+    operation: F,
+) -> Result<T, FfmpegError>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<AtomicBool>, watch::Receiver<bool>) -> Result<T, NativeMp4Error> + Send + 'static,
+{
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let worker_cancellation = cancellation.clone();
+    let mut worker =
+        tokio::task::spawn_blocking(move || operation(worker_cancelled, worker_cancellation));
+    tokio::select! {
+        biased;
+        result = &mut worker => match result {
+            Ok(result) => result.map_err(FfmpegError::NativeMp4),
+            Err(_) => Err(FfmpegError::ProcessRunner),
+        },
+        result = wait_for_native_cancellation(&mut cancellation) => {
+            cancelled.store(true, Ordering::Relaxed);
+            let _ = worker.await;
+            match result {
+                Ok(()) => Err(FfmpegError::Cancelled),
+                Err(error) => Err(error),
+            }
+        }
+        _ = sleep(process_timeout) => {
+            cancelled.store(true, Ordering::Relaxed);
+            let _ = worker.await;
+            Err(FfmpegError::ProcessTimeout)
+        }
+    }
+}
+
+async fn wait_for_native_cancellation(
+    cancellation: &mut watch::Receiver<bool>,
+) -> Result<(), FfmpegError> {
+    loop {
+        if *cancellation.borrow_and_update() {
+            return Ok(());
+        }
+        cancellation
+            .changed()
+            .await
+            .map_err(|_| FfmpegError::ProcessRunner)?;
     }
 }
 
@@ -1613,11 +1811,14 @@ mod tests {
     use std::{
         error::Error,
         ffi::OsString,
+        fs::File,
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
         time::Duration,
     };
 
+    use mp4::{AvcConfig, FourCC, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig};
+    use tempfile::tempdir;
     use tokio::io::AsyncWriteExt;
     use tokio::sync::{mpsc, watch};
 
@@ -1767,6 +1968,36 @@ mod tests {
         br#"{"format":{"format_name":"mov,mp4","duration":"12.5","size":"1024","bit_rate":"650"},"streams":[{"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"avg_frame_rate":"30000/1001"},{"codec_type":"audio","codec_name":"aac","sample_rate":"48000","channels":2}]}"#
     }
 
+    fn write_h264_mp4_fixture(path: &Path) -> Result<(), Box<dyn Error>> {
+        let mut writer = Mp4Writer::write_start(
+            File::create(path)?,
+            &Mp4Config {
+                major_brand: FourCC::from(*b"isom"),
+                minor_version: 512,
+                compatible_brands: vec![FourCC::from(*b"isom"), FourCC::from(*b"mp41")],
+                timescale: 1000,
+            },
+        )?;
+        writer.add_track(&TrackConfig::from(AvcConfig {
+            width: 640,
+            height: 360,
+            seq_param_set: vec![0x67, 0x42, 0, 0x1e],
+            pic_param_set: vec![0x68, 0xce, 6, 0xe2],
+        }))?;
+        writer.write_sample(
+            1,
+            &Mp4Sample {
+                start_time: 0,
+                duration: 1000,
+                rendering_offset: 0,
+                is_sync: true,
+                bytes: vec![0, 0, 0, 1, 0x65].into(),
+            },
+        )?;
+        writer.write_end()?;
+        Ok(())
+    }
+
     #[test]
     fn parses_probe_metadata_and_missing_values() -> Result<(), FfmpegError> {
         let info = parse_probe_output(parse_fixture())?;
@@ -1818,6 +2049,55 @@ mod tests {
             parse_probe_output(&vec![b' '; MAX_PROBE_OUTPUT_BYTES + 1]),
             Err(FfmpegError::MetadataOutputTooLarge)
         ));
+    }
+
+    #[tokio::test]
+    async fn probe_uses_native_mp4_for_supported_input() -> Result<(), Box<dyn Error>> {
+        let base = tempdir()?;
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        let processor = setup(runner, base.path()).await?;
+        let input = base.path().join("supported.mp4");
+        write_h264_mp4_fixture(&input)?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        let info = processor.probe(&input, cancellation).await?;
+        assert_eq!(info.format_name.as_deref(), Some("mp4"));
+        assert_eq!(info.streams[0].codec.as_deref(), Some("h264"));
+        assert_eq!(info.streams[0].width, Some(640));
+        assert!(
+            !state
+                .lock()
+                .expect("fake runner mutex")
+                .calls
+                .iter()
+                .any(|(_, arguments)| arguments.contains(&"-show_streams".to_owned()))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probe_falls_back_to_ffprobe_for_unsupported_mp4() -> Result<(), Box<dyn Error>> {
+        let base = tempdir()?;
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        state.lock().expect("fake runner mutex").probe_output = parse_fixture().to_vec();
+        let processor = setup(runner, base.path()).await?;
+        let input = base.path().join("unsupported.mp4");
+        tokio::fs::write(&input, b"not an MP4").await?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        let info = processor.probe(&input, cancellation).await?;
+        assert_eq!(info.format_name.as_deref(), Some("mov,mp4"));
+        assert!(
+            state
+                .lock()
+                .expect("fake runner mutex")
+                .calls
+                .iter()
+                .any(|(_, arguments)| arguments.contains(&"-show_streams".to_owned()))
+        );
+        Ok(())
     }
 
     #[test]
