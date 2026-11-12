@@ -194,6 +194,32 @@ class BrowserViewModelTest {
         assertFalse(vm.uiState.value.showPrivacySettings)
     }
 
+    @Test fun `ad blocking settings dialog open and close are reflected in ui state`() {
+        val vm = BrowserViewModel()
+
+        vm.openAdBlockingSettings()
+        assertTrue(vm.uiState.value.showAdBlockingSettings)
+
+        vm.closeAdBlockingSettings()
+        assertFalse(vm.uiState.value.showAdBlockingSettings)
+    }
+
+    @Test fun `uBlock and GeckoView preferences can be toggled independently`() {
+        val vm = BrowserViewModel()
+
+        vm.setUBlockOriginEnabled(false)
+        assertFalse(vm.uiState.value.privacySettings.uBlockOriginEnabled)
+        assertTrue(vm.uiState.value.privacySettings.geckoTrackingProtectionEnabled)
+
+        vm.setGeckoTrackingProtectionEnabled(false)
+        assertFalse(vm.uiState.value.privacySettings.uBlockOriginEnabled)
+        assertFalse(vm.uiState.value.privacySettings.geckoTrackingProtectionEnabled)
+
+        vm.setUBlockOriginEnabled(true)
+        assertTrue(vm.uiState.value.privacySettings.uBlockOriginEnabled)
+        assertFalse(vm.uiState.value.privacySettings.geckoTrackingProtectionEnabled)
+    }
+
     // ──Bookmark list updates ─────────────────────────────────────────────
 
     @Test fun `bookmarks list updates after add`() {
@@ -282,6 +308,7 @@ class BrowserViewModelTest {
 
         assertTrue(vm.uiState.value.showTrackerDetails)
         assertFalse(vm.uiState.value.trackerBlockingEnabled)
+        assertFalse(vm.uiState.value.privacySettings.geckoTrackingProtectionEnabled)
 
         vm.closeTrackerDetails()
         assertFalse(vm.uiState.value.showTrackerDetails)

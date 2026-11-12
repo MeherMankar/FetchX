@@ -175,9 +175,9 @@ internal fun extensionSource(extensionId: String, isBuiltIn: Boolean): Extension
 
 internal fun uBlockNeedsStateChange(
     extensionState: ExtensionState,
-    adBlockingEnabled: Boolean,
+    uBlockOriginEnabled: Boolean,
 ): Boolean = when (extensionState) {
-    ExtensionState.ENABLED -> !adBlockingEnabled
-    ExtensionState.DISABLED, ExtensionState.INSTALLED -> adBlockingEnabled
+    ExtensionState.ENABLED -> !uBlockOriginEnabled
+    ExtensionState.DISABLED, ExtensionState.INSTALLED -> uBlockOriginEnabled
     else -> false
 }

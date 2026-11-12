@@ -581,9 +581,9 @@ internal fun SitePrivacyDialog(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                        Text("Tracking protection", style = MaterialTheme.typography.labelMedium)
+                        Text("GeckoView tracking protection", style = MaterialTheme.typography.labelMedium)
                         Text(
-                            if (trackerProtectionEnabled) "Enabled" else "Disabled",
+                            if (trackerProtectionEnabled) "Enabled for all tabs" else "Disabled for all tabs",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }

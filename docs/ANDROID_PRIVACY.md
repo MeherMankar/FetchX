@@ -9,20 +9,26 @@ implemented.
 ## Implemented controls
 
 The browser uses one process-wide `GeckoRuntime` shared by all tabs. `PrivacyController`
-holds immutable, in-memory settings; `GeckoRuntimeHolder` maps them to GeckoView's
-native APIs. A change updates the shared runtime without closing or recreating tabs.
-Reload open pages after changing a setting. A newly constructed controller starts
-with the defaults below; this phase does not persist user changes, so settings may
-reset when the browser ViewModel is recreated.
+holds immutable settings; `BrowserViewModel` persists them in the browser's
+SharedPreferences store, and `GeckoRuntimeHolder` maps GeckoView settings to native
+APIs. A change updates the shared runtime without closing or recreating tabs. Reload
+open pages after changing a setting.
 
-| Control | Default | GeckoView behavior |
+| Control | Default | Behavior |
 |---|---:|---|
 | GeckoView tracking protection | On | `ContentBlocking.AntiTracking.AD`, `ANALYTIC`, and `SOCIAL` |
 | uBlock Origin | On | Bundled WebExtension enable/disable state managed independently of GeckoView protections |
-| Fingerprinting protection | On | `GeckoRuntimeSettings.setFingerprintingProtection(true)` and the `AntiTracking.FINGERPRINTING` category |
+| Fingerprinting protection | Off | `GeckoRuntimeSettings.setFingerprintingProtection(false)` and the `AntiTracking.FINGERPRINTING` category |
 | Cryptomining protection | On | `ContentBlocking.AntiTracking.CRYPTOMINING` |
-| Third-party cookie isolation | On | `CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS` |
+| Third-party cookie isolation | Off | `CookieBehavior.ACCEPT_ALL`; when on, `ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS` |
 | HTTPS-only mode | Off | `GeckoRuntimeSettings.HTTPS_ONLY`; when off, `ALLOW_ALL` |
+
+uBlock Origin's XPI and license are packaged in the Android app assets. When the
+browser's runtime extension manager starts, it checks GeckoView's installed
+extensions and installs the bundled XPI if it is missing. This is an automatic
+first-browser-start install from the app package; it does not download executable
+code at runtime. The Ad Blocking screen shows the extension's actual GeckoView
+enabled state and reports loading or installation errors.
 
 The fingerprinting-protection preference and the fingerprinting anti-tracking
 category are distinct GeckoView mechanisms. The preference enables GeckoView's
@@ -40,15 +46,16 @@ FetchX-maintained URL rule. HTTP-only sites may fail to load. FetchX does not
 implement per-site HTTP exceptions. Android's `network_security_config.xml` is a
 separate platform policy; it is not the implementation of this browser control.
 
-All controls are global to the shared runtime, not per-tab or per-origin.
-Fingerprinting, cryptomining, and tracker anti-tracking categories are combined
-when configuring GeckoView. Turning tracker blocking off removes only the ad,
-analytics, and social categories; separately enabled fingerprinting and
-cryptomining protections remain active.
+These controls are global to the shared runtime, not per-tab or per-origin. The
+GeckoView Tracking Protection switch and the Tracking Protection switch in the
+browser menu share the same preference. Turning it off removes the ad, analytics,
+and social anti-tracking categories; separately enabled fingerprinting and
+cryptomining protections remain active. uBlock Origin is a separate extension
+switch and does not change GeckoView's settings.
 
 ## Tracker blocking and statistics
 
-GeckoView 137's `GeckoSessionSettings.useTrackingProtection` defaults to false.
+`GeckoSessionSettings.useTrackingProtection` defaults to false.
 `TabManager` explicitly enables it on each session before opening it. The
 per-session `ContentBlocking.Delegate` forwards GeckoView's native
 `onContentBlocked` events to `TrackerBlockingController`; FetchX does not infer
@@ -83,8 +90,6 @@ was observed, but those multi-tab lifecycle checks remain unverified.
 - **Custom fingerprint profiles:** FetchX does not spoof navigator, canvas, screen,
   font, audio, or WebGL values, nor does it configure fingerprinting-protection
   overrides.
-- **Settings persistence:** these controls are in-memory and are not stored in
-  SQLite or another FetchX settings store.
 - **VPN, Tor, or network anonymity:** none of these controls hides the user's IP
   address from network operators or visited sites.
 

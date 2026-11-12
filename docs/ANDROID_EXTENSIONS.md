@@ -24,6 +24,14 @@ registry. Tab creation, tab switching, and tab closure do not create, remove, or
 otherwise mutate extension instances. BrowserViewModel observes manager state;
 Compose only renders the list and forwards user actions.
 
+The official uBlock Origin XPI and its license are included in the APK under
+`apps/android/browser/src/main/assets`. On the first browser startup, the
+runtime extension manager checks the installed list and installs that packaged
+XPI if it is missing. This does not fetch extension code at runtime. Users can
+independently enable or disable uBlock Origin and GeckoView Tracking Protection
+from the browser's **Ad Blocking** settings; uBlock's switch reflects
+GeckoView's reported extension state.
+
 The domain includes validated extension IDs and metadata, explicit lifecycle
 states, source classification, and bounded API-permission/host-origin metadata.
 `ExtensionStore` rejects duplicate IDs and malformed metadata, returns defensive

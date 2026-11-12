@@ -70,15 +70,14 @@ class PrivacyControllerTest {
     }
 
     @Test
-    fun `disabling tracker categories preserves independently enabled protections`() {
+    fun `disabling gecko tracking protection preserves independently enabled protections`() {
         val configuration = geckoPrivacyConfiguration(
             trackerBlockingEnabled = false,
             settings = PrivacySettings(),
         )
 
         assertEquals(
-            ContentBlocking.AntiTracking.AD or
-                ContentBlocking.AntiTracking.CRYPTOMINING,
+            ContentBlocking.AntiTracking.CRYPTOMINING,
             configuration.antiTrackingCategories,
         )
     }
@@ -155,7 +154,7 @@ class PrivacyControllerTest {
             ),
         )
         assertEquals(
-            ContentBlocking.AntiTracking.ANALYTIC or ContentBlocking.AntiTracking.SOCIAL,
+            ContentBlocking.AntiTracking.NONE,
             disabledConfiguration.antiTrackingCategories,
         )
     }
@@ -172,7 +171,24 @@ class PrivacyControllerTest {
         )
 
         assertEquals(
-            ContentBlocking.AntiTracking.ANALYTIC or ContentBlocking.AntiTracking.SOCIAL,
+            ContentBlocking.AntiTracking.NONE,
+            configuration.antiTrackingCategories,
+        )
+    }
+
+    @Test
+    fun `disabling gecko tracking removes its ad categories but preserves cryptomining protection`() {
+        val configuration = geckoPrivacyConfiguration(
+            trackerBlockingEnabled = true,
+            settings = PrivacySettings(
+                geckoTrackingProtectionEnabled = false,
+                fingerprintingProtectionEnabled = false,
+                cryptominingProtectionEnabled = true,
+            ),
+        )
+
+        assertEquals(
+            ContentBlocking.AntiTracking.CRYPTOMINING,
             configuration.antiTrackingCategories,
         )
     }

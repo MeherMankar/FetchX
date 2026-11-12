@@ -117,15 +117,13 @@ class ExtensionFrameworkTest {
     }
 
     @Test
-    fun `uBlock enabled state follows the extension toggle independently from Gecko settings`() {
-        assertTrue(uBlockNeedsStateChange(ExtensionState.DISABLED, adBlockingEnabled = true))
-        assertTrue(uBlockNeedsStateChange(ExtensionState.ENABLED, adBlockingEnabled = false))
-        assertFalse(uBlockNeedsStateChange(ExtensionState.ENABLED, adBlockingEnabled = true))
-        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLED, adBlockingEnabled = false))
-        assertFalse(uBlockNeedsStateChange(ExtensionState.ENABLING, adBlockingEnabled = false))
-        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLING, adBlockingEnabled = true))
-        assertTrue(uBlockNeedsStateChange(ExtensionState.DISABLED, adBlockingEnabled = true))
-        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLED, adBlockingEnabled = false))
+    fun `uBlock enabled state follows its own extension preference`() {
+        assertTrue(uBlockNeedsStateChange(ExtensionState.DISABLED, uBlockOriginEnabled = true))
+        assertTrue(uBlockNeedsStateChange(ExtensionState.ENABLED, uBlockOriginEnabled = false))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.ENABLED, uBlockOriginEnabled = true))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLED, uBlockOriginEnabled = false))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.ENABLING, uBlockOriginEnabled = false))
+        assertFalse(uBlockNeedsStateChange(ExtensionState.DISABLING, uBlockOriginEnabled = true))
     }
 
     @Test

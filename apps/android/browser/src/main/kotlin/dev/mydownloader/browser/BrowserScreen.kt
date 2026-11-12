@@ -954,6 +954,10 @@ fun BrowserScreen(
                         closeMenu()
                         viewModel.openTrackerDetails()
                     },
+                    onOpenAdBlockingSettings = {
+                        closeMenu()
+                        viewModel.openAdBlockingSettings()
+                    },
                     onOpenPrivacySettings = {
                         closeMenu()
                         viewModel.openPrivacySettings()
@@ -1531,13 +1535,21 @@ fun BrowserScreen(
     if (uiState.showPrivacySettings) {
         PrivacySettingsDialog(
             settings = uiState.privacySettings,
-            onGeckoTrackingProtectionChange = viewModel::setGeckoTrackingProtectionEnabled,
-            onUBlockOriginChange = viewModel::setUBlockOriginEnabled,
             onFingerprintingProtectionChange = viewModel::setFingerprintingProtectionEnabled,
             onCryptominingProtectionChange = viewModel::setCryptominingProtectionEnabled,
             onThirdPartyCookieIsolationChange = viewModel::setThirdPartyCookieIsolationEnabled,
             onHttpsOnlyChange = viewModel::setHttpsOnlyEnabled,
             onDismiss = viewModel::closePrivacySettings,
+        )
+    }
+
+    if (uiState.showAdBlockingSettings) {
+        AdBlockingSettingsDialog(
+            settings = uiState.privacySettings,
+            extensionManagerState = uiState.extensionManagerState,
+            onGeckoTrackingProtectionChange = viewModel::setGeckoTrackingProtectionEnabled,
+            onUBlockOriginChange = viewModel::setUBlockOriginEnabled,
+            onDismiss = viewModel::closeAdBlockingSettings,
         )
     }
 
@@ -1577,6 +1589,10 @@ fun BrowserScreen(
             onOpenThemePicker = {
                 viewModel.closeBrowserSettings()
                 viewModel.openThemePicker()
+            },
+            onOpenAdBlocking = {
+                viewModel.closeBrowserSettings()
+                viewModel.openAdBlockingSettings()
             },
             onOpenPrivacy = {
                 viewModel.closeBrowserSettings()
@@ -2192,6 +2208,7 @@ private fun BrowserMenuSheet(
     onOpenExternally: () -> Unit,
     onToggleDesktopSite: () -> Unit,
     onOpenTrackerDetails: () -> Unit,
+    onOpenAdBlockingSettings: () -> Unit,
     onOpenPrivacySettings: () -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
@@ -2493,6 +2510,12 @@ private fun BrowserMenuSheet(
                 badgeText = "${uiState.activeTabBlockedRequests} blocked",
                 badgeColor = MaterialTheme.colorScheme.tertiaryContainer,
                 onClick = onOpenTrackerDetails,
+            )
+            BrowserMenuItemRow(
+                icon = Icons.Default.Security,
+                title = "Ad Blocking",
+                iconTint = MaterialTheme.colorScheme.onSurface,
+                onClick = onOpenAdBlockingSettings,
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Security,
@@ -3919,7 +3942,7 @@ private fun ExtensionsDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    "Search Mozilla's Firefox Add-ons catalog to install signed extensions, or install an XPI file. FetchX asks before granting requested permissions; private-browsing access is never granted. uBlock Origin is bundled and enabled by default.",
+                    "Search Mozilla's Firefox Add-ons catalog to install signed extensions, or install an XPI file. FetchX asks before granting requested permissions; private-browsing access is never granted. uBlock Origin is bundled with FetchX and installed automatically when the browser starts.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
@@ -4037,7 +4060,7 @@ private fun ExtensionsDialog(
                         }
                         if (extension.id.value == UBLOCK_ORIGIN_EXTENSION_ID) {
                             Text(
-                                "Turn ad blocking on or off in Privacy controls.",
+                                "Manage this extension in Ad Blocking settings.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -4239,6 +4262,7 @@ private fun BrowserSettingsDialog(
     onDismiss: () -> Unit,
     onOpenSearchEngine: () -> Unit,
     onOpenThemePicker: () -> Unit,
+    onOpenAdBlocking: () -> Unit,
     onOpenPrivacy: () -> Unit,
     onOpenTrackingProtection: () -> Unit,
     onOpenHistory: () -> Unit,
@@ -4312,6 +4336,11 @@ private fun BrowserSettingsDialog(
                         )
                     }
                     SettingsSection("Privacy & Security") {
+                        SettingsActionRow(
+                            title = "Ad Blocking",
+                            subtitle = "Manage GeckoView protection and uBlock Origin",
+                            onClick = onOpenAdBlocking,
+                        )
                         SettingsActionRow(
                             title = "Tracking protection",
                             subtitle = "View protection for this site",
@@ -4461,10 +4490,92 @@ private fun SettingsActionRow(
 }
 
 @Composable
-private fun PrivacySettingsDialog(
+private fun AdBlockingSettingsDialog(
     settings: PrivacySettings,
+    extensionManagerState: ExtensionManagerState,
     onGeckoTrackingProtectionChange: (Boolean) -> Unit,
     onUBlockOriginChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val uBlock = extensionManagerState.extensions.firstOrNull {
+        it.id.value == UBLOCK_ORIGIN_EXTENSION_ID
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ad Blocking") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    "These controls are independent. uBlock Origin is bundled with FetchX and installed automatically when the browser starts.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                PrivacySwitchRow(
+                    title = "GeckoView Tracking Protection",
+                    description = "Control GeckoView's built-in ad, analytics, and social protections.",
+                    checked = settings.geckoTrackingProtectionEnabled,
+                    onCheckedChange = onGeckoTrackingProtectionChange,
+                )
+                if (uBlock != null) {
+                    PrivacySwitchRow(
+                        title = "uBlock Origin",
+                        description = when (uBlock.state) {
+                            ExtensionState.ENABLED -> "Bundled extension is installed and enabled."
+                            ExtensionState.DISABLED, ExtensionState.INSTALLED ->
+                                "Bundled extension is installed and disabled."
+                            else -> "Bundled extension state: ${uBlock.state.name.lowercase()}."
+                        },
+                        checked = uBlock.state in setOf(
+                            ExtensionState.ENABLED,
+                            ExtensionState.DISABLING,
+                        ),
+                        enabled = !extensionManagerState.isBusy &&
+                            uBlock.state in setOf(
+                                ExtensionState.ENABLED,
+                                ExtensionState.DISABLED,
+                                ExtensionState.INSTALLED,
+                            ),
+                        onCheckedChange = onUBlockOriginChange,
+                    )
+                } else {
+                    Text(
+                        if (extensionManagerState.isLoading) {
+                            "Bundled uBlock Origin is being installed or loaded."
+                        } else {
+                            "Bundled uBlock Origin is not available."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (extensionManagerState.error != null) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+                extensionManagerState.error?.let { error ->
+                    Text(
+                        error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+@Composable
+private fun PrivacySettingsDialog(
+    settings: PrivacySettings,
     onFingerprintingProtectionChange: (Boolean) -> Unit,
     onCryptominingProtectionChange: (Boolean) -> Unit,
     onThirdPartyCookieIsolationChange: (Boolean) -> Unit,
@@ -4481,21 +4592,9 @@ private fun PrivacySettingsDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    "These browser-wide settings apply to all tabs. Reload open pages after changing them.",
+                    "These browser-wide privacy settings apply to all tabs. Reload open pages after changing them.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 8.dp),
-                )
-                PrivacySwitchRow(
-                    title = "GeckoView Tracking Protection",
-                    description = "Enable GeckoView's built-in ad, analytics, and social anti-tracking categories.",
-                    checked = settings.geckoTrackingProtectionEnabled,
-                    onCheckedChange = onGeckoTrackingProtectionChange,
-                )
-                PrivacySwitchRow(
-                    title = "uBlock Origin",
-                    description = "Enable or disable the bundled uBlock Origin extension independently from GeckoView's built-in protections.",
-                    checked = settings.uBlockOriginEnabled,
-                    onCheckedChange = onUBlockOriginChange,
                 )
                 PrivacySwitchRow(
                     title = "Fingerprinting protection",
@@ -4534,6 +4633,7 @@ private fun PrivacySwitchRow(
     title: String,
     description: String,
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit,
 ) {
     Row(
@@ -4550,7 +4650,11 @@ private fun PrivacySwitchRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+        )
     }
 }
 

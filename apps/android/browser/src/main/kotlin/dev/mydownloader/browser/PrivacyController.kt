@@ -87,11 +87,10 @@ internal fun geckoPrivacyConfiguration(
     trackerBlockingEnabled: Boolean,
     settings: PrivacySettings,
 ): GeckoPrivacyConfiguration {
-    var categories = trackerAntiTrackingCategories(trackerBlockingEnabled)
-    categories = if (settings.geckoTrackingProtectionEnabled) {
-        categories or ContentBlocking.AntiTracking.AD
+    var categories = if (trackerBlockingEnabled && settings.geckoTrackingProtectionEnabled) {
+        trackerAntiTrackingCategories(enabled = true)
     } else {
-        categories and ContentBlocking.AntiTracking.AD.inv()
+        ContentBlocking.AntiTracking.NONE
     }
     if (settings.fingerprintingProtectionEnabled) {
         categories = categories or ContentBlocking.AntiTracking.FINGERPRINTING

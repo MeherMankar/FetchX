@@ -104,6 +104,7 @@ data class BrowserUiState(
     val activeTabBlockedHosts: List<String> = emptyList(),
     val sitePermissionPrompt: SitePermissionPrompt? = null,
     val androidRuntimePermissionRequests: List<AndroidRuntimePermissionRequest> = emptyList(),
+    val showAdBlockingSettings: Boolean = false,
     val showPrivacySettings: Boolean = false,
     val privacySettings: PrivacySettings = PrivacySettings(),
     val showExtensions: Boolean = false,
@@ -206,6 +207,8 @@ class BrowserViewModel internal constructor(
     private var mediaFormatJob: Job? = null
     private var mediaFormatGeneration = 0
     private var extensionManager: ExtensionManager? = null
+    @Volatile
+    private var uBlockSyncAttemptedPreference: Boolean? = null
     private var extensionStateListener: (() -> Unit)? = null
     private val firefoxAddonsCatalog = FirefoxAddonsCatalog()
     private var firefoxAddonsSearchGeneration = 0
@@ -762,7 +765,10 @@ class BrowserViewModel internal constructor(
 
     fun onVideoDetected(video: DetectedVideo) {
         _uiState.update { state ->
-            if (state.detectedVideos.any { it.url == video.url }) return@update state
+            val identity = VideoInterceptor.videoIdentity(video.url)
+            if (state.detectedVideos.any { VideoInterceptor.videoIdentity(it.url) == identity }) {
+                return@update state
+            }
             state.copy(
                 detectedVideos = state.detectedVideos + video,
                 showVideoDownloadBar = true,
@@ -1081,8 +1087,15 @@ class BrowserViewModel internal constructor(
     }
 
     fun setTrackerBlockingEnabled(enabled: Boolean) {
-        trackerBlockingController.setEnabled(enabled)
-        applyPrivacySettings()
+        setGeckoTrackingProtectionEnabled(enabled)
+    }
+
+    fun openAdBlockingSettings() {
+        _uiState.update { it.copy(showAdBlockingSettings = true) }
+    }
+
+    fun closeAdBlockingSettings() {
+        _uiState.update { it.copy(showAdBlockingSettings = false) }
     }
 
     fun openPrivacySettings() {
@@ -1095,6 +1108,7 @@ class BrowserViewModel internal constructor(
 
     fun setGeckoTrackingProtectionEnabled(enabled: Boolean) {
         privacyController.setGeckoTrackingProtectionEnabled(enabled)
+        trackerBlockingController.setEnabled(enabled)
         applyPrivacySettings()
     }
 
@@ -1102,8 +1116,7 @@ class BrowserViewModel internal constructor(
 
     fun setUBlockOriginEnabled(enabled: Boolean) {
         privacyController.setUBlockOriginEnabled(enabled)
-        applyPrivacySettings()
-        syncUBlockWithAdBlockingSetting()
+        syncUBlockWithAdBlockingSetting(force = true)
     }
 
     fun setFingerprintingProtectionEnabled(enabled: Boolean) {
@@ -1314,7 +1327,7 @@ class BrowserViewModel internal constructor(
         syncUBlockWithAdBlockingSetting()
     }
 
-    private fun syncUBlockWithAdBlockingSetting() {
+    private fun syncUBlockWithAdBlockingSetting(force: Boolean = false) {
         val manager = extensionManager ?: return
         val managerState = manager.state.value
         if (managerState.isLoading || managerState.isBusy || managerState.isShutdown) return
@@ -1322,17 +1335,21 @@ class BrowserViewModel internal constructor(
         val uBlock = managerState.extensions.firstOrNull {
             it.id.value == UBLOCK_ORIGIN_EXTENSION_ID
         } ?: return
-        if (uBlockNeedsStateChange(
+        val desiredEnabled = privacyController.settings.value.uBlockOriginEnabled
+        if (!uBlockNeedsStateChange(
                 extensionState = uBlock.state,
-                adBlockingEnabled = privacyController.settings.value.uBlockOriginEnabled,
+                uBlockOriginEnabled = desiredEnabled,
             )
         ) {
-            if (privacyController.settings.value.uBlockOriginEnabled) {
-                manager.enable(uBlock.id)
-            } else {
-                manager.disable(uBlock.id)
-            }
+            uBlockSyncAttemptedPreference = null
+            return
         }
+        if (force) uBlockSyncAttemptedPreference = null
+        if (uBlockSyncAttemptedPreference == desiredEnabled) return
+
+        uBlockSyncAttemptedPreference = desiredEnabled
+        val accepted = if (desiredEnabled) manager.enable(uBlock.id) else manager.disable(uBlock.id)
+        if (!accepted) uBlockSyncAttemptedPreference = null
     }
 
     private fun applyPrivacySettings() {
@@ -1715,6 +1732,7 @@ class BrowserViewModel internal constructor(
             httpsOnlyEnabled = prefs.getBoolean(PRIVACY_HTTPS_ONLY_KEY, false),
         )
         privacyController.setGeckoTrackingProtectionEnabled(settings.geckoTrackingProtectionEnabled)
+        trackerBlockingController.setEnabled(settings.geckoTrackingProtectionEnabled)
         privacyController.setUBlockOriginEnabled(settings.uBlockOriginEnabled)
         privacyController.setFingerprintingProtectionEnabled(settings.fingerprintingProtectionEnabled)
         privacyController.setCryptominingProtectionEnabled(settings.cryptominingProtectionEnabled)
