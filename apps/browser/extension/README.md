@@ -8,9 +8,11 @@ Firefox uses its separate Manifest V2 package.
 
 - **Context menu**: right-click any link → "Send to FetchX"
 - **Popup**: paste a URL and click "Send to FetchX"
+- **Page capture**: scan the current page's links and media from the popup's Add tab
 - Select the local FetchX desktop or a configured remote FetchX server
 - Displays connection status for the selected target
-- Fetch and queue individual yt-dlp video formats for the local **This PC** target
+- Surface detected media in the popup and fetch/queue individual yt-dlp video formats
+  for the local **This PC** target
 - Existing optional download interception and page-resource scanning features
 
 Remote target support only adds explicit target selection and RPC forwarding.
@@ -42,9 +44,10 @@ Windows Credential Manager. Later RPC calls send only the target ID and
 endpoint; the native host retrieves the endpoint-bound token and sends it as a
 bearer credential to the configured server.
 
-For the local **This PC** target, click **Fetch video qualities** to list
-supported yt-dlp formats, then choose a format or **Download all**. This option
-is not available for remote targets.
+The popup checks the active page for media already detected by the extension.
+Click **Choose quality** to run yt-dlp format discovery for that page; you can
+also use **Choose video quality** manually or scan its downloadable resources.
+Format selection is available for the local **This PC** target only.
 
 The native host validates the remote server's `fetchx.rpc.v1` protocol and
 allows only `system.discover`, `download.create`, and `download.list` for this

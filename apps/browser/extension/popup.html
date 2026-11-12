@@ -53,13 +53,21 @@
           <button id="use-tab-btn" class="btn-tab-url" title="Use current tab URL" aria-label="Use current tab URL">⇥</button>
         </div>
 
+        <div id="media-detected" class="media-detected hidden" role="status" aria-live="polite">
+          <span id="media-detected-text"></span>
+          <button id="detected-media-btn" class="btn-text" type="button">Choose quality</button>
+        </div>
+
         <button id="submit-btn" class="btn-primary" type="button" disabled>
           <span class="btn-icon-lead">↓</span>
           <span id="btn-text">Download with FetchX</span>
         </button>
 
         <button id="fetch-formats-btn" class="btn-secondary" type="button" disabled>
-          Fetch video qualities
+          Choose video quality
+        </button>
+        <button id="scan-page-btn" class="btn-secondary" type="button">
+          Find downloads on this page
         </button>
         <div id="quality-panel" class="quality-panel hidden">
           <div class="quality-header">

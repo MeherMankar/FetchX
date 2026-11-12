@@ -20,6 +20,10 @@ const urlInput       = q<HTMLInputElement>("#url-input");
 const useTabBtn      = q<HTMLButtonElement>("#use-tab-btn");
 const submitBtn      = q<HTMLButtonElement>("#submit-btn");
 const fetchFormatsBtn = q<HTMLButtonElement>("#fetch-formats-btn");
+const detectedMedia  = q<HTMLElement>("#media-detected");
+const detectedMediaText = q<HTMLElement>("#media-detected-text");
+const detectedMediaBtn = q<HTMLButtonElement>("#detected-media-btn");
+const scanPageBtn    = q<HTMLButtonElement>("#scan-page-btn");
 const qualityPanel   = q<HTMLElement>("#quality-panel");
 const qualityTitle   = q<HTMLElement>("#quality-title");
 const qualityList    = q<HTMLElement>("#quality-list");
@@ -126,17 +130,47 @@ urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !submitBt
 
 useTabBtn.addEventListener("click", () => void fillTab());
 fetchFormatsBtn.addEventListener("click", () => void fetchVideoFormats());
+detectedMediaBtn.addEventListener("click", () => void chooseDetectedMediaQuality());
+scanPageBtn.addEventListener("click", () => {
+  document.querySelector<HTMLButtonElement>('[data-tab="resources"]')?.click();
+  void scanPage();
+});
 downloadAllFormatsBtn.addEventListener("click", () => void downloadFormats(availableFormats));
 
-async function fillTab() {
+async function fillTab(): Promise<boolean> {
   try {
     const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && isHttpUrl(tab.url) && !hasEmbeddedCredentials(tab.url)) {
       urlInput.value = tab.url; clearResult(); updateSubmit();
+      return true;
     } else {
       showResult("error", "Current page is not a downloadable HTTP/HTTPS URL.");
     }
   } catch { showResult("error", "Could not read the current tab."); }
+  return false;
+}
+
+async function refreshDetectedMedia() {
+  try {
+    const [tab] = await browserApi.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url || !isHttpUrl(tab.url) || hasEmbeddedCredentials(tab.url)) return;
+    const streams = await sendRuntimeMessage<NetworkStream[]>({
+      type: "get_media_for_tab",
+      tabId: tab.id,
+    });
+    const count = Array.isArray(streams) ? streams.length : 0;
+    if (count === 0) return;
+    detectedMediaText.textContent =
+      `FetchX detected ${count} media stream${count === 1 ? "" : "s"} on this page.`;
+    detectedMedia.classList.remove("hidden");
+  } catch (error) {
+    console.error("Could not check for detected media", error);
+  }
+}
+
+async function chooseDetectedMediaQuality() {
+  if (!await fillTab()) return;
+  await fetchVideoFormats();
 }
 
 submitBtn.addEventListener("click", () => void submit());
@@ -757,6 +791,7 @@ function esc(s: string): string {
 
 async function init() {
   void fillTab();
+  void refreshDetectedMedia();
   try {
     await loadTargets();
     await checkConnection();

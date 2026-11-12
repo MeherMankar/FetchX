@@ -41,7 +41,9 @@ body {
   color: var(--text);
   width: 360px;
   min-height: 340px;
-  overflow: hidden;
+  max-height: 600px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .popup-root { display: flex; flex-direction: column; min-height: 340px; }
@@ -130,6 +132,14 @@ body {
 }
 .url-input::placeholder { color: var(--text-3); }
 .url-input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+.media-detected {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; background: var(--accent-dim); border: 1px solid rgba(59,130,246,0.25);
+  border-radius: var(--r-sm); color: var(--text-2); font-size: 11px;
+}
+.media-detected span { min-width: 0; }
+.media-detected .btn-text { flex-shrink: 0; }
 
 .btn-tab-url {
   width: 32px; height: 32px; display: grid; place-items: center;
