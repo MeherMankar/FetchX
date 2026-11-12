@@ -68,6 +68,11 @@ class VideoInterceptorTest {
     }
 
     @Test
+    fun `isVideoUrl accepts media extension before trailing slash`() {
+        assertTrue(VideoInterceptor.isVideoUrl("https://example.com/video.mp4/"))
+    }
+
+    @Test
     fun `isVideoUrl returns false for html page`() {
         assertFalse(VideoInterceptor.isVideoUrl("https://example.com/page.html"))
     }
@@ -103,6 +108,14 @@ class VideoInterceptorTest {
         assertEquals(
             "clip.mkv",
             VideoInterceptor.suggestFilename("https://cdn.com/clip.mkv?token=abc", "video/x-matroska"),
+        )
+    }
+
+    @Test
+    fun `suggestFilename extracts quality from trailing slash URL`() {
+        assertEquals(
+            "720p.mp4",
+            VideoInterceptor.suggestFilename("https://cdn.com/get_file/123/808341_720p.mp4/", null),
         )
     }
 

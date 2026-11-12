@@ -40,7 +40,7 @@ function shouldSkip(url) {
 function isVideoUrl(url) {
   if (shouldSkip(url)) return false;
   const lower = url.toLowerCase();
-  const path = lower.split("?")[0];
+  const path = lower.split(/[?#]/)[0].replace(/\/+$/, "");
   const ext = path.slice(path.lastIndexOf(".") + 1);
   if (VIDEO_EXTENSIONS.has(ext)) return true;
   if (MANIFEST_EXTENSIONS.has(ext)) return true;
@@ -53,7 +53,7 @@ function extractQuality(url) {
 }
 
 function suggestFilename(url) {
-  const path = url.split("?")[0];
+  const path = url.split(/[?#]/)[0].replace(/\/+$/, "");
   const name = path.split("/").pop() || "video";
   const ext = name.split(".").pop().toLowerCase();
   const ALL = new Set(["mp4","m4v","mkv","webm","mov","flv","avi","3gp","wmv","m3u8","mpd"]);
@@ -148,3 +148,75 @@ browser.webNavigation.onCompleted.addListener((details) => {
     } catch(e) {}
   }).catch(function() {});
 }, { url: [{ hostContains: "xhamster" }] });
+
+browser.webNavigation.onCompleted.addListener((details) => {
+  if (details.frameId !== 0 || !/^https?:/i.test(details.url)) return;
+
+  browser.tabs.executeScript(details.tabId, {
+    code: String.raw`
+      (function() {
+        try {
+          var sources = [];
+          var seen = new Set();
+          var pageVideoId = location.pathname.match(/\/video\/(\d+)/i);
+          pageVideoId = pageVideoId && pageVideoId[1];
+
+          function addSource(value) {
+            if (typeof value !== "string" || !value) return;
+            value = value.replace(/\\u002f/gi, "/").replace(/\\\//g, "/");
+            var url;
+            try { url = new URL(value, location.href); } catch (_) { return; }
+            if (url.protocol !== "http:" && url.protocol !== "https:") return;
+            if (!/\.(?:mp4|m4v|webm|mkv|mov|m3u8|mpd)\/?$/i.test(url.pathname)) return;
+            if (/preview/i.test(url.pathname)) return;
+            if (pageVideoId && /\/get_file\//i.test(url.pathname) &&
+                !new RegExp("/" + pageVideoId + "(?:[_./-]|$)").test(url.pathname)) return;
+            if (seen.has(url.href)) return;
+            seen.add(url.href);
+            var quality = url.pathname.match(/(\d{3,4}p)/i);
+            var extension = url.pathname.replace(/\/+$/, "").split(".").pop();
+            sources.push({
+              url: url.href,
+              quality: quality ? quality[1] : "",
+              filename: (quality ? quality[1] : "video") + "." + extension
+            });
+          }
+
+          document.querySelectorAll("video").forEach(function(video) {
+            addSource(video.currentSrc);
+            addSource(video.src);
+            video.querySelectorAll("source[src]").forEach(function(source) {
+              addSource(source.src);
+            });
+          });
+
+          var mediaPattern = /(?:https?:\/\/|\/\/|\/)[^"'\s<>]*?\.(?:mp4|m4v|webm|mkv|mov|m3u8|mpd)(?:[?#][^"'\s<>]*)?\/?/gi;
+          document.querySelectorAll("script:not([src])").forEach(function(script) {
+            var text = script.textContent.replace(/\\u002f/gi, "/").replace(/\\\//g, "/");
+            var match;
+            while ((match = mediaPattern.exec(text)) !== null && sources.length < 32) {
+              addSource(match[0]);
+            }
+          });
+          return JSON.stringify(sources.slice(0, 32));
+        } catch (_) {
+          return "[]";
+        }
+      })()
+    `,
+  }).then(function(results) {
+    if (!results || !results[0]) return;
+    try {
+      JSON.parse(results[0]).forEach(function(source) {
+        if (!source.url || reported.has(source.url)) return;
+        reported.add(source.url);
+        browser.runtime.sendNativeMessage("browser", {
+          type: "video",
+          url: source.url,
+          filename: source.filename || suggestFilename(source.url),
+          quality: source.quality || extractQuality(source.url),
+        }).catch(function() {});
+      });
+    } catch (_) {}
+  }).catch(function() {});
+}, { url: [{ schemes: ["http", "https"] }] });

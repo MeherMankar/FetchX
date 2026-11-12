@@ -25,11 +25,12 @@ use tokio::sync::{mpsc, watch};
 /// A stub `YtDlpProcessRunner` whose `discover_formats` always fails with
 /// `YtDlpError::FormatDiscoveryUnsupported`, proving the error propagates
 /// through the adapter → extractor → registry → `CoreServices::extract_media`.
-struct UnsupportedDiscoveryRunner {
+struct StubDiscoveryRunner {
     discover_calls: Arc<AtomicUsize>,
+    formats: Vec<YtDlpFormat>,
 }
 
-impl YtDlpProcessRunner for UnsupportedDiscoveryRunner {
+impl YtDlpProcessRunner for StubDiscoveryRunner {
     fn validate_version<'a>(
         &'a self,
         _executable: &'a Path,
@@ -60,7 +61,14 @@ impl YtDlpProcessRunner for UnsupportedDiscoveryRunner {
         _timeout: Duration,
     ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
         self.discover_calls.fetch_add(1, Ordering::Relaxed);
-        Box::pin(async { Err(YtDlpError::FormatDiscoveryUnsupported) })
+        let formats = self.formats.clone();
+        Box::pin(async move {
+            if formats.is_empty() {
+                Err(YtDlpError::FormatDiscoveryUnsupported)
+            } else {
+                Ok(formats)
+            }
+        })
     }
 }
 
@@ -90,8 +98,9 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
     let services = CoreServices::start_with_engine_config_and_ytdlp_runner(
         cfg,
         Some(engine_config),
-        Some(Arc::new(UnsupportedDiscoveryRunner {
+        Some(Arc::new(StubDiscoveryRunner {
             discover_calls: Arc::clone(&discover_calls),
+            formats: Vec::new(),
         })),
     )
     .await?;
@@ -138,6 +147,66 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         );
     }
     assert_eq!(discover_calls.load(Ordering::Relaxed), 4);
+
+    services.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn yt_dlp_discovery_precedes_generic_fallback_and_preserves_qualities()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let cfg = CoreServicesConfig {
+        database_path: root.path().join("fetchx.db"),
+        downloads_dir: root.path().join("downloads"),
+        runtime_dir: root.path().join("runtime"),
+        bundled_engines_dir: None,
+        defer_queued_on_start: false,
+    };
+    let expected_qualities = ["360p", "480p", "720p", "1080p"];
+    let discover_calls = Arc::new(AtomicUsize::new(0));
+    let services = CoreServices::start_with_engine_config_and_ytdlp_runner(
+        cfg,
+        Some(EngineConfig {
+            yt_dlp: YtDlpConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        Some(Arc::new(StubDiscoveryRunner {
+            discover_calls: Arc::clone(&discover_calls),
+            formats: expected_qualities
+                .iter()
+                .map(|quality| YtDlpFormat {
+                    format_id: quality.to_string(),
+                    label: quality.to_string(),
+                    extension: Some("mp4".to_owned()),
+                    file_size_bytes: None,
+                    title: Some("Test video".to_owned()),
+                    platform: Some("Test".to_owned()),
+                })
+                .collect(),
+        })),
+    )
+    .await?;
+
+    let info = services
+        .extract_media(
+            "https://example.invalid/video",
+            ExtractOptions {
+                timeout: Some(Duration::ZERO),
+                ..ExtractOptions::default()
+            },
+        )
+        .await?;
+    let qualities: Vec<_> = info
+        .formats
+        .iter()
+        .map(|format| format.label.as_str())
+        .collect();
+    assert_eq!(qualities, expected_qualities);
+    assert_eq!(discover_calls.load(Ordering::Relaxed), 1);
 
     services.shutdown().await?;
     Ok(())

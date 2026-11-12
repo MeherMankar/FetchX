@@ -1349,30 +1349,28 @@ fun BrowserScreen(
                                 Text(format.label)
                             }
                         }
-                        if (uiState.mediaFormats.isEmpty()) {
-                            val otherStreams = uiState.detectedVideos
-                                .filter { it.suggestedFilename != video.suggestedFilename || it.url != video.url }
-                            if (otherStreams.isNotEmpty()) {
-                                Text(
-                                    "Other detected streams:",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-                                )
-                                otherStreams.forEach { stream ->
-                                    TextButton(
-                                        onClick = { viewModel.downloadDetectedVideo(stream) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Text(stream.suggestedFilename)
-                                    }
+                        val otherStreams = uiState.detectedVideos
+                            .filter { it.suggestedFilename != video.suggestedFilename || it.url != video.url }
+                        if (otherStreams.isNotEmpty()) {
+                            Text(
+                                "Other detected streams:",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                            )
+                            otherStreams.forEach { stream ->
+                                TextButton(
+                                    onClick = { viewModel.downloadDetectedVideo(stream) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(stream.suggestedFilename)
                                 }
-                            } else {
-                                Text(
-                                    "No selectable formats were found. Automatic quality selection is still available.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(top = 8.dp),
-                                )
                             }
+                        } else if (uiState.mediaFormats.isEmpty()) {
+                            Text(
+                                "No selectable formats were found. Automatic quality selection is still available.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
                         }
                     }
                 }

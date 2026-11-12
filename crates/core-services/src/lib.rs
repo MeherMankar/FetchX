@@ -2754,7 +2754,6 @@ impl EngineRuntime {
             registry.register(Arc::new(NdrExtractor));
             registry.register(Arc::new(TvpExtractor));
             registry.register(Arc::new(GlobalPlayerExtractor));
-            registry.register(Arc::new(GenericExtractor));
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
                 // Use the resolved executable path captured before the engine was moved.
                 let executable = ytdlp_executable.unwrap_or_else(|| {
@@ -2777,6 +2776,9 @@ impl EngineRuntime {
             } else {
                 registry.register(Arc::new(UnsupportedExtractor));
             }
+            // Generic HTML parsing is intentionally the last resort: when yt-dlp
+            // is available, it can discover the complete set of player formats.
+            registry.register(Arc::new(GenericExtractor));
             Arc::new(registry)
         };
 

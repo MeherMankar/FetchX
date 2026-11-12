@@ -159,7 +159,7 @@ fn is_direct_media_url(url: &str) -> bool {
     };
     let extension = url
         .path_segments()
-        .and_then(Iterator::last)
+        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
         .and_then(|filename| filename.rsplit_once('.').map(|(_, ext)| ext))
         .unwrap_or_default();
     matches!(
@@ -1617,6 +1617,9 @@ mod tests {
     fn direct_media_detection_uses_url_path_not_host_query_or_fragment() {
         assert!(is_direct_media_url(
             "https://cdn.example.test/video.mp4?token=abc#t=10"
+        ));
+        assert!(is_direct_media_url(
+            "https://cdn.example.test/get_file/123/808341_720p.mp4/"
         ));
         assert!(!is_direct_media_url("https://video.mp4/"));
         assert!(!is_direct_media_url(

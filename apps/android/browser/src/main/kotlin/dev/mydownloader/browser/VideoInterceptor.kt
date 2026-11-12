@@ -54,7 +54,8 @@ object VideoInterceptor {
 
     fun isVideoUrl(url: String): Boolean {
         val lower = url.lowercase(Locale.ROOT)
-        val ext = lower.substringBefore("?").substringAfterLast(".", "")
+        val path = lower.substringBefore("?").substringBefore("#").trimEnd('/')
+        val ext = path.substringAfterLast(".", "")
         if (ext in VIDEO_EXTENSIONS) return true
         return VIDEO_PATH_HINTS.any { lower.contains(it) }
     }
@@ -66,10 +67,20 @@ object VideoInterceptor {
     }
 
     fun suggestFilename(url: String, mimeType: String?): String {
-        val raw = url.substringBefore("?").substringAfterLast("/").trim()
+        val path = url.substringBefore("?").substringBefore("#").trimEnd('/')
+        val raw = path.substringAfterLast("/").trim()
         val base = raw.takeIf { it.isNotBlank() } ?: "video"
         val hasVideoExt = base.substringAfterLast(".").lowercase() in VIDEO_EXTENSIONS
-        return if (hasVideoExt) base else "$base.mp4"
+        val extension = base.substringAfterLast(".").lowercase()
+        val quality = Regex("""\d{3,4}p""", RegexOption.IGNORE_CASE)
+            .find(path)
+            ?.value
+            ?.lowercase(Locale.ROOT)
+        return when {
+            hasVideoExt && quality != null -> "$quality.$extension"
+            hasVideoExt -> base
+            else -> "$base.mp4"
+        }
     }
 
     /**
