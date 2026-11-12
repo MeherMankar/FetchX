@@ -291,6 +291,7 @@ impl DownloadService {
                 engine_config.yt_dlp.enabled = true;
             }
             engine_config.native_torrent.enabled = true;
+            engine_config.native_torrent.listen_port = 0;
             // Use app-private storage; std::env::temp_dir() may resolve to
             // /data/local/tmp, which is not writable by the app sandbox.
             let runtime_parent = PathBuf::from(&config.runtime_dir)
@@ -1729,6 +1730,31 @@ mod tests {
         assert!(!metadata.selection_confirmed);
         assert!(metadata.selected_file_indexes.is_empty());
         svc.shutdown();
+    }
+
+    #[test]
+    fn native_torrent_services_can_coexist() {
+        let (first_config, _first_dir) = make_config();
+        let first =
+            DownloadService::new(first_config, None).expect("first service creation failed");
+        let (second_config, _second_dir) = make_config();
+        let second =
+            DownloadService::new(second_config, None).expect("second service creation failed");
+        let magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567";
+
+        for service in [&first, &second] {
+            let id = service
+                .add_magnet_download(magnet.to_owned(), DownloadPriorityDto::Normal)
+                .expect("native torrent should be available");
+            let download = service
+                .get_download(id)
+                .expect("download lookup should succeed")
+                .expect("native magnet should be persisted");
+            assert_eq!(download.engine, "native_torrent");
+        }
+
+        first.shutdown();
+        second.shutdown();
     }
 
     #[test]

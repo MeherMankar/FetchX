@@ -2,11 +2,12 @@
 //!
 //! The user-facing stream-copy behavior is informed by the FFmpeg project
 //! (https://ffmpeg.org). This is an original FetchX implementation using the
-//! Rust `mp4` crate; it does not copy FFmpeg source code.
+//! Rust MP4 crates; it does not copy FFmpeg source code.
 
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{self, Seek, SeekFrom, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -19,14 +20,24 @@ use mp4::{
     AacConfig, AvcConfig, ChannelConfig, FourCC, MediaType, Mp4Config, Mp4Reader, Mp4Track,
     Mp4Writer, TrackConfig, TrackType,
 };
+use shiguredo_mp4::{
+    TrackKind,
+    boxes::SampleEntry,
+    demux::{Input, Mp4FileDemuxer, TrackInfo},
+    mux::{Mp4FileMuxer, Sample as MuxSample},
+};
 use thiserror::Error;
 use uuid::Uuid;
+
+const MAX_EXTENDED_MP4_HEADER_BYTES: usize = 64 * 1024 * 1024;
+const MAX_EXTENDED_MP4_TRACKS: usize = 128;
+const MAX_EXTENDED_MP4_SAMPLES: usize = 1_000_000;
 
 #[derive(Debug, Error)]
 pub enum NativeMp4Error {
     #[error("MP4 input is invalid or unsupported")]
     InvalidInput,
-    #[error("native MP4 operations currently support H.264 video and AAC audio")]
+    #[error("native MP4 operation does not support this codec or track layout")]
     UnsupportedCodec,
     #[error("MP4 does not contain the requested video or audio track")]
     RequiredTrackMissing,
@@ -139,6 +150,30 @@ impl NativeMp4Processor {
         let input = canonical_input(input)?;
         let size_bytes = fs::metadata(&input)?.len();
         let reader = open_reader(&input)?;
+        let needs_extended_codecs = reader.tracks().values().any(|track| {
+            matches!(track.track_type(), Ok(TrackType::Video)) && track.media_type().is_err()
+        });
+        if needs_extended_codecs
+            && (reader.tracks().len() != 1
+                || reader
+                    .tracks()
+                    .values()
+                    .any(|track| !matches!(track.track_type(), Ok(TrackType::Video))))
+        {
+            return Err(NativeMp4Error::UnsupportedCodec);
+        }
+        let extended_codecs = if needs_extended_codecs {
+            let media_track_count = reader
+                .tracks()
+                .values()
+                .filter(|track| {
+                    matches!(track.track_type(), Ok(TrackType::Video | TrackType::Audio))
+                })
+                .count();
+            extended_track_codecs(&input, media_track_count, &is_cancelled)?
+        } else {
+            HashMap::new()
+        };
         let mut tracks = Vec::with_capacity(reader.tracks().len());
         for track in reader.tracks().values() {
             if is_cancelled() {
@@ -154,7 +189,8 @@ impl NativeMp4Processor {
                 Ok(MediaType::VP9) => Some("vp9"),
                 Ok(MediaType::TTXT) => Some("tx3g"),
                 Err(_) => None,
-            };
+            }
+            .or_else(|| extended_codecs.get(&track.track_id()).copied());
             let (sample_rate_hz, channels) = if media_type == TrackType::Audio
                 && matches!(track.media_type(), Ok(MediaType::AAC))
             {
@@ -212,19 +248,11 @@ impl NativeMp4Processor {
             return Err(NativeMp4Error::InvalidOutput);
         }
         let input = canonical_input(input.as_ref())?;
-        let (destination, temporary) = prepare_output(output.as_ref())?;
-        let _temporary_guard = TemporaryOutput(temporary.clone());
         let mut reader = open_reader(&input)?;
-        let mut configs = Vec::with_capacity(reader.tracks().len());
         let mut selected = Vec::with_capacity(reader.tracks().len());
         let mut track_ids = reader.tracks().keys().copied().collect::<Vec<_>>();
         track_ids.sort_unstable();
         for (index, id) in track_ids.iter().copied().enumerate() {
-            let track = reader
-                .tracks()
-                .get(&id)
-                .ok_or(NativeMp4Error::InvalidInput)?;
-            configs.push(track_config(track)?);
             selected.push(SelectedTrack {
                 id,
                 output_id: u32::try_from(index + 1).map_err(|_| NativeMp4Error::InvalidInput)?,
@@ -234,6 +262,33 @@ impl NativeMp4Processor {
         if selected.is_empty() {
             return Err(NativeMp4Error::InvalidInput);
         }
+        let configs = match selected
+            .iter()
+            .map(|selected| {
+                reader
+                    .tracks()
+                    .get(&selected.id)
+                    .ok_or(NativeMp4Error::InvalidInput)
+                    .and_then(track_config)
+            })
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(configs) => configs,
+            Err(NativeMp4Error::UnsupportedCodec) => {
+                if reader.tracks().len() != 1
+                    || reader
+                        .tracks()
+                        .values()
+                        .any(|track| !matches!(track.track_type(), Ok(TrackType::Video)))
+                {
+                    return Err(NativeMp4Error::UnsupportedCodec);
+                }
+                return remux_extended(&input, output.as_ref(), max_output_bytes, &is_cancelled);
+            }
+            Err(error) => return Err(error),
+        };
+        let (destination, temporary) = prepare_output(output.as_ref())?;
+        let _temporary_guard = TemporaryOutput(temporary.clone());
         let info = write_output(
             &mut reader,
             &selected,
@@ -261,17 +316,23 @@ impl NativeMp4Processor {
         }
         let video_path = canonical_input(video_input.as_ref())?;
         let audio_path = canonical_input(audio_input.as_ref())?;
+        let mut video_reader = open_reader(&video_path)?;
+        let mut audio_reader = open_reader(&audio_path)?;
+        let Some((video_id, video_track)) =
+            first_track(&video_reader, TrackType::Video, MediaType::H264)
+        else {
+            return Err(NativeMp4Error::RequiredTrackMissing);
+        };
+        let Some((audio_id, audio_track)) =
+            first_track(&audio_reader, TrackType::Audio, MediaType::AAC)
+        else {
+            return Err(NativeMp4Error::RequiredTrackMissing);
+        };
         let (destination, temporary) = prepare_output(output.as_ref())?;
         if video_path == destination || audio_path == destination {
             return Err(NativeMp4Error::InvalidOutput);
         }
         let _temporary_guard = TemporaryOutput(temporary.clone());
-        let mut video_reader = open_reader(&video_path)?;
-        let mut audio_reader = open_reader(&audio_path)?;
-        let (video_id, video_track) = first_track(&video_reader, TrackType::Video, MediaType::H264)
-            .ok_or(NativeMp4Error::RequiredTrackMissing)?;
-        let (audio_id, audio_track) = first_track(&audio_reader, TrackType::Audio, MediaType::AAC)
-            .ok_or(NativeMp4Error::RequiredTrackMissing)?;
         if video_track.duration() != audio_track.duration() {
             return Err(NativeMp4Error::UnsupportedTiming);
         }
@@ -345,6 +406,318 @@ impl NativeMp4Processor {
         publish_output(&temporary, &destination)?;
         Ok(info)
     }
+}
+
+struct ExtendedInput {
+    file: File,
+    file_size: u64,
+    demuxer: Mp4FileDemuxer,
+    tracks: Vec<TrackInfo>,
+}
+
+struct ExtendedOutput {
+    writer: BoundedWriter,
+    exceeded: Arc<AtomicBool>,
+    muxer: Mp4FileMuxer,
+    sample_count: usize,
+    seen_entries: HashSet<TrackKind>,
+}
+
+fn extended_track_codecs(
+    path: &Path,
+    expected_track_count: usize,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<HashMap<u32, &'static str>, NativeMp4Error> {
+    let mut source = open_extended_input(path, expected_track_count, is_cancelled)?;
+    let mut seen_tracks = HashSet::new();
+    let mut codecs = HashMap::new();
+    while seen_tracks.len() < source.tracks.len() {
+        if is_cancelled() {
+            return Err(NativeMp4Error::Cancelled);
+        }
+        let sample = source
+            .demuxer
+            .next_sample()
+            .map_err(|_| NativeMp4Error::InvalidInput)?
+            .ok_or(NativeMp4Error::InvalidInput)?;
+        let track_id = sample.track.track_id;
+        if seen_tracks.insert(track_id) {
+            let entry = sample.sample_entry.ok_or(NativeMp4Error::InvalidInput)?;
+            let codec = match entry {
+                SampleEntry::Avc1(_) => Some("h264"),
+                SampleEntry::Hev1(_) | SampleEntry::Hvc1(_) => Some("hevc"),
+                SampleEntry::Vp09(_) => Some("vp9"),
+                _ => None,
+            };
+            if let Some(codec) = codec {
+                codecs.insert(track_id, codec);
+            }
+        }
+    }
+    Ok(codecs)
+}
+
+fn remux_extended(
+    input: &Path,
+    output: &Path,
+    max_output_bytes: u64,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<NativeMp4Info, NativeMp4Error> {
+    let expected_track_count = open_reader(input)?.tracks().len();
+    let mut source = open_extended_input(input, expected_track_count, is_cancelled)?;
+    validate_extended_track_layout(&source.tracks)?;
+    let (destination, temporary) = prepare_output(output)?;
+    let _temporary_guard = TemporaryOutput(temporary.clone());
+    let mut output_state = start_extended_output(&temporary, max_output_bytes)?;
+    write_extended_samples(&mut source, &mut output_state, is_cancelled)?;
+    if output_state.seen_entries.len() != source.tracks.len() {
+        return Err(NativeMp4Error::UnsupportedCodec);
+    }
+    finish_extended_output(output_state, &temporary, &destination, is_cancelled)
+}
+
+fn open_extended_input(
+    path: &Path,
+    expected_track_count: usize,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<ExtendedInput, NativeMp4Error> {
+    if expected_track_count == 0 || expected_track_count > MAX_EXTENDED_MP4_TRACKS {
+        return Err(NativeMp4Error::UnsupportedCodec);
+    }
+    let mut file = File::open(path)?;
+    let file_size = file.metadata()?.len();
+    let mut demuxer = Mp4FileDemuxer::new();
+    let tracks = loop {
+        if is_cancelled() {
+            return Err(NativeMp4Error::Cancelled);
+        }
+        if let Ok(tracks) = demuxer.tracks() {
+            break tracks.to_vec();
+        }
+        let required = demuxer
+            .required_input()
+            .ok_or(NativeMp4Error::InvalidInput)?;
+        let size = required.size.ok_or(NativeMp4Error::InvalidInput)?;
+        let end = required
+            .position
+            .checked_add(u64::try_from(size).map_err(|_| NativeMp4Error::InvalidInput)?)
+            .ok_or(NativeMp4Error::InvalidInput)?;
+        if size == 0 || size > MAX_EXTENDED_MP4_HEADER_BYTES || end > file_size {
+            return Err(NativeMp4Error::UnsupportedCodec);
+        }
+        let mut bytes = vec![0; size];
+        file.seek(SeekFrom::Start(required.position))?;
+        file.read_exact(&mut bytes).map_err(|error| {
+            if error.kind() == io::ErrorKind::UnexpectedEof {
+                NativeMp4Error::InvalidInput
+            } else {
+                NativeMp4Error::Io(error)
+            }
+        })?;
+        demuxer.handle_input(Input {
+            position: required.position,
+            data: &bytes,
+        });
+    };
+    if tracks.len() != expected_track_count {
+        return Err(NativeMp4Error::UnsupportedCodec);
+    }
+    Ok(ExtendedInput {
+        file,
+        file_size,
+        demuxer,
+        tracks,
+    })
+}
+
+fn validate_extended_track_layout(tracks: &[TrackInfo]) -> Result<(), NativeMp4Error> {
+    if tracks.is_empty()
+        || tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Video)
+            .count()
+            > 1
+        || tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Audio)
+            .count()
+            > 1
+    {
+        return Err(NativeMp4Error::UnsupportedCodec);
+    }
+    Ok(())
+}
+
+fn start_extended_output(
+    temporary: &Path,
+    max_output_bytes: u64,
+) -> Result<ExtendedOutput, NativeMp4Error> {
+    let exceeded = Arc::new(AtomicBool::new(false));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(temporary)?;
+    let mut writer = BoundedWriter::new(file, max_output_bytes, Arc::clone(&exceeded));
+    let muxer = Mp4FileMuxer::new().map_err(|_| NativeMp4Error::UnsupportedCodec)?;
+    write_bounded(&mut writer, muxer.initial_boxes_bytes(), &exceeded)?;
+    Ok(ExtendedOutput {
+        writer,
+        exceeded,
+        muxer,
+        sample_count: 0,
+        seen_entries: HashSet::new(),
+    })
+}
+
+fn write_extended_samples(
+    source: &mut ExtendedInput,
+    output: &mut ExtendedOutput,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<(), NativeMp4Error> {
+    loop {
+        if is_cancelled() {
+            return Err(NativeMp4Error::Cancelled);
+        }
+        let sample = source
+            .demuxer
+            .next_sample()
+            .map_err(|_| NativeMp4Error::InvalidInput)?;
+        let Some(sample) = sample else {
+            break;
+        };
+        if output.sample_count >= MAX_EXTENDED_MP4_SAMPLES
+            || sample.data_size == 0
+            || sample.data_size > u32::MAX as usize
+        {
+            return Err(NativeMp4Error::UnsupportedCodec);
+        }
+        let sample_entry = sample.sample_entry.cloned();
+        if let Some(entry) = &sample_entry {
+            if !is_supported_sample_entry(sample.track.kind, entry) {
+                return Err(NativeMp4Error::UnsupportedCodec);
+            }
+            output.seen_entries.insert(sample.track.kind);
+        } else if !output.seen_entries.contains(&sample.track.kind) {
+            return Err(NativeMp4Error::UnsupportedCodec);
+        }
+        let source_end = sample
+            .data_offset
+            .checked_add(u64::try_from(sample.data_size).map_err(|_| NativeMp4Error::InvalidInput)?)
+            .ok_or(NativeMp4Error::InvalidInput)?;
+        if source_end > source.file_size {
+            return Err(NativeMp4Error::InvalidInput);
+        }
+        let output_offset = output.writer.stream_position()?;
+        copy_sample_data(
+            &mut source.file,
+            &mut output.writer,
+            sample.data_offset,
+            sample.data_size,
+            &output.exceeded,
+            is_cancelled,
+        )?;
+        output
+            .muxer
+            .append_sample(&MuxSample {
+                track_kind: sample.track.kind,
+                sample_entry,
+                keyframe: sample.keyframe,
+                timescale: sample.track.timescale,
+                duration: sample.duration,
+                composition_time_offset: sample.composition_time_offset,
+                data_offset: output_offset,
+                data_size: sample.data_size,
+            })
+            .map_err(|_| NativeMp4Error::UnsupportedCodec)?;
+        output.sample_count += 1;
+    }
+    Ok(())
+}
+
+fn is_supported_sample_entry(kind: TrackKind, entry: &SampleEntry) -> bool {
+    matches!(
+        (kind, entry),
+        (
+            TrackKind::Video,
+            SampleEntry::Avc1(_)
+                | SampleEntry::Hev1(_)
+                | SampleEntry::Hvc1(_)
+                | SampleEntry::Vp09(_)
+        )
+    )
+}
+
+fn copy_sample_data(
+    source: &mut File,
+    writer: &mut BoundedWriter,
+    offset: u64,
+    size: usize,
+    exceeded: &AtomicBool,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<(), NativeMp4Error> {
+    source.seek(SeekFrom::Start(offset))?;
+    let mut remaining = size;
+    let mut buffer = [0; 64 * 1024];
+    while remaining > 0 {
+        if is_cancelled() {
+            return Err(NativeMp4Error::Cancelled);
+        }
+        let read_size = remaining.min(buffer.len());
+        source
+            .read_exact(&mut buffer[..read_size])
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::UnexpectedEof {
+                    NativeMp4Error::InvalidInput
+                } else {
+                    NativeMp4Error::Io(error)
+                }
+            })?;
+        write_bounded(writer, &buffer[..read_size], exceeded)?;
+        remaining -= read_size;
+    }
+    Ok(())
+}
+
+fn write_bounded(
+    writer: &mut BoundedWriter,
+    bytes: &[u8],
+    exceeded: &AtomicBool,
+) -> Result<(), NativeMp4Error> {
+    writer.write_all(bytes).map_err(|error| {
+        if exceeded.load(Ordering::Relaxed) {
+            NativeMp4Error::OutputTooLarge
+        } else {
+            NativeMp4Error::Io(error)
+        }
+    })
+}
+
+fn finish_extended_output(
+    mut output: ExtendedOutput,
+    temporary: &Path,
+    destination: &Path,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<NativeMp4Info, NativeMp4Error> {
+    if is_cancelled() {
+        return Err(NativeMp4Error::Cancelled);
+    }
+    let finalized = output
+        .muxer
+        .finalize()
+        .map_err(|_| NativeMp4Error::UnsupportedCodec)?;
+    for (offset, bytes) in finalized.offset_and_bytes_pairs() {
+        output.writer.seek(SeekFrom::Start(offset))?;
+        write_bounded(&mut output.writer, bytes, &output.exceeded)?;
+    }
+    output.writer.flush()?;
+    output.writer.file.sync_all()?;
+    drop(output);
+    let info = NativeMp4Processor::probe_with_cancel(temporary, is_cancelled)?;
+    if is_cancelled() {
+        return Err(NativeMp4Error::Cancelled);
+    }
+    publish_output(temporary, destination)?;
+    Ok(info)
 }
 
 fn open_reader(path: &Path) -> Result<Mp4Reader<File>, NativeMp4Error> {
@@ -551,11 +924,25 @@ fn channel_count(config: ChannelConfig) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, fs::File, path::Path};
+    use std::{
+        error::Error,
+        fs::File,
+        io::{Seek, SeekFrom, Write},
+        num::{NonZeroU16, NonZeroU32},
+        path::Path,
+    };
 
     use mp4::{
         AacConfig, AudioObjectType, AvcConfig, ChannelConfig, FourCC, Mp4Config, Mp4Sample,
         Mp4Writer, SampleFreqIndex, TrackConfig,
+    };
+    use shiguredo_mp4::{
+        FixedPointNumber, TrackKind, Uint,
+        boxes::{
+            Hvc1Box, HvccBox, HvccNalUintArray, SampleEntry, VisualSampleEntryFields, Vp09Box,
+            VpccBox,
+        },
+        mux::{Mp4FileMuxer, Sample as MuxSample},
     };
     use tempfile::tempdir;
 
@@ -588,6 +975,114 @@ mod tests {
         )?;
         writer.write_end()?;
         Ok(())
+    }
+
+    fn make_mp4_with_sample_entry(
+        path: &Path,
+        sample_entry: SampleEntry,
+        duration: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut muxer = Mp4FileMuxer::new()?;
+        let mut file = File::create(path)?;
+        file.write_all(muxer.initial_boxes_bytes())?;
+        let sample_data = [0, 0, 0, 2, 0x26, 0x01];
+        let data_offset = file.stream_position()?;
+        file.write_all(&sample_data)?;
+        muxer.append_sample(&MuxSample {
+            track_kind: TrackKind::Video,
+            sample_entry: Some(sample_entry),
+            keyframe: true,
+            timescale: NonZeroU32::new(1000).ok_or("invalid timescale")?,
+            duration,
+            composition_time_offset: None,
+            data_offset,
+            data_size: sample_data.len(),
+        })?;
+        let finalized = muxer.finalize()?;
+        for (offset, bytes) in finalized.offset_and_bytes_pairs() {
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(bytes)?;
+        }
+        Ok(())
+    }
+
+    fn visual_sample_entry_fields() -> VisualSampleEntryFields {
+        VisualSampleEntryFields {
+            data_reference_index: NonZeroU16::MIN,
+            width: 640,
+            height: 360,
+            horizresolution: FixedPointNumber::new(0x48, 0),
+            vertresolution: FixedPointNumber::new(0x48, 0),
+            frame_count: 1,
+            compressorname: [0; 32],
+            depth: 0x18,
+        }
+    }
+
+    fn vp9_sample_entry() -> SampleEntry {
+        SampleEntry::Vp09(Vp09Box {
+            visual: visual_sample_entry_fields(),
+            vpcc_box: VpccBox {
+                profile: 0,
+                level: 10,
+                bit_depth: Uint::new(8),
+                chroma_subsampling: Uint::new(0),
+                video_full_range_flag: Uint::new(0),
+                colour_primaries: 1,
+                transfer_characteristics: 1,
+                matrix_coefficients: 1,
+                codec_initialization_data: Vec::new(),
+            },
+            unknown_boxes: Vec::new(),
+        })
+    }
+
+    fn hevc_sample_entry() -> SampleEntry {
+        let nalu_array = |nal_unit_type, nal_unit| HvccNalUintArray {
+            array_completeness: Uint::new(1),
+            nal_unit_type: Uint::new(nal_unit_type),
+            nalus: vec![nal_unit],
+        };
+        SampleEntry::Hvc1(Hvc1Box {
+            visual: visual_sample_entry_fields(),
+            hvcc_box: HvccBox {
+                general_profile_space: Uint::new(0),
+                general_tier_flag: Uint::new(0),
+                general_profile_idc: Uint::new(1),
+                general_profile_compatibility_flags: 0,
+                general_constraint_indicator_flags: Uint::new(0),
+                general_level_idc: 120,
+                min_spatial_segmentation_idc: Uint::new(0),
+                parallelism_type: Uint::new(0),
+                chroma_format_idc: Uint::new(1),
+                bit_depth_luma_minus8: Uint::new(0),
+                bit_depth_chroma_minus8: Uint::new(0),
+                avg_frame_rate: 0,
+                constant_frame_rate: Uint::new(0),
+                num_temporal_layers: Uint::new(1),
+                temporal_id_nested: Uint::new(1),
+                length_size_minus_one: Uint::new(3),
+                nalu_arrays: vec![
+                    nalu_array(32, vec![0x40, 0x01]),
+                    nalu_array(33, vec![0x42, 0x01]),
+                    nalu_array(34, vec![0x44, 0x01]),
+                ],
+            },
+            unknown_boxes: Vec::new(),
+        })
+    }
+
+    fn read_first_sample_entry(path: &Path) -> Result<SampleEntry, Box<dyn Error>> {
+        let track_count = super::open_reader(path)?.tracks().len();
+        let mut input = super::open_extended_input(path, track_count, &|| false)?;
+        let sample = input
+            .demuxer
+            .next_sample()?
+            .ok_or("MP4 contains no samples")?;
+        sample
+            .sample_entry
+            .cloned()
+            .ok_or_else(|| "MP4 sample has no sample entry".into())
     }
 
     fn video_config() -> TrackConfig {
@@ -636,6 +1131,49 @@ mod tests {
             NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false),
             Err(NativeMp4Error::DestinationExists)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn remuxes_vp9_and_preserves_its_sample_entry() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("video-vp9.mp4");
+        let output = directory.path().join("remuxed-vp9.mp4");
+        let sample_entry = vp9_sample_entry();
+        make_mp4_with_sample_entry(&input, sample_entry.clone(), 1000)?;
+
+        let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("vp9"));
+        assert_eq!(read_first_sample_entry(&output)?, sample_entry);
+        Ok(())
+    }
+
+    #[test]
+    fn remuxes_hevc_and_preserves_its_sample_entry() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("video-hevc.mp4");
+        let output = directory.path().join("remuxed-hevc.mp4");
+        let sample_entry = hevc_sample_entry();
+        make_mp4_with_sample_entry(&input, sample_entry.clone(), 1000)?;
+
+        let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("hevc"));
+        assert_eq!(read_first_sample_entry(&output)?, sample_entry);
+        Ok(())
+    }
+
+    #[test]
+    fn bounds_extended_mp4_output_without_publishing_partial_file() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("video-vp9.mp4");
+        let output = directory.path().join("too-large-vp9.mp4");
+        make_mp4_with_sample_entry(&input, vp9_sample_entry(), 1000)?;
+
+        assert!(matches!(
+            NativeMp4Processor::remux(&input, &output, 8, || false),
+            Err(NativeMp4Error::OutputTooLarge)
+        ));
+        assert!(!output.exists());
         Ok(())
     }
 
