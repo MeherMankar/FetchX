@@ -99,24 +99,27 @@ fun DownloadItemRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             // File name
             Text(
                 text = item.fileName,
-                style = MaterialTheme.typography.bodyLarge,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Engine badge + priority badge on the same row
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
                     text = item.engine,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 6.dp),
                 )
                 PriorityBadge(priority = item.priority)
             }
@@ -171,7 +174,7 @@ fun DownloadItemRow(
                         state.downloadedBytes.toFloat() / totalBytes.toFloat()
                     } else {
                         0f
-                    }
+                    }.coerceIn(0f, 1f)
                     if (totalBytes != null) {
                         LinearProgressIndicator(
                             progress = { progress },

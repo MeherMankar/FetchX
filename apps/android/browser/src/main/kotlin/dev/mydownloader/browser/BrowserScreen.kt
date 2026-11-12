@@ -1772,7 +1772,7 @@ private fun EssentialsPage(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.Start,
         ) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -1800,14 +1800,14 @@ private fun EssentialsPage(
                 )
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = "Browse • Download • Manage",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 text = "Search or enter an address above to get started.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1816,14 +1816,14 @@ private fun EssentialsPage(
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(20.dp))
 
             Text(
                 text = "Quick access",
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onBackground,
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1863,7 +1863,7 @@ private fun EssentialsPage(
             }
 
             if (recentEntries.isNotEmpty()) {
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(24.dp))
                 Text(
                     text = "Frequently visited",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
@@ -3264,21 +3264,14 @@ internal fun TabGridSheet(
                             Text(
                                 text = "Tabs",
                                 style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Medium,
                                 color = primaryTextColor,
                             )
-                            Surface(
-                                shape = CircleShape,
-                                color = spaceAccentColor.copy(alpha = 0.16f),
-                            ) {
-                                Text(
-                                    text = "${tabs.size}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = spaceAccentColor,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                )
-                            }
+                            Text(
+                                text = "${tabs.size} open",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = secondaryTextColor,
+                            )
                         }
 
                         // Keep the workspace actions limited to search, new tab, and options.
@@ -3414,20 +3407,20 @@ internal fun TabGridSheet(
                                 modifier = Modifier.testTag("tab-space-filter-all"),
                                 shape = CircleShape,
                                 color = if (isAllSelected) {
-                                    spaceAccentColor.copy(alpha = 0.2f)
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
                                 } else {
                                     MaterialTheme.colorScheme.surfaceContainer
                                 },
                                 border = BorderStroke(
                                     1.dp,
-                                    if (isAllSelected) spaceAccentColor else cardBorder.copy(alpha = 0.6f),
+                                    if (isAllSelected) spaceAccentColor.copy(alpha = 0.55f) else cardBorder.copy(alpha = 0.6f),
                                 ),
                             ) {
                                 Text(
-                                    text = "All spaces (${tabs.size})",
+                                    text = "All spaces · ${tabs.size}",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = if (isAllSelected) spaceAccentColor else secondaryTextColor,
-                                    fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isAllSelected) primaryTextColor else secondaryTextColor,
+                                    fontWeight = if (isAllSelected) FontWeight.Medium else FontWeight.Normal,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                 )
                             }
@@ -3445,13 +3438,13 @@ internal fun TabGridSheet(
                                     modifier = Modifier.testTag("tab-space-filter-${profile.id}"),
                                     shape = CircleShape,
                                     color = if (isSelected) {
-                                        profileColor.copy(alpha = 0.2f)
+                                        MaterialTheme.colorScheme.surfaceContainerHigh
                                     } else {
                                         MaterialTheme.colorScheme.surfaceContainer
                                     },
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isSelected) profileColor else cardBorder.copy(alpha = 0.6f),
+                                        if (isSelected) profileColor.copy(alpha = 0.55f) else cardBorder.copy(alpha = 0.6f),
                                     ),
                                 ) {
                                     Row(
@@ -3465,10 +3458,10 @@ internal fun TabGridSheet(
                                                 .background(profileColor, CircleShape),
                                         )
                                         Text(
-                                            text = "${profile.name} ($count)",
+                                            text = "${profile.name} · $count",
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = if (isSelected) profileColor else secondaryTextColor,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isSelected) primaryTextColor else secondaryTextColor,
+                                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                                         )
                                     }
                                 }
