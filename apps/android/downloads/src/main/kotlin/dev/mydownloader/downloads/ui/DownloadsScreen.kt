@@ -3,29 +3,30 @@ package dev.fetchx.downloads.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -35,9 +36,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -86,6 +87,14 @@ fun DownloadsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val queueDispatchPaused by viewModel.queueDispatchPaused.collectAsStateWithLifecycle()
     val downloadSnapshotState by viewModel.downloadSnapshotState.collectAsStateWithLifecycle()
+    val tabCounts = listOf(
+        allDownloads.size,
+        activeDownloads.size,
+        queuedDownloads.size,
+        completedDownloads.size,
+        failedDownloads.size,
+        cancelledDownloads.size,
+    )
     val reservedFileNames = remember(allDownloads) {
         allDownloads.flatMap { item ->
             listOf(item.fileName, File(item.destinationPath).name)
@@ -171,7 +180,7 @@ fun DownloadsScreen(
         },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "Add Download")
+                Icon(Icons.Default.Add, contentDescription = "Add download")
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -193,15 +202,18 @@ fun DownloadsScreen(
                 }
             }
 
-            ScrollableTabRow(
-                selectedTabIndex = selectedTab,
-                edgePadding = 12.dp,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 TABS.forEachIndexed { index, title ->
-                    Tab(
+                    FilterChip(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
-                        text = { Text(title, maxLines = 1) },
+                        label = { Text("$title · ${tabCounts[index]}", maxLines = 1) },
                     )
                 }
             }
@@ -244,34 +256,37 @@ fun DownloadsScreen(
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier
+                                .widthIn(max = 360.dp)
+                                .fillMaxWidth()
+                                .padding(24.dp),
                         ) {
                             Surface(
-                                shape = androidx.compose.foundation.shape.CircleShape,
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                modifier = Modifier.padding(bottom = 16.dp).size(64.dp),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier.size(48.dp),
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         imageVector = Icons.Default.Add,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(32.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(24.dp),
                                     )
                                 }
                             }
                             Text(
-                                text = "Nothing here yet",
+                                text = "No downloads yet",
                                 style = MaterialTheme.typography.titleMedium,
                                 textAlign = TextAlign.Center,
                             )
                             Text(
-                                text = "Downloads you start while browsing will appear here.",
+                                text = "Start a download from the browser or paste a link.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center,
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
                             Button(onClick = onBrowseWeb) {
                                 Text("Browse the web")
                             }
@@ -297,6 +312,8 @@ fun DownloadsScreen(
                         .widthIn(max = 840.dp)
                         .fillMaxSize()
                         .align(Alignment.CenterHorizontally),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(filtered, key = { it.id }) { item ->
                         DownloadItemRow(

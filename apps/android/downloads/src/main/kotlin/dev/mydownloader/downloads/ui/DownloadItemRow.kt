@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.fetchx.core.download.DownloadItem
@@ -97,17 +98,23 @@ fun DownloadItemRow(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // File name
-            Text(
-                text = item.fileName,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = item.fileName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                DownloadStateBadge(item.state)
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -160,7 +167,7 @@ fun DownloadItemRow(
             }
             when (val state = item.state) {
                 is DownloadState.Active -> {
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     torrentTelemetry?.let { telemetry ->
                         TorrentTelemetryDetails(telemetry)
                     }
@@ -227,12 +234,7 @@ fun DownloadItemRow(
                 }
 
                 is DownloadState.Queued -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Queued",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
@@ -244,12 +246,7 @@ fun DownloadItemRow(
                 }
 
                 is DownloadState.MetadataAcquiring -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Acquiring torrent metadata",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     torrentMetadata?.metadata?.let { meta ->
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
@@ -270,22 +267,12 @@ fun DownloadItemRow(
                 }
 
                 is DownloadState.Recovering -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Recovering torrent task",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                 }
 
                 is DownloadState.Seeding -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Seeding · ${formatBytes(state.downloadedBytes)}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     torrentTelemetry?.let { telemetry ->
                         TorrentTelemetryDetails(telemetry)
                     }
@@ -304,7 +291,7 @@ fun DownloadItemRow(
                 }
 
                 is DownloadState.Paused -> {
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     val progress = state.totalBytes?.takeIf { it > 0L }?.let {
                         state.downloadedBytes.toFloat() / it.toFloat()
                     }
@@ -326,11 +313,6 @@ fun DownloadItemRow(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Text(
-                        text = "Paused",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
@@ -343,7 +325,7 @@ fun DownloadItemRow(
                 is DownloadState.PublicationPending -> {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Downloaded locally; public copy pending",
+                        text = "Local download ready; public copy pending",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.tertiary,
                     )
@@ -381,9 +363,9 @@ fun DownloadItemRow(
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = "Completed \u00b7 ${formatBytes(state.totalBytes)}",
+                            text = "${formatBytes(state.totalBytes)} downloaded",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Row(
@@ -407,7 +389,7 @@ fun DownloadItemRow(
                 is DownloadState.Failed -> {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Failed: ${sanitizeFailureReason(state.reason)}",
+                        text = sanitizeFailureReason(state.reason),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.error,
                         maxLines = 2,
@@ -425,12 +407,7 @@ fun DownloadItemRow(
                 }
 
                 is DownloadState.Cancelled -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Cancelled",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
@@ -440,12 +417,7 @@ fun DownloadItemRow(
                 }
 
                 is DownloadState.Stopped -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Seeding stopped",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                     TextButton(onClick = onRemove) { Text("Remove") }
                 }
             }
@@ -765,6 +737,44 @@ private fun safeAria2SourceSuggestion(url: String): String =
     }.getOrDefault("")
 
 @Composable
+private fun DownloadStateBadge(state: DownloadState) {
+    val scheme = MaterialTheme.colorScheme
+    val label = when (state) {
+        is DownloadState.Active -> "Downloading"
+        is DownloadState.Queued -> "Queued"
+        is DownloadState.MetadataAcquiring -> "Preparing"
+        is DownloadState.Recovering -> "Recovering"
+        is DownloadState.Seeding -> "Seeding"
+        is DownloadState.Paused -> "Paused"
+        is DownloadState.PublicationPending -> "Publishing"
+        is DownloadState.Completed -> "Complete"
+        is DownloadState.Failed -> "Failed"
+        is DownloadState.Cancelled -> "Cancelled"
+        is DownloadState.Stopped -> "Stopped"
+    }
+    val (containerColor, contentColor) = when (state) {
+        is DownloadState.Active -> scheme.primaryContainer to scheme.onPrimaryContainer
+        is DownloadState.Seeding,
+        is DownloadState.PublicationPending -> scheme.tertiaryContainer to scheme.onTertiaryContainer
+        is DownloadState.Failed -> scheme.errorContainer to scheme.onErrorContainer
+        else -> scheme.surfaceContainerHigh to scheme.onSurfaceVariant
+    }
+
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = containerColor,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@Composable
 private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {
     val peers = telemetry.peerCount?.toString() ?: "Unavailable"
     val completedPeers = telemetry.completedPeerCount?.toString() ?: "Unavailable"
@@ -801,14 +811,14 @@ private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {
 private fun PriorityBadge(priority: DownloadPriority) {
     val (label, containerColor) = when (priority) {
         DownloadPriority.LOW ->
-            "LOW" to MaterialTheme.colorScheme.surfaceVariant
+            "Low" to MaterialTheme.colorScheme.surfaceVariant
         DownloadPriority.NORMAL ->
-            "NORMAL" to MaterialTheme.colorScheme.primaryContainer
+            "Normal" to MaterialTheme.colorScheme.primaryContainer
         DownloadPriority.HIGH ->
-            "HIGH" to MaterialTheme.colorScheme.tertiaryContainer
+            "High" to MaterialTheme.colorScheme.tertiaryContainer
         DownloadPriority.CRITICAL ->
             // CRITICAL is treated as HIGH at the UI layer — never shown as a separate value.
-            "HIGH" to MaterialTheme.colorScheme.tertiaryContainer
+            "High" to MaterialTheme.colorScheme.tertiaryContainer
     }
     Surface(
         shape = MaterialTheme.shapes.extraSmall,
