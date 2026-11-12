@@ -93,6 +93,22 @@ class VideoInterceptorTest {
     }
 
     @Test
+    fun `videoIdentity ignores query and trailing slash variants`() {
+        assertEquals(
+            VideoInterceptor.videoIdentity("https://cdn.com/video.mp4/"),
+            VideoInterceptor.videoIdentity("https://cdn.com/video.mp4/?download=true&token=abc"),
+        )
+    }
+
+    @Test
+    fun `videoIdentity keeps different media paths distinct`() {
+        assertFalse(
+            VideoInterceptor.videoIdentity("https://cdn.com/video_480m.mp4") ==
+                VideoInterceptor.videoIdentity("https://cdn.com/video_720m.mp4"),
+        )
+    }
+
+    @Test
     fun `isVideoUrl returns false for html page`() {
         assertFalse(VideoInterceptor.isVideoUrl("https://example.com/page.html"))
     }

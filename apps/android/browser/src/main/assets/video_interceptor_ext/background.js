@@ -73,9 +73,19 @@ function suggestFilename(url) {
 
 const reported = new Set();
 
+function videoIdentity(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.origin + parsed.pathname.replace(/\/+$/, "");
+  } catch (_) {
+    return url.split(/[?#]/)[0].replace(/\/+$/, "");
+  }
+}
+
 function sendVideo(url, tabId) {
-  if (reported.has(url)) return;
-  reported.add(url);
+  const identity = videoIdentity(url);
+  if (reported.has(identity)) return;
+  reported.add(identity);
   browser.runtime.sendNativeMessage("browser", {
     type: "video",
     url: url,
@@ -140,8 +150,9 @@ browser.webNavigation.onCompleted.addListener((details) => {
     try {
       var sources = JSON.parse(results[0]);
       sources.forEach(function(s) {
-        if (s.url && !reported.has(s.url)) {
-          reported.add(s.url);
+        var identity = s.url && videoIdentity(s.url);
+        if (s.url && !reported.has(identity)) {
+          reported.add(identity);
           browser.runtime.sendNativeMessage("browser", {
             type: "video",
             url: s.url,
@@ -227,8 +238,9 @@ browser.webNavigation.onCompleted.addListener((details) => {
     if (!results || !results[0]) return;
     try {
       JSON.parse(results[0]).forEach(function(source) {
-        if (!source.url || reported.has(source.url)) return;
-        reported.add(source.url);
+        var identity = source.url && videoIdentity(source.url);
+        if (!source.url || reported.has(identity)) return;
+        reported.add(identity);
         browser.runtime.sendNativeMessage("browser", {
           type: "video",
           url: source.url,

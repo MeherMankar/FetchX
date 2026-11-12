@@ -80,6 +80,9 @@ object VideoInterceptor {
         return "${height}p"
     }
 
+    fun videoIdentity(url: String): String =
+        url.substringBefore("#").substringBefore("?").trimEnd('/')
+
     fun isVideoMimeType(mimeType: String?): Boolean {
         if (mimeType == null) return false
         val lower = mimeType.lowercase(Locale.ROOT).substringBefore(";").trim()
