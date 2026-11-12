@@ -190,7 +190,7 @@ async function submit() {
   } catch (e) {
     showResult("error", e instanceof NativeHostError ? e.message : "Could not reach FetchX.");
   } finally {
-    btnText.textContent = "Download with FetchX";
+    btnText.textContent = "Add to FetchX";
     updateSubmit();
   }
 }

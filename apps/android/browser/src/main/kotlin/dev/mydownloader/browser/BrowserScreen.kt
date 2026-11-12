@@ -392,7 +392,7 @@ fun BrowserScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             IconButton(
@@ -418,14 +418,14 @@ fun BrowserScreen(
                                 leadingIcon = {
                                     Surface(
                                         onClick = { viewModel.openSearchEngineSelector() },
-                                        shape = RoundedCornerShape(10.dp),
+                                        shape = RoundedCornerShape(8.dp),
                                         color = MaterialTheme.colorScheme.surfaceVariant,
                                         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                                        modifier = Modifier.padding(start = 6.dp),
+                                        modifier = Modifier.padding(start = 8.dp),
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                         ) {
                                             SearchEngineIcon(
                                                 engine = uiState.selectedSearchEngine,
@@ -504,9 +504,9 @@ fun BrowserScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             // Site security / tracker icon
                             IconButton(
@@ -697,7 +697,7 @@ fun BrowserScreen(
                     Surface(
                         tonalElevation = 6.dp,
                         shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                             if (uiState.isLoadingSearchSuggestions) {
@@ -734,7 +734,7 @@ fun BrowserScreen(
                                             viewModel.applySuggestion(suggestion)
                                             isUrlBarExpanded = false
                                         }
-                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                        .padding(horizontal = 16.dp, vertical = 8.dp),
                                 ) {
                                     Icon(
                                         icon,
@@ -1772,42 +1772,6 @@ private fun EssentialsPage(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.Start,
         ) {
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    modifier = Modifier.size(40.dp),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Language,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    text = "FetchX browser",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Medium),
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = "Browse the web and send files to FetchX downloads",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(Modifier.height(24.dp))
-
             Text(
                 text = "Quick access",
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),

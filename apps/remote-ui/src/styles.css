@@ -272,18 +272,18 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
 .download-name-cell { min-width: 170px !important; max-width: 280px; }
 .download-name-cell strong, .download-name-cell span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .download-name-cell strong { color: #2e3948; font-size: 13px; font-weight: 500; }
-.download-name-cell span { max-width: 210px; margin-top: 4px; color: #687585; font-size: 11px; font-variant-numeric: tabular-nums; }
+.download-name-cell span { max-width: 210px; margin-top: 4px; color: #687585; font-size: 12px; font-variant-numeric: tabular-nums; }
 .progress-cell { min-width: 155px !important; }
-.progress-cell > span { display: block; margin-top: 4px; color: #687585; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.progress-cell > span { display: block; margin-top: 4px; color: #687585; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .progress-line { display: block; width: 100%; height: 4px; overflow: hidden; appearance: none; background: #edf0f4; border: 0; border-radius: 2px; }
 .progress-line::-webkit-progress-bar { background: #edf0f4; border-radius: 2px; }
 .progress-line::-webkit-progress-value { background: var(--blue); border-radius: 2px; }
 .progress-line::-moz-progress-bar { background: var(--blue); border-radius: 2px; }
 .speed-cell { min-width: 80px !important; color: #506174; white-space: nowrap; }
-.engine-label { color: #58677a; font-size: 11px; }
+.engine-label { color: #58677a; font-size: 12px; }
 .priority-select { height: 32px; padding: 0 8px; font-size: 12px; }
 .row-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 130px; }
-.row-actions button { padding: 4px 8px; color: #526173; background: #f6f8fa; border: 1px solid #e7ebf0; border-radius: 6px; font-size: 11px; }
+.row-actions button { min-height: 32px; padding: 4px 8px; color: #526173; background: #f6f8fa; border: 1px solid #e7ebf0; border-radius: 8px; font-size: 12px; }
 .row-actions button:hover:not(:disabled) { color: #2256b6; background: #edf3ff; border-color: #dbe7fd; }
 .row-actions .danger-text { color: #ae4741; }
 .error-code { color: #a8453f; font-size: 11px; }

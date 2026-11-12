@@ -358,7 +358,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   gap: 12px;
   padding: 16px;
   border: 1px solid var(--border-light);
-  border-radius: var(--radius);
+  border-radius: 12px;
   background: var(--surface);
   cursor: pointer;
   transition: border-color 100ms;
@@ -392,7 +392,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .download-main { flex: 1; min-width: 0; }
 
-.download-title { display: flex; align-items: center; gap: 7px; }
+.download-title { display: flex; align-items: center; gap: 8px; }
 
 .download-title strong {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -400,8 +400,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .download-url {
-  margin-top: 2px;
-  color: var(--text-3); font-size: 11px;
+  margin-top: 4px;
+  color: var(--text-3); font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -421,17 +421,17 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .download-meta {
   display: flex; align-items: center; justify-content: space-between;
-  margin-top: 5px; color: var(--text-3); font-size: 11px;
+  margin-top: 4px; color: var(--text-3); font-size: 12px;
 }
 
-.download-speed { display: flex; gap: 10px; white-space: nowrap; }
+.download-speed { display: flex; gap: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .download-eta   { color: var(--text-2); }
-.download-error { margin-top: 5px; color: var(--red); font-size: 11px; }
-.download-time  { color: var(--text-3); font-size: 11px; white-space: nowrap; }
+.download-error { margin-top: 8px; color: var(--red); font-size: 12px; }
+.download-time  { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 
 .download-actions {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
-  gap: 5px; flex-shrink: 0;
+  gap: 4px; flex-shrink: 0;
 }
 
 /* ============================================================
@@ -440,8 +440,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .status {
   display: inline-block; flex-shrink: 0;
-  padding: 2px 6px; border-radius: 6px;
-  font-size: 11px; font-weight: 500; text-transform: capitalize;
+  padding: 4px 8px; border-radius: 6px;
+  font-size: 12px; font-weight: 500; text-transform: capitalize;
   color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border-light);
 }
 
@@ -471,29 +471,29 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
    ============================================================ */
 
 .priority-select {
-  height: 30px; padding: 0 7px;
+  height: 32px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--surface); color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer;
+  background: var(--surface); color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer;
 }
 
 .priority-select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.priority-select-sm    { height: 26px; font-size: 11px; }
+.priority-select-sm    { height: 32px; font-size: 12px; }
 
 /* ============================================================
    Schedule row
    ============================================================ */
 
 .schedule-row {
-  display: flex; align-items: center; gap: 7px; margin-top: 8px;
-  font-size: 11px; color: var(--text-2);
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  font-size: 12px; color: var(--text-2);
 }
 
 .schedule-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .schedule-input {
-  height: 27px; padding: 0 7px;
+  height: 32px; padding: 0 8px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-size: 11px; color: var(--text); background: var(--surface); outline: none;
+  font-size: 12px; color: var(--text); background: var(--surface); outline: none;
 }
 
 .schedule-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(36 99 235 / 10%); }
@@ -571,9 +571,9 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .dialog {
   width: min(480px, 96vw); max-height: 90vh;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   display: flex; flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0 0 0 / 18%); overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0 0 0 / 6%); overflow: hidden;
 }
 
 .dialog-header {
