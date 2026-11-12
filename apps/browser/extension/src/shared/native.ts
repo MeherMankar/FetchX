@@ -56,9 +56,11 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
 
-    const cleanup = () => {
+    const cleanup = (disconnectPort = true) => {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
-      try { port.disconnect(); } catch { /* ignore */ }
+      if (disconnectPort) {
+        try { port.disconnect(); } catch { /* ignore */ }
+      }
     };
 
     try {
@@ -76,11 +78,11 @@ export async function sendToNativeHost(request: BrowserRequest): Promise<Browser
     }, RESPONSE_TIMEOUT_MS);
 
     port.onDisconnect.addListener(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
       const firefoxError = "error" in port ? port.error : undefined;
       const runtimeError = typeof browser === "undefined" ? chrome.runtime.lastError : undefined;
+      if (settled) return;
+      settled = true;
+      cleanup(false);
       const errorMessage = firefoxError?.message ?? runtimeError?.message;
       const hostUnavailable = isNativeHostUnavailableError(errorMessage);
       reject(

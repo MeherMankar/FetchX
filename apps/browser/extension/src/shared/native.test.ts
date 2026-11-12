@@ -9,6 +9,7 @@ describe("sendToNativeHost", () => {
   it("resolves a response even if disconnect fires during cleanup", async () => {
     const messageListeners: Array<(message: unknown) => void> = [];
     const disconnectListeners: Array<() => void> = [];
+    let lastErrorRead = false;
     const response = { version: 1, ok: true, pong: true, app_version: "test" };
     const port = {
       onMessage: { addListener: (listener: (message: unknown) => void) => messageListeners.push(listener) },
@@ -19,11 +20,15 @@ describe("sendToNativeHost", () => {
     vi.stubGlobal("chrome", {
       runtime: {
         connectNative: () => port,
-        lastError: undefined,
+        get lastError() {
+          lastErrorRead = true;
+          return { message: "Error when communicating with the native messaging host." };
+        },
       },
     });
 
     const { sendToNativeHost } = await import("./native");
     await expect(sendToNativeHost({ version: 1, type: "ping" })).resolves.toEqual(response);
+    expect(lastErrorRead).toBe(true);
   });
 });
