@@ -273,7 +273,7 @@ pub fn generate_native_host_manifests(
 ) -> std::io::Result<(PathBuf, PathBuf)> {
     std::fs::create_dir_all(manifest_dir)?;
 
-    let exe_str = host_exe_path.to_string_lossy().to_string();
+    let exe_str = normalize_manifest_executable_path(&host_exe_path.to_string_lossy());
 
     let chromium_manifest = serde_json::json!({
         "name": NATIVE_HOST_NAME,
@@ -307,6 +307,14 @@ pub fn generate_native_host_manifests(
     std::fs::write(&firefox_manifest_path, firefox_json.as_bytes())?;
 
     Ok((chromium_manifest_path, firefox_manifest_path))
+}
+
+fn normalize_manifest_executable_path(path: &str) -> String {
+    if let Some(unc_path) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc_path}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    }
 }
 
 struct BrowserTarget {
@@ -1002,6 +1010,22 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&f_man).unwrap()).unwrap();
         assert_eq!(f_content["name"], NATIVE_HOST_NAME);
         assert_eq!(f_content["allowed_extensions"][0], FIREFOX_EXTENSION_ID);
+    }
+
+    #[test]
+    fn test_manifest_executable_path_uses_standard_windows_paths() {
+        assert_eq!(
+            normalize_manifest_executable_path(r"\\?\C:\Program Files\FetchX\host.exe"),
+            r"C:\Program Files\FetchX\host.exe"
+        );
+        assert_eq!(
+            normalize_manifest_executable_path(r"\\?\UNC\server\share\FetchX\host.exe"),
+            r"\\server\share\FetchX\host.exe"
+        );
+        assert_eq!(
+            normalize_manifest_executable_path(r"C:\Program Files\FetchX\host.exe"),
+            r"C:\Program Files\FetchX\host.exe"
+        );
     }
 
     #[test]
