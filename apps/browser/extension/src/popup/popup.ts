@@ -183,7 +183,7 @@ async function submit() {
     if (isError(resp)) {
       showResult("error", userMessageForCode(resp.error.code));
     } else {
-      showResult("success", "✓ Download added to FetchX");
+      showResult("success", "Download added to FetchX");
       urlInput.value = "";
       updateSubmit();
     }
@@ -283,7 +283,7 @@ async function downloadFormats(formats: MediaFormat[]) {
       }
     }
     const message = failed === 0
-      ? `✓ Added ${added} format${added === 1 ? "" : "s"} to FetchX`
+      ? `Added ${added} format${added === 1 ? "" : "s"} to FetchX`
       : `${added} added, ${failed} failed. Check yt-dlp in FetchX settings.`;
     showResult(failed === 0 ? "success" : "error", message);
   } catch (error) {
@@ -342,15 +342,17 @@ function parseMediaInfo(value: unknown): MediaInfo {
 
 // ──Tasks tab ─────────────────────────────────────────────────────────────
 
-// Map status → pill class + icon
-const STATUS_META: Record<string, { cls: string; icon: string }> = {
-  downloading: { cls: "pill-dl",    icon: "↓" },
-  completed:   { cls: "pill-done",  icon: "✓" },
-  failed:      { cls: "pill-fail",  icon: "✗" },
-  queued:      { cls: "pill-queue", icon: "…" },
-  preparing:   { cls: "pill-queue", icon: "↓" },
-  paused:      { cls: "pill-pause", icon: "‖" },
-  cancelled:   { cls: "pill-cancel",icon: "×" },
+const STATUS_CLASS: Record<string, string> = {
+  downloading: "downloading",
+  metadata_acquiring: "downloading",
+  recovering: "downloading",
+  seeding: "downloading",
+  completed: "completed",
+  failed: "failed",
+  queued: "queued",
+  preparing: "downloading",
+  paused: "paused",
+  cancelled: "cancelled",
 };
 
 function fmtBytes(b: number): string {
@@ -378,38 +380,42 @@ interface DL {
 
 function renderTasks(downloads: DL[]) {
   if (!downloads.length) {
-    taskList.innerHTML = `<div class="empty-state"><span class="empty-icon">⇩</span><p>No downloads yet</p></div>`;
+    taskList.innerHTML = `<div class="empty-state"><p>No downloads yet</p></div>`;
     return;
   }
   taskList.innerHTML = downloads.map((d) => {
-    const pct = d.percentage_basis_points != null ? Math.round(d.percentage_basis_points / 100) : null;
-    const meta = d.status;
-    const { cls, icon } = STATUS_META[d.status] ?? { cls: "pill-queue", icon: "↓" };
+    const pct = d.percentage_basis_points != null
+      ? Math.min(100, Math.max(0, Math.round(d.percentage_basis_points / 100)))
+      : null;
+    const meta = d.status.replaceAll("_", " ");
+    const statusClass = STATUS_CLASS[d.status] ?? "queued";
     const speed = fmtSpeed(d.speed_bytes_per_second);
-    const sizeInfo = [fmtBytes(d.downloaded_bytes), pct != null ? `${pct}%` : "", speed].filter(Boolean).join(" · ");
-    const bar = pct != null && d.status === "downloading"
-      ? `<div class="task-progress"><div class="task-progress-fill" style="width:${pct}%"></div></div>` : "";
-    return `<div class="task-card">
-      <div class="task-status-pill ${cls}">${icon}</div>
-      <div class="task-body">
+    const sizeInfo = [fmtBytes(d.downloaded_bytes), pct != null ? `${pct}%` : ""].filter(Boolean).join(" · ");
+    const progress = pct != null && d.status === "downloading"
+      ? `<progress class="task-progress" value="${pct}" max="100" aria-label="Progress for ${esc(d.filename)}"></progress>` : "";
+    return `<div class="task-item" data-status="${esc(statusClass)}">
+      <div class="task-header">
         <div class="task-name" title="${esc(d.filename)}">${esc(d.filename)}</div>
-        <div class="task-meta-row">
-          <span class="task-state-tag">${meta}</span>
-          <span>${sizeInfo}</span>
+        <span class="task-status task-status-${esc(statusClass)}">${esc(meta)}</span>
+      </div>
+      <div class="task-body">
+        <div class="task-meta">
+          <span>${esc(sizeInfo)}</span>
+          <span>${esc(speed)}</span>
         </div>
-        ${bar}
+        ${progress}
       </div>
     </div>`;
   }).join("");
 }
 
 async function loadTasks() {
-  taskList.innerHTML = `<div class="empty-state"><span class="empty-icon">⋯</span><p>Loading…</p></div>`;
+  taskList.innerHTML = `<div class="empty-state"><p>Loading…</p></div>`;
   try {
     const tasks = await sendRuntimeMessage<DL[]>({ type: "get_tasks" });
     renderTasks(Array.isArray(tasks) ? tasks : []);
   } catch {
-    taskList.innerHTML = `<div class="empty-state"><span class="empty-icon">✗</span><p>Could not load tasks</p></div>`;
+    taskList.innerHTML = `<div class="empty-state"><p>Could not load tasks</p></div>`;
   }
 }
 
@@ -489,17 +495,18 @@ function renderResources() {
     : currentResources.filter((r) => r.type === currentFilter);
 
   if (!filtered.length) {
-    resourceList.innerHTML = `<div class="empty-state"><span class="empty-icon">◯</span><p>No ${currentFilter === "all" ? "" : currentFilter + " "}resources found</p></div>`;
+    resourceList.innerHTML = `<div class="empty-state"><p>No ${currentFilter === "all" ? "" : currentFilter + " "}resources found</p></div>`;
     updateSelectionUI();
     return;
   }
 
   resourceList.innerHTML = filtered.map((r) => {
     const checked = selectedUrls.has(r.url) ? "checked" : "";
-    const sel = selectedUrls.has(r.url) ? " sel" : "";
-    return `<label class="resource-row${sel}" data-url="${esc(r.url)}">
+    const sel = selectedUrls.has(r.url) ? " selected" : "";
+    const type = ["video", "audio", "image", "file"].includes(r.type) ? r.type : "file";
+    return `<label class="resource-item${sel}" data-url="${esc(r.url)}">
       <input type="checkbox" ${checked} data-url="${esc(r.url)}" />
-      <span class="type-badge tb-${r.type}">${r.type}</span>
+      <span class="resource-type resource-type-${type}">${type}</span>
       <span class="resource-name" title="${esc(r.url)}">${esc(r.label)}</span>
     </label>`;
   }).join("");
@@ -508,8 +515,8 @@ function renderResources() {
     cb.addEventListener("change", () => {
       const url = cb.dataset.url!;
       cb.checked ? selectedUrls.add(url) : selectedUrls.delete(url);
-      const row = cb.closest(".resource-row");
-      row?.classList.toggle("sel", cb.checked);
+      const row = cb.closest(".resource-item");
+      row?.classList.toggle("selected", cb.checked);
       updateSelectionUI();
     });
   });
@@ -538,7 +545,7 @@ async function downloadSelected() {
     selectedUrls.clear();
     renderResources();
     const msg = result.failed === 0
-      ? `✓ ${result.added} download${result.added > 1 ? "s" : ""} added`
+      ? `${result.added} download${result.added === 1 ? "" : "s"} added`
       : `${result.added} added, ${result.failed} failed`;
     showResult(result.failed === 0 ? "success" : "error", msg);
     document.querySelector<HTMLButtonElement>('[data-tab="tasks"]')?.click();

@@ -29,16 +29,16 @@ type Section =
   | "plugins"
   | "system";
 
-const navigation: Array<{ id: Section; label: string; icon: string }> = [
-  { id: "dashboard", label: "Dashboard", icon: "⌂" },
-  { id: "downloads", label: "Downloads", icon: "↓" },
-  { id: "queue", label: "Queue", icon: "≡" },
-  { id: "engines", label: "Engines", icon: "◈" },
-  { id: "scheduler", label: "Scheduler", icon: "◷" },
-  { id: "settings", label: "Settings", icon: "⚙" },
-  { id: "devices", label: "Devices", icon: "⌘" },
-  { id: "plugins", label: "Plugins", icon: "▦" },
-  { id: "system", label: "System / Health", icon: "◇" },
+const navigation: Array<{ id: Section; label: string }> = [
+  { id: "dashboard", label: "Dashboard" },
+  { id: "downloads", label: "Downloads" },
+  { id: "queue", label: "Queue" },
+  { id: "engines", label: "Engines" },
+  { id: "scheduler", label: "Scheduler" },
+  { id: "settings", label: "Settings" },
+  { id: "devices", label: "Devices" },
+  { id: "plugins", label: "Plugins" },
+  { id: "system", label: "System / health" },
 ];
 
 const unavailable: Record<Exclude<Section, "dashboard" | "downloads" | "queue" | "system">, {
@@ -397,7 +397,7 @@ export function App() {
           <div className="brand-lockup">
             <span className="brand-glyph">F</span>
             <div>
-              <p className="eyebrow">FETCHX REMOTE</p>
+              <p className="eyebrow">FetchX remote</p>
               <h1>Connect to your server</h1>
             </div>
           </div>
@@ -433,7 +433,6 @@ export function App() {
             </button>
           </form>
           <div className="security-note">
-            <span aria-hidden="true">⌑</span>
             <p>Non-loopback servers must use HTTPS. Configure the exact web UI origin in the server allow-list.</p>
           </div>
           <p className="setup-help">
@@ -460,13 +459,13 @@ export function App() {
           <span className="brand-glyph brand-glyph-small">F</span>
           <div>
             <strong>FetchX</strong>
-            <span>REMOTE CLIENT</span>
+            <span>Remote client</span>
           </div>
         </div>
         <div className="server-badge">
           <span className="status-dot online" />
           <span className="server-badge-text">{client.serverOrigin}</span>
-          <button className="icon-button disconnect-button" onClick={() => disconnect()} aria-label="Disconnect" title="Disconnect">↗</button>
+          <button className="disconnect-button" onClick={() => disconnect()}>Disconnect</button>
         </div>
         <nav className="navigation" aria-label="Remote server sections">
           {navigation.map((item) => {
@@ -479,7 +478,6 @@ export function App() {
                 aria-current={section === item.id ? "page" : undefined}
                 title={!isAvailable ? "Not available in current protocol" : undefined}
               >
-                <span className="nav-icon" aria-hidden="true">{item.icon}</span>
                 <span>{item.label}</span>
                 {item.id === "downloads" && <span className="nav-count">{downloads.length}</span>}
                 {!isAvailable && item.id !== "system" && <span className="nav-lock" aria-label="Unavailable">—</span>}
@@ -497,13 +495,13 @@ export function App() {
       <main className="main-panel">
         <header className="topbar">
           <div>
-            <p className="eyebrow">REMOTE SERVER</p>
+            <p className="eyebrow">Remote server</p>
             <h1>{title}</h1>
           </div>
           <div className="topbar-actions">
             <span className="server-version">v{protocol?.server_version ?? "—"}</span>
             <button className="secondary-button" onClick={() => void refreshNow()} disabled={refreshing}>
-              {refreshing ? "Refreshing…" : "↻ Refresh"}
+              {refreshing ? "Refreshing…" : "Refresh"}
             </button>
           </div>
         </header>
@@ -599,7 +597,7 @@ function EngineRuntimeView({ engines }: { engines: EngineRuntimeStatusEntry[] | 
     <div className="page-stack">
       <section className="welcome-panel">
         <div>
-          <p className="eyebrow">ENGINE RUNTIME</p>
+          <p className="eyebrow">Engine runtime</p>
           <h2>Download engines</h2>
           <p className="muted">Live availability from the shared FetchX runtime. This view does not expose executable paths, configuration, or failure details.</p>
         </div>
@@ -642,25 +640,25 @@ function Dashboard(props: {
     <div className="page-stack">
       <section className="welcome-panel">
         <div>
-          <p className="eyebrow">OVERVIEW</p>
-          <h2>Your remote server is connected.</h2>
+          <p className="eyebrow">Overview</p>
+          <h2>Your remote server is connected</h2>
           <p className="muted">Live state is provided by the FetchX server. Actions are authorized by the server, not this interface.</p>
         </div>
-        <button className="primary-button" onClick={props.onOpenDownloads}>View downloads <span aria-hidden="true">→</span></button>
+        <button className="primary-button" onClick={props.onOpenDownloads}>View downloads</button>
       </section>
 
       <section className="metric-grid" aria-label="Download summary">
-        <MetricCard label="Active" value={onlineCount} icon="↗" tone="blue" />
-        <MetricCard label="Queued" value={queuedCount} icon="≡" tone="violet" />
-        <MetricCard label="Completed" value={completedCount} icon="✓" tone="green" />
-        <MetricCard label="Tracked" value={downloads.length} icon="↓" tone="amber" />
+        <MetricCard label="Active" value={onlineCount} />
+        <MetricCard label="Queued" value={queuedCount} />
+        <MetricCard label="Completed" value={completedCount} />
+        <MetricCard label="Tracked" value={downloads.length} />
       </section>
 
       <div className="dashboard-grid">
         <section className="panel recent-panel">
           <div className="panel-heading">
-            <div><p className="eyebrow">ACTIVITY</p><h2>Recent downloads</h2></div>
-            <button className="text-button" onClick={props.onOpenDownloads}>See all <span aria-hidden="true">→</span></button>
+            <div><p className="eyebrow">Activity</p><h2>Recent downloads</h2></div>
+            <button className="text-button" onClick={props.onOpenDownloads}>See all</button>
           </div>
           {recent.length
             ? <DownloadTable downloads={recent} compact />
@@ -668,7 +666,7 @@ function Dashboard(props: {
         </section>
         <section className="panel server-panel">
           <div className="panel-heading">
-            <div><p className="eyebrow">SERVER</p><h2>Connection health</h2></div>
+            <div><p className="eyebrow">Server</p><h2>Connection health</h2></div>
             <span className={`pill ${health?.status === "ok" ? "pill-green" : "pill-muted"}`}>
               <span className="status-dot online" />{health?.status ?? "Unknown"}
             </span>
@@ -680,7 +678,7 @@ function Dashboard(props: {
             <Detail label="Last event" value={props.lastEvent || "No events received"} />
             <Detail label="Bytes downloaded" value={formatBytes(props.totalDownloaded)} />
           </div>
-          <button className="text-button system-link" onClick={props.onOpenSystem}>System details <span aria-hidden="true">→</span></button>
+          <button className="text-button system-link" onClick={props.onOpenSystem}>System details</button>
         </section>
       </div>
     </div>
@@ -719,7 +717,7 @@ function DownloadsView(props: {
     <div className="page-stack">
       <section className="panel add-panel">
         <div className="panel-heading">
-          <div><p className="eyebrow">NEW TRANSFER</p><h2>Add a download</h2></div>
+          <div><p className="eyebrow">New transfer</p><h2>Add a download</h2></div>
           <span className="capability-chip">{props.allDownloads.length} records</span>
         </div>
         <form className="add-form" onSubmit={props.onAdd}>
@@ -757,10 +755,9 @@ function DownloadsView(props: {
       </section>
       <section className="panel">
         <div className="panel-heading downloads-heading">
-          <div><p className="eyebrow">REMOTE QUEUE</p><h2>Downloads</h2></div>
+          <div><p className="eyebrow">Remote queue</p><h2>Downloads</h2></div>
           <label className="search-field">
-            <span aria-hidden="true">⌕</span>
-            <input value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="Search name or ID" />
+            <input value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="Search" />
           </label>
         </div>
         {props.downloads.length
@@ -805,7 +802,7 @@ function QueueView(props: {
     <div className="page-stack">
       <section className="welcome-panel queue-intro">
         <div>
-          <p className="eyebrow">QUEUE SNAPSHOT</p>
+          <p className="eyebrow">Queue snapshot</p>
           <h2>{props.downloads.length} queued or active records</h2>
           <p className="muted">Reorder queued downloads within their priority group. Active downloads cannot be moved.</p>
           <div className="toolbar-actions">
@@ -855,14 +852,14 @@ function SystemView(props: {
     <div className="page-stack">
       <section className="welcome-panel">
         <div>
-          <p className="eyebrow">SYSTEM STATUS</p>
+          <p className="eyebrow">System status</p>
           <h2>FetchX remote service</h2>
           <p className="muted">Health comes from the public health endpoint; capabilities and version come from authenticated system.discover.</p>
         </div>
         <span className="pill pill-green"><span className="status-dot online" />{props.health?.status ?? "Unknown"}</span>
       </section>
       <section className="panel">
-        <div className="panel-heading"><div><p className="eyebrow">PROTOCOL</p><h2>Server information</h2></div></div>
+        <div className="panel-heading"><div><p className="eyebrow">Protocol</p><h2>Server information</h2></div></div>
         <div className="detail-list system-details">
           <Detail label="Protocol version" value={props.protocol?.protocol_version ?? "—"} />
           <Detail label="Server version" value={props.protocol?.server_version ?? "—"} />
@@ -885,8 +882,7 @@ function UnavailableView({ section }: { section: Exclude<Section, "dashboard" | 
   const item = unavailable[section];
   return (
     <section className="unavailable-panel">
-      <span className="unavailable-icon" aria-hidden="true">◌</span>
-      <p className="eyebrow">NOT AVAILABLE IN CURRENT PROTOCOL</p>
+      <p className="eyebrow">Not available in current protocol</p>
       <h2>{item.title}</h2>
       <p className="muted">{item.detail}</p>
       <p className="small-note">This view is intentionally not simulated by the web client.</p>
@@ -894,17 +890,13 @@ function UnavailableView({ section }: { section: Exclude<Section, "dashboard" | 
   );
 }
 
-function MetricCard({ label, value, icon, tone }: {
+function MetricCard({ label, value }: {
   label: string;
   value: number;
-  icon: string;
-  tone: "blue" | "violet" | "green" | "amber";
 }) {
   return (
     <article className="metric-card">
-      <span className={`metric-icon ${tone}`} aria-hidden="true">{icon}</span>
       <div><p>{label}</p><strong>{value}</strong></div>
-      <span className="metric-accent" />
     </article>
   );
 }
@@ -996,8 +988,8 @@ function DownloadTable(props: {
                         <button disabled={props.busy} onClick={() => props.onTorrentDetails?.(download)}>Files</button>
                       )}
                       {!legacyAria2 && props.onQueueMove && props.canMoveQueue && download.status === "queued" && <>
-                        <button disabled={props.busy} aria-label={`Move ${download.filename} earlier in queue`} onClick={() => props.onQueueMove?.(download, "up")}>↑</button>
-                        <button disabled={props.busy} aria-label={`Move ${download.filename} later in queue`} onClick={() => props.onQueueMove?.(download, "down")}>↓</button>
+                        <button disabled={props.busy} aria-label={`Move ${download.filename} earlier in queue`} onClick={() => props.onQueueMove?.(download, "up")}>Earlier</button>
+                        <button disabled={props.busy} aria-label={`Move ${download.filename} later in queue`} onClick={() => props.onQueueMove?.(download, "down")}>Later</button>
                       </>}
                       {!legacyAria2 && props.onAction && props.canCancel && !["completed", "cancelled", "failed", "stopped"].includes(download.status) && <button disabled={props.busy} onClick={() => props.onAction?.(download, "cancel")}>Cancel</button>}
                       {props.onAction && props.canRemove && <button className="danger-text" disabled={props.busy} onClick={() => {
@@ -1032,7 +1024,7 @@ function StatusPill({ status }: { status: DownloadStatus }) {
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) {
-  return <div className="empty-state"><span aria-hidden="true">↓</span><h3>{title}</h3><p>{detail}</p></div>;
+  return <div className="empty-state"><h3>{title}</h3><p>{detail}</p></div>;
 }
 
 function Detail({ label, value }: { label: string; value: string }) {

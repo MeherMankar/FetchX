@@ -110,7 +110,7 @@ export const DownloadRow = memo(function DownloadRow({
               className="badge-scheduled"
               title={`Scheduled: ${formatDatetime(schedule.scheduled_at_ms)}`}
             >
-              ⏱
+              Scheduled
             </span>
           )}
         </div>
@@ -186,7 +186,7 @@ export const DownloadRow = memo(function DownloadRow({
               aria-label={`Move ${download.filename} earlier in queue`}
               title="Move earlier in queue"
             >
-              ↑
+              Earlier
             </button>
             <button
               className="button button-secondary"
@@ -195,7 +195,7 @@ export const DownloadRow = memo(function DownloadRow({
               aria-label={`Move ${download.filename} later in queue`}
               title="Move later in queue"
             >
-              ↓
+              Later
             </button>
           </>
         )}

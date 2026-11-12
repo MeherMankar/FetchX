@@ -63,7 +63,7 @@ export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
           onClick={() => onSelect("settings")}
           aria-current={active === "settings" ? "page" : undefined}
         >
-          <span className="nav-label">&#9881; Settings</span>
+          <span className="nav-label">Settings</span>
         </button>
       </div>
     </nav>

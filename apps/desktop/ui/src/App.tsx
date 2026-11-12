@@ -715,7 +715,9 @@ export function App() {
         <footer className="app-footer">
           Downloads are stored in your system Downloads folder. Removing an item preserves its files.
           {checkedIds.size === 0 && (
-            <span className="footer-hint"> · Press A to add · / to search · ↑↓ to navigate</span>
+            <span className="footer-hint">
+              · <kbd>A</kbd> to add · <kbd>/</kbd> to search · <kbd>↑</kbd><kbd>↓</kbd> to navigate
+            </span>
           )}
         </footer>
       </div>

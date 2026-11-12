@@ -22,7 +22,7 @@
             <span class="status-dot"></span>
             <span id="status-text">Checking…</span>
           </div>
-          <button id="settings-btn" class="btn-ghost" title="Settings" aria-label="Settings">⚙</button>
+          <button id="settings-btn" class="btn-ghost">Settings</button>
         </div>
       </header>
 
@@ -46,11 +46,11 @@
             id="url-input"
             class="url-input"
             type="url"
-            placeholder="Paste or use current tab URL…"
+            placeholder="Paste a URL"
             autocomplete="off"
             spellcheck="false"
           />
-          <button id="use-tab-btn" class="btn-tab-url" title="Use current tab URL" aria-label="Use current tab URL">⇥</button>
+          <button id="use-tab-btn" class="btn-tab-url" title="Use current tab URL">Use tab</button>
         </div>
 
         <div id="media-detected" class="media-detected hidden" role="status" aria-live="polite">
@@ -59,7 +59,6 @@
         </div>
 
         <button id="submit-btn" class="btn-primary" type="button" disabled>
-          <span class="btn-icon-lead">↓</span>
           <span id="btn-text">Download with FetchX</span>
         </button>
 
@@ -84,11 +83,10 @@
       <div id="tab-tasks" class="tab-panel hidden">
         <div class="section-toolbar">
           <span class="section-label">Recent downloads</span>
-          <button id="refresh-tasks-btn" class="btn-text">↺ Refresh</button>
+          <button id="refresh-tasks-btn" class="btn-text">Refresh</button>
         </div>
         <div id="task-list" class="task-list">
           <div class="empty-state">
-            <span class="empty-icon">⇩</span>
             <p>No downloads yet</p>
           </div>
         </div>
@@ -109,7 +107,6 @@
 
         <div id="scan-empty" class="scan-area">
           <button id="scan-btn" class="btn-primary">
-            <span class="btn-icon-lead">🔍</span>
             <span>Scan this page</span>
           </button>
         </div>
@@ -119,7 +116,6 @@
         <div id="resource-actions" class="resource-footer hidden">
           <span id="selected-count" class="sel-count">0 selected</span>
           <button id="download-selected-btn" class="btn-primary btn-primary-sm" disabled>
-            <span class="btn-icon-lead">↓</span>
             <span>Download selected</span>
           </button>
         </div>
@@ -131,14 +127,14 @@
 
           <div class="settings-head">
             <span class="settings-title">Settings</span>
-            <button id="settings-close-btn" class="btn-ghost">✕</button>
+            <button id="settings-close-btn" class="btn-ghost">Close</button>
           </div>
 
           <div class="settings-body">
 
             <!-- Targets section -->
             <div class="settings-section">
-              <div class="settings-section-title">FetchX Targets</div>
+              <div class="settings-section-title">FetchX targets</div>
               <div class="settings-inner">
                 <div id="target-list" class="target-cards"></div>
 

@@ -54,7 +54,7 @@ export function Toolbar({
           ref={searchRef}
           className="search-input"
           type="search"
-          placeholder="Search…"
+          placeholder="Search"
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
           aria-label="Search downloads"
@@ -93,7 +93,7 @@ export function Toolbar({
           aria-label="Refresh downloads list"
           title="Refresh"
         >
-          ↺
+          Refresh
         </button>
 
         <button
@@ -101,7 +101,7 @@ export function Toolbar({
           onClick={onAddClick}
           aria-label="Add new download"
         >
-          + Add
+          Add download
         </button>
       </div>
 
