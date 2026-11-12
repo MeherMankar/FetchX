@@ -159,7 +159,7 @@ fn is_direct_media_url(url: &str) -> bool {
     };
     let extension = url
         .path_segments()
-        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
         .and_then(|filename| filename.rsplit_once('.').map(|(_, ext)| ext))
         .unwrap_or_default();
     matches!(
