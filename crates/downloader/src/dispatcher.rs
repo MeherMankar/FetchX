@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use crate::{
     DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
     ManagedDownloadControl, ManagedDownloadEngine, MetalinkEngine, NativeTorrentEngine, SftpEngine,
-    YtDlpEngine, is_hls_url,
+    YtDlpEngine, YtDlpFormat, is_hls_url,
 };
 
 /// Routes work to the selected backend without moving engine selection into the queue.
@@ -49,6 +49,17 @@ where
     pub fn with_yt_dlp(mut self, engine: Arc<YtDlpEngine<R>>) -> Self {
         self.yt_dlp = Some(engine);
         self
+    }
+
+    pub async fn discover_ytdlp_formats(
+        &self,
+        url: &str,
+    ) -> Result<Vec<YtDlpFormat>, DownloadEngineError> {
+        let engine = self
+            .yt_dlp
+            .as_ref()
+            .ok_or(DownloadEngineError::EngineNotAvailable)?;
+        engine.discover_formats(url).await.map_err(Into::into)
     }
 
     pub fn with_hls(mut self, engine: Arc<HlsEngine<R>>) -> Self {

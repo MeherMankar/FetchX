@@ -35,6 +35,7 @@ use crate::{
 // on first launch in Android's embedded runtime. Keep validation bounded, but
 // leave enough time for a healthy binary to initialize.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
+const FORMAT_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
@@ -314,6 +315,13 @@ where
 
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    pub async fn discover_formats(&self, url: &str) -> Result<Vec<YtDlpFormat>, YtDlpError> {
+        fetchx_media_extractor::is_safe_media_url(url).map_err(|_| YtDlpError::InvalidUrl)?;
+        self.runner
+            .discover_formats(&self.executable, url, FORMAT_DISCOVERY_TIMEOUT)
+            .await
     }
 
     async fn download_controlled(
@@ -1990,6 +1998,9 @@ mod tests {
     #[derive(Default)]
     struct FakeRunnerState {
         version_validation_count: usize,
+        format_discovery_count: usize,
+        discovered_urls: Vec<String>,
+        discovered_formats: Vec<YtDlpFormat>,
         run_count: usize,
         arguments: Vec<String>,
         diagnostic_codes: Vec<&'static str>,
@@ -2028,6 +2039,20 @@ mod tests {
                     .expect("test runner mutex")
                     .version_validation_count += 1;
                 Ok("2025.01.01".to_owned())
+            })
+        }
+
+        fn discover_formats<'a>(
+            &'a self,
+            _executable: &'a Path,
+            url: &'a str,
+            _timeout: Duration,
+        ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
+            Box::pin(async move {
+                let mut state = self.state.lock().expect("test runner mutex");
+                state.format_discovery_count += 1;
+                state.discovered_urls.push(url.to_owned());
+                Ok(state.discovered_formats.clone())
             })
         }
 
@@ -2418,6 +2443,51 @@ mod tests {
         let persisted = engine.repository.get(id).await?.ok_or("item missing")?;
         assert_eq!(persisted.progress().downloaded_bytes(), 5);
         assert_eq!(persisted.progress().total_bytes(), Some(10));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn format_discovery_uses_runner_and_rejects_unsafe_urls() -> Result<(), Box<dyn Error>> {
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        state.lock().expect("test runner mutex").discovered_formats = vec![YtDlpFormat {
+            format_id: "137".to_owned(),
+            label: "1080p - mp4".to_owned(),
+            extension: Some("mp4".to_owned()),
+            file_size_bytes: Some(1_024),
+            title: Some("test".to_owned()),
+            platform: Some("test-site".to_owned()),
+        }];
+        let (engine, base, _) = fixture("https://example.test/watch", runner).await?;
+
+        let formats = engine
+            .discover_formats("https://example.test/watch")
+            .await?;
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].format_id, "137");
+        assert_eq!(
+            state.lock().expect("test runner mutex").discovered_urls,
+            ["https://example.test/watch"]
+        );
+
+        for unsafe_url in [
+            "file:///etc/passwd",
+            "http://127.0.0.1/private",
+            "https://user:password@example.test/watch",
+        ] {
+            assert!(matches!(
+                engine.discover_formats(unsafe_url).await,
+                Err(YtDlpError::InvalidUrl)
+            ));
+        }
+        assert_eq!(
+            state
+                .lock()
+                .expect("test runner mutex")
+                .format_discovery_count,
+            1
+        );
+        tokio::fs::remove_dir_all(base).await?;
         Ok(())
     }
 

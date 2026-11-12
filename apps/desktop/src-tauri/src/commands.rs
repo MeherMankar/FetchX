@@ -7,7 +7,7 @@ use fetchx_core::StateMachineError;
 use fetchx_core_services::{
     BatchDownloadRequest, ConfigService, CoreRepository, CoreServices, EngineRuntime,
 };
-use fetchx_downloader::validate_http_source_url;
+use fetchx_downloader::{DownloadEngineError, YtDlpError, YtDlpFormat, validate_http_source_url};
 use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
@@ -281,6 +281,24 @@ impl AppState {
             .await
             .map(media_info_to_dto)
             .map_err(|_| IpcError::internal())
+    }
+
+    async fn discover_ytdlp_formats(&self, source_url: &str) -> Result<Vec<YtDlpFormat>, IpcError> {
+        let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+        core_services
+            .discover_ytdlp_formats(source_url)
+            .await
+            .map_err(|error| match error {
+                DownloadEngineError::EngineNotAvailable => {
+                    IpcError::engine_unavailable(EngineKind::YtDlp)
+                }
+                DownloadEngineError::InvalidUrl
+                | DownloadEngineError::YtDlp(YtDlpError::InvalidUrl) => IpcError::invalid_request(),
+                error => {
+                    tracing::warn!(%error, "yt-dlp format discovery failed");
+                    IpcError::internal()
+                }
+            })
     }
 
     pub(crate) async fn add_media_format_from_browser(
@@ -1263,6 +1281,14 @@ pub async fn extract_media_formats(
     url: String,
 ) -> Result<MediaInfoDto, IpcError> {
     state.extract_media_formats(&url).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn discover_ytdlp_formats(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<Vec<YtDlpFormat>, IpcError> {
+    state.discover_ytdlp_formats(&url).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

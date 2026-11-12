@@ -196,6 +196,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::add_torrent_download,
             commands::add_media_download,
             commands::extract_media_formats,
+            commands::discover_ytdlp_formats,
             commands::pause_download,
             commands::resume_download,
             commands::cancel_download,

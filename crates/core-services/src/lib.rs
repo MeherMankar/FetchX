@@ -35,9 +35,9 @@ use std::{
 };
 
 use fetchx_downloader::{
-    DirectHttpEngine, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
+    DirectHttpEngine, DownloadEngineError, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
     NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
-    YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpProcessRunner,
+    YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpFormat, YtDlpProcessRunner,
     YtDlpProcessRunnerAdapter, is_dash_url, is_hls_url, remove_http_multi_source_set,
     save_http_multi_source_set, validate_http_source_url,
 };
@@ -967,6 +967,17 @@ impl CoreServices {
         opts: MediaExtractOptions,
     ) -> Result<fetchx_media_extractor::MediaInfo, ExtractionError> {
         self.engine_runtime.media_registry.extract(url, opts).await
+    }
+
+    /// Discover selectable formats using the configured yt-dlp engine.
+    pub async fn discover_ytdlp_formats(
+        &self,
+        url: &str,
+    ) -> Result<Vec<YtDlpFormat>, DownloadEngineError> {
+        self.engine_runtime
+            .dispatcher
+            .discover_ytdlp_formats(url)
+            .await
     }
 
     /// Admits one DirectHTTP job with ordered, whole-source failover candidates.
