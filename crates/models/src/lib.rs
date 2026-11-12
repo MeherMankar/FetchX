@@ -33,6 +33,7 @@ pub use priority::DownloadPriority;
 pub use progress::{DownloadProgress, DownloadProgressError};
 pub use resources::{
     EngineBandwidthLimits, ResourcePolicy, ResourcePolicyError, ResourcePressure, ResourceProfile,
+    WeeklyQueueSchedule, WeeklyQueueScheduleError,
 };
 pub use runtime::DownloadRuntimeStatus;
 pub use schedule::{DownloadSchedule, DownloadScheduleError};

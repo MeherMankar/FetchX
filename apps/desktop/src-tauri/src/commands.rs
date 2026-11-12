@@ -518,6 +518,8 @@ impl AppState {
             used_connections,
             total_connections: snap.global_connection_limit,
             dispatch_paused: snap.dispatch_paused,
+            manual_dispatch_paused: snap.manual_dispatch_paused,
+            schedule_dispatch_paused: snap.schedule_dispatch_paused,
         })
     }
 
@@ -745,6 +747,8 @@ pub struct QueueSnapshotDto {
     pub used_connections: usize,
     pub total_connections: usize,
     pub dispatch_paused: bool,
+    pub manual_dispatch_paused: bool,
+    pub schedule_dispatch_paused: bool,
 }
 
 impl DownloadDto {
@@ -2457,6 +2461,8 @@ mod tests {
             used_connections: 8,
             total_connections: 16,
             dispatch_paused: true,
+            manual_dispatch_paused: true,
+            schedule_dispatch_paused: false,
         };
         let s = serde_json::to_string(&dto)?;
         assert!(s.contains(r#""active_count":2"#));

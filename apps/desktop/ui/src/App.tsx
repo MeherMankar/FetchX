@@ -229,7 +229,7 @@ export function App() {
 
   const toggleQueueDispatch = useCallback(async () => {
     try {
-      const next = snapshot?.dispatch_paused
+      const next = snapshot?.manual_dispatch_paused
         ? await resumeQueueDispatch()
         : await pauseQueueDispatch();
       setSnapshot(next);
@@ -237,7 +237,7 @@ export function App() {
     } catch (cause) {
       setGlobalError(errorMessage(cause));
     }
-  }, [snapshot?.dispatch_paused]);
+  }, [snapshot?.manual_dispatch_paused]);
 
   useEffect(() => {
     refreshSnapshot();
@@ -587,7 +587,8 @@ export function App() {
           onSearchChange={setSearch}
           onSortChange={setSort}
           onRefresh={() => { void load(); refreshSnapshot(); }}
-          dispatchPaused={snapshot?.dispatch_paused ?? false}
+          dispatchManuallyPaused={snapshot?.manual_dispatch_paused ?? false}
+          dispatchSchedulePaused={snapshot?.schedule_dispatch_paused ?? false}
           onToggleQueueDispatch={() => { void toggleQueueDispatch(); }}
           onAddClick={() => openAddDialog()}
           appVersion={appVersion}

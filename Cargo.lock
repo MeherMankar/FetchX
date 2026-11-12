@@ -2146,6 +2146,7 @@ dependencies = [
 name = "fetchx-scheduler"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "fetchx-core",
  "fetchx-downloader",
  "fetchx-models",

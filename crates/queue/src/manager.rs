@@ -70,6 +70,8 @@ pub struct QueueSnapshot {
     pub paused: Vec<DownloadId>,
     pub active: Vec<ActiveDownload>,
     pub dispatch_paused: bool,
+    pub manual_dispatch_paused: bool,
+    pub schedule_dispatch_paused: bool,
     pub max_active_downloads: usize,
     pub global_connection_limit: usize,
     pub resource_pressure: ResourcePressure,
@@ -187,6 +189,23 @@ impl QueueManager {
         R: DownloadRepository + Clone + 'static,
         E: ManagedDownloadEngine + 'static,
     {
+        Self::new_with_deferred_policy_and_schedule_pause(
+            repository, engine, policy, deferred, false,
+        )
+        .await
+    }
+
+    pub async fn new_with_deferred_policy_and_schedule_pause<R, E>(
+        repository: R,
+        engine: Arc<E>,
+        policy: ResourcePolicy,
+        deferred: HashSet<DownloadId>,
+        schedule_dispatch_paused: bool,
+    ) -> Result<Self, QueueError>
+    where
+        R: DownloadRepository + Clone + 'static,
+        E: ManagedDownloadEngine + 'static,
+    {
         policy
             .validate()
             .map_err(|_| QueueError::InvalidConfiguration)?;
@@ -224,6 +243,7 @@ impl QueueManager {
             entries,
             next_sequence,
             deferred,
+            schedule_dispatch_paused,
             command_receiver,
         ));
 
@@ -291,6 +311,13 @@ impl QueueManager {
             reply,
         })
         .await
+    }
+
+    /// Holds new queue dispatch because the recurring schedule is closed.
+    /// This gate is independent of the user's manual queue hold.
+    pub async fn set_schedule_dispatch_paused(&self, paused: bool) -> Result<(), QueueError> {
+        self.request(|reply| Command::SetScheduleDispatchPaused { paused, reply })
+            .await
     }
 
     pub async fn pause(&self, id: DownloadId) -> Result<(), QueueError> {
@@ -602,6 +629,10 @@ enum Command {
         paused: bool,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
+    SetScheduleDispatchPaused {
+        paused: bool,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
     SetConnectionLimit {
         limit: usize,
         reply: oneshot::Sender<Result<(), QueueError>>,
@@ -618,6 +649,7 @@ enum Command {
     },
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_actor<R, E>(
     repository: R,
     engine: Arc<E>,
@@ -625,6 +657,7 @@ async fn run_actor<R, E>(
     mut entries: HashMap<DownloadId, Entry>,
     mut next_sequence: u64,
     mut deferred: HashSet<DownloadId>,
+    mut schedule_dispatch_paused: bool,
     mut commands: mpsc::Receiver<Command>,
 ) -> Result<(), QueueError>
 where
@@ -644,13 +677,13 @@ where
     let mut task_downloads = HashMap::<TaskId, DownloadId>::new();
     let mut last_priority = None;
     let mut consecutive_priority_starts = 0_u8;
-    let mut dispatch_paused = false;
+    let mut manual_dispatch_paused = false;
     let mut stopping = false;
     let mut pressure = ResourcePressure::Normal;
     let mut shutdown_waiters = Vec::<oneshot::Sender<Result<(), QueueError>>>::new();
 
     loop {
-        if !stopping && !dispatch_paused {
+        if !stopping && !manual_dispatch_paused && !schedule_dispatch_paused {
             start_eligible(
                 Arc::clone(&engine),
                 &config,
@@ -701,7 +734,8 @@ where
                     &mut active,
                     &mut stopping,
                     &mut pressure,
-                    &mut dispatch_paused,
+                    &mut manual_dispatch_paused,
+                    &mut schedule_dispatch_paused,
                     &mut shutdown_waiters,
                     &mut next_sequence,
                 ).await?;
@@ -996,7 +1030,8 @@ async fn handle_command<R, E>(
     active: &mut HashMap<DownloadId, ActiveWorker>,
     stopping: &mut bool,
     pressure: &mut ResourcePressure,
-    dispatch_paused: &mut bool,
+    manual_dispatch_paused: &mut bool,
+    schedule_dispatch_paused: &mut bool,
     shutdown_waiters: &mut Vec<oneshot::Sender<Result<(), QueueError>>>,
     next_sequence: &mut u64,
 ) -> Result<(), QueueError>
@@ -1347,7 +1382,11 @@ where
             let _ = reply.send(result);
         }
         Command::SetDispatchPaused { paused, reply } => {
-            *dispatch_paused = paused;
+            *manual_dispatch_paused = paused;
+            let _ = reply.send(Ok(()));
+        }
+        Command::SetScheduleDispatchPaused { paused, reply } => {
+            *schedule_dispatch_paused = paused;
             let _ = reply.send(Ok(()));
         }
         Command::SetConnectionLimit { limit, reply } => {
@@ -1413,7 +1452,9 @@ where
                     max_active_downloads: config.max_active_downloads,
                     global_connection_limit: config.global_connection_limit,
                     resource_pressure: *pressure,
-                    dispatch_paused: *dispatch_paused,
+                    dispatch_paused: *manual_dispatch_paused || *schedule_dispatch_paused,
+                    manual_dispatch_paused: *manual_dispatch_paused,
+                    schedule_dispatch_paused: *schedule_dispatch_paused,
                 })
             }
             .await;
@@ -3441,6 +3482,60 @@ mod tests {
             Ok::<(), Box<dyn std::error::Error>>(())
         })
         .await??;
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manual_and_schedule_dispatch_holds_are_independent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let manager = QueueManager::new(repository, engine, QueueConfig::default()).await?;
+
+        manager.set_schedule_dispatch_paused(true).await?;
+        let schedule_held = manager.snapshot().await?;
+        assert!(schedule_held.dispatch_paused);
+        assert!(!schedule_held.manual_dispatch_paused);
+        assert!(schedule_held.schedule_dispatch_paused);
+
+        manager.pause_dispatch().await?;
+        manager.set_schedule_dispatch_paused(false).await?;
+        let manually_held = manager.snapshot().await?;
+        assert!(manually_held.dispatch_paused);
+        assert!(manually_held.manual_dispatch_paused);
+        assert!(!manually_held.schedule_dispatch_paused);
+
+        manager.resume_dispatch().await?;
+        let resumed = manager.snapshot().await?;
+        assert!(!resumed.dispatch_paused);
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scheduled_dispatch_hold_is_active_before_queued_work_can_start()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, release) = setup_engine().await?;
+        let manager = QueueManager::new_with_deferred_policy_and_schedule_pause(
+            repository.clone(),
+            engine,
+            ResourcePolicy::default(),
+            HashSet::new(),
+            true,
+        )
+        .await?;
+        let queued = item()?;
+        let id = queued.id();
+        manager.enqueue(queued).await?;
+
+        let held = manager.snapshot().await?;
+        assert!(held.schedule_dispatch_paused);
+        assert!(held.active.is_empty());
+        assert_eq!(held.queued, [id]);
+
+        manager.set_schedule_dispatch_paused(false).await?;
+        wait_for_active(&manager, 1).await?;
+        release.send_replace(true);
         manager.shutdown().await?;
         Ok(())
     }

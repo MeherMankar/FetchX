@@ -60,11 +60,11 @@ and validation of partial files against a remote representation are not implemen
 so a partial may belong to an older resource version.
 
 The Scheduler supports immediate, future, and overdue one-shot starts, with persistent
-enable/disable state. It wakes on schedule changes or the next due time and defers
-future downloads without using queue slots or connection budget. Once eligible, the
-Queue Manager applies priority, FIFO, fairness, and resource limits. Recurring schedules,
-calendar rules, and cron syntax are not implemented. Wall-clock changes are rechecked
-at least once per minute while a distant schedule is pending.
+enable/disable state, plus a persistent weekly queue window using the system's local
+time zone. Outside the selected weekly window, new queued downloads wait while active
+downloads continue; the manual queue hold remains independent. One-shot schedules
+still apply to individual downloads. Arbitrary recurrence, calendar rules, and cron
+syntax are not implemented. Wall-clock changes are rechecked at least once per minute.
 
 For fresh responses that advertise byte ranges and provide a known size of at least
 4 MiB, the engine plans up to eight ranges and starts with four workers. A bounded

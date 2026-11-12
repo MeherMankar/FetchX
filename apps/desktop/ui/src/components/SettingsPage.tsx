@@ -27,6 +27,7 @@ import type {
   ResourcePolicyDto,
   ResourceProfile,
   SaveYtDlpConfigRequest,
+  WeeklyQueueScheduleDto,
 } from "../api/types";
 import { errorMessage } from "../lib/format";
 
@@ -228,6 +229,7 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
       const updated = await saveEngineConfig({
         yt_dlp: req,
         resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
       });
       onSaved(updated);
     } catch (cause) {
@@ -592,6 +594,7 @@ function ResourcePolicySection({
           executable_path: cfg.yt_dlp.executable_path,
         },
         resource_policy: policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
       });
       onSaved(updated);
     } catch (cause) {
@@ -715,6 +718,156 @@ function ResourcePolicySection({
   );
 }
 
+function formatScheduleTime(minute: number): string {
+  const hours = Math.floor(minute / 60).toString().padStart(2, "0");
+  const minutes = (minute % 60).toString().padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function parseScheduleTime(value: string): number | null {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function WeeklyQueueScheduleSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [schedule, setSchedule] = useState<WeeklyQueueScheduleDto>(cfg.weekly_queue_schedule);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setSchedule(cfg.weekly_queue_schedule), [cfg.weekly_queue_schedule]);
+
+  const save = async () => {
+    if (schedule.enabled && !schedule.weekdays.some(Boolean)) {
+      onError("Choose at least one day for the download window.");
+      return;
+    }
+    if (schedule.start_minute === schedule.end_minute) {
+      onError("The download window start and end times must be different.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: {
+          enabled: cfg.yt_dlp.enabled,
+          executable_path: cfg.yt_dlp.executable_path,
+        },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: schedule,
+      });
+      onSaved(updated);
+      onError("");
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateTime = (key: "start_minute" | "end_minute", value: string) => {
+    const minute = parseScheduleTime(value);
+    if (minute !== null) {
+      setSchedule((current) => ({ ...current, [key]: minute }));
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="queue-schedule-heading">
+      <div className="settings-section-header">
+        <h3 id="queue-schedule-heading" className="settings-section-title">
+          Download schedule
+        </h3>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="weekly-schedule-enabled">
+          Weekly download window
+        </label>
+        <div className="settings-control">
+          <input
+            id="weekly-schedule-enabled"
+            type="checkbox"
+            checked={schedule.enabled}
+            disabled={busy}
+            onChange={(event) =>
+              setSchedule((current) => ({ ...current, enabled: event.target.checked }))
+            }
+          />
+          <p className="settings-hint">
+            Outside this window, new queued downloads wait. Active downloads continue.
+            Times use this computer’s local time.
+          </p>
+        </div>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Days</span>
+        <div className="settings-control weekday-picker" role="group" aria-label="Download days">
+          {WEEKDAY_LABELS.map((label, index) => (
+            <button
+              key={label}
+              type="button"
+              className={`weekday-button${schedule.weekdays[index] ? " weekday-button-active" : ""}`}
+              aria-pressed={schedule.weekdays[index]}
+              disabled={busy || !schedule.enabled}
+              onClick={() =>
+                setSchedule((current) => ({
+                  ...current,
+                  weekdays: current.weekdays.map((selected, day) =>
+                    day === index ? !selected : selected,
+                  ),
+                }))
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="weekly-schedule-start">Start</label>
+        <div className="settings-control">
+          <input
+            id="weekly-schedule-start"
+            type="time"
+            className="settings-input settings-input-sm"
+            value={formatScheduleTime(schedule.start_minute)}
+            disabled={busy || !schedule.enabled}
+            onChange={(event) => updateTime("start_minute", event.target.value)}
+          />
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="weekly-schedule-end">End</label>
+        <div className="settings-control">
+          <input
+            id="weekly-schedule-end"
+            type="time"
+            className="settings-input settings-input-sm"
+            value={formatScheduleTime(schedule.end_minute)}
+            disabled={busy || !schedule.enabled}
+            onChange={(event) => updateTime("end_minute", event.target.value)}
+          />
+          <p className="settings-hint">Overnight windows, such as 22:00–06:00, are supported.</p>
+        </div>
+      </div>
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save download schedule"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
@@ -791,9 +944,9 @@ export function SettingsPage() {
       )}
 
       <div className="settings-notice" role="note">
-        <strong>Note:</strong> Saved engine and resource-policy settings take effect
-        after restarting FetchX. Active downloads keep their existing runtime
-        settings. Disabling an engine does not cancel downloads already in progress.
+        <strong>Note:</strong> Engine and resource-policy changes take effect after
+        restarting FetchX. The weekly queue schedule applies immediately. Active
+        downloads keep their existing runtime settings.
       </div>
 
       <BrowserExtensionSection />
@@ -801,6 +954,7 @@ export function SettingsPage() {
 
       {cfg && (
         <>
+          <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <DirectHttpSection runtimeStatus={runtimeStatus?.direct_http ?? null} />
           <YtDlpSection

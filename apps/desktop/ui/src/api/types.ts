@@ -181,6 +181,8 @@ export interface QueueSnapshot {
   used_connections: number;
   total_connections: number;
   dispatch_paused: boolean;
+  manual_dispatch_paused: boolean;
+  schedule_dispatch_paused: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +202,7 @@ export interface EngineConfigDto {
   direct_http: DirectHttpConfigDto;
   yt_dlp: YtDlpConfigDto;
   resource_policy: ResourcePolicyDto;
+  weekly_queue_schedule: WeeklyQueueScheduleDto;
 }
 
 export type ResourceProfile = "unlimited" | "normal" | "limited" | "night" | "custom";
@@ -220,6 +223,16 @@ export interface ResourcePolicyDto {
   engine_bandwidth_limits: EngineBandwidthLimitsDto;
 }
 
+export interface WeeklyQueueScheduleDto {
+  enabled: boolean;
+  /** Monday through Sunday. */
+  weekdays: boolean[];
+  /** Minutes after midnight in the system's local time zone. */
+  start_minute: number;
+  /** Minutes after midnight in the system's local time zone. */
+  end_minute: number;
+}
+
 export interface SaveYtDlpConfigRequest {
   enabled: boolean;
   executable_path: string | null;
@@ -228,6 +241,7 @@ export interface SaveYtDlpConfigRequest {
 export interface SaveEngineConfigRequest {
   yt_dlp: SaveYtDlpConfigRequest;
   resource_policy: ResourcePolicyDto;
+  weekly_queue_schedule: WeeklyQueueScheduleDto;
 }
 
 export interface DiagnosticResult {

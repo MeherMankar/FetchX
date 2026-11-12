@@ -9,6 +9,7 @@ fetchx-downloader = { path = "../downloader" }
 fetchx-models = { path = "../models" }
 fetchx-queue = { path = "../queue" }
 fetchx-storage = { path = "../storage" }
+chrono.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

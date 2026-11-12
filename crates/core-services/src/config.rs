@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use fetchx_models::ResourcePolicy;
+use fetchx_models::{ResourcePolicy, WeeklyQueueSchedule};
 use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
@@ -31,6 +31,8 @@ pub struct EngineConfig {
     pub metalink: MetalinkConfig,
     #[serde(default)]
     pub resource_policy: ResourcePolicy,
+    #[serde(default)]
+    pub weekly_queue_schedule: WeeklyQueueSchedule,
 }
 
 impl Default for EngineConfig {
@@ -45,6 +47,7 @@ impl Default for EngineConfig {
             sftp: SftpConfig::default(),
             metalink: MetalinkConfig::default(),
             resource_policy: ResourcePolicy::default(),
+            weekly_queue_schedule: WeeklyQueueSchedule::default(),
         }
     }
 }
@@ -170,6 +173,8 @@ pub enum ConfigError {
     UnsupportedVersion(u32),
     #[error("resource policy is invalid: {0}")]
     ResourcePolicy(String),
+    #[error("weekly queue schedule is invalid: {0}")]
+    WeeklyQueueSchedule(String),
     #[error("configuration serialisation failed: {0}")]
     Serialization(String),
     #[error("configuration storage failed: {0}")]
@@ -184,6 +189,9 @@ impl EngineConfig {
         self.resource_policy
             .validate()
             .map_err(|error| ConfigError::ResourcePolicy(error.to_string()))?;
+        self.weekly_queue_schedule
+            .validate()
+            .map_err(|error| ConfigError::WeeklyQueueSchedule(error.to_string()))?;
         Ok(())
     }
 }
@@ -309,6 +317,12 @@ mod tests {
         let mut config = service.load().await.expect("defaults should load");
         config.resource_policy =
             fetchx_models::ResourcePolicy::for_profile(fetchx_models::ResourceProfile::Night);
+        config.weekly_queue_schedule = fetchx_models::WeeklyQueueSchedule {
+            enabled: true,
+            weekdays: [true, false, true, false, true, false, true],
+            start_minute: 19 * 60,
+            end_minute: 23 * 60,
+        };
         service
             .save(&config)
             .await
@@ -320,6 +334,14 @@ mod tests {
                 .expect("resource profile should load")
                 .resource_policy,
             config.resource_policy
+        );
+        assert_eq!(
+            service
+                .load()
+                .await
+                .expect("weekly schedule should load")
+                .weekly_queue_schedule,
+            config.weekly_queue_schedule
         );
     }
 

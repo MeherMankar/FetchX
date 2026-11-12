@@ -168,6 +168,69 @@ impl ResourcePolicy {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct WeeklyQueueSchedule {
+    pub enabled: bool,
+    /// Monday through Sunday.
+    pub weekdays: [bool; 7],
+    /// Minutes after midnight in the system's local time zone.
+    pub start_minute: u16,
+    /// Minutes after midnight in the system's local time zone.
+    pub end_minute: u16,
+}
+
+impl Default for WeeklyQueueSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            weekdays: [true; 7],
+            start_minute: 22 * 60,
+            end_minute: 6 * 60,
+        }
+    }
+}
+
+impl WeeklyQueueSchedule {
+    pub fn validate(&self) -> Result<(), WeeklyQueueScheduleError> {
+        if self.start_minute >= 24 * 60 || self.end_minute >= 24 * 60 {
+            return Err(WeeklyQueueScheduleError::InvalidTime);
+        }
+        if self.start_minute == self.end_minute {
+            return Err(WeeklyQueueScheduleError::EmptyWindow);
+        }
+        if self.enabled && !self.weekdays.iter().any(|selected| *selected) {
+            return Err(WeeklyQueueScheduleError::NoDaysSelected);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn is_open_at(&self, weekday: usize, minute: u16) -> bool {
+        if weekday >= self.weekdays.len() || minute >= 24 * 60 {
+            return false;
+        }
+        if self.start_minute < self.end_minute {
+            return self.weekdays[weekday]
+                && minute >= self.start_minute
+                && minute < self.end_minute;
+        }
+        let previous_weekday = (weekday + self.weekdays.len() - 1) % self.weekdays.len();
+        (self.weekdays[weekday] && minute >= self.start_minute)
+            || (self.weekdays[previous_weekday] && minute < self.end_minute)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum WeeklyQueueScheduleError {
+    #[error("weekly queue schedule times must be within a day")]
+    InvalidTime,
+    #[error("weekly queue schedule start and end times must differ")]
+    EmptyWindow,
+    #[error("select at least one weekday for an enabled weekly queue schedule")]
+    NoDaysSelected,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum ResourcePolicyError {
     #[error("active download limit must be between 1 and 32")]
@@ -182,7 +245,10 @@ pub enum ResourcePolicyError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResourcePolicy, ResourcePolicyError, ResourceProfile};
+    use super::{
+        ResourcePolicy, ResourcePolicyError, ResourceProfile, WeeklyQueueSchedule,
+        WeeklyQueueScheduleError,
+    };
 
     #[test]
     fn profiles_have_bounded_documented_defaults() {
@@ -292,6 +358,48 @@ mod tests {
         assert_eq!(
             policy.validate(),
             Err(ResourcePolicyError::GlobalConnectionLimit)
+        );
+    }
+
+    #[test]
+    fn weekly_queue_schedule_handles_selected_days_and_overnight_windows() {
+        let schedule = WeeklyQueueSchedule {
+            enabled: true,
+            weekdays: [true, false, false, false, false, false, false],
+            start_minute: 22 * 60,
+            end_minute: 6 * 60,
+        };
+
+        assert!(schedule.is_open_at(0, 22 * 60));
+        assert!(schedule.is_open_at(1, 5 * 60));
+        assert!(!schedule.is_open_at(1, 6 * 60));
+        assert!(!schedule.is_open_at(1, 22 * 60));
+    }
+
+    #[test]
+    fn weekly_queue_schedule_validates_enabled_days_and_window_bounds() {
+        let mut schedule = WeeklyQueueSchedule {
+            enabled: true,
+            weekdays: [false; 7],
+            ..WeeklyQueueSchedule::default()
+        };
+        assert_eq!(
+            schedule.validate(),
+            Err(WeeklyQueueScheduleError::NoDaysSelected)
+        );
+
+        schedule.weekdays[0] = true;
+        schedule.end_minute = schedule.start_minute;
+        assert_eq!(
+            schedule.validate(),
+            Err(WeeklyQueueScheduleError::EmptyWindow)
+        );
+
+        schedule.end_minute = 30;
+        schedule.start_minute = 24 * 60;
+        assert_eq!(
+            schedule.validate(),
+            Err(WeeklyQueueScheduleError::InvalidTime)
         );
     }
 }

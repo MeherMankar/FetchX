@@ -6,10 +6,11 @@ use std::{
     time::Duration,
 };
 
+use chrono::{Datelike, Local, Timelike};
 use fetchx_downloader::ManagedDownloadEngine;
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadSchedule, DownloadScheduleError, DownloadStatus,
-    ResourcePolicy, Timestamp, TimestampError,
+    ResourcePolicy, Timestamp, TimestampError, WeeklyQueueSchedule, WeeklyQueueScheduleError,
 };
 use fetchx_queue::{QueueConfig, QueueError, QueueManager};
 use fetchx_storage::{DownloadRepository, StorageError};
@@ -41,6 +42,8 @@ pub enum ScheduleError {
     Timestamp(#[from] TimestampError),
     #[error("schedule domain data is invalid: {0}")]
     InvalidSchedule(#[from] DownloadScheduleError),
+    #[error("weekly queue schedule is invalid: {0}")]
+    InvalidWeeklyQueueSchedule(#[from] WeeklyQueueScheduleError),
     #[error("schedule persistence failed: {0}")]
     Storage(#[from] StorageError),
     #[error("queue operation failed: {0}")]
@@ -75,6 +78,10 @@ enum Command {
     },
     Disable {
         id: DownloadId,
+        reply: oneshot::Sender<Result<(), ScheduleError>>,
+    },
+    SetWeeklyQueueSchedule {
+        schedule: WeeklyQueueSchedule,
         reply: oneshot::Sender<Result<(), ScheduleError>>,
     },
     Shutdown {
@@ -131,11 +138,32 @@ where
         repository: R,
         engine: Arc<E>,
         resource_policy: ResourcePolicy,
-        mut deferred: HashSet<DownloadId>,
+        deferred: HashSet<DownloadId>,
     ) -> Result<Self, ScheduleError>
     where
         E: ManagedDownloadEngine + 'static,
     {
+        Self::start_with_resource_policy_and_deferred_and_weekly_schedule(
+            repository,
+            engine,
+            resource_policy,
+            deferred,
+            WeeklyQueueSchedule::default(),
+        )
+        .await
+    }
+
+    pub async fn start_with_resource_policy_and_deferred_and_weekly_schedule<E>(
+        repository: R,
+        engine: Arc<E>,
+        resource_policy: ResourcePolicy,
+        mut deferred: HashSet<DownloadId>,
+        weekly_queue_schedule: WeeklyQueueSchedule,
+    ) -> Result<Self, ScheduleError>
+    where
+        E: ManagedDownloadEngine + 'static,
+    {
+        weekly_queue_schedule.validate()?;
         let schedules = repository.list_schedules().await?;
         deferred.extend(
             schedules
@@ -143,20 +171,26 @@ where
                 .filter(|schedule| schedule.enabled())
                 .map(|schedule| schedule.download_id()),
         );
-        let queue = QueueManager::new_with_deferred_policy(
+        let queue = QueueManager::new_with_deferred_policy_and_schedule_pause(
             repository.clone(),
             engine,
             resource_policy,
             deferred,
+            weekly_schedule_holds_dispatch(&weekly_queue_schedule),
         )
         .await?;
         let (commands, receiver) = mpsc::channel(128);
         let actor_queue = queue.clone();
         let actor_repository = repository.clone();
-        let actor =
-            tokio::spawn(
-                async move { run_scheduler(actor_repository, actor_queue, receiver).await },
-            );
+        let actor = tokio::spawn(async move {
+            run_scheduler(
+                actor_repository,
+                actor_queue,
+                receiver,
+                weekly_queue_schedule,
+            )
+            .await
+        });
 
         Ok(Self {
             repository,
@@ -194,6 +228,15 @@ where
     /// Disables a persisted schedule and releases it as an ordinary queued item.
     pub async fn disable_schedule(&self, id: DownloadId) -> Result<(), ScheduleError> {
         self.command(|reply| Command::Disable { id, reply }).await
+    }
+
+    pub async fn set_weekly_queue_schedule(
+        &self,
+        schedule: WeeklyQueueSchedule,
+    ) -> Result<(), ScheduleError> {
+        schedule.validate()?;
+        self.command(|reply| Command::SetWeeklyQueueSchedule { schedule, reply })
+            .await
     }
 
     pub async fn get_schedule(
@@ -258,11 +301,13 @@ async fn run_scheduler<R>(
     repository: R,
     queue: QueueManager,
     mut commands: mpsc::Receiver<Command>,
+    weekly_queue_schedule: WeeklyQueueSchedule,
 ) -> Result<(), ScheduleError>
 where
     R: DownloadRepository + Clone,
 {
-    let result = run_scheduler_loop(&repository, &queue, &mut commands).await;
+    let result =
+        run_scheduler_loop(&repository, &queue, &mut commands, weekly_queue_schedule).await;
     if result.is_err() {
         if let Err(error) = queue.shutdown().await {
             tracing::error!(%error, "queue failed to shut down after scheduler error");
@@ -277,13 +322,14 @@ async fn run_scheduler_loop<R>(
     repository: &R,
     queue: &QueueManager,
     commands: &mut mpsc::Receiver<Command>,
+    mut weekly_queue_schedule: WeeklyQueueSchedule,
 ) -> Result<(), ScheduleError>
 where
     R: DownloadRepository,
 {
     loop {
         let now = Timestamp::now()?;
-        let next = reconcile(repository, queue, now).await?;
+        let next = reconcile(repository, queue, now, &weekly_queue_schedule).await?;
         let delay = next.map_or(MAX_TIMER_INTERVAL, |scheduled_at| {
             Duration::from_millis(
                 scheduled_at
@@ -299,7 +345,13 @@ where
                 let Some(command) = command else {
                     return Ok(());
                 };
-                if handle_command(command, repository, queue, Timestamp::now()?).await? {
+                if handle_command(
+                    command,
+                    repository,
+                    queue,
+                    Timestamp::now()?,
+                    &mut weekly_queue_schedule,
+                ).await? {
                     return Ok(());
                 }
             }
@@ -314,10 +366,14 @@ async fn reconcile<R>(
     repository: &R,
     queue: &QueueManager,
     now: Timestamp,
+    weekly_queue_schedule: &WeeklyQueueSchedule,
 ) -> Result<Option<Timestamp>, ScheduleError>
 where
     R: DownloadRepository,
 {
+    queue
+        .set_schedule_dispatch_paused(weekly_schedule_holds_dispatch(weekly_queue_schedule))
+        .await?;
     let schedules = repository.list_schedules().await?;
     let downloads = repository
         .list()
@@ -365,6 +421,7 @@ async fn handle_command<R>(
     repository: &R,
     queue: &QueueManager,
     now: Timestamp,
+    weekly_queue_schedule: &mut WeeklyQueueSchedule,
 ) -> Result<bool, ScheduleError>
 where
     R: DownloadRepository,
@@ -375,7 +432,15 @@ where
             scheduled_at,
             reply,
         } => {
-            let result = schedule_download(repository, queue, id, scheduled_at, now).await;
+            let result = schedule_download(
+                repository,
+                queue,
+                id,
+                scheduled_at,
+                now,
+                weekly_queue_schedule,
+            )
+            .await;
             let _ = reply.send(result);
         }
         Command::Remove { id, reply } => {
@@ -388,11 +453,26 @@ where
             let _ = reply.send(result);
         }
         Command::Enable { id, reply } => {
-            let result = set_schedule_enabled(repository, queue, id, true, now).await;
+            let result =
+                set_schedule_enabled(repository, queue, id, true, now, weekly_queue_schedule).await;
             let _ = reply.send(result);
         }
         Command::Disable { id, reply } => {
-            let result = set_schedule_enabled(repository, queue, id, false, now).await;
+            let result =
+                set_schedule_enabled(repository, queue, id, false, now, weekly_queue_schedule)
+                    .await;
+            let _ = reply.send(result);
+        }
+        Command::SetWeeklyQueueSchedule { schedule, reply } => {
+            let result = async {
+                schedule.validate()?;
+                queue
+                    .set_schedule_dispatch_paused(weekly_schedule_holds_dispatch(&schedule))
+                    .await?;
+                *weekly_queue_schedule = schedule;
+                Ok(())
+            }
+            .await;
             let _ = reply.send(result);
         }
         Command::Shutdown { reply } => {
@@ -409,6 +489,7 @@ async fn schedule_download<R>(
     id: DownloadId,
     scheduled_at: Timestamp,
     now: Timestamp,
+    weekly_queue_schedule: &WeeklyQueueSchedule,
 ) -> Result<(), ScheduleError>
 where
     R: DownloadRepository,
@@ -440,7 +521,7 @@ where
     schedule.set_enabled(true, updated_at)?;
     if let Err(error) = repository.save_schedule(&schedule).await {
         if was_deferred {
-            reconcile(repository, queue, now).await?;
+            reconcile(repository, queue, now, weekly_queue_schedule).await?;
         } else {
             queue.release_download(id).await?;
         }
@@ -452,12 +533,23 @@ where
     Ok(())
 }
 
+fn weekly_schedule_holds_dispatch(schedule: &WeeklyQueueSchedule) -> bool {
+    if !schedule.enabled {
+        return false;
+    }
+    let local_now = Local::now();
+    let weekday = local_now.weekday().num_days_from_monday() as usize;
+    let minute = (local_now.hour() * 60 + local_now.minute()) as u16;
+    !schedule.is_open_at(weekday, minute)
+}
+
 async fn set_schedule_enabled<R>(
     repository: &R,
     queue: &QueueManager,
     id: DownloadId,
     enabled: bool,
     now: Timestamp,
+    weekly_queue_schedule: &WeeklyQueueSchedule,
 ) -> Result<(), ScheduleError>
 where
     R: DownloadRepository,
@@ -491,7 +583,7 @@ where
     }
     schedule.set_enabled(enabled, schedule.updated_at().max(now))?;
     if let Err(error) = repository.save_schedule(&schedule).await {
-        reconcile(repository, queue, now).await?;
+        reconcile(repository, queue, now, weekly_queue_schedule).await?;
         return Err(ScheduleError::Storage(error));
     }
     if !enabled || schedule.scheduled_at() <= now {
@@ -517,6 +609,7 @@ fn validate_schedulable(item: &DownloadItem) -> Result<(), ScheduleError> {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         error::Error,
         path::PathBuf,
         sync::{
@@ -526,13 +619,15 @@ mod tests {
         time::Duration,
     };
 
+    use chrono::{Local, Timelike};
     use fetchx_core::DownloadStateMachine;
     use fetchx_downloader::{
         DownloadEngine, DownloadEngineError, ManagedDownloadControl, ManagedDownloadEngine,
     };
     use fetchx_models::{
         DownloadId, DownloadItem, DownloadPriority, DownloadProgress, DownloadSchedule,
-        DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
+        DownloadSource, DownloadStatus, EngineKind, FileName, ResourcePolicy, Timestamp,
+        WeeklyQueueSchedule,
     };
     use fetchx_queue::{QueueConfig, QueueError};
     use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
@@ -694,6 +789,58 @@ mod tests {
         )
         .await?;
         Ok((scheduler, started, completion_sender))
+    }
+
+    #[tokio::test]
+    async fn weekly_queue_window_holds_new_starts_and_preserves_manual_hold()
+    -> Result<(), Box<dyn Error>> {
+        let repository = repository().await?;
+        let queued = insert_item(&repository, DownloadStatus::Queued).await?;
+        let (completion_sender, completion) = watch::channel(false);
+        let started = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(ControlledEngine {
+            repository: repository.clone(),
+            completion,
+            started: Arc::clone(&started),
+        });
+        let local_now = Local::now();
+        let start_minute = ((local_now.hour() * 60 + local_now.minute() + 2) % (24 * 60)) as u16;
+        let end_minute = (start_minute + 1) % (24 * 60);
+        let scheduler = Scheduler::start_with_resource_policy_and_deferred_and_weekly_schedule(
+            repository.clone(),
+            engine,
+            ResourcePolicy::default(),
+            HashSet::new(),
+            WeeklyQueueSchedule {
+                enabled: true,
+                weekdays: [true; 7],
+                start_minute,
+                end_minute,
+            },
+        )
+        .await?;
+
+        let held = scheduler.queue_manager().snapshot().await?;
+        assert!(held.schedule_dispatch_paused);
+        assert!(held.active.is_empty());
+        assert_eq!(held.queued, [queued.id()]);
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+
+        scheduler.queue_manager().pause_dispatch().await?;
+        scheduler
+            .set_weekly_queue_schedule(WeeklyQueueSchedule::default())
+            .await?;
+        let still_held = scheduler.queue_manager().snapshot().await?;
+        assert!(still_held.dispatch_paused);
+        assert!(still_held.manual_dispatch_paused);
+        assert!(!still_held.schedule_dispatch_paused);
+
+        scheduler.queue_manager().resume_dispatch().await?;
+        wait_started(&started, 1).await?;
+        completion_sender.send_replace(true);
+        wait_status(&repository, queued.id(), DownloadStatus::Completed).await?;
+        scheduler.shutdown().await?;
+        Ok(())
     }
 
     async fn wait_started(started: &AtomicUsize, expected: usize) -> Result<(), Box<dyn Error>> {

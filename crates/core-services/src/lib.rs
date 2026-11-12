@@ -565,22 +565,24 @@ impl CoreServices {
         } else {
             std::collections::HashSet::new()
         };
-        let scheduler = match Scheduler::start_with_resource_policy_and_deferred(
-            repository.clone(),
-            engine_runtime.dispatcher.clone(),
-            engine_config.resource_policy.clone(),
-            deferred,
-        )
-        .await
-        {
-            Ok(scheduler) => scheduler,
-            Err(error) => {
-                if let Err(cleanup_error) = engine_runtime.shutdown().await {
-                    warn!(%cleanup_error, "engine shutdown failed after scheduler startup failure");
+        let scheduler =
+            match Scheduler::start_with_resource_policy_and_deferred_and_weekly_schedule(
+                repository.clone(),
+                engine_runtime.dispatcher.clone(),
+                engine_config.resource_policy.clone(),
+                deferred,
+                engine_config.weekly_queue_schedule.clone(),
+            )
+            .await
+            {
+                Ok(scheduler) => scheduler,
+                Err(error) => {
+                    if let Err(cleanup_error) = engine_runtime.shutdown().await {
+                        warn!(%cleanup_error, "engine shutdown failed after scheduler startup failure");
+                    }
+                    return Err(CoreServicesError::Queue(error.to_string()));
                 }
-                return Err(CoreServicesError::Queue(error.to_string()));
-            }
-        };
+            };
         let queue = scheduler.queue_manager();
 
         Ok(Self {

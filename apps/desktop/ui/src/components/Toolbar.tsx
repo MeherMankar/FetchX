@@ -11,7 +11,8 @@ interface ToolbarProps {
   onSearchChange: (value: string) => void;
   onSortChange: (sort: SortKey) => void;
   onRefresh: () => void;
-  dispatchPaused: boolean;
+  dispatchManuallyPaused: boolean;
+  dispatchSchedulePaused: boolean;
   onToggleQueueDispatch: () => void;
   onAddClick: () => void;
   appVersion: string | undefined;
@@ -26,7 +27,8 @@ export function Toolbar({
   onSearchChange,
   onSortChange,
   onRefresh,
-  dispatchPaused,
+  dispatchManuallyPaused,
+  dispatchSchedulePaused,
   onToggleQueueDispatch,
   onAddClick,
   appVersion,
@@ -41,6 +43,11 @@ export function Toolbar({
       </div>
 
       <div className="toolbar-controls">
+        {dispatchSchedulePaused && (
+          <span className="queue-schedule-status" role="status">
+            Outside schedule
+          </span>
+        )}
         <label className="visually-hidden" htmlFor="search-input">Search downloads</label>
         <input
           id="search-input"
@@ -74,10 +81,10 @@ export function Toolbar({
         <button
           className="button button-secondary"
           onClick={onToggleQueueDispatch}
-          aria-label={dispatchPaused ? "Resume queued downloads" : "Hold queued downloads"}
-          title={dispatchPaused ? "Resume queue" : "Hold queue"}
+          aria-label={dispatchManuallyPaused ? "Resume queued downloads" : "Hold queued downloads"}
+          title={dispatchManuallyPaused ? "Resume queue" : "Hold queue"}
         >
-          {dispatchPaused ? "Resume queue" : "Hold queue"}
+          {dispatchManuallyPaused ? "Resume queue" : "Hold queue"}
         </button>
 
         <button

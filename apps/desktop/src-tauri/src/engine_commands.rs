@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use fetchx_core_services::{
     ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
 };
-use fetchx_models::{ResourcePolicy, ResourceProfile};
+use fetchx_models::{ResourcePolicy, ResourceProfile, WeeklyQueueSchedule};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::{fs, process::Command};
@@ -17,6 +17,8 @@ use crate::commands::AppState;
 pub struct SaveEngineConfigRequest {
     pub yt_dlp: SaveYtDlpConfigRequest,
     pub resource_policy: Option<ResourcePolicy>,
+    #[serde(default)]
+    pub weekly_queue_schedule: Option<WeeklyQueueSchedule>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -31,6 +33,7 @@ pub struct EngineConfigDto {
     pub direct_http: DirectHttpConfigDto,
     pub yt_dlp: YtDlpConfigDto,
     pub resource_policy: ResourcePolicy,
+    pub weekly_queue_schedule: WeeklyQueueSchedule,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -59,6 +62,7 @@ impl From<&EngineConfig> for EngineConfigDto {
                     .map(|path| path.to_string_lossy().into_owned()),
             },
             resource_policy: config.resource_policy.clone(),
+            weekly_queue_schedule: config.weekly_queue_schedule.clone(),
         }
     }
 }
@@ -169,11 +173,22 @@ pub async fn save_engine_config(
             profile => ResourcePolicy::for_profile(profile),
         };
     }
+    if let Some(schedule) = request.weekly_queue_schedule {
+        config.weekly_queue_schedule = schedule;
+    }
     state
         .config_service
         .save(&config)
         .await
         .map_err(EngineIpcError::from)?;
+    state
+        .scheduler
+        .set_weekly_queue_schedule(config.weekly_queue_schedule.clone())
+        .await
+        .map_err(|error| EngineIpcError {
+            code: EngineIpcErrorCode::InvalidConfig,
+            message: error.to_string(),
+        })?;
     Ok(EngineConfigDto::from(&config))
 }
 
@@ -186,6 +201,14 @@ pub async fn reset_engine_config(
         .reset()
         .await
         .map_err(EngineIpcError::from)?;
+    state
+        .scheduler
+        .set_weekly_queue_schedule(config.weekly_queue_schedule.clone())
+        .await
+        .map_err(|error| EngineIpcError {
+            code: EngineIpcErrorCode::InvalidConfig,
+            message: error.to_string(),
+        })?;
     Ok(EngineConfigDto::from(&config))
 }
 
