@@ -77,6 +77,24 @@ export interface DownloadRuntimeStatus {
   updated_at: number;
 }
 
+export type MediaJobStatus =
+  | "preparing"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface MediaProcessJob {
+  job_id: string;
+  download_id: string;
+  status: MediaJobStatus;
+  output_time_seconds: number;
+  duration_seconds: number | null;
+  output_path: string | null;
+  output_size_bytes: number | null;
+  error: string | null;
+}
+
 export interface DuplicateDownloadMatch {
   id: string;
   filename: string;

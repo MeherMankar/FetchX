@@ -12,6 +12,7 @@ use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
 use crate::helper_manager::{self, HelperManager};
+use crate::media_processing::{self, MediaProcessingManager};
 
 const SHUTDOWN_RUNNING: u8 = 0;
 const SHUTDOWN_IN_PROGRESS: u8 = 1;
@@ -197,6 +198,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::add_media_download,
             commands::extract_media_formats,
             commands::discover_ytdlp_formats,
+            media_processing::get_media_process_for_download,
+            media_processing::start_media_remux,
+            media_processing::cancel_media_process,
             commands::pause_download,
             commands::resume_download,
             commands::cancel_download,
@@ -249,6 +253,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ))?;
             if !app.manage(helper_manager) {
                 return Err("desktop helper manager was already initialized".into());
+            }
+            if !app.manage(MediaProcessingManager::default()) {
+                return Err("desktop media processing manager was already initialized".into());
             }
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
             if !app.manage(state) {
@@ -383,9 +390,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let core_services = state.core_services.clone();
                     let scheduler = state.scheduler.clone();
                     let engine_runtime = state.engine_runtime.clone();
+                    let media_processing =
+                        (*app_handle.state::<MediaProcessingManager>()).clone();
                     let app_handle = app_handle.clone();
                     let shutdown_state = Arc::clone(&state.shutdown_state);
                     tauri::async_runtime::spawn(async move {
+                        media_processing.cancel_all_and_wait().await;
                         if let Some(core_services) = core_services {
                             if let Err(error) = core_services.shutdown().await {
                                 tracing::error!(%error, "core services failed to shut down cleanly");

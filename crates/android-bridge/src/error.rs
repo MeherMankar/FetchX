@@ -91,6 +91,9 @@ impl From<ScheduleError> for MobileApiError {
             ScheduleError::Queue(e) => MobileApiError::from(e),
             ScheduleError::Timestamp(e) => MobileApiError::Runtime(e.to_string()),
             ScheduleError::InvalidSchedule(e) => MobileApiError::Validation(e.to_string()),
+            ScheduleError::InvalidWeeklyQueueSchedule(e) => {
+                MobileApiError::Validation(e.to_string())
+            }
             ScheduleError::ScheduleNotFound(id) => {
                 MobileApiError::NotFound(format!("schedule for download {id} not found"))
             }

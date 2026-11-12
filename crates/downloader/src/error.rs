@@ -197,6 +197,11 @@ impl DownloadEngineError {
                 DownloadErrorCode::Destination,
                 "The yt-dlp output could not be written safely.".to_owned(),
             ),
+            Self::YtDlp(YtDlpError::UnmergedOutput) => (
+                DownloadErrorCode::Engine,
+                "The video and audio streams were not merged. Ensure FFmpeg is installed and available to FetchX."
+                    .to_owned(),
+            ),
             Self::YtDlp(_) => (
                 DownloadErrorCode::Engine,
                 "The yt-dlp download could not be completed safely.".to_owned(),

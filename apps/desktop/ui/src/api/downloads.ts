@@ -11,6 +11,7 @@ import type {
   DownloadRemovedEvent,
   DownloadSchedule,
   DownloadUpdatedEvent,
+  MediaProcessJob,
   QueueSnapshot,
   ScheduleDownloadRequest,
   SetPriorityRequest,
@@ -27,6 +28,28 @@ export function listDownloads(): Promise<Download[]> {
 
 export function listRuntimeStatuses(): Promise<DownloadRuntimeStatus[]> {
   return invoke<DownloadRuntimeStatus[]>("list_runtime_statuses");
+}
+
+export function getMediaProcessForDownload(
+  downloadId: string,
+): Promise<MediaProcessJob | null> {
+  return invoke<MediaProcessJob | null>("get_media_process_for_download", {
+    download_id: downloadId,
+  });
+}
+
+export function startMediaRemux(
+  downloadId: string,
+  container: "mp4" | "mkv" | "webm",
+): Promise<MediaProcessJob> {
+  return invoke<MediaProcessJob>("start_media_remux", {
+    download_id: downloadId,
+    container,
+  });
+}
+
+export function cancelMediaProcess(jobId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_media_process", { job_id: jobId });
 }
 
 export function restartAria2HttpWithNative(
@@ -303,4 +326,12 @@ export async function listenForDownloadChanges(
     unlistenUpdated();
     throw error;
   }
+}
+
+export function listenForMediaProcessUpdates(
+  onUpdated: (job: MediaProcessJob) => void,
+): Promise<UnlistenFn> {
+  return listen<MediaProcessJob>("media_process_updated", (event) => {
+    onUpdated(event.payload);
+  });
 }

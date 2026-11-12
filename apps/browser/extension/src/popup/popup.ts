@@ -11,6 +11,8 @@ import {
 } from "../shared/native";
 import { browserApi, sendRuntimeMessage } from "../shared/browser-api";
 import type { BrowserTarget, ExtensionSettings } from "../background/service-worker";
+import { formatIdForDownload, isVideoOnlyFormat } from "./media-format";
+import type { MediaFormat } from "./media-format";
 
 // ──DOM refs ──────────────────────────────────────────────────────────────
 
@@ -105,12 +107,6 @@ function updateSubmit() {
   const invalid = validateUrl(urlInput.value.trim()) !== null;
   submitBtn.disabled = invalid;
   fetchFormatsBtn.disabled = invalid;
-}
-
-interface MediaFormat {
-  format_id: string;
-  label: string;
-  ext: string;
 }
 
 interface MediaInfo {
@@ -244,7 +240,7 @@ function renderVideoFormats() {
     row.className = "quality-item";
     const label = document.createElement("span");
     label.className = "quality-label";
-    label.textContent = `${index + 1}. ${format.label || format.ext}`;
+    label.textContent = `${index + 1}. ${format.label || format.ext}${isVideoOnlyFormat(format) ? " + audio" : ""}`;
     const download = document.createElement("button");
     download.type = "button";
     download.className = "btn-text";
@@ -277,7 +273,7 @@ async function downloadFormats(formats: MediaFormat[]) {
         jsonrpc: "2.0",
         id: crypto.randomUUID(),
         method: "media.addFormat",
-        params: { url, format_id: format.format_id, extension: format.ext },
+        params: { url, format_id: formatIdForDownload(format), extension: format.ext },
       });
       const rpcResponse = getRpcResponse(response);
       if ("error" in rpcResponse) {
@@ -330,12 +326,17 @@ function parseMediaInfo(value: unknown): MediaInfo {
   if (typeof candidate.title !== "string" || !Array.isArray(candidate.formats)) {
     throw new Error("FetchX returned invalid video qualities.");
   }
-  const formats = candidate.formats.filter((format): format is MediaFormat =>
-    typeof format === "object" && format !== null
-      && typeof (format as Record<string, unknown>).format_id === "string"
-      && typeof (format as Record<string, unknown>).label === "string"
-      && typeof (format as Record<string, unknown>).ext === "string"
-  );
+  const formats = candidate.formats.filter((format): format is MediaFormat => {
+    if (typeof format !== "object" || format === null) return false;
+    const record = format as Record<string, unknown>;
+    const hasValidCodec = (value: unknown) =>
+      value === undefined || value === null || typeof value === "string";
+    return typeof record.format_id === "string"
+      && typeof record.label === "string"
+      && typeof record.ext === "string"
+      && hasValidCodec(record.video_codec)
+      && hasValidCodec(record.audio_codec);
+  });
   return { title: candidate.title, formats };
 }
 

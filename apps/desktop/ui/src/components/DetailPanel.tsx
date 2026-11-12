@@ -2,8 +2,11 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
 import {
+  cancelMediaProcess,
+  getMediaProcessForDownload,
   getTorrentDownloadMetadata,
   getTorrentTelemetry,
+  listenForMediaProcessUpdates,
   restartAria2HttpWithNative,
   restartAria2TorrentFileWithNative,
   restartAria2TorrentWithNative,
@@ -12,9 +15,10 @@ import {
   setTorrentDirectorySelected,
   setTorrentFileSelected,
   setTorrentSelectionAll,
+  startMediaRemux,
 } from "../api/downloads";
-import type { Download, DownloadSchedule } from "../api/types";
-import { formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTime, formatSpeed } from "../lib/format";
+import type { Download, DownloadSchedule, MediaProcessJob } from "../api/types";
+import { errorMessage, formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTime, formatSpeed } from "../lib/format";
 import { canSchedule, canChangePriority, canPause, canResume, canCancel, canRetry } from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
 import type {
@@ -33,6 +37,11 @@ const ENGINE_LABELS: Record<string, string> = {
 const MEDIA_EXTENSIONS = new Set([
   "aac", "avi", "flac", "m3u8", "m4a", "m4v", "mkv", "mov", "mp3", "mp4",
   "mpd", "mpeg", "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
+]);
+
+const REMUXABLE_EXTENSIONS = new Set([
+  "aac", "avi", "flac", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg",
+  "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
 ]);
 
 function isHttpSource(url: string): boolean {
@@ -123,6 +132,10 @@ export function DetailPanel({
   const [torrentRestartDestination, setTorrentRestartDestination] = useState("");
   const [torrentRestartConfirmed, setTorrentRestartConfirmed] = useState(false);
   const [torrentRestartLoading, setTorrentRestartLoading] = useState(false);
+  const [mediaJob, setMediaJob] = useState<MediaProcessJob | null>(null);
+  const [mediaContainer, setMediaContainer] = useState<"mp4" | "mkv" | "webm">("mp4");
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
   const [torrentRestartError, setTorrentRestartError] = useState<string | null>(null);
   const [restartedTorrentDownloadId, setRestartedTorrentDownloadId] = useState<string | null>(null);
   const [torrentTelemetry, setTorrentTelemetry] = useState<TorrentTelemetry | null>(null);
@@ -269,6 +282,64 @@ export function DetailPanel({
       setTorrentRestartError(cause instanceof Error ? cause.message : String(cause));
     }
   };
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    setMediaJob(null);
+    setMediaError(null);
+    void (async () => {
+      try {
+        const stop = await listenForMediaProcessUpdates((job) => {
+          if (job.download_id === download.id) setMediaJob(job);
+        });
+        if (!active) {
+          stop();
+          return;
+        }
+        unlisten = stop;
+        setMediaJob(await getMediaProcessForDownload(download.id));
+      } catch (cause) {
+        if (active) setMediaError(errorMessage(cause));
+      }
+    })();
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [download.id]);
+
+  const remux = async () => {
+    setMediaLoading(true);
+    setMediaError(null);
+    try {
+      setMediaJob(await startMediaRemux(download.id, mediaContainer));
+    } catch (cause) {
+      setMediaError(errorMessage(cause));
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
+  const cancelRemux = async () => {
+    if (!mediaJob) return;
+    setMediaError(null);
+    try {
+      const cancelled = await cancelMediaProcess(mediaJob.job_id);
+      if (!cancelled) setMediaError("This remux job is no longer active.");
+    } catch (cause) {
+      setMediaError(errorMessage(cause));
+    }
+  };
+
+  const fileExtension = download.filename.split(".").pop()?.toLowerCase() ?? "";
+  const canRemux = download.status === "completed" && REMUXABLE_EXTENSIONS.has(fileExtension);
+  const mediaJobActive = mediaJob?.status === "preparing" || mediaJob?.status === "processing";
+  const mediaProgress = mediaJob?.status === "completed"
+    ? 100
+    : mediaJob?.duration_seconds && mediaJob.duration_seconds > 0
+      ? Math.min(100, (mediaJob.output_time_seconds / mediaJob.duration_seconds) * 100)
+      : undefined;
 
   return (
     <aside className="detail-panel" aria-label="Download details">
@@ -557,6 +628,85 @@ export function DetailPanel({
                 )}
               </div>
             )}
+          </section>
+        )}
+
+        {canRemux && (
+          <section className="detail-section" aria-label="Media remux">
+            <p className="detail-section-title">Remux media</p>
+            <p className="field-hint">
+              Copies the existing streams into another container without re-encoding.
+              The source is preserved and the new file is saved beside it. Closing FetchX cancels the remux.
+            </p>
+            <label className="field-label" htmlFor={`remux-container-${download.id}`}>
+              Output container
+            </label>
+            <select
+              id={`remux-container-${download.id}`}
+              className="field-input"
+              value={mediaContainer}
+              disabled={mediaLoading || mediaJobActive}
+              onChange={(event) =>
+                setMediaContainer(event.target.value as "mp4" | "mkv" | "webm")
+              }
+            >
+              <option value="mp4">MP4</option>
+              <option value="mkv">Matroska (MKV)</option>
+              <option value="webm">WebM</option>
+            </select>
+            <div className="detail-actions">
+              <button
+                className="button button-primary"
+                disabled={mediaLoading || mediaJobActive}
+                onClick={() => void remux()}
+              >
+                {mediaLoading
+                  ? "Starting…"
+                  : mediaJob?.status === "completed"
+                    ? "Remux again"
+                    : "Remux"}
+              </button>
+              {mediaJobActive && (
+                <button
+                  className="button button-secondary"
+                  onClick={() => void cancelRemux()}
+                >
+                  Cancel remux
+                </button>
+              )}
+            </div>
+            {mediaJob && (
+              <div role="status" aria-live="polite">
+                <p className="field-hint">
+                  Remux {mediaJob.status}
+                  {mediaJob.status === "processing" && (
+                    <>
+                      {" · "}
+                      {formatEta(Math.floor(mediaJob.output_time_seconds))}
+                      {mediaJob.duration_seconds !== null
+                        ? ` / ${formatEta(Math.floor(mediaJob.duration_seconds))}`
+                        : ""}
+                    </>
+                  )}
+                  {mediaJob.output_size_bytes !== null
+                    ? ` · ${formatBytes(mediaJob.output_size_bytes)}`
+                    : ""}
+                </p>
+                {(mediaJobActive || mediaJob.status === "completed") && (
+                  <progress
+                    className="progress-track"
+                    aria-label="Remux progress"
+                    value={mediaProgress}
+                    max={100}
+                  />
+                )}
+                {mediaJob.output_path && <code>{mediaJob.output_path}</code>}
+                {mediaJob.error && (
+                  <p className="detail-error-message">{mediaJob.error}</p>
+                )}
+              </div>
+            )}
+            {mediaError && <p className="detail-error-message">{mediaError}</p>}
           </section>
         )}
 

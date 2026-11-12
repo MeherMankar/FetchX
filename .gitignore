@@ -12,6 +12,9 @@
 /apps/desktop/ui/node_modules/
 /apps/desktop/ui/dist/
 
+# Temporary workspaces created by FFmpeg remux jobs
+.fetchx-ffmpeg-*/
+
 # Remote web client
 /apps/remote-ui/node_modules/
 /apps/remote-ui/dist/

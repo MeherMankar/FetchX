@@ -8,6 +8,7 @@ mod commands;
 mod engine_commands;
 mod events;
 mod helper_manager;
+mod media_processing;
 
 fn main() {
     std::panic::set_hook(Box::new(|panic_info| {
