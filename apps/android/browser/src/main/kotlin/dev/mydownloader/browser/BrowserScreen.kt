@@ -4343,7 +4343,7 @@ private fun BrowserSettingsDialog(
                         )
                         SettingsActionRow(
                             title = "Tracking protection",
-                            subtitle = "View protection for this site",
+                            subtitle = "View and control protection for all tabs",
                             onClick = onOpenTrackingProtection,
                         )
                         SettingsActionRow(
