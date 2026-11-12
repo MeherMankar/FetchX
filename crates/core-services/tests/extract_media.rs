@@ -118,7 +118,26 @@ async fn test_core_services_extract_media_calls_registry() -> Result<(), Box<dyn
         matches!(err, ExtractionError::UnsupportedUrl),
         "expected ExtractionError::UnsupportedUrl from the stub runner, got {err:?}"
     );
-    assert_eq!(discover_calls.load(Ordering::Relaxed), 1);
+    for source in [
+        "https://www.globalplayer.com/videos/2JsSZ7Gm2uP/",
+        "https://www.ndr.de/ndraktuell28488-player.html",
+        "https://www.tvp.pl/sess/tvplayer.php?object_id=51247504",
+    ] {
+        let result = services
+            .extract_media(
+                source,
+                ExtractOptions {
+                    cookies: Some("caller-provided".to_owned()),
+                    ..ExtractOptions::default()
+                },
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ExtractionError::UnsupportedUrl)),
+            "expected unsupported native result to reach fallback for {source}, got {result:?}"
+        );
+    }
+    assert_eq!(discover_calls.load(Ordering::Relaxed), 4);
 
     services.shutdown().await?;
     Ok(())

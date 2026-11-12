@@ -43,9 +43,9 @@ use fetchx_downloader::{
 };
 use fetchx_media_extractor::{
     BrightcoveExtractor, CbcExtractor, ExtractOptions as MediaExtractOptions, ExtractionError,
-    ExtractorRegistry, GenericExtractor, JwPlatformExtractor, KalturaExtractor,
-    PolskieRadioExtractor, RadioFranceExtractor, UnsupportedExtractor, VimeoExtractor,
-    YoutubeExtractor, YtDlpExtractor,
+    ExtractorRegistry, GenericExtractor, GlobalPlayerExtractor, JwPlatformExtractor,
+    KalturaExtractor, NdrExtractor, PolskieRadioExtractor, RadioFranceExtractor, TvpExtractor,
+    UnsupportedExtractor, VimeoExtractor, YoutubeExtractor, YtDlpExtractor,
 };
 use fetchx_models::{
     ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
@@ -2751,6 +2751,9 @@ impl EngineRuntime {
             registry.register(Arc::new(VimeoExtractor));
             registry.register(Arc::new(PolskieRadioExtractor));
             registry.register(Arc::new(RadioFranceExtractor));
+            registry.register(Arc::new(NdrExtractor));
+            registry.register(Arc::new(TvpExtractor));
+            registry.register(Arc::new(GlobalPlayerExtractor));
             registry.register(Arc::new(GenericExtractor));
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
                 // Use the resolved executable path captured before the engine was moved.
