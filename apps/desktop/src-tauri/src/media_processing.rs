@@ -6,7 +6,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use fetchx_downloader::{
@@ -22,13 +21,9 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::{
-    commands::AppState,
-    helper_manager::{self, HelperId, HelperManager},
-};
+use crate::commands::AppState;
 
 const MEDIA_PROCESS_UPDATED: &str = "media_process_updated";
-const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_OUTPUT_NAME_ATTEMPTS: u32 = 100_000;
 const MAX_RETAINED_JOBS: usize = 100;
 
@@ -110,43 +105,16 @@ impl MediaProcessingManager {
         }
     }
 
-    async fn processor(
-        &self,
-        helper_manager: &HelperManager,
-        state: &AppState,
-    ) -> Result<Arc<FfmpegProcessor>, String> {
+    async fn processor(&self) -> Result<Arc<FfmpegProcessor>, String> {
         let mut processor = self.inner.processor.lock().await;
         if let Some(processor) = processor.as_ref() {
             return Ok(Arc::clone(processor));
         }
 
-        let config = state
-            .config_service
-            .load()
-            .await
-            .map_err(|error| format!("Could not load engine configuration: {error}"))?;
-        let statuses = helper_manager
-            .get_statuses(&helper_manager::configured_helper_paths(&config))
-            .await;
-        let executable_path = |helper| {
-            statuses
-                .iter()
-                .find(|status| status.helper == helper && status.available)
-                .and_then(|status| status.executable_path.as_deref())
-                .map(PathBuf::from)
-        };
-        let mut processor_config = FfmpegConfig::new()
-            .with_native_only_mode(true)
-            .with_max_concurrent_processes(1);
-        if let Some(path) = executable_path(HelperId::Ffmpeg) {
-            processor_config = processor_config.with_ffmpeg_executable(path);
-        }
-        if let Some(path) = executable_path(HelperId::Ffprobe) {
-            processor_config = processor_config.with_ffprobe_executable(path);
-        }
+        let processor_config = FfmpegConfig::new().with_max_concurrent_processes(1);
         let initialized = FfmpegProcessor::initialize(processor_config)
             .await
-            .map_err(|error| format!("Could not initialize FFmpeg: {error}"))?;
+            .map_err(|error| format!("Could not initialize native media processing: {error}"))?;
         let initialized = Arc::new(initialized);
         *processor = Some(Arc::clone(&initialized));
         Ok(initialized)
@@ -257,36 +225,12 @@ impl MediaProcessingManager {
                 })
                 .await;
 
-            let (progress_sender, mut progress_receiver) = FfmpegProcessor::progress_channel();
             let request = MediaProcessRequest {
                 input,
                 output,
                 operation: MediaOperation::Remux { container },
             };
-            let process = processor.process(request, cancellation_receiver, Some(progress_sender));
-            tokio::pin!(process);
-            let mut last_progress_event = None;
-            let mut progress_open = true;
-            let result = loop {
-                tokio::select! {
-                    result = &mut process => break result,
-                    progress = progress_receiver.recv(), if progress_open => {
-                        match progress {
-                            Some(progress) => {
-                                let should_emit = last_progress_event
-                                    .is_none_or(|last: tokio::time::Instant| last.elapsed() >= PROGRESS_EVENT_INTERVAL);
-                                if should_emit {
-                                    last_progress_event = Some(tokio::time::Instant::now());
-                                    manager.update_job(&app, &download_id, |job| {
-                                        job.output_time_seconds = progress.output_time.as_secs_f64();
-                                    }).await;
-                                }
-                            }
-                            None => progress_open = false,
-                        }
-                    }
-                }
-            };
+            let result = processor.process(request, cancellation_receiver).await;
             match result {
                 Ok(output) => {
                     manager
@@ -372,7 +316,6 @@ pub async fn get_media_process_for_download(
 pub async fn start_media_remux(
     app: AppHandle,
     state: State<'_, AppState>,
-    helper_manager: State<'_, HelperManager>,
     manager: State<'_, MediaProcessingManager>,
     download_id: String,
     container: String,
@@ -388,7 +331,7 @@ pub async fn start_media_remux(
     let input = item.destination().to_path_buf();
     validate_remux_source(item.status(), &input)?;
     let container = parse_container(&container)?;
-    let processor = manager.processor(&helper_manager, &state).await?;
+    let processor = manager.processor().await?;
     manager
         .start_remux(app, processor, download_id, input, container)
         .await

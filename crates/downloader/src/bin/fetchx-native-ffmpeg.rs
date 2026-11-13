@@ -2,7 +2,7 @@ use std::{
     env,
     ffi::OsString,
     path::{Path, PathBuf},
-    process::{Command, ExitCode},
+    process::ExitCode,
 };
 
 use fetchx_downloader::{
@@ -80,7 +80,7 @@ fn main() -> ExitCode {
             Ok(_) => return ExitCode::SUCCESS,
             Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
             Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
-                eprintln!("native merge unsupported; using bundled FFmpeg fallback");
+                eprintln!("native merge does not support these streams");
             }
             Err(error) => {
                 eprintln!("native merge failed: {error}");
@@ -119,7 +119,7 @@ fn main() -> ExitCode {
             Ok(_) => return ExitCode::SUCCESS,
             Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
             Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
-                eprintln!("native audio extraction unsupported; using bundled FFmpeg fallback");
+                eprintln!("native audio extraction does not support this stream");
             }
             Err(error) => {
                 eprintln!("native audio extraction failed: {error}");
@@ -183,7 +183,7 @@ fn main() -> ExitCode {
             Ok(_) => return ExitCode::SUCCESS,
             Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
             Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
-                eprintln!("native remux unsupported; using bundled FFmpeg fallback");
+                eprintln!("native remux does not support this input");
             }
             Err(error) => {
                 eprintln!("native remux failed: {error}");
@@ -232,7 +232,8 @@ fn main() -> ExitCode {
         }
     }
 
-    run_fallback(&arguments)
+    eprintln!("requested operation is not supported by FetchX native media processing");
+    ExitCode::FAILURE
 }
 
 fn run_native_oxideav_probe(input: &Path) -> Option<ExitCode> {
@@ -604,39 +605,6 @@ fn path_argument(argument: &OsString) -> Option<PathBuf> {
     let argument = argument.to_str()?;
     let path = argument.strip_prefix("file:").unwrap_or(argument);
     (!path.is_empty()).then(|| PathBuf::from(path))
-}
-
-fn run_fallback(arguments: &[OsString]) -> ExitCode {
-    let Some(executable) = fallback_executable() else {
-        eprintln!("operation is not supported natively and bundled FFmpeg is unavailable");
-        return ExitCode::FAILURE;
-    };
-    match Command::new(executable).args(arguments).status() {
-        Ok(status) => status
-            .code()
-            .and_then(|code| u8::try_from(code).ok())
-            .map(ExitCode::from)
-            .unwrap_or(ExitCode::FAILURE),
-        Err(error) => {
-            eprintln!("could not start bundled FFmpeg fallback: {error}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn fallback_executable() -> Option<PathBuf> {
-    let executable = env::current_exe().ok()?;
-    let directory = executable.parent()?;
-    let fallback = if cfg!(target_os = "android") {
-        directory.join("libfetchx_ffmpeg.so")
-    } else {
-        directory.join(if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        })
-    };
-    fallback.is_file().then_some(fallback)
 }
 
 #[cfg(test)]

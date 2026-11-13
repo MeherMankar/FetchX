@@ -106,7 +106,7 @@ private fun findOwnedWorkspaces(downloadsDir: Path): List<Path> {
             val name = entry.fileName.toString()
             if (
                 name.startsWith(".fetchx-ytdlp-") ||
-                name.startsWith(".fetchx-ffmpeg-")
+                name.startsWith(".fetchx-media-") || name.startsWith(".fetchx-ffmpeg-")
             ) {
                 if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) workspaces.add(entry)
             }

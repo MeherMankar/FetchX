@@ -32,7 +32,7 @@ Android UI / desktop React / CLI / remote clients
               engine dispatcher
       |       |       |       |       |
      HTTP  native   yt-dlp  HLS   FTP/SFTP
-           torrent   FFmpeg metalink aria2
+           torrent native media metalink aria2
 ```
 
 The Rust workspace is the implementation center:
@@ -40,7 +40,7 @@ The Rust workspace is the implementation center:
 - `crates/models`: engine-independent persisted/domain models and validation.
 - `crates/core`: lifecycle state-machine transitions.
 - `crates/storage`: SQLite repositories, migrations, backup, import/export, and maintenance.
-- `crates/downloader`: direct HTTP segmentation, retries, bandwidth control, FTP, SFTP, HLS, Metalink, yt-dlp, FFmpeg, aria2, native torrent, and process supervision.
+- `crates/downloader`: direct HTTP segmentation, retries, bandwidth control, FTP, SFTP, HLS, Metalink, yt-dlp, native media processing, aria2, and native torrent.
 - `crates/queue`: persisted priority/FIFO queue, resource budgeting, recovery, cancellation, and events.
 - `crates/scheduler`: persistent one-shot scheduling over the queue.
 - `crates/core-services`: platform-independent composition root used by desktop, Android, CLI, and remote hosts.

@@ -12,7 +12,8 @@
 /apps/desktop/ui/node_modules/
 /apps/desktop/ui/dist/
 
-# Temporary workspaces created by FFmpeg remux jobs
+# Temporary workspaces created by native media processing (including legacy names)
+.fetchx-media-*/
 .fetchx-ffmpeg-*/
 
 # Remote web client

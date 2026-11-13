@@ -155,6 +155,6 @@ existing SSRF protections remain enabled. Do not add network exceptions or pass
 bearer credentials in URLs. Host port publication is loopback-only by default.
 
 The image packages the FetchX CLI/server, not optional helper executables such as
-`aria2c`, `yt-dlp`, or FFmpeg. Workflows that require an external executable need
-that tool to be provisioned and configured separately; no helper is downloaded
-or installed by container startup.
+`aria2c` or `yt-dlp`. Workflows that require one of those tools need it to be
+provisioned and configured separately; no helper is downloaded or installed by
+container startup. Native media processing does not require FFmpeg.

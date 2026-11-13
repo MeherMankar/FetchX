@@ -22,13 +22,16 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         cancelPath: String,
     ): String {
         val mediaArguments = MediaDownloadPreferences.applyArguments(context, arguments)
-        val runtimeArguments = if (requiresFfmpeg(mediaArguments)) {
-            val withFfmpeg = mediaArguments.toMutableList()
-            val urlDelimiter = withFfmpeg.indexOf("--")
+        val runtimeArguments = if (requiresNativeMediaProcessor(mediaArguments)) {
+            val withNativeProcessor = mediaArguments.toMutableList()
+            val urlDelimiter = withNativeProcessor.indexOf("--")
             check(urlDelimiter >= 0) { "yt-dlp arguments are missing the URL delimiter" }
-            withFfmpeg.add(urlDelimiter, "--ffmpeg-location")
-            withFfmpeg.add(urlDelimiter + 1, ffmpegExecutableForYtDlp().absolutePath)
-            withFfmpeg
+            withNativeProcessor.add(urlDelimiter, "--ffmpeg-location")
+            withNativeProcessor.add(
+                urlDelimiter + 1,
+                nativeMediaProcessorForYtDlp().absolutePath,
+            )
+            withNativeProcessor
         } else {
             mediaArguments
         }
@@ -56,30 +59,23 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         Log.e("FetchXYtDlp", "Rust yt-dlp diagnostic=$diagnosticCode")
     }
 
-    private fun ensureFfmpegExecutable(): File {
-        val abi = Build.SUPPORTED_ABIS.firstOrNull { it in SUPPORTED_FFMPEG_ABIS }
-            ?: error("No bundled FFmpeg executable for this device ABI")
-        val executable = File(context.applicationInfo.nativeLibraryDir, FFMPEG_LIBRARY_NAME)
-        check(executable.isFile) { "Bundled FFmpeg executable is missing for $abi" }
-        check(executable.canExecute()) { "Bundled FFmpeg executable is not runnable for $abi" }
+    private fun nativeMediaProcessorForYtDlp(): File {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull { it in SUPPORTED_MEDIA_ABIS }
+            ?: error("Native media processing is not supported for this device ABI")
+        val executable = File(
+            context.applicationInfo.nativeLibraryDir,
+            NATIVE_MEDIA_PROCESSOR_LIBRARY_NAME,
+        )
+        check(executable.isFile) {
+            "Native media processor is missing for $abi"
+        }
+        check(executable.canExecute()) { "Native media processor is not runnable for $abi" }
         return executable
     }
 
-    private fun ffmpegExecutableForYtDlp(): File {
-        val nativeExecutable = File(
-            context.applicationInfo.nativeLibraryDir,
-            NATIVE_FFMPEG_LIBRARY_NAME,
-        )
-        if (!nativeExecutable.exists()) return ensureFfmpegExecutable()
-        check(nativeExecutable.isFile) { "Native media processor is not a regular file" }
-        check(nativeExecutable.canExecute()) { "Native media processor is not runnable" }
-        return nativeExecutable
-    }
-
     companion object {
-        private const val FFMPEG_LIBRARY_NAME = "libfetchx_ffmpeg.so"
-        private const val NATIVE_FFMPEG_LIBRARY_NAME = "libfetchx_ffmpeg_native.so"
-        private val SUPPORTED_FFMPEG_ABIS = setOf("arm64-v8a", "x86_64")
+        private const val NATIVE_MEDIA_PROCESSOR_LIBRARY_NAME = "libfetchx_ffmpeg_native.so"
+        private val SUPPORTED_MEDIA_ABIS = setOf("arm64-v8a", "x86_64")
 
         fun start(context: Context): AndroidYtDlpRuntime {
             if (!Python.isStarted()) {
@@ -91,10 +87,10 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
             }
         }
 
-        internal fun requiresFfmpeg(arguments: List<String>): Boolean =
-                    "--extract-audio" in arguments ||
-                        arguments.windowed(2).any { (option, value) ->
-                            option == "--format" && '+' in value
-                        }
-        }
+        internal fun requiresNativeMediaProcessor(arguments: List<String>): Boolean =
+            "--extract-audio" in arguments ||
+                arguments.windowed(2).any { (option, value) ->
+                    option == "--format" && '+' in value
+                }
+    }
 }

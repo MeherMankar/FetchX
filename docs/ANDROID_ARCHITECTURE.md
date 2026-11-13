@@ -45,7 +45,7 @@
          │  crates/scheduler│  │  DirectHttp       │
          │  crates/storage  │  │  aria2            │
          │  crates/models   │  │  yt-dlp           │
-         └──────────────────┘  │  FFmpeg           │
+         └──────────────────┘  │ Native media      │
                                 └──────────────────┘
 ```
 
@@ -219,21 +219,15 @@ Selected engine (DirectHttp / aria2 / yt-dlp) begins downloading
 The browser asks the embedded yt-dlp runtime for available formats before adding a
 media download. The selected format ID is persisted with the queued source. Adaptive
 video-only formats are paired with the best available audio track; Android supplies
-the bundled FFmpeg executable to yt-dlp only for those merge-required selections.
-The executable is copied to app-private runtime storage on first use and is not
-extracted for muxed formats.
+the FetchX native media compatibility shim to yt-dlp for supported merge-required
+selections. Unsupported post-processing fails explicitly; no external FFmpeg
+executable is bundled.
 
 Format discovery also returns yt-dlp's video title and extractor/platform metadata.
 The Android browser uses these with the selected quality label to name downloads
 `<title> - <quality> - <platform>.<extension>`, for example
 `Video title - 720p - XHamster.mp4`. When yt-dlp metadata is unavailable, the
 browser falls back to the page title, host name, and best-quality label.
-
-Build the Android FFmpeg executable for `arm64-v8a` and `x86_64` with
-`scripts/build-android-ffmpeg.sh` from WSL. The script uses FFmpeg 8.1.2 and the
-pinned `ffmpeg-android-maker` revision, with GPL-only external libraries disabled.
-The corresponding LGPL and builder license notices are packaged with the Android
-app.
 
 ---
 

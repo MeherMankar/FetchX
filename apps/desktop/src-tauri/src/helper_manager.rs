@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{
         Arc,
@@ -22,8 +22,6 @@ use crate::commands::AppState;
 
 const MAX_METADATA_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_YTDLP_BYTES: u64 = 100 * 1024 * 1024;
-const MAX_FFMPEG_ARCHIVE_BYTES: u64 = 400 * 1024 * 1024;
-const MAX_EXTRACTED_EXE_BYTES: u64 = 300 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -31,8 +29,6 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 #[serde(rename_all = "snake_case")]
 pub enum HelperId {
     YtDlp,
-    Ffmpeg,
-    Ffprobe,
 }
 
 fn verify_sha256(actual: &str, expected: &str) -> Result<(), String> {
@@ -44,28 +40,15 @@ fn verify_sha256(actual: &str, expected: &str) -> Result<(), String> {
     }
 }
 
-fn is_safe_archive_entry(name: &str, expected: &str) -> bool {
-    if name != expected && !name.ends_with(&format!("/{expected}")) {
-        return false;
-    }
-    Path::new(name)
-        .components()
-        .all(|component| matches!(component, Component::Normal(_)))
-}
-
 impl HelperId {
     fn executable_name(self) -> &'static str {
         if cfg!(target_os = "windows") {
             match self {
                 Self::YtDlp => "yt-dlp.exe",
-                Self::Ffmpeg => "ffmpeg.exe",
-                Self::Ffprobe => "ffprobe.exe",
             }
         } else {
             match self {
                 Self::YtDlp => "yt-dlp",
-                Self::Ffmpeg => "ffmpeg",
-                Self::Ffprobe => "ffprobe",
             }
         }
     }
@@ -73,15 +56,12 @@ impl HelperId {
     fn display_name(self) -> &'static str {
         match self {
             Self::YtDlp => "yt-dlp",
-            Self::Ffmpeg => "ffmpeg",
-            Self::Ffprobe => "ffprobe",
         }
     }
 
     fn install_group(self) -> u8 {
         match self {
             Self::YtDlp => 0,
-            Self::Ffmpeg | Self::Ffprobe => 1,
         }
     }
 
@@ -128,14 +108,7 @@ struct InstallPackage {
     sha256: String,
     archive_name: &'static str,
     max_bytes: u64,
-    archive_format: ArchiveFormat,
     files: Vec<InstallFile>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ArchiveFormat {
-    DirectExecutable,
-    Zip,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,8 +151,8 @@ impl HelperManager {
         &self,
         configured_paths: &HashMap<HelperId, PathBuf>,
     ) -> Vec<HelperStatus> {
-        let mut statuses = Vec::with_capacity(3);
-        for helper in [HelperId::YtDlp, HelperId::Ffmpeg, HelperId::Ffprobe] {
+        let mut statuses = Vec::with_capacity(1);
+        for helper in [HelperId::YtDlp] {
             statuses.push(self.get_status(helper, configured_paths.get(&helper)).await);
         }
         statuses
@@ -346,7 +319,6 @@ impl HelperManager {
             ensure_not_cancelled(&cancellation)?;
 
             let files = package.files.clone();
-            let archive_format = package.archive_format;
             let archive_path_for_extract = archive_path.clone();
             let staging_for_extract = staging.clone();
             let expected_arch = expected_pe_machine(std::env::consts::ARCH)
@@ -356,7 +328,6 @@ impl HelperManager {
                     &archive_path_for_extract,
                     &staging_for_extract,
                     &files,
-                    archive_format,
                     expected_arch,
                 )
             })
@@ -401,7 +372,6 @@ impl HelperManager {
     ) -> Result<InstallPackage, String> {
         match helper {
             HelperId::YtDlp => self.ytdlp_package(cancellation).await,
-            HelperId::Ffmpeg | HelperId::Ffprobe => self.ffmpeg_package(cancellation).await,
         }
     }
 
@@ -434,45 +404,11 @@ impl HelperManager {
             sha256,
             archive_name: "yt-dlp.exe",
             max_bytes: MAX_YTDLP_BYTES,
-            archive_format: ArchiveFormat::DirectExecutable,
             files: vec![InstallFile {
                 helper: HelperId::YtDlp,
                 archive_entry: "yt-dlp.exe",
                 staged_name: "yt-dlp.exe",
             }],
-        })
-    }
-
-    async fn ffmpeg_package(&self, cancellation: &AtomicBool) -> Result<InstallPackage, String> {
-        let checksum = self
-            .get_allowlisted_bytes(
-                "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256",
-                4096,
-                Some(cancellation),
-            )
-            .await?;
-        let sha256 = parse_checksum_file(&checksum)?;
-        let url = validate_allowlisted_url(
-            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
-        )?;
-        Ok(InstallPackage {
-            url,
-            sha256,
-            archive_name: "ffmpeg.zip",
-            max_bytes: MAX_FFMPEG_ARCHIVE_BYTES,
-            archive_format: ArchiveFormat::Zip,
-            files: vec![
-                InstallFile {
-                    helper: HelperId::Ffmpeg,
-                    archive_entry: "bin/ffmpeg.exe",
-                    staged_name: "ffmpeg.exe",
-                },
-                InstallFile {
-                    helper: HelperId::Ffprobe,
-                    archive_entry: "bin/ffprobe.exe",
-                    staged_name: "ffprobe.exe",
-                },
-            ],
         })
     }
 
@@ -792,7 +728,6 @@ pub async fn install_helper(
     for (installed_helper, path) in installed {
         match installed_helper {
             HelperId::YtDlp => config.yt_dlp.executable_path = Some(path),
-            HelperId::Ffmpeg | HelperId::Ffprobe => {}
         }
     }
     state.config_service.save(&config).await.map_err(|error| {
@@ -816,16 +751,6 @@ pub async fn cancel_helper_install(
     }
 }
 
-pub fn configured_helper_paths(
-    config: &fetchx_core_services::EngineConfig,
-) -> HashMap<HelperId, PathBuf> {
-    let mut configured = HashMap::new();
-    if let Some(path) = config.yt_dlp.executable_path.as_deref() {
-        configured.insert(HelperId::YtDlp, path.to_path_buf());
-    }
-    configured
-}
-
 fn github_digest(asset: &GithubAsset) -> Result<String, String> {
     let digest = asset
         .digest
@@ -834,17 +759,6 @@ fn github_digest(asset: &GithubAsset) -> Result<String, String> {
         .ok_or_else(|| "The official release does not provide a SHA-256 digest.".to_owned())?;
     validate_sha256(digest)?;
     Ok(digest.to_ascii_lowercase())
-}
-
-fn parse_checksum_file(bytes: &[u8]) -> Result<String, String> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| "The official checksum file was not valid UTF-8.".to_owned())?;
-    let checksum = text
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| "The official checksum file was empty.".to_owned())?;
-    validate_sha256(checksum)?;
-    Ok(checksum.to_ascii_lowercase())
 }
 
 fn validate_sha256(value: &str) -> Result<(), String> {
@@ -864,10 +778,6 @@ fn validate_allowlisted_url(value: &str) -> Result<Url, String> {
     let allowed = match host.as_str() {
         "api.github.com" => path == "/repos/yt-dlp/yt-dlp/releases/latest",
         "github.com" => path.starts_with("/yt-dlp/yt-dlp/releases/download/"),
-        "www.gyan.dev" => {
-            path.starts_with("/ffmpeg/builds/ffmpeg-release-essentials.zip")
-                || path.starts_with("/ffmpeg/builds/packages/")
-        }
         _ => false,
     };
     if url.scheme() != "https"
@@ -942,7 +852,6 @@ async fn install_with_native_package_manager(helper: HelperId) -> Result<(), Str
     {
         let package = match helper {
             HelperId::YtDlp => "yt-dlp",
-            HelperId::Ffmpeg | HelperId::Ffprobe => "ffmpeg",
         };
         let output = Command::new("brew")
             .args(["install", package])
@@ -963,7 +872,6 @@ async fn install_with_native_package_manager(helper: HelperId) -> Result<(), Str
     {
         let packages: &[&str] = match helper {
             HelperId::YtDlp => &["yt-dlp"],
-            HelperId::Ffmpeg | HelperId::Ffprobe => &["ffmpeg"],
         };
         let mut command = if Path::new("/usr/bin/pkexec").exists() {
             let (manager, args) = if Path::new("/usr/bin/apt-get").exists() {
@@ -1064,7 +972,6 @@ async fn detect_version(helper: HelperId, executable: &Path) -> Result<String, S
 fn version_arguments(helper: HelperId) -> &'static [&'static str] {
     match helper {
         HelperId::YtDlp => &["--version"],
-        HelperId::Ffmpeg | HelperId::Ffprobe => &["-version"],
     }
 }
 
@@ -1078,8 +985,6 @@ fn parse_version_output(helper: HelperId, stdout: &[u8], stderr: &[u8]) -> Resul
     let normalized = line.to_ascii_lowercase();
     let expected_label = match helper {
         HelperId::YtDlp => "",
-        HelperId::Ffmpeg => "ffmpeg version",
-        HelperId::Ffprobe => "ffprobe version",
     };
     if !expected_label.is_empty() && !normalized.contains(expected_label) {
         return Err("The executable returned an unexpected version response.".to_owned());
@@ -1106,98 +1011,26 @@ fn extract_executables(
     archive_path: &Path,
     staging: &Path,
     files: &[InstallFile],
-    archive_format: ArchiveFormat,
     expected_machine: u16,
 ) -> Result<(), String> {
     reject_reparse_point(staging)?;
-    if archive_format == ArchiveFormat::DirectExecutable {
-        for install_file in files {
-            if install_file.archive_entry != install_file.staged_name {
-                return Err("Invalid direct executable catalog entry.".to_owned());
-            }
-            let output_path = staging.join(install_file.staged_name);
-            let mut source = File::open(archive_path)
-                .map_err(|error| format!("Could not open verified executable: {error}"))?;
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&output_path)
-                .map_err(|error| format!("Could not stage helper executable: {error}"))?;
-            std::io::copy(&mut source, &mut output)
-                .map_err(|error| format!("Could not copy verified executable: {error}"))?;
-            output
-                .flush()
-                .map_err(|error| format!("Could not flush staged executable: {error}"))?;
-            validate_staged_executable(&output_path, expected_machine)?;
-        }
-        return Ok(());
-    }
-    let archive_file = File::open(archive_path)
-        .map_err(|error| format!("Could not open verified archive: {error}"))?;
-    let mut archive = zip::ZipArchive::new(archive_file)
-        .map_err(|error| format!("The verified helper archive is invalid: {error}"))?;
     for install_file in files {
-        let mut matched = None;
-        for index in 0..archive.len() {
-            let entry = archive
-                .by_index(index)
-                .map_err(|error| format!("Could not inspect helper archive entry: {error}"))?;
-            if is_safe_archive_entry(entry.name(), install_file.archive_entry) {
-                if entry.is_dir()
-                    || entry.size() == 0
-                    || entry.size() > MAX_EXTRACTED_EXE_BYTES
-                    || entry
-                        .unix_mode()
-                        .is_some_and(|mode| mode & 0o170000 == 0o120000)
-                {
-                    return Err(
-                        "The helper archive contains an unsafe executable entry.".to_owned()
-                    );
-                }
-                matched = Some(index);
-                break;
-            }
+        if install_file.archive_entry != install_file.staged_name {
+            return Err("Invalid direct executable catalog entry.".to_owned());
         }
-        let index = matched.ok_or_else(|| {
-            format!(
-                "The official archive does not contain {}.",
-                install_file.helper.display_name()
-            )
-        })?;
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| format!("Could not read helper archive entry: {error}"))?;
         let output_path = staging.join(install_file.staged_name);
-        if output_path.parent() != Some(staging) {
-            return Err("The helper archive attempted to escape the staging directory.".to_owned());
-        }
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&output_path)
             .map_err(|error| format!("Could not stage helper executable: {error}"))?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        let mut copied = 0_u64;
-        loop {
-            let count = entry
-                .read(&mut buffer)
-                .map_err(|error| format!("Could not extract helper executable: {error}"))?;
-            if count == 0 {
-                break;
-            }
-            copied += count as u64;
-            if copied > MAX_EXTRACTED_EXE_BYTES {
-                return Err("The extracted helper exceeded its maximum size.".to_owned());
-            }
-            hasher.update(&buffer[..count]);
-            output
-                .write_all(&buffer[..count])
-                .map_err(|error| format!("Could not write staged helper executable: {error}"))?;
-        }
+        let mut source = File::open(archive_path)
+            .map_err(|error| format!("Could not open verified executable: {error}"))?;
+        std::io::copy(&mut source, &mut output)
+            .map_err(|error| format!("Could not copy verified executable: {error}"))?;
         output
             .flush()
-            .map_err(|error| format!("Could not flush staged helper executable: {error}"))?;
+            .map_err(|error| format!("Could not flush staged executable: {error}"))?;
         drop(output);
         validate_staged_executable(&output_path, expected_machine)?;
     }
@@ -1301,7 +1134,7 @@ mod tests {
     use std::{
         fs,
         io::Write,
-        path::{Component, Path},
+        path::Path,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -1312,9 +1145,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        HelperId, InstallFile, ensure_not_cancelled, expected_pe_machine, hex_digest,
-        parse_checksum_file, replace_transactionally, validate_allowlisted_url,
-        validate_pe_architecture, validate_sha256, verify_sha256,
+        HelperId, ensure_not_cancelled, expected_pe_machine, hex_digest, replace_transactionally,
+        validate_allowlisted_url, validate_pe_architecture, validate_sha256, verify_sha256,
     };
 
     fn sample_pe(machine: u16) -> Vec<u8> {
@@ -1327,10 +1159,8 @@ mod tests {
     }
 
     #[test]
-    fn helper_catalog_contains_only_native_helpers_and_media_tools() {
+    fn helper_catalog_contains_only_yt_dlp() {
         assert_eq!(HelperId::YtDlp.display_name(), "yt-dlp");
-        assert_eq!(HelperId::Ffmpeg.display_name(), "ffmpeg");
-        assert_eq!(HelperId::Ffprobe.display_name(), "ffprobe");
     }
 
     #[test]
@@ -1349,12 +1179,6 @@ mod tests {
                 "https://github.com/other/repo/releases/download/tag/file.exe"
             )
             .is_err()
-        );
-        assert!(
-            validate_allowlisted_url(
-                "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-            )
-            .is_ok()
         );
         assert!(serde_json::from_str::<HelperId>(r#""../../evil.exe""#).is_err());
     }
@@ -1386,13 +1210,12 @@ mod tests {
                 .expect("yt-dlp version"),
             "2026.10.21"
         );
-        assert!(super::parse_version_output(HelperId::Ffmpeg, b"garbage 1.0", b"").is_err());
-        assert!(super::parse_version_output(HelperId::Ffprobe, b"", b"").is_err());
+        assert!(super::parse_version_output(HelperId::YtDlp, b"", b"").is_err());
     }
 
     #[test]
     fn selects_only_supported_windows_architecture() {
-        let helper = HelperId::Ffmpeg;
+        let helper = HelperId::YtDlp;
         assert!(helper.supported_install_architecture("x86_64"));
         assert!(!helper.supported_install_architecture("aarch64"));
         assert!(!helper.supported_install_architecture("x86"));
@@ -1418,17 +1241,10 @@ mod tests {
     }
 
     #[test]
-    fn validates_checksum_format_and_parses_expected_hash() {
+    fn validates_checksum_format() {
         let expected = "a".repeat(64);
         assert!(validate_sha256(&expected).is_ok());
         assert!(validate_sha256("not-a-hash").is_err());
-        assert_eq!(
-            parse_checksum_file(format!("{expected}  ffmpeg.zip\n").as_bytes())
-                .expect("checksum parses"),
-            expected
-        );
-        assert!(parse_checksum_file(b"").is_err());
-        assert!(parse_checksum_file(b"xyz ffmpeg.zip").is_err());
         assert!(verify_sha256(&expected, &expected).is_ok());
         assert!(verify_sha256(&expected, &"b".repeat(64)).is_err());
     }
@@ -1565,32 +1381,6 @@ mod tests {
     }
 
     #[test]
-    fn rollback_restores_files_if_a_later_pair_install_fails() {
-        let directory = tempdir().expect("temp directory");
-        let managed = directory.path().join("bin");
-        fs::create_dir_all(&managed).expect("managed directory");
-        let staging = managed.join(".stage");
-        fs::create_dir(&staging).expect("stage directory");
-        let ffmpeg = managed.join("ffmpeg.exe");
-        let ffprobe = managed.join("ffprobe.exe");
-        fs::write(&ffmpeg, b"old ffmpeg").expect("old ffmpeg");
-        fs::write(&ffprobe, b"old ffprobe").expect("old ffprobe");
-        let staged_ffmpeg = staging.join("ffmpeg.exe");
-        fs::write(&staged_ffmpeg, b"new ffmpeg").expect("new ffmpeg");
-        let missing_ffprobe = staging.join("missing-ffprobe.exe");
-        let error = replace_transactionally(
-            &staging,
-            &[
-                (HelperId::Ffmpeg, staged_ffmpeg, ffmpeg.clone()),
-                (HelperId::Ffprobe, missing_ffprobe, ffprobe.clone()),
-            ],
-        )
-        .expect_err("second install should fail");
-        assert!(error.contains("atomically install"));
-        assert_eq!(fs::read(ffmpeg).expect("restored ffmpeg"), b"old ffmpeg");
-        assert_eq!(fs::read(ffprobe).expect("restored ffprobe"), b"old ffprobe");
-    }
-
     #[test]
     fn installed_helper_is_detected_after_atomic_replacement() {
         let directory = tempdir().expect("temp directory");
@@ -1614,47 +1404,10 @@ mod tests {
     }
 
     #[test]
-    fn executable_validation_fails_for_a_missing_file_and_wrong_version_label() {
+    fn executable_validation_fails_for_a_missing_file_and_empty_version() {
         let directory = tempdir().expect("temp directory");
         assert!(validate_pe_architecture(&directory.path().join("missing.exe")).is_err());
-        assert!(
-            super::parse_version_output(HelperId::Ffprobe, b"ffmpeg version 9.0\n", b"").is_err()
-        );
-        assert_eq!(super::version_arguments(HelperId::Ffmpeg), &["-version"]);
+        assert!(super::parse_version_output(HelperId::YtDlp, b"", b"").is_err());
         assert_eq!(super::version_arguments(HelperId::YtDlp), &["--version"]);
-    }
-
-    #[test]
-    fn archive_entry_names_are_catalog_constants_and_not_ui_input() {
-        let files = [
-            InstallFile {
-                helper: HelperId::Ffmpeg,
-                archive_entry: "bin/ffmpeg.exe",
-                staged_name: "ffmpeg.exe",
-            },
-            InstallFile {
-                helper: HelperId::Ffprobe,
-                archive_entry: "bin/ffprobe.exe",
-                staged_name: "ffprobe.exe",
-            },
-        ];
-        assert!(
-            files
-                .iter()
-                .all(|file| !Path::new(file.archive_entry).is_absolute())
-        );
-        assert!(files.iter().all(|file| {
-            Path::new(file.archive_entry)
-                .components()
-                .all(|component| matches!(component, Component::Normal(_)))
-        }));
-        assert!(!super::is_safe_archive_entry(
-            "../../bin/ffmpeg.exe",
-            "bin/ffmpeg.exe"
-        ));
-        assert!(super::is_safe_archive_entry(
-            "ffmpeg-9.0.2/bin/ffmpeg.exe",
-            "bin/ffmpeg.exe"
-        ));
     }
 }

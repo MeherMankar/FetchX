@@ -30,7 +30,7 @@ work. Existing downloads are not terminated by pressure signals. Automatic
 Windows resource monitoring and Android lifecycle/memory-signal adapters are
 not implemented; platform adapters remain future work.
 
-FFmpeg is a local media processor, not a queued network downloader. It does not
-consume resource-policy bandwidth settings. Process concurrency is controlled
-by the FFmpeg processor's own `FfmpegConfig` semaphore; the desktop resource
-profile does not currently configure that separate processor.
+Native media processing is local work, not a queued network downloader. It does
+not consume resource-policy bandwidth settings. Processing concurrency is bounded
+by the processor's own `FfmpegConfig` semaphore; the desktop resource profile
+does not currently configure that separate processor.

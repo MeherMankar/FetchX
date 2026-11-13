@@ -93,7 +93,6 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += "**/libfetchx_ffmpeg.so"
             keepDebugSymbols += "**/libfetchx_ffmpeg_native.so"
             excludes += listOf(
                 "**/lib/armeabi-v7a/**",

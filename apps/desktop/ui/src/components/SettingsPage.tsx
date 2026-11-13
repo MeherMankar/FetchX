@@ -438,8 +438,6 @@ function HelperInstallPanel({
 
   const items: Array<{ id: ManagedHelperId; name: string }> = [
     { id: "yt_dlp", name: "yt-dlp" },
-    { id: "ffmpeg", name: "FFmpeg" },
-    { id: "ffprobe", name: "FFprobe" },
   ];
 
   return (
@@ -461,10 +459,7 @@ function HelperInstallPanel({
             const current = progress[id];
             const busy = current !== undefined
               && ["downloading", "verifying", "installing"].includes(current.phase);
-            const packageBusy = id === "ffmpeg" || id === "ffprobe"
-              ? progress.ffmpeg !== undefined && ["downloading", "verifying", "installing"].includes(progress.ffmpeg.phase)
-                || progress.ffprobe !== undefined && ["downloading", "verifying", "installing"].includes(progress.ffprobe.phase)
-              : busy;
+            const packageBusy = busy;
             return (
               <div className="helper-manager-item" key={id}>
                 <div className="helper-manager-details">
@@ -513,9 +508,7 @@ function HelperInstallPanel({
         </div>
       )}
       <p className="settings-hint">
-        yt-dlp uses its upstream release artifacts.
-        FFmpeg and FFprobe use Gyan.dev’s Windows essentials build and published checksum. Windows x64 is supported;
-        other architectures are rejected.
+        yt-dlp uses its upstream release artifacts. Media processing uses FetchX's native Rust implementation.
       </p>
     </section>
   );
@@ -724,7 +717,7 @@ function ResourcePolicySection({
       </div>
       <p className="settings-hint">
         HTTP and HLS use shared Rust bandwidth limits. yt-dlp uses native per-download limits where supported.
-        FFmpeg processing has its own local process ceiling and is not network bandwidth limited.
+        Native media processing has its own local concurrency limit and is not network bandwidth limited.
         The queue accepts explicit pressure signals: elevated pressure reduces new allocations, high pressure limits new starts, and critical pressure blocks new work without stopping active downloads. Automatic OS-pressure detection is not wired.
       </p>
       <div className="settings-actions">

@@ -44,7 +44,7 @@ const MAX_DISCOVERED_FORMATS: usize = 100;
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
-const AUTO_FORMAT_SELECTOR: &str = "bestvideo*+bestaudio/best";
+const AUTO_FORMAT_SELECTOR: &str = "best";
 const MAX_PROGRESS_EVENTS: usize = 32;
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -175,6 +175,10 @@ pub enum YtDlpError {
     OutputUnavailable,
     #[error("yt-dlp left separate output files instead of a merged media file")]
     UnmergedOutput,
+    #[error(
+        "this platform does not have a supported native media post-processor for the requested selection"
+    )]
+    NativePostprocessingUnsupported,
     #[error("yt-dlp output destination already exists")]
     DestinationExists,
     #[error("yt-dlp output workspace could not be used safely")]
@@ -215,6 +219,7 @@ impl YtDlpError {
             Self::ProgressRegression => "progress_regression",
             Self::OutputUnavailable => "output_unavailable",
             Self::UnmergedOutput => "unmerged_output",
+            Self::NativePostprocessingUnsupported => "native_postprocessing_unsupported",
             Self::DestinationExists => "destination_exists",
             Self::WorkspaceUnavailable => "workspace_unavailable",
             Self::ProcessCleanup => "process_cleanup",
@@ -417,14 +422,20 @@ where
         }
         let audio_format = item.source().yt_dlp_audio_format();
         validate_audio_destination(item.destination(), audio_format)?;
-        let ffmpeg_executable = ffmpeg_sibling_executable(&self.executable);
+        #[cfg(not(target_os = "android"))]
+        if audio_format.is_some()
+            || format_selector(item.source().yt_dlp_format())
+                .split('/')
+                .any(|alternative| alternative.contains('+'))
+        {
+            return Err(YtDlpError::NativePostprocessingUnsupported.into());
+        }
         let arguments = build_arguments(
             &workspace,
             url.as_str(),
             item.source().yt_dlp_format(),
             audio_format,
             control.bandwidth.external_download_rate_bytes_per_second,
-            ffmpeg_executable.as_deref(),
         );
         let allows_component_reset = audio_format.is_some()
             || format_selector(item.source().yt_dlp_format())
@@ -1199,7 +1210,6 @@ fn build_arguments(
     selected_format: Option<&str>,
     audio_format: Option<YtDlpAudioFormat>,
     max_download_rate_bytes_per_second: Option<u64>,
-    ffmpeg_executable: Option<&Path>,
 ) -> Vec<OsString> {
     let selected_format = if audio_format.is_some() {
         "bestaudio/best"
@@ -1230,12 +1240,6 @@ fn build_arguments(
     let mut home_path = OsString::from("home:");
     home_path.push(workspace.as_os_str());
     arguments.push(home_path);
-    if let Some(ffmpeg_executable) = ffmpeg_executable {
-        arguments.extend([
-            "--ffmpeg-location".into(),
-            ffmpeg_executable.as_os_str().to_owned(),
-        ]);
-    }
     if let Some(audio_format) = audio_format {
         arguments.extend([
             "--extract-audio".into(),
@@ -1644,19 +1648,6 @@ async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
         output = Some(path);
     }
     output.ok_or(YtDlpError::OutputUnavailable)
-}
-
-fn ffmpeg_sibling_executable(executable: &Path) -> Option<PathBuf> {
-    let filename = if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
-    let candidate = executable.parent()?.join(filename);
-    std::fs::metadata(&candidate)
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .map(|_| candidate)
 }
 
 async fn files_equal(left: &Path, right: &Path) -> Result<bool, DownloadEngineError> {
@@ -2625,20 +2616,16 @@ mod tests {
             Some("137+bestaudio/137"),
             None,
             Some(4096),
-            Some(Path::new("tools/ffmpeg.exe")),
         );
         let format_index = args
             .iter()
             .position(|argument| argument == OsStr::new("--format"))
             .expect("format option is present");
         assert_eq!(args[format_index + 1], OsStr::new("137+bestaudio/137"));
-        let ffmpeg_index = args
-            .iter()
-            .position(|argument| argument == OsStr::new("--ffmpeg-location"))
-            .expect("ffmpeg location is present");
-        assert_eq!(
-            args[ffmpeg_index + 1],
-            Path::new("tools/ffmpeg.exe").as_os_str()
+        assert!(
+            !args
+                .iter()
+                .any(|argument| { argument == OsStr::new("--ffmpeg-location") })
         );
         let limit_index = args
             .iter()
@@ -2655,16 +2642,12 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let format_index = args
             .iter()
             .position(|argument| argument == OsStr::new("--format"))
             .expect("format option is present");
-        assert_eq!(
-            args[format_index + 1],
-            OsStr::new("bestvideo*+bestaudio/best")
-        );
+        assert_eq!(args[format_index + 1], OsStr::new("best"));
     }
 
     #[test]
@@ -2674,7 +2657,6 @@ mod tests {
             "https://example.test/video",
             Some("137"),
             Some(YtDlpAudioFormat::Mp3),
-            None,
             None,
         );
         let format_index = args
@@ -2705,26 +2687,6 @@ mod tests {
                 .is_err()
         );
         assert!(validate_audio_destination(Path::new("track.mp4"), None).is_ok());
-    }
-
-    #[test]
-    fn finds_ffmpeg_beside_the_configured_ytdlp_executable() -> Result<(), Box<dyn Error>> {
-        let directory = tempfile::tempdir()?;
-        let executable = directory.path().join(if cfg!(windows) {
-            "yt-dlp.exe"
-        } else {
-            "yt-dlp"
-        });
-        let ffmpeg = directory.path().join(if cfg!(windows) {
-            "ffmpeg.exe"
-        } else {
-            "ffmpeg"
-        });
-
-        assert_eq!(ffmpeg_sibling_executable(&executable), None);
-        std::fs::write(&ffmpeg, b"test executable")?;
-        assert_eq!(ffmpeg_sibling_executable(&executable), Some(ffmpeg));
-        Ok(())
     }
 
     #[tokio::test]

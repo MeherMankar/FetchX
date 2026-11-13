@@ -26,10 +26,9 @@ pub use dispatcher::{EngineDispatcher, is_dash_url};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use ffmpeg::{
-    FfmpegConfig, FfmpegError, FfmpegFuture, FfmpegProcessExit, FfmpegProcessRunner,
-    FfmpegProcessSpec, FfmpegProcessor, FrameRate, MediaContainer, MediaExecutable, MediaInfo,
-    MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaProgress, MediaStream,
-    MediaStreamKind, TranscodePreset,
+    FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo,
+    MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaStream, MediaStreamKind,
+    TranscodePreset,
 };
 pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};

@@ -199,7 +199,12 @@ impl DownloadEngineError {
             ),
             Self::YtDlp(YtDlpError::UnmergedOutput) => (
                 DownloadErrorCode::Engine,
-                "The video and audio streams were not merged. Ensure FFmpeg is installed and available to FetchX."
+                "The selected video and audio streams could not be merged by the native media processor."
+                    .to_owned(),
+            ),
+            Self::YtDlp(YtDlpError::NativePostprocessingUnsupported) => (
+                DownloadErrorCode::Engine,
+                "This media selection requires post-processing that is not supported on this platform."
                     .to_owned(),
             ),
             Self::YtDlp(_) => (

@@ -4486,11 +4486,10 @@ fn credential_fields_are_not_logged_in_ftp_or_sftp() {
     }
 }
 
-// ── Binary-detection tests (yt-dlp, ffmpeg) ──────────────────────────────────
+// ── yt-dlp binary-detection test ────────────────────────────────────────────
 //
-// These tests attempt to detect the external binary on PATH. If absent they
-// return early (skip). They do NOT validate behaviour — only that detection
-// succeeds or gracefully reports absence.
+// This test attempts to detect the external yt-dlp binary on PATH. If absent it
+// returns early (skip). It does not validate behavior beyond version output.
 // NOT VALIDATED — results depend on the CI/developer environment.
 
 /// Detect yt-dlp binary; skip gracefully if absent.
@@ -4514,29 +4513,5 @@ async fn ytdlp_binary_detection_skips_when_absent() {
     assert!(
         !version_output.trim().is_empty(),
         "yt-dlp --version returned empty output"
-    );
-}
-
-/// Detect ffmpeg binary; skip gracefully if absent.
-/// NOT VALIDATED — binary presence depends on environment.
-#[tokio::test]
-async fn ffmpeg_binary_detection_skips_when_absent() {
-    use std::process::Stdio;
-    let Ok(output) = tokio::process::Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-    else {
-        return;
-    };
-    // ffmpeg -version exits 0 or 1 depending on build; presence is enough.
-    let version_output = String::from_utf8_lossy(&output.stdout);
-    let err_output = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{version_output}{err_output}");
-    assert!(
-        combined.to_ascii_lowercase().contains("ffmpeg"),
-        "ffmpeg -version did not mention 'ffmpeg': {combined}"
     );
 }

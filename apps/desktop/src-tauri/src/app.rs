@@ -276,11 +276,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let state = app_handle.state::<AppState>();
                     if let Ok(mut config) = state.config_service.load().await {
                         let manager = app_handle.state::<HelperManager>();
-                        let statuses = manager
-                            .get_statuses(
-                                &crate::helper_manager::configured_helper_paths(&config),
-                            )
-                            .await;
+                        let configured_paths = config
+                            .yt_dlp
+                            .executable_path
+                            .clone()
+                            .map(|path| {
+                                std::collections::HashMap::from([(
+                                    crate::helper_manager::HelperId::YtDlp,
+                                    path,
+                                )])
+                            })
+                            .unwrap_or_default();
+                        let statuses = manager.get_statuses(&configured_paths).await;
                         for status in statuses {
                             let Some(path) = status.executable_path else {
                                 continue;
@@ -293,8 +300,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                         needs_save = true;
                                     }
                                 }
-                                crate::helper_manager::HelperId::Ffmpeg
-                                | crate::helper_manager::HelperId::Ffprobe => {}
                             }
                         }
                         if needs_save {

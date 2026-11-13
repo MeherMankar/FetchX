@@ -18,6 +18,8 @@ class FetchXStorageManagerTest {
         val files = Files.createDirectories(root.resolve("files"))
         val downloads = Files.createDirectories(root.resolve("external"))
         val staging = Files.createDirectories(files.resolve("downloads/public-staging"))
+        val legacyMediaWorkspace =
+            Files.createDirectories(downloads.resolve(".fetchx-ffmpeg-legacy"))
         val cache = Files.createDirectories(root.resolve("cache"))
         val profile = Files.createDirectories(files.resolve("mozilla/profile"))
         val workspace = Files.createDirectories(downloads.resolve(".fetchx-ytdlp-active"))
@@ -28,7 +30,8 @@ class FetchXStorageManagerTest {
         writeBytes(downloads.resolve("active.part"), 5)
         writeBytes(staging.resolve("staged-download.part"), 4)
         writeBytes(workspace.resolve("fragment.part"), 7)
-        writeBytes(downloads.resolve(".fetchx-ffmpeg-active/output.tmp"), 11)
+        writeBytes(downloads.resolve(".fetchx-media-active/output.tmp"), 11)
+        writeBytes(legacyMediaWorkspace.resolve("output.tmp"), 3)
         writeBytes(runtime.resolve("progress"), 29)
         writeBytes(profile.resolve("prefs.js"), 11)
         writeBytes(profile.resolve("cache2/entries/cache"), 19)
@@ -52,10 +55,10 @@ class FetchXStorageManagerTest {
         assertEquals(22, usage.downloadsBytes)
         assertEquals(11, usage.browserDataBytes)
         assertEquals(42, usage.browserCacheBytes)
-        assertEquals(47, usage.temporaryBytes)
+        assertEquals(50, usage.temporaryBytes)
         assertEquals(9, usage.databaseBytes)
         assertEquals(17, usage.otherAppDataBytes)
-        assertEquals(148, usage.totalBytes)
+        assertEquals(151, usage.totalBytes)
         assertTrue(usage.customSafLocationConfigured)
     }
 

@@ -16,48 +16,45 @@ pause/resume/cancel/removal controls, startup recovery, and a global connection 
 Tauri 2 desktop foundation is in place with a minimal React + TypeScript shell. It
 currently exposes direct HTTP/HTTPS downloads, queue controls, and explicit refresh;
 live progress notifications and engine selection are not yet wired to the desktop.
-The desktop app includes an optional per-user helper manager for yt-dlp, FFmpeg,
-and FFprobe. Installs are initiated explicitly in Settings, use allowlisted
+The desktop app includes an optional per-user helper manager for yt-dlp. Installs
+are initiated explicitly in Settings, use allowlisted
 HTTPS distributions, verify published SHA-256 checksums, validate Windows x64 PE
 architecture and executable version output, and install into the FetchX application
-data `bin` directory without changing the system PATH. The supported sources are the
-yt-dlp GitHub release digest, and Gyan.dev's Windows FFmpeg essentials build and
-checksum. The helper manager is Windows desktop only; helper installation is optional
-and does not affect Android or CLI startup. Installed engine paths are persisted and
-take effect after restarting FetchX.
+data `bin` directory without changing the system PATH. The supported source is the
+yt-dlp GitHub release digest. The helper manager is Windows desktop only; helper
+installation is optional and does not affect Android or CLI startup. Installed
+engine paths are persisted and take effect after restarting FetchX.
 
-The downloader crate includes an optional FFmpeg/ffprobe media post-processing
-service for metadata inspection, remuxing, and a small set of transcoding presets. It
-also supports external executables configured by path or discovered on `PATH`; it
-never installs binaries itself. The processor bounds concurrent child processes, supports
-cancellation but not active pause/resume, streams selected input files over stdin with
-only the `pipe` input protocol enabled, caps output at 100 GiB by default (configurable
-up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal
-tests independent of FFmpeg. The optional yt-dlp engine is configured as an external
-process adapter and uses fake runners in tests; no installed yt-dlp is required for CI.
+The downloader crate includes a native media post-processing service for metadata
+inspection, remuxing, and supported audio conversions. It does not discover, install,
+or launch external FFmpeg/ffprobe executables. Native processing is bounded, supports
+cancellation but not active pause/resume, caps output at 100 GiB by default (configurable
+up to 1 TiB), and does not own download lifecycle or scheduling. The optional yt-dlp
+engine is configured as an external process adapter and uses fake runners in tests;
+no installed yt-dlp is required for CI.
 An initial native Rust MP4 path probes MP4 metadata and stream-copies supported H.264/AAC,
 HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video and one
 audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
 Compatible H.264/AAC merges use native stream copy. OxideAV also attempts native
 stream-copy merges for other registered codec/container combinations when both inputs
-report matching durations and the selected MP4 or Matroska muxer accepts their streams;
-unsupported or mismatched inputs retain the FFmpeg fallback.
-Integer PCM WAV with 1–8 channels retains its native-sample FLAC path. Symphonia also supports
-FLAC encoding from decoded audio with 1–8 channels at 8–192 kHz, in addition to MP3 encoding.
-Symphonia demuxes common
+report matching durations and the selected MP4 or Matroska muxer accepts their streams.
+Integer PCM WAV with 1–8 channels retains its native-sample FLAC path. Symphonia also
+supports FLAC encoding from decoded audio with 1–8 channels at 8–192 kHz, in addition
+to MP3 encoding. Symphonia demuxes common
 audio sources (WAV, AIFF, CAF, MP3, FLAC, AAC/ALAC in MP4/M4A, Vorbis in Ogg, and supported
 audio tracks in Matroska/WebM); decoded audio with 1–8 channels and sample rates from
 8–192 kHz is downmixed/resampled as needed and encoded to 192 kb/s MP3. Symphonia also
-probes supported audio-only WAV, AIFF, CAF, FLAC, M4A,
-MP1/MP2/MP3, and OGA files natively, without invoking ffprobe. SRT subtitles can be
-converted to WebVTT. OxideAV's pure-Rust registry now supplies native container and stream
-probes and attempts stream-copy remuxes into registered MOV/MP4, Matroska, WebM, Ogg, AVI,
-MPEG-TS, WAV, FLAC, and subtitle containers when stream codecs are compatible.
-Unsupported probes, remuxes, codecs, merges, and transcoding still use the external FFmpeg
-fallback. The desktop media manager can run supported native operations without installed
-FFmpeg or ffprobe; an unavailable helper is reported only when a requested
-operation or probe needs that external fallback. Native output remains size-bounded, cancellable,
-and published without overwriting an existing file.
+probes supported audio-only WAV, AIFF, CAF, FLAC, M4A, MP1/MP2/MP3, and OGA files
+natively. SRT subtitles can be converted to WebVTT. OxideAV's pure-Rust registry now
+supplies native container and stream probes and attempts stream-copy remuxes into
+registered MOV/MP4, Matroska, WebM, Ogg, AVI, MPEG-TS, WAV, FLAC, and subtitle
+containers when stream codecs are compatible.
+Unsupported probes, remuxes, codecs, merges, and transcoding return an explicit native
+unsupported-operation error; broad video transcoding and full FFmpeg feature parity are
+not implemented. Android's yt-dlp adapter supplies the FetchX native compatibility shim
+for supported post-processing only, with no external FFmpeg executable fallback.
+Native output remains size-bounded, cancellable, and published without overwriting an
+existing file.
 This original FetchX implementation takes FFmpeg's stream-copy behavior as a functional
 reference and does not copy FFmpeg source code. MP4 container handling uses the MIT-licensed
 [`mp4` crate](https://crates.io/crates/mp4) and Apache-2.0-licensed
@@ -86,10 +83,8 @@ Android's embedded yt-dlp runtime also supports selectable media formats. Adapti
 video/audio selections first use a FetchX native FFmpeg-compatible shim for supported
 single-input registered-container stream-copy remuxes, H.264/AAC MP4 merges, compatible
 audio-in-MP4 to M4A extraction, and supported audio-to-MP3 conversions. Other codecs,
-containers, and audio transcoding still fall back to the bundled, statically linked
-FFmpeg 8.1.2 executable (LGPL configuration, without GPL-only external libraries), built
-for the app's supported ABIs with
-`scripts/build-android-ffmpeg.sh`.
+containers, and audio transcoding fail as unsupported; no external FFmpeg executable
+is bundled or launched.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
@@ -167,7 +162,7 @@ host does not initialize are reported as unavailable rather than inferred to be 
 - `crates/core` — application logic and persisted download state transitions
 - `crates/storage` — SQLx/SQLite persistence for download records
 - `crates/downloader` — direct HTTP/HTTPS engine with resume/adaptive segmentation,
-  yt-dlp engine adapter, FFmpeg/ffprobe media processing, and engine dispatcher
+  yt-dlp engine adapter, native media processing, and engine dispatcher
 - `crates/queue` — persistent queue scheduling, lifecycle control, and global resource allocation
 - `crates/scheduler` — persistent one-shot start times and event-driven eligibility handoff
 - `apps/desktop/src-tauri` — Tauri commands, shared application services, and lifecycle

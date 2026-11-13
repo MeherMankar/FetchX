@@ -76,7 +76,6 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [busy, setBusy] = useState(false);
   const [formats, setFormats] = useState<YtDlpFormat[] | null>(null);
   const [selectedFormatId, setSelectedFormatId] = useState("");
-  const [audioFormat, setAudioFormat] = useState<"" | "mp3" | "m4a">("");
   const [torrentInspection, setTorrentInspection] = useState<Awaited<ReturnType<typeof inspectTorrentFile>> | null>(null);
   const [selectedTorrentFiles, setSelectedTorrentFiles] = useState<number[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(false);
@@ -151,11 +150,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
           packageName: packageNameEdited ? packageName.trim() || undefined : undefined,
           engine: engineKind === "yt_dlp" ? "yt_dlp" : "direct_http",
           priority,
-          formatId: audioFormat ? undefined : selectedFormatId || undefined,
-          extension:
-            audioFormat ||
-            formats?.find((format) => format.format_id === selectedFormatId)?.extension,
-          audioFormat: audioFormat || undefined,
+          formatId: selectedFormatId || undefined,
+          extension: formats?.find((format) => format.format_id === selectedFormatId)?.extension,
         });
         const failures = results
           .filter((result) => result.error)
@@ -179,7 +175,6 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
         if (failures.length > 0) {
           setUrl(failedUrls.join("\n"));
           setSelectedFormatId("");
-          setAudioFormat("");
           const queuedCount = results.filter((result) => result.download_id).length;
           setError(
             `${queuedCount} of ${results.length} downloads were queued. ` +
@@ -203,9 +198,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
           : engineKind === "yt_dlp" && !isTorrent
           ? await addMediaDownload(
               targetUrl,
-              audioFormat ? undefined : selectedFormatId || undefined,
-              audioFormat || formats?.find((format) => format.format_id === selectedFormatId)?.extension,
-              audioFormat || undefined,
+              selectedFormatId || undefined,
+              formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+              undefined,
             )
           : await addDownload({
               url: targetUrl.trim(),
@@ -444,7 +439,6 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   }
                   setFormats(null);
                   setSelectedFormatId("");
-                  setAudioFormat("");
                 }}
                 disabled={busy || formatsLoading}
                 aria-describedby="add-engine-hint"
@@ -483,29 +477,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
           {engineKind === "yt_dlp" && (
             <div className="field">
-              <label htmlFor="add-audio-format" className="field-label">
-                Media output
-              </label>
-              <select
-                id="add-audio-format"
-                className="field-select"
-                value={audioFormat || "video"}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setAudioFormat(value === "mp3" || value === "m4a" ? value : "");
-                }}
-                disabled={busy}
-              >
-                <option value="video">Video (select quality)</option>
-                <option value="mp3">Extract audio as MP3</option>
-                <option value="m4a">Extract audio as M4A</option>
-              </select>
-              {audioFormat ? (
-                <p className="field-hint">
-                  FetchX selects the best available audio stream and converts it to {audioFormat.toUpperCase()}.
-                  FFmpeg must be available to yt-dlp.
-                </p>
-              ) : formats === null ? (
+              {formats === null ? (
                 <button
                   type="button"
                   className="button button-secondary"
@@ -535,15 +507,13 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 </select>
                 </>
               )}
-              {!audioFormat && (
-                <p className="field-hint">
-                  {formats === null
-                    ? "Discover formats before selecting a specific quality."
-                    : formats.length === 0
-                      ? "No selectable video formats were found; automatic selection remains available."
-                      : "Choose a discovered format, or keep automatic best quality."}
-                </p>
-              )}
+              <p className="field-hint">
+                {formats === null
+                  ? "Discover formats before selecting a specific quality."
+                  : formats.length === 0
+                    ? "No selectable video formats were found; automatic selection remains available."
+                    : "Choose a discovered format, or keep automatic best quality."}
+              </p>
             </div>
           )}
 

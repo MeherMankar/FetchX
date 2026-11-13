@@ -292,7 +292,7 @@ export interface EngineStatus {
   native_torrent: EngineInstanceStatus;
 }
 
-export type ManagedHelperId = "yt_dlp" | "ffmpeg" | "ffprobe";
+export type ManagedHelperId = "yt_dlp";
 
 export interface HelperStatus {
   helper: ManagedHelperId;
