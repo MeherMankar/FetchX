@@ -35,10 +35,10 @@ only the `pipe` input protocol enabled, caps output at 100 GiB by default (confi
 up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal
 tests independent of FFmpeg. The optional yt-dlp engine is configured as an external
 process adapter and uses fake runners in tests; no installed yt-dlp is required for CI.
-An initial native Rust MP4 path probes MP4 metadata and stream-copies H.264/AAC tracks
-and video-only HEVC or VP9 files. Compatible H.264/AAC merges also use native stream
-copy; duration mismatches fall back to FFmpeg to preserve its shortest-stream behavior.
-Other codec combinations continue through FFmpeg.
+An initial native Rust MP4 path probes MP4 metadata and stream-copies H.264/AAC tracks,
+video-only HEVC, VP8, VP9, or AV1 files, and audio-only Opus or FLAC files. Compatible
+H.264/AAC merges also use native stream copy; duration mismatches fall back to FFmpeg
+to preserve its shortest-stream behavior. Other codec combinations continue through FFmpeg.
 Unsupported codecs, subtitle tracks, and unsupported track layouts fall back to FFmpeg;
 other containers, transcoding, and Android yt-dlp merging still use FFmpeg. Native output
 remains size-bounded, cancellable, and published without overwriting an existing file.

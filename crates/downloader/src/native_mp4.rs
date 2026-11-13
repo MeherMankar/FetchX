@@ -150,15 +150,15 @@ impl NativeMp4Processor {
         let input = canonical_input(input)?;
         let size_bytes = fs::metadata(&input)?.len();
         let reader = open_reader(&input)?;
-        let needs_extended_codecs = reader.tracks().values().any(|track| {
-            matches!(track.track_type(), Ok(TrackType::Video)) && track.media_type().is_err()
-        });
+        let needs_extended_codecs = reader
+            .tracks()
+            .values()
+            .any(|track| track.media_type().is_err());
         if needs_extended_codecs
             && (reader.tracks().len() != 1
-                || reader
-                    .tracks()
-                    .values()
-                    .any(|track| !matches!(track.track_type(), Ok(TrackType::Video))))
+                || reader.tracks().values().any(|track| {
+                    !matches!(track.track_type(), Ok(TrackType::Video | TrackType::Audio))
+                }))
         {
             return Err(NativeMp4Error::UnsupportedCodec);
         }
@@ -190,7 +190,11 @@ impl NativeMp4Processor {
                 Ok(MediaType::TTXT) => Some("tx3g"),
                 Err(_) => None,
             }
-            .or_else(|| extended_codecs.get(&track.track_id()).copied());
+            .or_else(|| {
+                extended_codecs
+                    .get(&track.track_id())
+                    .map(|info| info.codec)
+            });
             let (sample_rate_hz, channels) = if media_type == TrackType::Audio
                 && matches!(track.media_type(), Ok(MediaType::AAC))
             {
@@ -208,8 +212,16 @@ impl NativeMp4Processor {
                     )),
                 )
             } else {
-                (None, None)
+                (
+                    extended_codecs
+                        .get(&track.track_id())
+                        .and_then(|info| info.sample_rate_hz),
+                    extended_codecs
+                        .get(&track.track_id())
+                        .and_then(|info| info.channels),
+                )
             };
+            let extended_info = extended_codecs.get(&track.track_id());
             tracks.push(NativeMp4Track {
                 id: track.track_id(),
                 media_type: match media_type {
@@ -220,8 +232,16 @@ impl NativeMp4Processor {
                 .to_owned(),
                 codec: codec.map(str::to_owned),
                 duration: track.duration(),
-                width: (media_type == TrackType::Video).then(|| track.width()),
-                height: (media_type == TrackType::Video).then(|| track.height()),
+                width: (media_type == TrackType::Video).then(|| {
+                    extended_info
+                        .and_then(|info| info.width)
+                        .unwrap_or_else(|| track.width())
+                }),
+                height: (media_type == TrackType::Video).then(|| {
+                    extended_info
+                        .and_then(|info| info.height)
+                        .unwrap_or_else(|| track.height())
+                }),
                 sample_rate_hz,
                 channels,
             });
@@ -276,10 +296,9 @@ impl NativeMp4Processor {
             Ok(configs) => configs,
             Err(NativeMp4Error::UnsupportedCodec) => {
                 if reader.tracks().len() != 1
-                    || reader
-                        .tracks()
-                        .values()
-                        .any(|track| !matches!(track.track_type(), Ok(TrackType::Video)))
+                    || reader.tracks().values().any(|track| {
+                        !matches!(track.track_type(), Ok(TrackType::Video | TrackType::Audio))
+                    })
                 {
                     return Err(NativeMp4Error::UnsupportedCodec);
                 }
@@ -423,11 +442,20 @@ struct ExtendedOutput {
     seen_entries: HashSet<TrackKind>,
 }
 
+#[derive(Clone, Copy)]
+struct ExtendedCodecInfo {
+    codec: &'static str,
+    width: Option<u16>,
+    height: Option<u16>,
+    sample_rate_hz: Option<u32>,
+    channels: Option<u16>,
+}
+
 fn extended_track_codecs(
     path: &Path,
     expected_track_count: usize,
     is_cancelled: &impl Fn() -> bool,
-) -> Result<HashMap<u32, &'static str>, NativeMp4Error> {
+) -> Result<HashMap<u32, ExtendedCodecInfo>, NativeMp4Error> {
     let mut source = open_extended_input(path, expected_track_count, is_cancelled)?;
     let mut seen_tracks = HashSet::new();
     let mut codecs = HashMap::new();
@@ -443,14 +471,29 @@ fn extended_track_codecs(
         let track_id = sample.track.track_id;
         if seen_tracks.insert(track_id) {
             let entry = sample.sample_entry.ok_or(NativeMp4Error::InvalidInput)?;
-            let codec = match entry {
-                SampleEntry::Avc1(_) => Some("h264"),
-                SampleEntry::Hev1(_) | SampleEntry::Hvc1(_) => Some("hevc"),
-                SampleEntry::Vp09(_) => Some("vp9"),
+            let codec = match &entry {
+                SampleEntry::Avc1(_) => Some(("h264", entry.video_resolution())),
+                SampleEntry::Hev1(_) | SampleEntry::Hvc1(_) => {
+                    Some(("hevc", entry.video_resolution()))
+                }
+                SampleEntry::Vp09(_) => Some(("vp9", entry.video_resolution())),
+                SampleEntry::Vp08(_) => Some(("vp8", entry.video_resolution())),
+                SampleEntry::Av01(_) => Some(("av1", entry.video_resolution())),
+                SampleEntry::Opus(_) => Some(("opus", None)),
+                SampleEntry::Flac(_) => Some(("flac", None)),
                 _ => None,
             };
-            if let Some(codec) = codec {
-                codecs.insert(track_id, codec);
+            if let Some((codec, resolution)) = codec {
+                codecs.insert(
+                    track_id,
+                    ExtendedCodecInfo {
+                        codec,
+                        width: resolution.map(|(width, _)| width),
+                        height: resolution.map(|(_, height)| height),
+                        sample_rate_hz: entry.audio_sample_rate().map(u32::from),
+                        channels: entry.audio_channel_count().map(u16::from),
+                    },
+                );
             }
         }
     }
@@ -642,7 +685,12 @@ fn is_supported_sample_entry(kind: TrackKind, entry: &SampleEntry) -> bool {
             SampleEntry::Avc1(_)
                 | SampleEntry::Hev1(_)
                 | SampleEntry::Hvc1(_)
+                | SampleEntry::Vp08(_)
                 | SampleEntry::Vp09(_)
+                | SampleEntry::Av01(_)
+        ) | (
+            TrackKind::Audio,
+            SampleEntry::Opus(_) | SampleEntry::Flac(_)
         )
     )
 }
@@ -939,8 +987,9 @@ mod tests {
     use shiguredo_mp4::{
         FixedPointNumber, TrackKind, Uint,
         boxes::{
-            Hvc1Box, HvccBox, HvccNalUintArray, SampleEntry, VisualSampleEntryFields, Vp09Box,
-            VpccBox,
+            AudioSampleEntryFields, Av01Box, Av1cBox, DflaBox, DopsBox, FlacBox, FlacMetadataBlock,
+            Hvc1Box, HvccBox, HvccNalUintArray, OpusBox, SampleEntry, VisualSampleEntryFields,
+            Vp08Box, Vp09Box, VpccBox,
         },
         mux::{Mp4FileMuxer, Sample as MuxSample},
     };
@@ -979,7 +1028,9 @@ mod tests {
 
     fn make_mp4_with_sample_entry(
         path: &Path,
+        track_kind: TrackKind,
         sample_entry: SampleEntry,
+        timescale: u32,
         duration: u32,
     ) -> Result<(), Box<dyn Error>> {
         let mut muxer = Mp4FileMuxer::new()?;
@@ -989,10 +1040,10 @@ mod tests {
         let data_offset = file.stream_position()?;
         file.write_all(&sample_data)?;
         muxer.append_sample(&MuxSample {
-            track_kind: TrackKind::Video,
+            track_kind,
             sample_entry: Some(sample_entry),
             keyframe: true,
-            timescale: NonZeroU32::new(1000).ok_or("invalid timescale")?,
+            timescale: NonZeroU32::new(timescale).ok_or("invalid timescale")?,
             duration,
             composition_time_offset: None,
             data_offset,
@@ -1032,6 +1083,81 @@ mod tests {
                 transfer_characteristics: 1,
                 matrix_coefficients: 1,
                 codec_initialization_data: Vec::new(),
+            },
+            unknown_boxes: Vec::new(),
+        })
+    }
+
+    fn vp8_sample_entry() -> SampleEntry {
+        SampleEntry::Vp08(Vp08Box {
+            visual: visual_sample_entry_fields(),
+            vpcc_box: VpccBox {
+                profile: 0,
+                level: 10,
+                bit_depth: Uint::new(8),
+                chroma_subsampling: Uint::new(0),
+                video_full_range_flag: Uint::new(0),
+                colour_primaries: 1,
+                transfer_characteristics: 1,
+                matrix_coefficients: 1,
+                codec_initialization_data: Vec::new(),
+            },
+            unknown_boxes: Vec::new(),
+        })
+    }
+
+    fn av1_sample_entry() -> SampleEntry {
+        SampleEntry::Av01(Av01Box {
+            visual: visual_sample_entry_fields(),
+            av1c_box: Av1cBox {
+                seq_profile: Uint::new(0),
+                seq_level_idx_0: Uint::new(0),
+                seq_tier_0: Uint::new(0),
+                high_bitdepth: Uint::new(0),
+                twelve_bit: Uint::new(0),
+                monochrome: Uint::new(0),
+                chroma_subsampling_x: Uint::new(1),
+                chroma_subsampling_y: Uint::new(1),
+                chroma_sample_position: Uint::new(0),
+                initial_presentation_delay_minus_one: None,
+                config_obus: Vec::new(),
+            },
+            unknown_boxes: Vec::new(),
+        })
+    }
+
+    fn opus_sample_entry() -> SampleEntry {
+        SampleEntry::Opus(OpusBox {
+            audio: AudioSampleEntryFields {
+                data_reference_index: NonZeroU16::MIN,
+                channelcount: 2,
+                samplesize: 16,
+                samplerate: FixedPointNumber::new(48_000, 0),
+            },
+            dops_box: DopsBox {
+                output_channel_count: 2,
+                pre_skip: 312,
+                input_sample_rate: 48_000,
+                output_gain: 0,
+            },
+            unknown_boxes: Vec::new(),
+        })
+    }
+
+    fn flac_sample_entry() -> SampleEntry {
+        SampleEntry::Flac(FlacBox {
+            audio: AudioSampleEntryFields {
+                data_reference_index: NonZeroU16::MIN,
+                channelcount: 2,
+                samplesize: 16,
+                samplerate: FixedPointNumber::new(48_000, 0),
+            },
+            dfla_box: DflaBox {
+                metadata_blocks: vec![FlacMetadataBlock {
+                    last_metadata_block_flag: Uint::new(1),
+                    block_type: FlacMetadataBlock::BLOCK_TYPE_STREAMINFO,
+                    block_data: vec![0; 34],
+                }],
             },
             unknown_boxes: Vec::new(),
         })
@@ -1140,10 +1266,38 @@ mod tests {
         let input = directory.path().join("video-vp9.mp4");
         let output = directory.path().join("remuxed-vp9.mp4");
         let sample_entry = vp9_sample_entry();
-        make_mp4_with_sample_entry(&input, sample_entry.clone(), 1000)?;
+        make_mp4_with_sample_entry(&input, TrackKind::Video, sample_entry.clone(), 1000, 1000)?;
 
         let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
         assert_eq!(info.tracks[0].codec.as_deref(), Some("vp9"));
+        assert_eq!(read_first_sample_entry(&output)?, sample_entry);
+        Ok(())
+    }
+
+    #[test]
+    fn remuxes_vp8_and_preserves_its_sample_entry() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("video-vp8.mp4");
+        let output = directory.path().join("remuxed-vp8.mp4");
+        let sample_entry = vp8_sample_entry();
+        make_mp4_with_sample_entry(&input, TrackKind::Video, sample_entry.clone(), 1000, 1000)?;
+
+        let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("vp8"));
+        assert_eq!(read_first_sample_entry(&output)?, sample_entry);
+        Ok(())
+    }
+
+    #[test]
+    fn remuxes_av1_and_preserves_its_sample_entry() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("video-av1.mp4");
+        let output = directory.path().join("remuxed-av1.mp4");
+        let sample_entry = av1_sample_entry();
+        make_mp4_with_sample_entry(&input, TrackKind::Video, sample_entry.clone(), 1000, 1000)?;
+
+        let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("av1"));
         assert_eq!(read_first_sample_entry(&output)?, sample_entry);
         Ok(())
     }
@@ -1154,10 +1308,42 @@ mod tests {
         let input = directory.path().join("video-hevc.mp4");
         let output = directory.path().join("remuxed-hevc.mp4");
         let sample_entry = hevc_sample_entry();
-        make_mp4_with_sample_entry(&input, sample_entry.clone(), 1000)?;
+        make_mp4_with_sample_entry(&input, TrackKind::Video, sample_entry.clone(), 1000, 1000)?;
 
         let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
         assert_eq!(info.tracks[0].codec.as_deref(), Some("hevc"));
+        assert_eq!(read_first_sample_entry(&output)?, sample_entry);
+        Ok(())
+    }
+
+    #[test]
+    fn remuxes_opus_and_preserves_its_sample_entry() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("audio-opus.mp4");
+        let output = directory.path().join("remuxed-opus.mp4");
+        let sample_entry = opus_sample_entry();
+        make_mp4_with_sample_entry(&input, TrackKind::Audio, sample_entry.clone(), 48_000, 960)?;
+
+        let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("opus"));
+        assert_eq!(info.tracks[0].sample_rate_hz, Some(48_000));
+        assert_eq!(info.tracks[0].channels, Some(2));
+        assert_eq!(read_first_sample_entry(&output)?, sample_entry);
+        Ok(())
+    }
+
+    #[test]
+    fn remuxes_flac_and_preserves_its_sample_entry() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("audio-flac.mp4");
+        let output = directory.path().join("remuxed-flac.mp4");
+        let sample_entry = flac_sample_entry();
+        make_mp4_with_sample_entry(&input, TrackKind::Audio, sample_entry.clone(), 48_000, 960)?;
+
+        let info = NativeMp4Processor::remux(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("flac"));
+        assert_eq!(info.tracks[0].sample_rate_hz, Some(48_000));
+        assert_eq!(info.tracks[0].channels, Some(2));
         assert_eq!(read_first_sample_entry(&output)?, sample_entry);
         Ok(())
     }
@@ -1167,7 +1353,7 @@ mod tests {
         let directory = tempdir()?;
         let input = directory.path().join("video-vp9.mp4");
         let output = directory.path().join("too-large-vp9.mp4");
-        make_mp4_with_sample_entry(&input, vp9_sample_entry(), 1000)?;
+        make_mp4_with_sample_entry(&input, TrackKind::Video, vp9_sample_entry(), 1000, 1000)?;
 
         assert!(matches!(
             NativeMp4Processor::remux(&input, &output, 8, || false),
