@@ -24,7 +24,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-netstat2.workspace = true
 roxmltree = "=0.21.1"
 digest = "=0.11.3"
 sha1 = "=0.11.0"
