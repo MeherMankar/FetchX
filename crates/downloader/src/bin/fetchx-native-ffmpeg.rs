@@ -34,6 +34,11 @@ struct NativeAudioFlac {
     output: PathBuf,
 }
 
+struct NativeAudioWav {
+    input: PathBuf,
+    output: PathBuf,
+}
+
 struct NativeRemux {
     input: PathBuf,
     output: PathBuf,
@@ -152,6 +157,20 @@ fn main() -> ExitCode {
             Err(NativeMediaError::Cancelled) => return ExitCode::from(130),
             Err(error) => {
                 eprintln!("native audio-to-FLAC conversion unavailable: {error}");
+            }
+        }
+    }
+    if let Some(transcode) = parse_native_audio_wav(&arguments) {
+        match NativeMediaProcessor::audio_to_wav(
+            &transcode.input,
+            &transcode.output,
+            MAX_OUTPUT_BYTES,
+            || false,
+        ) {
+            Ok(_) => return ExitCode::SUCCESS,
+            Err(NativeMediaError::Cancelled) => return ExitCode::from(130),
+            Err(error) => {
+                eprintln!("native audio-to-WAV conversion unavailable: {error}");
             }
         }
     }
@@ -433,6 +452,72 @@ fn parse_native_audio_flac(arguments: &[OsString]) -> Option<NativeAudioFlac> {
     })
 }
 
+fn parse_native_audio_wav(arguments: &[OsString]) -> Option<NativeAudioWav> {
+    let output = path_argument(arguments.last()?)?;
+    if !has_extension(&output, "wav") || arguments.len() < 2 {
+        return None;
+    }
+
+    let mut input = None;
+    let mut has_audio_only = false;
+    let mut has_audio_map = false;
+    let mut has_pcm_encoder = false;
+    let mut has_wav_format = false;
+    let mut index = 0;
+    while index < arguments.len() - 1 {
+        match arguments[index].to_str()? {
+            "-y" | "-nostdin" | "-hide_banner" => index += 1,
+            "-v" | "-loglevel" => {
+                arguments.get(index + 1)?.to_str()?;
+                index += 2;
+            }
+            "-i" if input.is_none() => {
+                input = Some(path_argument(arguments.get(index + 1)?)?);
+                index += 2;
+            }
+            "-map" if !has_audio_map && arguments.get(index + 1)?.to_str()? == "0:a:0" => {
+                has_audio_map = true;
+                index += 2;
+            }
+            "-vn" if !has_audio_only => {
+                has_audio_only = true;
+                index += 1;
+            }
+            "-acodec" | "-c:a" if !has_pcm_encoder => {
+                if !arguments
+                    .get(index + 1)?
+                    .to_str()?
+                    .eq_ignore_ascii_case("pcm_s16le")
+                {
+                    return None;
+                }
+                has_pcm_encoder = true;
+                index += 2;
+            }
+            "-f" if !has_wav_format => {
+                if !arguments
+                    .get(index + 1)?
+                    .to_str()?
+                    .eq_ignore_ascii_case("wav")
+                {
+                    return None;
+                }
+                has_wav_format = true;
+                index += 2;
+            }
+            _ => return None,
+        }
+    }
+
+    if !has_audio_only || !has_pcm_encoder || !has_wav_format {
+        return None;
+    }
+    Some(NativeAudioWav {
+        input: input?,
+        output,
+    })
+}
+
 fn has_extension(path: &Path, extension: &str) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
@@ -611,7 +696,7 @@ fn path_argument(argument: &OsString) -> Option<PathBuf> {
 mod tests {
     use super::{
         parse_native_audio_extract, parse_native_audio_flac, parse_native_audio_mp3,
-        parse_native_merge, parse_native_probe, parse_native_remux,
+        parse_native_audio_wav, parse_native_merge, parse_native_probe, parse_native_remux,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -831,6 +916,40 @@ mod tests {
                 "-f",
                 "flac",
                 "output.mp3",
+            ]))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn recognizes_supported_audio_to_wav_arguments() {
+        let arguments = args(&[
+            "-y",
+            "-i",
+            "input.m4a",
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "pcm_s16le",
+            "-f",
+            "wav",
+            "output.wav",
+        ]);
+        let transcode = parse_native_audio_wav(&arguments).expect("supported audio-to-WAV");
+        assert_eq!(transcode.input, PathBuf::from("input.m4a"));
+        assert_eq!(transcode.output, PathBuf::from("output.wav"));
+
+        assert!(
+            parse_native_audio_wav(&args(&[
+                "-i",
+                "input.m4a",
+                "-vn",
+                "-c:a",
+                "flac",
+                "-f",
+                "wav",
+                "output.wav",
             ]))
             .is_none()
         );

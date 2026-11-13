@@ -39,8 +39,8 @@ Compatible H.264/AAC merges use native stream copy. OxideAV also attempts native
 stream-copy merges for other registered codec/container combinations when both inputs
 report matching durations and the selected MP4 or Matroska muxer accepts their streams.
 Integer PCM WAV with 1–8 channels retains its native-sample FLAC path. Symphonia also
-supports FLAC encoding from decoded audio with 1–8 channels at 8–192 kHz, in addition
-to MP3 encoding. Symphonia demuxes common
+supports WAV output as 16-bit PCM while preserving decoded channel count and sample rate,
+and FLAC encoding from decoded audio with 1–8 channels at 8–192 kHz. Symphonia demuxes common
 audio sources (WAV, AIFF, CAF, MP3, FLAC, AAC/ALAC in MP4/M4A, Vorbis in Ogg, and supported
 audio tracks in Matroska/WebM); decoded audio with 1–8 channels and sample rates from
 8–192 kHz is downmixed/resampled as needed and encoded to 192 kb/s MP3. Symphonia also
@@ -82,9 +82,9 @@ controls and survives restart.
 Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
 video/audio selections first use a FetchX native FFmpeg-compatible shim for supported
 single-input registered-container stream-copy remuxes, H.264/AAC MP4 merges, compatible
-audio-in-MP4 to M4A extraction, and supported audio-to-MP3 conversions. Other codecs,
-containers, and audio transcoding fail as unsupported; no external FFmpeg executable
-is bundled or launched.
+audio-in-MP4 to M4A extraction, and supported audio-to-WAV/MP3/FLAC conversions. Other
+codecs, containers, and audio transcoding fail as unsupported; no external FFmpeg
+executable is bundled or launched.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`

@@ -109,6 +109,7 @@ pub enum TranscodePreset {
     Vp9OpusWebM,
     Mp3Audio,
     FlacAudio,
+    WavAudio,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -621,6 +622,42 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
+        if matches!(
+            request.operation,
+            MediaOperation::Transcode {
+                preset: TranscodePreset::WavAudio
+            }
+        ) {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::audio_to_wav(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native audio-to-WAV conversion unsupported");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         if is_mp4_path(&input)
             && matches!(
                 request.operation,
@@ -996,5 +1033,42 @@ mod native_only_tests {
             processor.probe(&unsupported, cancellation).await,
             Err(FfmpegError::NativeUnsupported)
         ));
+    }
+
+    #[tokio::test]
+    async fn transcodes_audio_to_wav_through_the_shared_processor() {
+        let directory = tempdir().expect("temporary directory");
+        let input = directory.path().join("input.wav");
+        let output = directory.path().join("output.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&input, spec).expect("create input WAV");
+        writer.write_sample(12_345_i16).expect("write input sample");
+        writer.finalize().expect("finalize input WAV");
+        let processor = FfmpegProcessor::initialize(FfmpegConfig::new())
+            .await
+            .expect("native processor initialization");
+        let (_, cancellation) = watch::channel(false);
+
+        processor
+            .process(
+                MediaProcessRequest::transcode(&input, &output, TranscodePreset::WavAudio),
+                cancellation,
+            )
+            .await
+            .expect("native audio-to-WAV conversion");
+        let mut reader = hound::WavReader::open(output).expect("read output WAV");
+        assert_eq!(
+            reader
+                .samples::<i16>()
+                .next()
+                .expect("read output sample")
+                .expect("valid output sample"),
+            12_345
+        );
     }
 }
