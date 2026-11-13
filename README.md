@@ -42,8 +42,10 @@ Compatible H.264/AAC merges also use native stream copy;
 duration mismatches fall back to FFmpeg to preserve its shortest-stream behavior.
 Mono/stereo integer PCM WAV can be transcoded natively to FLAC, and SRT subtitles can be
 converted to WebVTT. Other transcoding, unsupported MP4 subtitle/data tracks, codecs, and
-layouts continue through FFmpeg. Native output remains size-bounded, cancellable, and published
-without overwriting an existing file.
+layouts continue through FFmpeg. The desktop media manager can run these native operations
+without installed FFmpeg or ffprobe; an unavailable helper is reported only when a requested
+operation or probe needs that external fallback. Native output remains size-bounded, cancellable,
+and published without overwriting an existing file.
 This original FetchX implementation takes FFmpeg's stream-copy behavior as a functional
 reference and does not copy FFmpeg source code. MP4 container handling uses the MIT-licensed
 [`mp4` crate](https://crates.io/crates/mp4) and Apache-2.0-licensed

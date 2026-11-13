@@ -135,20 +135,18 @@ impl MediaProcessingManager {
                 .and_then(|status| status.executable_path.as_deref())
                 .map(PathBuf::from)
         };
-        let ffmpeg_path = executable_path(HelperId::Ffmpeg).ok_or_else(|| {
-            "FFmpeg is unavailable. Install or repair it in Settings before remuxing.".to_owned()
-        })?;
-        let ffprobe_path = executable_path(HelperId::Ffprobe).ok_or_else(|| {
-            "ffprobe is unavailable. Install or repair it in Settings before remuxing.".to_owned()
-        })?;
-        let initialized = FfmpegProcessor::initialize(
-            FfmpegConfig::new()
-                .with_ffmpeg_executable(ffmpeg_path)
-                .with_ffprobe_executable(ffprobe_path)
-                .with_max_concurrent_processes(1),
-        )
-        .await
-        .map_err(|error| format!("Could not initialize FFmpeg: {error}"))?;
+        let mut processor_config = FfmpegConfig::new()
+            .with_native_only_mode(true)
+            .with_max_concurrent_processes(1);
+        if let Some(path) = executable_path(HelperId::Ffmpeg) {
+            processor_config = processor_config.with_ffmpeg_executable(path);
+        }
+        if let Some(path) = executable_path(HelperId::Ffprobe) {
+            processor_config = processor_config.with_ffprobe_executable(path);
+        }
+        let initialized = FfmpegProcessor::initialize(processor_config)
+            .await
+            .map_err(|error| format!("Could not initialize FFmpeg: {error}"))?;
         let initialized = Arc::new(initialized);
         *processor = Some(Arc::clone(&initialized));
         Ok(initialized)

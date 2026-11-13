@@ -47,6 +47,7 @@ pub type FfmpegFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub struct FfmpegConfig {
     ffmpeg_executable: Option<PathBuf>,
     ffprobe_executable: Option<PathBuf>,
+    allow_native_only: bool,
     process_timeout: Duration,
     max_output_bytes: u64,
     max_concurrent_processes: usize,
@@ -75,6 +76,7 @@ impl FfmpegConfig {
         Self {
             ffmpeg_executable: None,
             ffprobe_executable: None,
+            allow_native_only: false,
             process_timeout: DEFAULT_PROCESS_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
             max_concurrent_processes: DEFAULT_MAX_CONCURRENT_PROCESSES,
@@ -88,6 +90,11 @@ impl FfmpegConfig {
 
     pub fn with_ffprobe_executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.ffprobe_executable = Some(path.into());
+        self
+    }
+
+    pub fn with_native_only_mode(mut self, enabled: bool) -> Self {
+        self.allow_native_only = enabled;
         self
     }
 
@@ -321,8 +328,8 @@ struct OutputTarget<'a> {
 }
 
 pub struct FfmpegProcessor {
-    ffmpeg_executable: PathBuf,
-    ffprobe_executable: PathBuf,
+    ffmpeg_executable: Option<PathBuf>,
+    ffprobe_executable: Option<PathBuf>,
     process_timeout: Duration,
     max_output_bytes: u64,
     process_slots: Arc<Semaphore>,
@@ -349,27 +356,39 @@ impl FfmpegProcessor {
         {
             return Err(FfmpegError::InvalidConfiguration);
         }
-        let ffmpeg_executable =
-            resolve_executable(config.ffmpeg_executable.as_deref(), "ffmpeg").await?;
-        let ffprobe_executable =
-            resolve_executable(config.ffprobe_executable.as_deref(), "ffprobe").await?;
+        let ffmpeg_executable = resolve_optional_executable(
+            config.ffmpeg_executable.as_deref(),
+            "ffmpeg",
+            config.allow_native_only,
+        )
+        .await?;
+        let ffprobe_executable = resolve_optional_executable(
+            config.ffprobe_executable.as_deref(),
+            "ffprobe",
+            config.allow_native_only,
+        )
+        .await?;
         let (_cancel_sender, cancellation) = watch::channel(false);
-        runner
-            .validate(
-                &ffmpeg_executable,
-                MediaExecutable::Ffmpeg,
-                config.process_timeout,
-                cancellation.clone(),
-            )
-            .await?;
-        runner
-            .validate(
-                &ffprobe_executable,
-                MediaExecutable::Ffprobe,
-                config.process_timeout,
-                cancellation,
-            )
-            .await?;
+        if let Some(executable) = &ffmpeg_executable {
+            runner
+                .validate(
+                    executable,
+                    MediaExecutable::Ffmpeg,
+                    config.process_timeout,
+                    cancellation.clone(),
+                )
+                .await?;
+        }
+        if let Some(executable) = &ffprobe_executable {
+            runner
+                .validate(
+                    executable,
+                    MediaExecutable::Ffprobe,
+                    config.process_timeout,
+                    cancellation,
+                )
+                .await?;
+        }
         let (pressure_sender, pressure) = watch::channel(ResourcePressure::Normal);
         Ok(Self {
             ffmpeg_executable,
@@ -383,12 +402,12 @@ impl FfmpegProcessor {
         })
     }
 
-    pub fn ffmpeg_executable(&self) -> &Path {
-        &self.ffmpeg_executable
+    pub fn ffmpeg_executable(&self) -> Option<&Path> {
+        self.ffmpeg_executable.as_deref()
     }
 
-    pub fn ffprobe_executable(&self) -> &Path {
-        &self.ffprobe_executable
+    pub fn ffprobe_executable(&self) -> Option<&Path> {
+        self.ffprobe_executable.as_deref()
     }
 
     pub fn set_resource_pressure(&self, pressure: ResourcePressure) {
@@ -406,6 +425,52 @@ impl FfmpegProcessor {
     ) -> Result<MediaInfo, FfmpegError> {
         let _permit = self.acquire_slot(cancellation.clone()).await?;
         let input = canonical_input(input.as_ref()).await?;
+        if is_srt_path(&input) {
+            if *cancellation.borrow() {
+                return Err(FfmpegError::Cancelled);
+            }
+            return Ok(MediaInfo {
+                duration: None,
+                format_name: Some("srt".to_owned()),
+                size_bytes: Some(
+                    tokio::fs::metadata(&input)
+                        .await
+                        .map_err(|_| FfmpegError::InvalidInput)?
+                        .len(),
+                ),
+                bit_rate_bits_per_second: None,
+                streams: vec![MediaStream {
+                    kind: MediaStreamKind::Subtitle,
+                    codec: Some("subrip".to_owned()),
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    sample_rate_hz: None,
+                    channels: None,
+                }],
+            });
+        }
+        if is_wav_path(&input) {
+            let native_input = input.clone();
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::probe_wav(&native_input, || {
+                        cancelled.load(Ordering::Relaxed) || *receiver.borrow()
+                    })
+                },
+            )
+            .await
+            {
+                Ok(info) => return Ok(info),
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native WAV probe unsupported; falling back to ffprobe");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         if is_mp4_path(&input) {
             let native_input = input.clone();
             match run_native_task(
@@ -427,6 +492,10 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
+        let ffprobe_executable = self
+            .ffprobe_executable
+            .as_deref()
+            .ok_or(FfmpegError::FfprobeNotFound)?;
         let input_file = tokio::fs::File::open(&input)
             .await
             .map_err(|_| FfmpegError::InvalidInput)?;
@@ -434,7 +503,7 @@ impl FfmpegProcessor {
         let output = self
             .runner
             .probe(
-                &self.ffprobe_executable,
+                ffprobe_executable,
                 &arguments,
                 input_file,
                 self.process_timeout,
@@ -510,6 +579,10 @@ impl FfmpegProcessor {
             }
         }
 
+        let ffmpeg_executable = self
+            .ffmpeg_executable
+            .as_deref()
+            .ok_or(FfmpegError::FfmpegNotFound)?;
         let workspace = create_workspace(&destination).await?;
         let extension = destination
             .extension()
@@ -539,7 +612,7 @@ impl FfmpegProcessor {
             temporary_output.as_os_str().to_owned(),
         ];
 
-        let mut child = Command::new(&self.ffmpeg_executable)
+        let mut child = Command::new(ffmpeg_executable)
             .args(arguments)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -740,6 +813,9 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
+        if self.ffmpeg_executable.is_none() {
+            return Err(FfmpegError::FfmpegNotFound);
+        }
         let input_file = tokio::fs::File::open(&input)
             .await
             .map_err(|_| FfmpegError::InvalidInput)?;
@@ -826,10 +902,14 @@ impl FfmpegProcessor {
         if *cancellation.borrow() {
             return Err(FfmpegError::Cancelled);
         }
+        let ffmpeg_executable = self
+            .ffmpeg_executable
+            .as_deref()
+            .ok_or(FfmpegError::FfmpegNotFound)?;
         let exit = self
             .runner
             .process(
-                &self.ffmpeg_executable,
+                ffmpeg_executable,
                 FfmpegProcessSpec {
                     arguments,
                     input,
@@ -1150,6 +1230,20 @@ async fn resolve_executable(
         }
     }
     Ok(canonical)
+}
+
+async fn resolve_optional_executable(
+    configured: Option<&Path>,
+    name: &'static str,
+    allow_missing: bool,
+) -> Result<Option<PathBuf>, FfmpegError> {
+    if let Some(path) = configured {
+        return resolve_executable(Some(path), name).await.map(Some);
+    }
+    if allow_missing {
+        return Ok(None);
+    }
+    resolve_executable(None, name).await.map(Some)
 }
 
 #[cfg(windows)]
@@ -2342,9 +2436,10 @@ mod tests {
         let runner = FakeRunner::default();
         let state = Arc::clone(&runner.state);
         let processor = setup_with_paths(runner, executable.clone(), executable.clone()).await?;
+        let canonical_executable = tokio::fs::canonicalize(&executable).await?;
         assert_eq!(
             processor.ffmpeg_executable(),
-            tokio::fs::canonicalize(&executable).await?
+            Some(canonical_executable.as_path())
         );
         assert_eq!(
             processor.ffprobe_executable(),
@@ -2510,6 +2605,99 @@ mod tests {
             state.lock().expect("fake runner mutex").calls.len(),
             initial_call_count
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_only_mode_probes_and_processes_supported_files_without_helpers()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        let processor = FfmpegProcessor::initialize_with_runner(
+            FfmpegConfig::new().with_native_only_mode(true),
+            Arc::new(runner),
+        )
+        .await?;
+        assert_eq!(processor.ffmpeg_executable(), None);
+        assert_eq!(processor.ffprobe_executable(), None);
+
+        let subtitle_input = directory.path().join("captions.srt");
+        let subtitle_output = directory.path().join("captions.vtt");
+        tokio::fs::write(
+            &subtitle_input,
+            "1\n00:00:01,000 --> 00:00:02,000\ncaption\n",
+        )
+        .await?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        let subtitle_info = processor
+            .probe(&subtitle_input, cancellation.clone())
+            .await?;
+        assert_eq!(subtitle_info.format_name.as_deref(), Some("srt"));
+        assert_eq!(subtitle_info.streams[0].codec.as_deref(), Some("subrip"));
+        processor
+            .process(
+                MediaProcessRequest::remux(
+                    &subtitle_input,
+                    &subtitle_output,
+                    MediaContainer::WebVtt,
+                ),
+                cancellation.clone(),
+                None,
+            )
+            .await?;
+
+        let audio_input = directory.path().join("audio.wav");
+        let audio_output = directory.path().join("audio.flac");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&audio_input, spec)?;
+        writer.write_sample(0_i16)?;
+        writer.write_sample(1_i16)?;
+        writer.finalize()?;
+        let audio_info = processor.probe(&audio_input, cancellation.clone()).await?;
+        assert_eq!(audio_info.format_name.as_deref(), Some("wav"));
+        assert_eq!(audio_info.streams[0].codec.as_deref(), Some("pcm_s16le"));
+        processor
+            .process(
+                MediaProcessRequest::transcode(
+                    &audio_input,
+                    &audio_output,
+                    TranscodePreset::FlacAudio,
+                ),
+                cancellation.clone(),
+                None,
+            )
+            .await?;
+
+        let unsupported_input = directory.path().join("unsupported.mkv");
+        let unsupported_output = directory.path().join("unsupported.mp4");
+        tokio::fs::write(&unsupported_input, b"not a native media file").await?;
+        assert!(matches!(
+            processor
+                .probe(&unsupported_input, cancellation.clone())
+                .await,
+            Err(FfmpegError::FfprobeNotFound)
+        ));
+        assert!(matches!(
+            processor
+                .process(
+                    MediaProcessRequest::remux(
+                        unsupported_input,
+                        unsupported_output,
+                        MediaContainer::Mp4,
+                    ),
+                    cancellation,
+                    None,
+                )
+                .await,
+            Err(FfmpegError::FfmpegNotFound)
+        ));
+        assert!(state.lock().expect("fake runner mutex").calls.is_empty());
         Ok(())
     }
 

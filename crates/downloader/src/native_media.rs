@@ -6,8 +6,10 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
+use crate::ffmpeg::{MediaInfo, MediaStream, MediaStreamKind};
 use flacenc::{
     bitsink::ByteSink,
     component::BitRepr,
@@ -90,6 +92,53 @@ impl Drop for TemporaryOutput {
 pub struct NativeMediaProcessor;
 
 impl NativeMediaProcessor {
+    pub fn probe_wav(
+        input: impl AsRef<Path>,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<MediaInfo, NativeMediaError> {
+        let input = canonical_input(input.as_ref())?;
+        let metadata = fs::metadata(&input)?;
+        if metadata.len() > MAX_NATIVE_WAV_BYTES {
+            return Err(NativeMediaError::UnsupportedInput);
+        }
+        let reader = hound::WavReader::open(&input).map_err(|_| NativeMediaError::InvalidInput)?;
+        let spec = reader.spec();
+        if spec.sample_format != hound::SampleFormat::Int
+            || !(8..=32).contains(&spec.bits_per_sample)
+            || !(1..=2).contains(&spec.channels)
+            || !(1..=655_350).contains(&spec.sample_rate)
+        {
+            return Err(NativeMediaError::UnsupportedInput);
+        }
+        if is_cancelled() {
+            return Err(NativeMediaError::Cancelled);
+        }
+        let codec = match spec.bits_per_sample {
+            8 => "pcm_u8".to_owned(),
+            bits => format!("pcm_s{bits}le"),
+        };
+        let duration =
+            Duration::from_secs_f64(f64::from(reader.duration()) / f64::from(spec.sample_rate));
+        let bit_rate_bits_per_second = u64::from(spec.sample_rate)
+            .checked_mul(u64::from(spec.channels))
+            .and_then(|value| value.checked_mul(u64::from(spec.bits_per_sample)));
+        Ok(MediaInfo {
+            duration: Some(duration),
+            format_name: Some("wav".to_owned()),
+            size_bytes: Some(metadata.len()),
+            bit_rate_bits_per_second,
+            streams: vec![MediaStream {
+                kind: MediaStreamKind::Audio,
+                codec: Some(codec),
+                width: None,
+                height: None,
+                frame_rate: None,
+                sample_rate_hz: Some(spec.sample_rate),
+                channels: Some(spec.channels),
+            }],
+        })
+    }
+
     pub fn wav_to_flac(
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
