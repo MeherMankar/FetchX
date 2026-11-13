@@ -1,7 +1,7 @@
 use std::{
     env,
     ffi::OsString,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
 
@@ -16,6 +16,11 @@ struct NativeMerge {
 }
 
 struct NativeAudioExtract {
+    input: PathBuf,
+    output: PathBuf,
+}
+
+struct NativeRemux {
     input: PathBuf,
     output: PathBuf,
 }
@@ -56,6 +61,15 @@ fn main() -> ExitCode {
             Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
             Err(error) => {
                 eprintln!("native AAC extraction unavailable: {error}");
+            }
+        }
+    }
+    if let Some(remux) = parse_native_remux(&arguments) {
+        match NativeMp4Processor::remux(&remux.input, &remux.output, MAX_OUTPUT_BYTES, || false) {
+            Ok(_) => return ExitCode::SUCCESS,
+            Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
+            Err(error) => {
+                eprintln!("native MP4 remux unavailable: {error}");
             }
         }
     }
@@ -118,6 +132,54 @@ fn parse_native_audio_extract(arguments: &[OsString]) -> Option<NativeAudioExtra
         input: inputs.into_iter().next()?,
         output,
     })
+}
+
+fn parse_native_remux(arguments: &[OsString]) -> Option<NativeRemux> {
+    let output = path_argument(arguments.last()?)?;
+    if !has_mp4_extension(&output) || arguments.len() < 2 {
+        return None;
+    }
+
+    let mut input = None;
+    let mut has_all_streams_map = false;
+    let mut has_stream_copy = false;
+    let mut index = 0;
+    while index < arguments.len() - 1 {
+        match arguments[index].to_str()? {
+            "-y" | "-dn" | "-ignore_unknown" => index += 1,
+            "-v" | "-loglevel" => {
+                arguments.get(index + 1)?.to_str()?;
+                index += 2;
+            }
+            "-i" if input.is_none() => {
+                input = Some(path_argument(arguments.get(index + 1)?)?);
+                index += 2;
+            }
+            "-map" if !has_all_streams_map && arguments.get(index + 1)?.to_str()? == "0" => {
+                has_all_streams_map = true;
+                index += 2;
+            }
+            "-c" if !has_stream_copy && arguments.get(index + 1)?.to_str()? == "copy" => {
+                has_stream_copy = true;
+                index += 2;
+            }
+            _ => return None,
+        }
+    }
+    if !has_all_streams_map || !has_stream_copy {
+        return None;
+    }
+    let input = input?;
+    if !has_mp4_extension(&input) {
+        return None;
+    }
+    Some(NativeRemux { input, output })
+}
+
+fn has_mp4_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
 }
 
 fn parse_native_merge(arguments: &[OsString]) -> Option<NativeMerge> {
@@ -230,7 +292,9 @@ fn fallback_executable() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_native_audio_extract, parse_native_merge, parse_native_probe};
+    use super::{
+        parse_native_audio_extract, parse_native_merge, parse_native_probe, parse_native_remux,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -356,5 +420,73 @@ mod tests {
             ]))
             .is_none()
         );
+    }
+
+    #[test]
+    fn recognizes_all_stream_mp4_copy_remux() {
+        let arguments = args(&[
+            "-y",
+            "-i",
+            "file:/downloads/input.mp4",
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "file:/downloads/output.mp4",
+        ]);
+        let remux = parse_native_remux(&arguments).expect("supported remux");
+        assert_eq!(remux.input, PathBuf::from("/downloads/input.mp4"));
+        assert_eq!(remux.output, PathBuf::from("/downloads/output.mp4"));
+    }
+
+    #[test]
+    fn allows_ffmpeg_logging_and_data_stream_options() {
+        let arguments = args(&[
+            "-y",
+            "-loglevel",
+            "repeat+info",
+            "-i",
+            "input.mp4",
+            "-map",
+            "0",
+            "-dn",
+            "-ignore_unknown",
+            "-c",
+            "copy",
+            "output.mp4",
+        ]);
+        assert!(parse_native_remux(&arguments).is_some());
+    }
+
+    #[test]
+    fn rejects_partial_mappings_and_other_containers_for_native_remux() {
+        let partial_map = args(&[
+            "-i",
+            "input.mp4",
+            "-map",
+            "0:v:0",
+            "-c",
+            "copy",
+            "output.mp4",
+        ]);
+        let webm_output = args(&["-i", "input.mp4", "-map", "0", "-c", "copy", "output.webm"]);
+        assert!(parse_native_remux(&partial_map).is_none());
+        assert!(parse_native_remux(&webm_output).is_none());
+    }
+
+    #[test]
+    fn rejects_remux_options_that_change_stream_content() {
+        let trimmed_input = args(&[
+            "-i",
+            "input.mp4",
+            "-ss",
+            "2",
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "output.mp4",
+        ]);
+        assert!(parse_native_remux(&trimmed_input).is_none());
     }
 }
