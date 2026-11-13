@@ -13,6 +13,7 @@ mod media_extractor_adapter;
 mod metalink;
 mod native_media;
 mod native_mp4;
+mod native_oxideav;
 mod native_torrent;
 mod retry;
 mod segments;
@@ -42,6 +43,7 @@ pub use media_extractor_adapter::{YtDlpProcessRunnerAdapter, parse_yt_dlp_json_t
 pub use metalink::{MetalinkEngine, MetalinkFile, MetalinkMirror};
 pub use native_media::{NativeMediaError, NativeMediaProcessor};
 pub use native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor, NativeMp4Track};
+pub use native_oxideav::{NativeOxideavError, NativeOxideavProcessor};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
 pub use ytdlp::{

@@ -6,7 +6,8 @@ use std::{
 };
 
 use fetchx_downloader::{
-    NativeMediaError, NativeMediaProcessor, NativeMp4Error, NativeMp4Processor,
+    MediaInfo, MediaStreamKind, NativeMediaError, NativeMediaProcessor, NativeMp4Error,
+    NativeMp4Processor, NativeOxideavError, NativeOxideavProcessor,
 };
 
 const MAX_OUTPUT_BYTES: u64 = 100 * 1024 * 1024 * 1024;
@@ -15,6 +16,7 @@ struct NativeMerge {
     video: PathBuf,
     audio: PathBuf,
     output: PathBuf,
+    container: &'static str,
 }
 
 struct NativeAudioExtract {
@@ -27,9 +29,15 @@ struct NativeAudioMp3 {
     output: PathBuf,
 }
 
+struct NativeAudioFlac {
+    input: PathBuf,
+    output: PathBuf,
+}
+
 struct NativeRemux {
     input: PathBuf,
     output: PathBuf,
+    container: &'static str,
 }
 
 fn main() -> ExitCode {
@@ -43,17 +51,40 @@ fn main() -> ExitCode {
     }
 
     if let Some(merge) = parse_native_merge(&arguments) {
-        match NativeMp4Processor::merge_h264_aac(
+        if merge.container == "mov"
+            && has_mp4_extension(&merge.video)
+            && has_mp4_extension(&merge.audio)
+        {
+            match NativeMp4Processor::merge_h264_aac(
+                &merge.video,
+                &merge.audio,
+                &merge.output,
+                MAX_OUTPUT_BYTES,
+                || false,
+            ) {
+                Ok(_) => return ExitCode::SUCCESS,
+                Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
+                Err(error) => {
+                    eprintln!("native MP4 merge unavailable: {error}");
+                }
+            }
+        }
+        match NativeOxideavProcessor::merge_video_audio(
             &merge.video,
             &merge.audio,
             &merge.output,
+            merge.container,
             MAX_OUTPUT_BYTES,
             || false,
         ) {
             Ok(_) => return ExitCode::SUCCESS,
-            Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
+            Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
+            Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
+                eprintln!("native merge unsupported; using bundled FFmpeg fallback");
+            }
             Err(error) => {
-                eprintln!("native MP4 merge unavailable: {error}");
+                eprintln!("native merge failed: {error}");
+                return ExitCode::FAILURE;
             }
         }
     }
@@ -66,8 +97,33 @@ fn main() -> ExitCode {
         ) {
             Ok(_) => return ExitCode::SUCCESS,
             Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
+            Err(
+                NativeMp4Error::InvalidInput
+                | NativeMp4Error::UnsupportedCodec
+                | NativeMp4Error::RequiredTrackMissing,
+            ) => {
+                eprintln!("native MP4 AAC extraction unsupported; trying OxideAV");
+            }
             Err(error) => {
-                eprintln!("native AAC extraction unavailable: {error}");
+                eprintln!("native AAC extraction failed: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+        match NativeOxideavProcessor::remux_audio(
+            &extract.input,
+            &extract.output,
+            "mov",
+            MAX_OUTPUT_BYTES,
+            || false,
+        ) {
+            Ok(_) => return ExitCode::SUCCESS,
+            Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
+            Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
+                eprintln!("native audio extraction unsupported; using bundled FFmpeg fallback");
+            }
+            Err(error) => {
+                eprintln!("native audio extraction failed: {error}");
+                return ExitCode::FAILURE;
             }
         }
     }
@@ -85,36 +141,124 @@ fn main() -> ExitCode {
             }
         }
     }
-    if let Some(remux) = parse_native_remux(&arguments) {
-        match NativeMp4Processor::remux(&remux.input, &remux.output, MAX_OUTPUT_BYTES, || false) {
+    if let Some(transcode) = parse_native_audio_flac(&arguments) {
+        match NativeMediaProcessor::audio_to_flac(
+            &transcode.input,
+            &transcode.output,
+            MAX_OUTPUT_BYTES,
+            || false,
+        ) {
             Ok(_) => return ExitCode::SUCCESS,
-            Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
+            Err(NativeMediaError::Cancelled) => return ExitCode::from(130),
             Err(error) => {
-                eprintln!("native MP4 remux unavailable: {error}");
+                eprintln!("native audio-to-FLAC conversion unavailable: {error}");
+            }
+        }
+    }
+    if let Some(remux) = parse_native_remux(&arguments) {
+        if remux.container == "mp4"
+            && has_mp4_extension(&remux.input)
+            && has_mp4_extension(&remux.output)
+        {
+            match NativeMp4Processor::remux(&remux.input, &remux.output, MAX_OUTPUT_BYTES, || false)
+            {
+                Ok(_) => return ExitCode::SUCCESS,
+                Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
+                Err(NativeMp4Error::InvalidInput | NativeMp4Error::UnsupportedCodec) => {
+                    eprintln!("native MP4 remux unsupported; trying OxideAV");
+                }
+                Err(error) => {
+                    eprintln!("native MP4 remux failed: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        match NativeOxideavProcessor::remux(
+            &remux.input,
+            &remux.output,
+            remux.container,
+            MAX_OUTPUT_BYTES,
+            || false,
+        ) {
+            Ok(_) => return ExitCode::SUCCESS,
+            Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
+            Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
+                eprintln!("native remux unsupported; using bundled FFmpeg fallback");
+            }
+            Err(error) => {
+                eprintln!("native remux failed: {error}");
+                return ExitCode::FAILURE;
             }
         }
     }
     if let Some(input) = parse_native_probe(&arguments) {
-        match NativeMp4Processor::probe(input) {
-            Ok(info) => {
-                for (index, track) in info.tracks.iter().enumerate() {
-                    let media_type = match track.media_type.as_str() {
-                        "video" => "Video",
-                        "audio" => "Audio",
-                        _ => continue,
-                    };
-                    let codec = track.codec.as_deref().unwrap_or("unknown");
-                    eprintln!("  Stream #0:{index}: {media_type}: {codec}");
+        if has_mp4_extension(&input) {
+            match NativeMp4Processor::probe(&input) {
+                Ok(info) => {
+                    for (index, track) in info.tracks.iter().enumerate() {
+                        let media_type = match track.media_type.as_str() {
+                            "video" => "Video",
+                            "audio" => "Audio",
+                            _ => continue,
+                        };
+                        let codec = track.codec.as_deref().unwrap_or("unknown");
+                        eprintln!("  Stream #0:{index}: {media_type}: {codec}");
+                    }
+                    return ExitCode::from(1);
                 }
-                return ExitCode::from(1);
+                Err(error) => {
+                    eprintln!("native MP4 probe unavailable: {error}");
+                }
             }
-            Err(error) => {
-                eprintln!("native media probe unavailable: {error}");
+        } else {
+            match NativeMediaProcessor::probe_audio(&input, || false) {
+                Ok(info) => {
+                    for (index, stream) in info.streams.iter().enumerate() {
+                        if stream.kind != fetchx_downloader::MediaStreamKind::Audio {
+                            continue;
+                        }
+                        let codec = stream.codec.as_deref().unwrap_or("unknown");
+                        eprintln!("  Stream #0:{index}: Audio: {codec}");
+                    }
+                    return ExitCode::from(1);
+                }
+                Err(error) => {
+                    eprintln!("native audio probe unavailable: {error}");
+                }
             }
+        }
+        if let Some(exit_code) = run_native_oxideav_probe(&input) {
+            return exit_code;
         }
     }
 
     run_fallback(&arguments)
+}
+
+fn run_native_oxideav_probe(input: &Path) -> Option<ExitCode> {
+    match NativeOxideavProcessor::probe(input, || false) {
+        Ok(info) => Some(print_probe_streams(&info)),
+        Err(error) => {
+            eprintln!("native OxideAV probe unavailable: {error}");
+            None
+        }
+    }
+}
+
+fn print_probe_streams(info: &MediaInfo) -> ExitCode {
+    for (index, stream) in info.streams.iter().enumerate() {
+        let media_type = match stream.kind {
+            MediaStreamKind::Video => "Video",
+            MediaStreamKind::Audio => "Audio",
+            MediaStreamKind::Subtitle => "Subtitle",
+            MediaStreamKind::Data | MediaStreamKind::Attachment | MediaStreamKind::Other => {
+                continue;
+            }
+        };
+        let codec = stream.codec.as_deref().unwrap_or("unknown");
+        eprintln!("  Stream #0:{index}: {media_type}: {codec}");
+    }
+    ExitCode::from(1)
 }
 
 fn parse_native_probe(arguments: &[OsString]) -> Option<PathBuf> {
@@ -222,6 +366,72 @@ fn parse_native_audio_mp3(arguments: &[OsString]) -> Option<NativeAudioMp3> {
     Some(NativeAudioMp3 { input, output })
 }
 
+fn parse_native_audio_flac(arguments: &[OsString]) -> Option<NativeAudioFlac> {
+    let output = path_argument(arguments.last()?)?;
+    if !has_extension(&output, "flac") || arguments.len() < 2 {
+        return None;
+    }
+
+    let mut input = None;
+    let mut has_audio_map = false;
+    let mut has_audio_only = false;
+    let mut has_flac_encoder = false;
+    let mut has_flac_format = false;
+    let mut index = 0;
+    while index < arguments.len() - 1 {
+        match arguments[index].to_str()? {
+            "-y" | "-nostdin" | "-hide_banner" => index += 1,
+            "-v" | "-loglevel" => {
+                arguments.get(index + 1)?.to_str()?;
+                index += 2;
+            }
+            "-i" if input.is_none() => {
+                input = Some(path_argument(arguments.get(index + 1)?)?);
+                index += 2;
+            }
+            "-map" if !has_audio_map && arguments.get(index + 1)?.to_str()? == "0:a:0" => {
+                has_audio_map = true;
+                index += 2;
+            }
+            "-vn" if !has_audio_only => {
+                has_audio_only = true;
+                index += 1;
+            }
+            "-acodec" | "-c:a" if !has_flac_encoder => {
+                if !arguments
+                    .get(index + 1)?
+                    .to_str()?
+                    .eq_ignore_ascii_case("flac")
+                {
+                    return None;
+                }
+                has_flac_encoder = true;
+                index += 2;
+            }
+            "-f" if !has_flac_format => {
+                if !arguments
+                    .get(index + 1)?
+                    .to_str()?
+                    .eq_ignore_ascii_case("flac")
+                {
+                    return None;
+                }
+                has_flac_format = true;
+                index += 2;
+            }
+            _ => return None,
+        }
+    }
+
+    if !has_audio_only || !has_flac_encoder || !has_flac_format {
+        return None;
+    }
+    Some(NativeAudioFlac {
+        input: input?,
+        output,
+    })
+}
+
 fn has_extension(path: &Path, extension: &str) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
@@ -230,11 +440,12 @@ fn has_extension(path: &Path, extension: &str) -> bool {
 
 fn parse_native_remux(arguments: &[OsString]) -> Option<NativeRemux> {
     let output = path_argument(arguments.last()?)?;
-    if !has_mp4_extension(&output) || arguments.len() < 2 {
+    if arguments.len() < 2 {
         return None;
     }
 
     let mut input = None;
+    let mut format = None;
     let mut has_all_streams_map = false;
     let mut has_stream_copy = false;
     let mut index = 0;
@@ -257,6 +468,10 @@ fn parse_native_remux(arguments: &[OsString]) -> Option<NativeRemux> {
                 has_stream_copy = true;
                 index += 2;
             }
+            "-f" if format.is_none() => {
+                format = Some(arguments.get(index + 1)?.to_str()?);
+                index += 2;
+            }
             _ => return None,
         }
     }
@@ -264,10 +479,51 @@ fn parse_native_remux(arguments: &[OsString]) -> Option<NativeRemux> {
         return None;
     }
     let input = input?;
-    if !has_mp4_extension(&input) {
-        return None;
+    let container = match format {
+        Some(format) => native_muxer_name(format)?,
+        None => native_muxer_for_path(&output)?,
+    };
+    Some(NativeRemux {
+        input,
+        output,
+        container,
+    })
+}
+
+fn native_muxer_name(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "mp4" | "ipod" | "3gp" => Some("mov"),
+        "mov" => Some("mov"),
+        "matroska" | "mkv" => Some("matroska"),
+        "webm" => Some("webm"),
+        "webvtt" => Some("webvtt"),
+        "srt" => Some("srt"),
+        "flac" => Some("flac"),
+        "wav" => Some("wav"),
+        "ogg" => Some("ogg"),
+        "avi" => Some("avi"),
+        "mpegts" => Some("mpegts"),
+        "yuv4mpegpipe" => Some("y4m"),
+        _ => None,
     }
-    Some(NativeRemux { input, output })
+}
+
+fn native_muxer_for_path(path: &Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "mp4" | "m4v" | "m4a" | "3gp" => Some("mov"),
+        "mov" => Some("mov"),
+        "mkv" | "mka" => Some("matroska"),
+        "webm" => Some("webm"),
+        "vtt" => Some("webvtt"),
+        "srt" => Some("srt"),
+        "flac" => Some("flac"),
+        "wav" => Some("wav"),
+        "ogg" | "oga" => Some("ogg"),
+        "avi" => Some("avi"),
+        "ts" | "mts" | "m2ts" => Some("mpegts"),
+        "y4m" => Some("y4m"),
+        _ => None,
+    }
 }
 
 fn has_mp4_extension(path: &Path) -> bool {
@@ -318,18 +574,17 @@ fn parse_native_merge(arguments: &[OsString]) -> Option<NativeMerge> {
     }
 
     let output = path_argument(arguments.last()?)?;
-    if !output
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
-    {
-        return None;
-    }
+    let container = match output.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "mp4" => "mov",
+        "mkv" => "matroska",
+        _ => return None,
+    };
 
     Some(NativeMerge {
         video: inputs[video_input].clone(),
         audio: inputs[audio_input].clone(),
         output,
+        container,
     })
 }
 
@@ -387,8 +642,8 @@ fn fallback_executable() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_native_audio_extract, parse_native_audio_mp3, parse_native_merge, parse_native_probe,
-        parse_native_remux,
+        parse_native_audio_extract, parse_native_audio_flac, parse_native_audio_mp3,
+        parse_native_merge, parse_native_probe, parse_native_remux,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -418,11 +673,12 @@ mod tests {
         assert_eq!(merge.video, PathBuf::from("/downloads/video.mp4"));
         assert_eq!(merge.audio, PathBuf::from("/downloads/audio.m4a"));
         assert_eq!(merge.output, PathBuf::from("/downloads/merged.temp.mp4"));
+        assert_eq!(merge.container, "mov");
     }
 
     #[test]
-    fn rejects_other_containers_and_unmapped_tracks() {
-        let container = args(&[
+    fn recognizes_native_matroska_merge_and_rejects_unmapped_tracks() {
+        let matroska = args(&[
             "-i",
             "video.mp4",
             "-i",
@@ -451,7 +707,12 @@ mod tests {
             "merged.mp4",
         ]);
 
-        assert!(parse_native_merge(&container).is_none());
+        assert_eq!(
+            parse_native_merge(&matroska)
+                .expect("supported Matroska merge")
+                .container,
+            "matroska"
+        );
         assert!(parse_native_merge(&extra_track).is_none());
     }
 
@@ -572,7 +833,43 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_all_stream_mp4_copy_remux() {
+    fn recognizes_supported_audio_to_flac_arguments() {
+        let arguments = args(&[
+            "-y",
+            "-i",
+            "input.m4a",
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "flac",
+            "-f",
+            "flac",
+            "output.flac",
+        ]);
+        let transcode = parse_native_audio_flac(&arguments).expect("supported audio-to-FLAC");
+        assert_eq!(transcode.input, PathBuf::from("input.m4a"));
+        assert_eq!(transcode.output, PathBuf::from("output.flac"));
+
+        assert!(
+            parse_native_audio_flac(&args(&[
+                "-i",
+                "input.m4a",
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-c:a",
+                "flac",
+                "-f",
+                "flac",
+                "output.mp3",
+            ]))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn recognizes_all_stream_registered_container_copy_remuxes() {
         let arguments = args(&[
             "-y",
             "-i",
@@ -586,6 +883,40 @@ mod tests {
         let remux = parse_native_remux(&arguments).expect("supported remux");
         assert_eq!(remux.input, PathBuf::from("/downloads/input.mp4"));
         assert_eq!(remux.output, PathBuf::from("/downloads/output.mp4"));
+        assert_eq!(remux.container, "mp4");
+    }
+
+    #[test]
+    fn recognizes_registered_native_remux_containers() {
+        let matroska = args(&["-i", "input.mov", "-map", "0", "-c", "copy", "output.mkv"]);
+        let explicit_webm = args(&[
+            "-i",
+            "input.mp4",
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-f",
+            "webm",
+            "output.tmp",
+        ]);
+        let ogg = args(&["-i", "input.flac", "-map", "0", "-c", "copy", "output.oga"]);
+        assert_eq!(
+            parse_native_remux(&matroska)
+                .expect("Matroska remux")
+                .container,
+            "matroska"
+        );
+        assert_eq!(
+            parse_native_remux(&explicit_webm)
+                .expect("WebM remux")
+                .container,
+            "webm"
+        );
+        assert_eq!(
+            parse_native_remux(&ogg).expect("Ogg remux").container,
+            "ogg"
+        );
     }
 
     #[test]
@@ -608,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_partial_mappings_and_other_containers_for_native_remux() {
+    fn rejects_partial_mappings_and_unknown_containers_for_native_remux() {
         let partial_map = args(&[
             "-i",
             "input.mp4",
@@ -618,9 +949,19 @@ mod tests {
             "copy",
             "output.mp4",
         ]);
-        let webm_output = args(&["-i", "input.mp4", "-map", "0", "-c", "copy", "output.webm"]);
+        let unknown_format = args(&[
+            "-i",
+            "input.mp4",
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-f",
+            "unknown",
+            "output.mp4",
+        ]);
         assert!(parse_native_remux(&partial_map).is_none());
-        assert!(parse_native_remux(&webm_output).is_none());
+        assert!(parse_native_remux(&unknown_format).is_none());
     }
 
     #[test]

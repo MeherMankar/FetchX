@@ -38,15 +38,24 @@ process adapter and uses fake runners in tests; no installed yt-dlp is required 
 An initial native Rust MP4 path probes MP4 metadata and stream-copies supported H.264/AAC,
 HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video and one
 audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
-Compatible H.264/AAC merges also use native stream copy;
-duration mismatches fall back to FFmpeg to preserve its shortest-stream behavior.
-Mono/stereo integer PCM WAV can be transcoded natively to FLAC. Symphonia demuxes common
+Compatible H.264/AAC merges use native stream copy. OxideAV also attempts native
+stream-copy merges for other registered codec/container combinations when both inputs
+report matching durations and the selected MP4 or Matroska muxer accepts their streams;
+unsupported or mismatched inputs retain the FFmpeg fallback.
+Integer PCM WAV with 1–8 channels retains its native-sample FLAC path. Symphonia also supports
+FLAC encoding from decoded audio with 1–8 channels at 8–192 kHz, in addition to MP3 encoding.
+Symphonia demuxes common
 audio sources (WAV, AIFF, CAF, MP3, FLAC, AAC/ALAC in MP4/M4A, Vorbis in Ogg, and supported
-audio tracks in Matroska/WebM); mono/stereo sources at 32, 44.1, or 48 kHz can be encoded
-to 192 kb/s MP3. SRT subtitles can be converted to WebVTT. Other transcoding, unsupported
-MP4 subtitle/data tracks, codecs, and layouts continue through FFmpeg. The desktop media
-manager can run these native operations
-without installed FFmpeg or ffprobe; an unavailable helper is reported only when a requested
+audio tracks in Matroska/WebM); decoded audio with 1–8 channels and sample rates from
+8–192 kHz is downmixed/resampled as needed and encoded to 192 kb/s MP3. Symphonia also
+probes supported audio-only WAV, AIFF, CAF, FLAC, M4A,
+MP1/MP2/MP3, and OGA files natively, without invoking ffprobe. SRT subtitles can be
+converted to WebVTT. OxideAV's pure-Rust registry now supplies native container and stream
+probes and attempts stream-copy remuxes into registered MOV/MP4, Matroska, WebM, Ogg, AVI,
+MPEG-TS, WAV, FLAC, and subtitle containers when stream codecs are compatible.
+Unsupported probes, remuxes, codecs, merges, and transcoding still use the external FFmpeg
+fallback. The desktop media manager can run supported native operations without installed
+FFmpeg or ffprobe; an unavailable helper is reported only when a requested
 operation or probe needs that external fallback. Native output remains size-bounded, cancellable,
 and published without overwriting an existing file.
 This original FetchX implementation takes FFmpeg's stream-copy behavior as a functional
@@ -57,7 +66,10 @@ reference and does not copy FFmpeg source code. MP4 container handling uses the 
 uses [`flacenc`](https://crates.io/crates/flacenc) (Apache-2.0); MP3 encoding uses
 [`audio2mp3-core`](https://crates.io/crates/audio2mp3-core) (MIT OR Apache-2.0); WAV
 parsing uses [`hound`](https://crates.io/crates/hound) (Apache-2.0), and audio demuxing/
-decoding uses [`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0).
+decoding uses [`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0). Additional media
+container probing and stream-copy remuxing use the MIT-licensed
+[`oxideav-core`](https://crates.io/crates/oxideav-core) and
+[`oxideav-meta`](https://crates.io/crates/oxideav-meta). OxideAV requires Rust 1.95 or newer.
 Historical aria2 records remain readable but the external aria2 runtime, daemon RPC,
 process supervision, packaging, settings, and fallback have been removed. Supported
 new work uses FetchX's shared Rust engines; eligible old records can be restarted as
@@ -72,10 +84,11 @@ controls and survives restart.
 
 Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
 video/audio selections first use a FetchX native FFmpeg-compatible shim for supported
-single-input MP4 stream-copy remuxes, H.264/AAC MP4 merges, AAC-in-MP4 to M4A extraction,
-and supported audio-to-MP3 conversions. Other codecs, containers, and audio transcoding
-fall back to the bundled, statically linked FFmpeg 8.1.2 executable (LGPL configuration,
-without GPL-only external libraries), built for the app's supported ABIs with
+single-input registered-container stream-copy remuxes, H.264/AAC MP4 merges, compatible
+audio-in-MP4 to M4A extraction, and supported audio-to-MP3 conversions. Other codecs,
+containers, and audio transcoding still fall back to the bundled, statically linked
+FFmpeg 8.1.2 executable (LGPL configuration, without GPL-only external libraries), built
+for the app's supported ABIs with
 `scripts/build-android-ffmpeg.sh`.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and

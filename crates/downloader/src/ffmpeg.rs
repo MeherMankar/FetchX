@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 use crate::native_media::{NativeMediaError, NativeMediaProcessor};
 use crate::native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor};
+use crate::native_oxideav::{NativeOxideavError, NativeOxideavProcessor};
 
 const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 6);
 const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 24);
@@ -129,6 +130,18 @@ impl MediaContainer {
     fn muxer(self) -> &'static str {
         match self {
             Self::Mp4 => "mp4",
+            Self::Matroska => "matroska",
+            Self::WebM => "webm",
+            Self::WebVtt => "webvtt",
+            Self::Mp3 => "mp3",
+            Self::Flac => "flac",
+            Self::Wav => "wav",
+        }
+    }
+
+    fn oxideav_muxer(self) -> &'static str {
+        match self {
+            Self::Mp4 => "mov",
             Self::Matroska => "matroska",
             Self::WebM => "webm",
             Self::WebVtt => "webvtt",
@@ -294,6 +307,8 @@ pub enum FfmpegError {
     NativeMp4(#[from] NativeMp4Error),
     #[error("native media processing failed: {0}")]
     NativeMedia(#[from] NativeMediaError),
+    #[error("native OxideAV media processing failed: {0}")]
+    NativeOxideav(#[from] NativeOxideavError),
 }
 
 pub trait FfmpegProcessRunner: Send + Sync {
@@ -492,6 +507,47 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
+        if NativeMediaProcessor::supports_audio_probe_path(&input) {
+            let native_input = input.clone();
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::probe_audio(&native_input, || {
+                        cancelled.load(Ordering::Relaxed) || *receiver.borrow()
+                    })
+                },
+            )
+            .await
+            {
+                Ok(info) => return Ok(info),
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native audio probe unsupported; falling back to ffprobe");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let native_input = input.clone();
+        match run_native_task(
+            self.process_timeout,
+            cancellation.clone(),
+            move |cancelled, receiver| {
+                NativeOxideavProcessor::probe(&native_input, || {
+                    cancelled.load(Ordering::Relaxed) || *receiver.borrow()
+                })
+            },
+        )
+        .await
+        {
+            Ok(info) => return Ok(info),
+            Err(FfmpegError::NativeOxideav(
+                NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_),
+            )) => {
+                debug!("native OxideAV probe unsupported; falling back to ffprobe");
+            }
+            Err(error) => return Err(error),
+        }
         let ffprobe_executable = self
             .ffprobe_executable
             .as_deref()
@@ -574,6 +630,55 @@ impl FfmpegProcessor {
                     | NativeMp4Error::UnsupportedTiming,
                 )) => {
                     debug!("native MP4 merge unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        let oxideav_muxer = destination
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| {
+                if extension.eq_ignore_ascii_case("mkv") {
+                    "matroska"
+                } else if extension.eq_ignore_ascii_case("mp4") {
+                    "mov"
+                } else {
+                    ""
+                }
+            })
+            .filter(|muxer| !muxer.is_empty());
+        if let Some(output_container) = oxideav_muxer {
+            let native_video = video.clone();
+            let native_audio = audio.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeOxideavProcessor::merge_video_audio(
+                        &native_video,
+                        &native_audio,
+                        &native_output,
+                        output_container,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeOxideav(
+                    NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_),
+                )) => {
+                    debug!("native OxideAV merge unsupported; falling back to FFmpeg");
                 }
                 Err(error) => return Err(error),
             }
@@ -739,6 +844,42 @@ impl FfmpegProcessor {
         if matches!(
             request.operation,
             MediaOperation::Transcode {
+                preset: TranscodePreset::FlacAudio
+            }
+        ) {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::audio_to_flac(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native audio-to-FLAC conversion unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if matches!(
+            request.operation,
+            MediaOperation::Transcode {
                 preset: TranscodePreset::Mp3Audio
             }
         ) {
@@ -845,6 +986,40 @@ impl FfmpegProcessor {
                 Err(FfmpegError::NativeMp4(NativeMp4Error::InvalidInput))
                 | Err(FfmpegError::NativeMp4(NativeMp4Error::UnsupportedCodec)) => {
                     debug!("native MP4 remux unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if let MediaOperation::Remux { container } = request.operation {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let output_container = container.oxideav_muxer();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeOxideavProcessor::remux(
+                        &native_input,
+                        &native_output,
+                        output_container,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeOxideav(
+                    NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_),
+                )) => {
+                    debug!("native OxideAV remux unsupported; falling back to FFmpeg");
                 }
                 Err(error) => return Err(error),
             }
@@ -2262,6 +2437,22 @@ mod tests {
         Ok(())
     }
 
+    fn write_wav_fixture(path: &Path) -> Result<(), Box<dyn Error>> {
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec)?;
+        for frame in 0..4_410_i16 {
+            writer.write_sample(frame.wrapping_mul(3))?;
+            writer.write_sample(frame.wrapping_mul(-2))?;
+        }
+        writer.finalize()?;
+        Ok(())
+    }
+
     #[test]
     fn parses_probe_metadata_and_missing_values() -> Result<(), FfmpegError> {
         let info = parse_probe_output(parse_fixture())?;
@@ -2329,6 +2520,36 @@ mod tests {
         assert_eq!(info.format_name.as_deref(), Some("mp4"));
         assert_eq!(info.streams[0].codec.as_deref(), Some("h264"));
         assert_eq!(info.streams[0].width, Some(640));
+        assert!(
+            !state
+                .lock()
+                .expect("fake runner mutex")
+                .calls
+                .iter()
+                .any(|(_, arguments)| arguments.contains(&"-show_streams".to_owned()))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probe_uses_symphonia_for_supported_audio_without_ffprobe() -> Result<(), Box<dyn Error>>
+    {
+        let base = tempdir()?;
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        let processor = setup(runner, base.path()).await?;
+        let wav = base.path().join("input.wav");
+        let input = base.path().join("input.mp3");
+        write_wav_fixture(&wav)?;
+        NativeMediaProcessor::wav_to_mp3(&wav, &input, 1024 * 1024, || false)?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        let info = processor.probe(&input, cancellation).await?;
+        assert_eq!(info.format_name.as_deref(), Some("mp3"));
+        assert_eq!(info.streams.len(), 1);
+        assert_eq!(info.streams[0].codec.as_deref(), Some("mp3"));
+        assert_eq!(info.streams[0].sample_rate_hz, Some(44_100));
+        assert_eq!(info.streams[0].channels, Some(2));
         assert!(
             !state
                 .lock()
@@ -2735,6 +2956,38 @@ mod tests {
                 None,
             )
             .await?;
+
+        let flac_copy_output = directory.path().join("audio-from-flac.flac");
+        processor
+            .process(
+                MediaProcessRequest::transcode(
+                    &audio_output,
+                    &flac_copy_output,
+                    TranscodePreset::FlacAudio,
+                ),
+                cancellation.clone(),
+                None,
+            )
+            .await?;
+        assert!(
+            tokio::fs::read(&flac_copy_output)
+                .await?
+                .starts_with(b"fLaC")
+        );
+
+        let remuxed_audio = directory.path().join("audio-remux.wav");
+        processor
+            .process(
+                MediaProcessRequest::remux(&audio_input, &remuxed_audio, MediaContainer::Wav),
+                cancellation.clone(),
+                None,
+            )
+            .await?;
+        let mut remuxed = hound::WavReader::open(remuxed_audio)?;
+        assert_eq!(
+            remuxed.samples::<i16>().collect::<Result<Vec<_>, _>>()?,
+            vec![0, 1]
+        );
 
         let unsupported_input = directory.path().join("unsupported.mkv");
         let unsupported_output = directory.path().join("unsupported.mp4");

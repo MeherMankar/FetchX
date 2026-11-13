@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-audio2mp3-core = "0.2.0"
+audio2mp3-core = { version = "0.2.0", features = ["pcm-convert"] }
 base64.workspace = true
 fetchx-core = { path = "../core" }
 fetchx-media-extractor = { path = "../media-extractor" }
@@ -37,6 +37,8 @@ ebml-webm = "=0.2.1"
 flacenc = { version = "=0.5.1", default-features = false }
 hound = "=3.5.1"
 symphonia = { version = "=0.6.1", default-features = false, features = ["aac", "adpcm", "aiff", "alac", "caf", "flac", "isomp4", "mkv", "mp1", "mp2", "mp3", "ogg", "pcm", "vorbis", "wav"] }
+oxideav-core = "=0.1.43"
+oxideav-meta = { version = "=0.0.4", default-features = false, features = ["audio", "video", "subtitles"] }
 
 [features]
 phase28-benchmark-local-http = []

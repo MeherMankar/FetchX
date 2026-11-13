@@ -1769,6 +1769,30 @@ mod tests {
     }
 
     #[test]
+    fn merges_oxideav_compatible_mp4_streams_natively() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let video = directory.path().join("video.mp4");
+        let audio = directory.path().join("audio.mp4");
+        let output = directory.path().join("merged.mp4");
+        make_mp4(&video, video_config(), 1000)?;
+        make_mp4(&audio, audio_config(), 1000)?;
+
+        crate::native_oxideav::NativeOxideavProcessor::merge_video_audio(
+            &video,
+            &audio,
+            &output,
+            "mov",
+            1024 * 1024,
+            || false,
+        )?;
+        let info = NativeMp4Processor::probe(&output)?;
+        assert_eq!(info.tracks.len(), 2);
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("h264"));
+        assert_eq!(info.tracks[1].codec.as_deref(), Some("aac"));
+        Ok(())
+    }
+
+    #[test]
     fn extracts_aac_audio_as_an_audio_only_mp4() -> Result<(), Box<dyn Error>> {
         let directory = tempdir()?;
         let input = directory.path().join("audio.mp4");
