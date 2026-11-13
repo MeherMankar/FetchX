@@ -785,19 +785,16 @@ fun BrowserScreen(
 
                 BrowserBottomBar(
                     canGoBack = activeTab?.canGoBack == true,
-                    canGoForward = activeTab?.canGoForward == true,
                     tabCount = uiState.tabs.size,
                     ongoingDownloadCount = ongoingDownloadCount,
                     onBack = { viewModel.goBack() },
-                    onForward = { viewModel.goForward() },
                     onHome = {
-                    viewModel.navigate("about:blank")
-                    viewModel.syncUrlInput("")
+                        viewModel.navigate("about:blank")
+                        viewModel.syncUrlInput("")
                     },
                     onDownloads = onNavigateToDownloads,
                     onTabs = { viewModel.openTabOverview() },
                     onMenu = openMenu,
-                    accentColor = spaceAccentColor,
                 )
             }
         },
@@ -900,6 +897,10 @@ fun BrowserScreen(
                     onGoBack = {
                         closeMenu()
                         viewModel.goBack()
+                    },
+                    onGoForward = {
+                        closeMenu()
+                        viewModel.goForward()
                     },
                     onReload = {
                         closeMenu()
@@ -2008,16 +2009,13 @@ private fun BrowserDownloadStatus(
 @Composable
 internal fun BrowserBottomBar(
     canGoBack: Boolean,
-    canGoForward: Boolean,
     tabCount: Int,
     ongoingDownloadCount: Int,
     onBack: () -> Unit,
-    onForward: () -> Unit,
     onHome: () -> Unit,
     onDownloads: () -> Unit,
     onTabs: () -> Unit,
     onMenu: () -> Unit,
-    accentColor: Color,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -2049,22 +2047,7 @@ internal fun BrowserBottomBar(
                 )
             }
 
-            // 2. Forward button
-            IconButton(
-                onClick = onForward,
-                enabled = canGoForward,
-                modifier = Modifier.size(48.dp),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Forward",
-                    tint = if (canGoForward) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-
-            // 3. Home button
+            // 2. Home button
             IconButton(
                 onClick = onHome,
                 modifier = Modifier.size(48.dp),
@@ -2077,7 +2060,7 @@ internal fun BrowserBottomBar(
                 )
             }
 
-            // 4. Tabs badge
+            // 3. Tabs badge
             IconButton(
                 onClick = onTabs,
                 modifier = Modifier
@@ -2109,7 +2092,7 @@ internal fun BrowserBottomBar(
                 }
             }
 
-            // 5. Downloads
+            // 4. Downloads
             IconButton(
                 onClick = onDownloads,
                 modifier = Modifier.size(48.dp),
@@ -2136,7 +2119,7 @@ internal fun BrowserBottomBar(
                 }
             }
 
-            // 6. 3-dot Menu
+            // 5. Browser menu
             IconButton(
                 onClick = onMenu,
                 modifier = Modifier.size(48.dp),
@@ -2162,6 +2145,7 @@ private fun BrowserMenuSheet(
     onDismiss: () -> Unit,
     onNavigateHome: () -> Unit,
     onGoBack: () -> Unit,
+    onGoForward: () -> Unit,
     onReload: () -> Unit,
     onToggleBookmark: () -> Unit,
     onDownloadMedia: () -> Unit,
@@ -2286,6 +2270,37 @@ private fun BrowserMenuSheet(
                         Spacer(Modifier.height(4.dp))
                         Text("Back", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // Forward remains available here while the main bar stays compact.
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable(
+                            enabled = activeTab?.canGoForward == true,
+                            onClick = onGoForward,
+                        ),
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.surfaceVariant
+                                   else MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.size(48.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = "Forward",
+                                    tint = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.onSurface
+                                           else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Forward",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     // Reload
                     Column(
