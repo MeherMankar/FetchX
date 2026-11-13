@@ -134,7 +134,7 @@ const SECTION_TITLES: Record<NavSection, string> = {
 };
 
 const EMPTY_MESSAGES: Record<NavSection, { title: string; subtitle: string }> = {
-  all:       { title: "No downloads yet",          subtitle: "Click + Add or drag a URL here." },
+  all:       { title: "No downloads yet",          subtitle: "Add a download or drop a URL here" },
   active:    { title: "Nothing downloading",        subtitle: "Start a queued download to see it here." },
   queued:    { title: "Queue is empty",             subtitle: "Add a download to fill the queue." },
   paused:    { title: "Nothing paused",             subtitle: "Pause an active download to see it here." },
