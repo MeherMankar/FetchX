@@ -248,7 +248,7 @@ fun TorrentDetailScreen(
             if (telemetry != null) {
                 item(key = "telemetry") {
                     Spacer(modifier = Modifier.height(12.dp))
-                    SectionHeader("Live Telemetry")
+                    SectionHeader("Live telemetry")
                     Spacer(modifier = Modifier.height(4.dp))
                     TelemetryCard(telemetry = telemetry)
                     Spacer(modifier = Modifier.height(12.dp))
@@ -282,18 +282,18 @@ fun TorrentDetailScreen(
 @Composable
 private fun InfoCard(item: DownloadItem, metadata: TorrentDownloadMetadata?) {
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             val torrentMeta = metadata?.metadata
             if (torrentMeta != null) {
                 LabeledValue("Name", torrentMeta.name)
-                LabeledValue("Info Hash", torrentMeta.infoHash)
+                LabeledValue("Info hash", torrentMeta.infoHash)
                 LabeledValue(
-                    "Total Size",
+                    "Total size",
                     formatBytes(torrentMeta.totalSizeBytes),
                 )
                 if (metadata.selectedTotalBytes > 0) {
                     LabeledValue(
-                        "Selected Size",
+                        "Selected size",
                         formatBytes(metadata.selectedTotalBytes),
                     )
                 }
@@ -309,7 +309,7 @@ private fun SectionHeader(title: String) {
     Text(
         text = title,
         style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
+        color = MaterialTheme.colorScheme.onSurface,
     )
     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 }
@@ -422,10 +422,10 @@ private fun TelemetryCard(telemetry: TorrentTelemetry) {
             val ratio = telemetry.shareRatio?.let { "%.3f".format(it) } ?: "—"
 
             LabeledValue("Peers", "$peers (complete: $completedPeers, seeds: $seeds)")
-            LabeledValue("Download Speed", download)
-            LabeledValue("Upload Speed", upload)
+            LabeledValue("Download speed", download)
+            LabeledValue("Upload speed", upload)
             LabeledValue("Uploaded", uploaded)
-            LabeledValue("Share Ratio", ratio)
+            LabeledValue("Share ratio", ratio)
         }
     }
 }
@@ -447,7 +447,7 @@ private fun ActionButtons(
                 onClick = onStartSelectedFiles,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Start Selected Files")
+                Text("Start selected files")
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
@@ -458,7 +458,7 @@ private fun ActionButtons(
                 onClick = onStopSeeding,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Stop Seeding")
+                Text("Stop seeding")
             }
             Spacer(modifier = Modifier.height(8.dp))
         }

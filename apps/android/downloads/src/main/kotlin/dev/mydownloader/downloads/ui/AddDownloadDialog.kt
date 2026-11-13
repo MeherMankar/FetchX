@@ -187,7 +187,7 @@ fun AddDownloadDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add Download") },
+        title = { Text("Add download") },
         text = {
             Column(
                 modifier = Modifier

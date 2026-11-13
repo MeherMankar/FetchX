@@ -560,7 +560,6 @@ fun BrowserScreen(
                                 }
                             }
 
-                            // Address bar capsule (Motrix/Arc-inspired clean pill)
                             Surface(
                                 onClick = {
                                     isUrlBarExpanded = true
@@ -1045,8 +1044,8 @@ fun BrowserScreen(
                 Surface(
                     onClick = { viewModel.toggleCompactMode() },
                     shape = CircleShape,
-                    color = spaceAccentColor.copy(alpha = 0.92f),
-                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 28.dp)
@@ -1056,7 +1055,7 @@ fun BrowserScreen(
                         Icon(
                             Icons.Default.Fullscreen,
                             contentDescription = "Exit compact mode",
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.size(20.dp),
                         )
                     }
@@ -2371,7 +2370,7 @@ private fun BrowserMenuSheet(
                     Text(
                         "FetchX",
                         style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                         ),
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -2553,7 +2552,7 @@ private fun BrowserMenuSheet(
                             }
                         }
                         Spacer(Modifier.height(4.dp))
-                        Text("Grab", style = MaterialTheme.typography.labelSmall,
+                        Text("Download", style = MaterialTheme.typography.labelSmall,
                             color = if (canDownload) MaterialTheme.colorScheme.primary
                                    else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -2565,17 +2564,14 @@ private fun BrowserMenuSheet(
             if (activeTab != null) {
                 val canUseWebPageActions = isHttpOrHttpsPageUrl(activeTab.url)
                 Text(
-                    text = "PAGE",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.2.sp,
-                    ),
+                    text = "Page",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
                 )
                 BrowserMenuItemRow(
                     icon = Icons.Default.FindInPage,
-                    title = "Find in Page",
+                    title = "Find in page",
                     iconTint = MaterialTheme.colorScheme.onSurface,
                     onClick = onFindInPage,
                 )
@@ -2618,11 +2614,8 @@ private fun BrowserMenuSheet(
 
             // ── Section: Tabs & Viewing ────────────────────────────────────
             Text(
-                text = "TABS & VIEWING",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                ),
+                text = "Tabs & viewing",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
@@ -2643,11 +2636,8 @@ private fun BrowserMenuSheet(
 
             // ── Section: Privacy & Security ────────────────────────────────
             Text(
-                text = "PRIVACY & SECURITY",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                ),
+                text = "Privacy & security",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
@@ -2661,7 +2651,7 @@ private fun BrowserMenuSheet(
             )
             BrowserMenuItemRow(
                 icon = Icons.Default.Security,
-                title = "Ad Blocking",
+                title = "Ad blocking",
                 iconTint = MaterialTheme.colorScheme.onSurface,
                 onClick = onOpenAdBlockingSettings,
             )
@@ -2676,11 +2666,8 @@ private fun BrowserMenuSheet(
 
             // ── Section: Library ───────────────────────────────────────────
             Text(
-                text = "LIBRARY",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                ),
+                text = "Library",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
@@ -2708,11 +2695,8 @@ private fun BrowserMenuSheet(
 
             // ── Section: Preferences ───────────────────────────────────────
             Text(
-                text = "PREFERENCES",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.2.sp,
-                ),
+                text = "Preferences",
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
             )
@@ -2799,8 +2783,7 @@ internal fun FindInPagePanel(
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = 4.dp,
-            shadowElevation = 4.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             Column(
                 modifier = Modifier
@@ -2812,7 +2795,7 @@ internal fun FindInPagePanel(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Find in Page",
+                        text = "Find in page",
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.weight(1f),
                     )
@@ -2822,7 +2805,7 @@ internal fun FindInPagePanel(
                     ) {
                         Icon(
                             Icons.Default.Close,
-                            contentDescription = "Close Find in Page",
+                            contentDescription = "Close Find in page",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -3087,7 +3070,7 @@ private fun ThemePickerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Theme Color") },
+        title = { Text("Theme color") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 // Preview swatch
@@ -3279,7 +3262,7 @@ private fun SearchEngineSelectorDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Search Engine") },
+        title = { Text("Search engine") },
         text = {
             LazyColumn(modifier = Modifier.fillMaxWidth()) {
                 items(SearchEngine.entries) { engine ->
@@ -4207,7 +4190,7 @@ private fun ExtensionsDialog(
                         }
                         if (extension.id.value == UBLOCK_ORIGIN_EXTENSION_ID) {
                             Text(
-                                "Manage this extension in Ad Blocking settings.",
+                                "Manage this extension in Ad blocking settings.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -4484,7 +4467,7 @@ private fun BrowserSettingsDialog(
                     }
                     SettingsSection("Privacy & Security") {
                         SettingsActionRow(
-                            title = "Ad Blocking",
+                            title = "Ad blocking",
                             subtitle = "Manage GeckoView protection and uBlock Origin",
                             onClick = onOpenAdBlocking,
                         )
@@ -4650,7 +4633,7 @@ private fun AdBlockingSettingsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Ad Blocking") },
+        title = { Text("Ad blocking") },
         text = {
             Column(
                 modifier = Modifier
@@ -4822,7 +4805,6 @@ private fun VideoDownloadBanner(
         shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        shadowElevation = 8.dp,
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(

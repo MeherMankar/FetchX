@@ -8,6 +8,8 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
 
@@ -80,19 +82,26 @@ fun FetchXTheme(
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {
-        // Custom seed overrides dynamic wallpaper
+        // Keep FetchX surfaces and semantic colors stable while the accent follows the saved seed.
         seedColor != null -> {
+            val onAccent = if (seedColor.luminance() > 0.179f) {
+                Color(0xFF111827)
+            } else {
+                Color.White
+            }
             if (darkTheme) {
-                darkColorScheme(
+                FetchXDarkColorScheme.copy(
                     primary = seedColor,
-                    secondary = seedColor.copy(alpha = 0.7f),
-                    tertiary = seedColor.copy(alpha = 0.5f),
+                    onPrimary = onAccent,
+                    primaryContainer = lerp(Color(0xFF19191B), seedColor, 0.36f),
+                    onPrimaryContainer = Color(0xFFEDF2F8),
                 )
             } else {
-                lightColorScheme(
+                FetchXLightColorScheme.copy(
                     primary = seedColor,
-                    secondary = seedColor.copy(alpha = 0.7f),
-                    tertiary = seedColor.copy(alpha = 0.5f),
+                    onPrimary = onAccent,
+                    primaryContainer = lerp(Color.White, seedColor, 0.16f),
+                    onPrimaryContainer = Color(0xFF171717),
                 )
             }
         }

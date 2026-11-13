@@ -1,20 +1,31 @@
 package dev.fetchx.app.storage
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +43,7 @@ import dev.fetchx.app.service.DownloadNetworkPolicy
 import dev.fetchx.app.media.MediaDownloadPreferences
 import dev.fetchx.downloads.storage.StorageManager
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun StorageScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -92,194 +104,256 @@ internal fun StorageScreen(onBack: () -> Unit) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            OutlinedButton(onClick = onBack) { Text("Back") }
-            OutlinedButton(
-                onClick = { refreshRequest++ },
-                enabled = !isLoading,
-            ) {
-                Text("Refresh")
-            }
-        }
-        Text("FetchX storage", style = MaterialTheme.typography.headlineSmall)
-        Text(
-            "Read-only estimates of app-specific storage. FetchX does not remove files from this screen.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Card(modifier = Modifier.fillMaxWidth()) {
-            PolicySwitch(
-                title = "Smart download folders",
-                description = "Route files into Videos, Audio, Archives, Documents, or Others automatically.",
-                checked = smartFolders,
-                onCheckedChange = { enabled ->
-                    smartFolders = enabled
-                    downloadStorageManager.setSmartFoldersEnabled(enabled)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("FetchX storage") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { refreshRequest++ },
+                        enabled = !isLoading,
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh storage")
+                    }
                 },
             )
-        }
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Row(
+        },
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            contentAlignment = androidx.compose.ui.Alignment.TopCenter,
+        ) {
+            Column(
                 modifier = Modifier
+                    .widthIn(max = 840.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Download only on Wi-Fi", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "Pause active transfers when Wi-Fi is unavailable, then resume them on Wi-Fi.",
-                        style = MaterialTheme.typography.bodySmall,
+                Text(
+                    "Read-only estimates of app-specific storage. FetchX does not remove files from this screen.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                StorageSection("Download folders") {
+                    PolicySwitch(
+                        title = "Smart download folders",
+                        description = "Route files into Videos, Audio, Archives, Documents, or Others automatically.",
+                        checked = smartFolders,
+                        onCheckedChange = { enabled ->
+                            smartFolders = enabled
+                            downloadStorageManager.setSmartFoldersEnabled(enabled)
+                        },
                     )
                 }
-                Text("Media downloads", style = MaterialTheme.typography.titleMedium)
-                PolicySwitch(
-                    title = "Quick shared links",
-                    description = "Open shared video links directly in FetchX’s media download flow.",
-                    checked = quickSharedDownloads,
-                    onCheckedChange = { enabled ->
-                        quickSharedDownloads = enabled
-                        MediaDownloadPreferences.setQuickDownloadEnabled(context, enabled)
-                    },
-                )
-                PolicySwitch(
-                    title = "Remove SponsorBlock segments",
-                    description = "Remove sponsors, introductions, outros, and self-promotions from supported yt-dlp videos.",
-                    checked = removeSponsorSegments,
-                    onCheckedChange = { enabled ->
-                        removeSponsorSegments = enabled
-                        MediaDownloadPreferences.setSponsorBlockEnabled(context, enabled)
-                    },
-                )
-                PolicySwitch(
-                    title = "Download subtitles",
-                    description = "Write subtitles using the preferred language matching rules.",
-                    checked = downloadSubtitles,
-                    onCheckedChange = { enabled ->
-                        downloadSubtitles = enabled
-                        MediaDownloadPreferences.setSubtitlesEnabled(context, enabled)
-                    },
-                )
-                PolicySwitch(
-                    title = "Embed subtitles",
-                    description = "Embed downloaded subtitles when the selected output format supports them.",
-                    checked = embedSubtitles,
-                    onCheckedChange = { enabled ->
-                        embedSubtitles = enabled
-                        MediaDownloadPreferences.setSubtitlesEmbedded(context, enabled)
-                    },
-                )
-                PolicySwitch(
-                    title = "Embed media metadata",
-                    description = "Add title, author, and other available metadata to media files.",
-                    checked = embedMetadata,
-                    onCheckedChange = { enabled ->
-                        embedMetadata = enabled
-                        MediaDownloadPreferences.setMetadataEmbeddingEnabled(context, enabled)
-                    },
-                )
-                Switch(
-                    checked = wifiOnly,
-                    onCheckedChange = { enabled ->
-                        wifiOnly = enabled
-                        DownloadNetworkPolicy.setWifiOnlyEnabled(context, enabled)
-                    },
-                )
+                StorageSection("Transfer settings") {
+                    PolicySwitch(
+                        title = "Download only on Wi-Fi",
+                        description = "Pause active transfers when Wi-Fi is unavailable, then resume them on Wi-Fi.",
+                        checked = wifiOnly,
+                        onCheckedChange = { enabled ->
+                            wifiOnly = enabled
+                            DownloadNetworkPolicy.setWifiOnlyEnabled(context, enabled)
+                        },
+                    )
+                }
+                StorageSection("Media downloads") {
+                    PolicySwitch(
+                        title = "Quick shared links",
+                        description = "Open shared video links directly in FetchX’s media download flow.",
+                        checked = quickSharedDownloads,
+                        onCheckedChange = { enabled ->
+                            quickSharedDownloads = enabled
+                            MediaDownloadPreferences.setQuickDownloadEnabled(context, enabled)
+                        },
+                    )
+                    PolicySwitch(
+                        title = "Remove SponsorBlock segments",
+                        description = "Remove sponsors, introductions, outros, and self-promotions from supported yt-dlp videos.",
+                        checked = removeSponsorSegments,
+                        onCheckedChange = { enabled ->
+                            removeSponsorSegments = enabled
+                            MediaDownloadPreferences.setSponsorBlockEnabled(context, enabled)
+                        },
+                    )
+                    PolicySwitch(
+                        title = "Download subtitles",
+                        description = "Write subtitles using the preferred language matching rules.",
+                        checked = downloadSubtitles,
+                        onCheckedChange = { enabled ->
+                            downloadSubtitles = enabled
+                            MediaDownloadPreferences.setSubtitlesEnabled(context, enabled)
+                        },
+                    )
+                    PolicySwitch(
+                        title = "Embed subtitles",
+                        description = "Embed downloaded subtitles when the selected output format supports them.",
+                        checked = embedSubtitles,
+                        onCheckedChange = { enabled ->
+                            embedSubtitles = enabled
+                            MediaDownloadPreferences.setSubtitlesEmbedded(context, enabled)
+                        },
+                    )
+                    PolicySwitch(
+                        title = "Embed media metadata",
+                        description = "Add title, author, and other available metadata to media files.",
+                        checked = embedMetadata,
+                        onCheckedChange = { enabled ->
+                            embedMetadata = enabled
+                            MediaDownloadPreferences.setMetadataEmbeddingEnabled(context, enabled)
+                        },
+                    )
+                }
+                StorageSection("Network conditions") {
+                    PolicySwitch(
+                        title = "Unmetered connections only",
+                        description = "Pause transfers on metered mobile and hotspot networks.",
+                        checked = unmeteredOnly,
+                        onCheckedChange = { enabled ->
+                            unmeteredOnly = enabled
+                            DownloadNetworkPolicy.setPolicy(
+                                context,
+                                DownloadNetworkPolicy.UNMETERED_ONLY_KEY,
+                                enabled,
+                            )
+                        },
+                    )
+                    PolicySwitch(
+                        title = "Allow downloads while roaming",
+                        description = "Keep roaming transfers paused unless explicitly allowed.",
+                        checked = roamingAllowed,
+                        onCheckedChange = { enabled ->
+                            roamingAllowed = enabled
+                            DownloadNetworkPolicy.setPolicy(
+                                context,
+                                DownloadNetworkPolicy.ROAMING_ALLOWED_KEY,
+                                enabled,
+                            )
+                        },
+                    )
+                }
+                StorageSection("Battery") {
+                    PolicySwitch(
+                        title = "Download only while charging",
+                        description = "Pause transfers while the device is running on battery.",
+                        checked = chargingOnly,
+                        onCheckedChange = { enabled ->
+                            chargingOnly = enabled
+                            DownloadNetworkPolicy.setPolicy(
+                                context,
+                                DownloadNetworkPolicy.CHARGING_ONLY_KEY,
+                                enabled,
+                            )
+                        },
+                    )
+                    PolicySwitch(
+                        title = "Battery level control",
+                        description = "Pause downloads when battery falls below $batteryThreshold%.",
+                        checked = batteryControl,
+                        onCheckedChange = { enabled ->
+                            batteryControl = enabled
+                            DownloadNetworkPolicy.setPolicy(
+                                context,
+                                DownloadNetworkPolicy.BATTERY_CONTROL_KEY,
+                                enabled,
+                            )
+                        },
+                    )
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                            Text(
+                                "Minimum battery level: $batteryThreshold%",
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Slider(
+                                value = batteryThreshold.toFloat(),
+                                onValueChange = {
+                                    batteryThreshold = it.toInt()
+                                    DownloadNetworkPolicy.setBatteryThreshold(context, batteryThreshold)
+                                },
+                                valueRange = 0f..100f,
+                                steps = 19,
+                            )
+                        }
+                    }
+                }
+                StorageSection("Storage use") {
+                    if (isLoading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    errorMessage?.let { message ->
+                        Text(
+                            "Storage scan failed: $message",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    usage?.let { result ->
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column {
+                                StorageUsageRow("Downloads (including partial files)", result.downloadsBytes)
+                                HorizontalDivider()
+                                StorageUsageRow("Browser data (including extensions)", result.browserDataBytes)
+                                HorizontalDivider()
+                                StorageUsageRow("Browser and app cache", result.browserCacheBytes)
+                                HorizontalDivider()
+                                StorageUsageRow("Temporary workspaces", result.temporaryBytes)
+                                HorizontalDivider()
+                                StorageUsageRow("Database", result.databaseBytes)
+                                HorizontalDivider()
+                                StorageUsageRow("Other app data", result.otherAppDataBytes)
+                                HorizontalDivider()
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text("Total", style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        formatStorageBytes(result.totalBytes),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            if (result.customSafLocationConfigured) {
+                                "The selected document-provider download folder is outside app storage and is not included."
+                            } else {
+                                "Only app-specific downloads are included. Files saved to other document-provider folders are not measured."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Browser extensions are included in browser data. This screen does not expose cache-cleanup or workspace-removal controls.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
         }
-        PolicySwitch(
-            title = "Unmetered connections only",
-            description = "Pause transfers on metered mobile and hotspot networks.",
-            checked = unmeteredOnly,
-            onCheckedChange = { enabled ->
-                unmeteredOnly = enabled
-                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.UNMETERED_ONLY_KEY, enabled)
-            },
-        )
-        PolicySwitch(
-            title = "Allow downloads while roaming",
-            description = "Keep roaming transfers paused unless explicitly allowed.",
-            checked = roamingAllowed,
-            onCheckedChange = { enabled ->
-                roamingAllowed = enabled
-                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.ROAMING_ALLOWED_KEY, enabled)
-            },
-        )
-        PolicySwitch(
-            title = "Download only while charging",
-            description = "Pause transfers while the device is running on battery.",
-            checked = chargingOnly,
-            onCheckedChange = { enabled ->
-                chargingOnly = enabled
-                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.CHARGING_ONLY_KEY, enabled)
-            },
-        )
-        PolicySwitch(
-            title = "Battery level control",
-            description = "Pause downloads when battery falls below $batteryThreshold%.",
-            checked = batteryControl,
-            onCheckedChange = { enabled ->
-                batteryControl = enabled
-                DownloadNetworkPolicy.setPolicy(context, DownloadNetworkPolicy.BATTERY_CONTROL_KEY, enabled)
-            },
-        )
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Text("Minimum battery level: $batteryThreshold%", style = MaterialTheme.typography.bodyLarge)
-                Slider(
-                    value = batteryThreshold.toFloat(),
-                    onValueChange = {
-                        batteryThreshold = it.toInt()
-                        DownloadNetworkPolicy.setBatteryThreshold(context, batteryThreshold)
-                    },
-                    valueRange = 0f..100f,
-                    steps = 19,
-                )
-            }
-        }
+    }
+}
 
-        if (isLoading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        errorMessage?.let { message ->
-            Text(
-                "Storage scan failed: $message",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
-        usage?.let { result ->
-            StorageUsageRow("Downloads (including partial files)", result.downloadsBytes)
-            StorageUsageRow("Browser data (including extensions)", result.browserDataBytes)
-            StorageUsageRow("Browser and app cache", result.browserCacheBytes)
-            StorageUsageRow("Temporary workspaces", result.temporaryBytes)
-            StorageUsageRow("Database", result.databaseBytes)
-            StorageUsageRow("Other app data", result.otherAppDataBytes)
-            Text(
-                "Total: ${formatStorageBytes(result.totalBytes)}",
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(
-                if (result.customSafLocationConfigured) {
-                    "The selected document-provider download folder is outside app storage and is not included."
-                } else {
-                    "Only app-specific downloads are included. Files saved to other document-provider folders are not measured."
-                },
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                "Browser extensions are included in browser data. This screen does not expose cache-cleanup or workspace-removal controls.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+@Composable
+private fun StorageSection(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        content()
     }
 }
 
@@ -308,16 +382,18 @@ private fun PolicySwitch(
 
 @Composable
 private fun StorageUsageRow(label: String, bytes: Long) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            Text(formatStorageBytes(bytes), style = MaterialTheme.typography.bodyLarge)
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        Text(
+            formatStorageBytes(bytes),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

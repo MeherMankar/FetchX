@@ -811,14 +811,14 @@ private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {
 private fun PriorityBadge(priority: DownloadPriority) {
     val (label, containerColor) = when (priority) {
         DownloadPriority.LOW ->
-            "Low" to MaterialTheme.colorScheme.surfaceVariant
+            "Low" to MaterialTheme.colorScheme.surfaceContainerHigh
         DownloadPriority.NORMAL ->
-            "Normal" to MaterialTheme.colorScheme.primaryContainer
+            "Normal" to MaterialTheme.colorScheme.surfaceVariant
         DownloadPriority.HIGH ->
-            "High" to MaterialTheme.colorScheme.tertiaryContainer
+            "High" to MaterialTheme.colorScheme.primaryContainer
         DownloadPriority.CRITICAL ->
             // CRITICAL is treated as HIGH at the UI layer — never shown as a separate value.
-            "High" to MaterialTheme.colorScheme.tertiaryContainer
+            "High" to MaterialTheme.colorScheme.primaryContainer
     }
     Surface(
         shape = MaterialTheme.shapes.extraSmall,

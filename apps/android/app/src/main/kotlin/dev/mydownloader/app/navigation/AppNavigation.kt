@@ -186,25 +186,27 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     Scaffold(
         bottomBar = {
             if (currentRoute != Screen.Browser.route) {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = currentRoute == Screen.Browser.route,
-                        onClick = {
-                            navigateToBrowser(navController)
-                        },
-                        icon = { Icon(Icons.Default.Language, contentDescription = "Browser") },
-                        label = { Text("Browser") },
-                    )
-                    NavigationBarItem(
-                        selected = currentRoute == Screen.Downloads.route,
-                        onClick = {
-                            navController.navigate(Screen.Downloads.route) {
-                                launchSingleTop = true
-                            }
-                        },
-                        icon = { Icon(Icons.Default.FileDownload, contentDescription = "Downloads") },
-                        label = { Text("Downloads") },
-                    )
+                FetchXTheme(seedColor = seedColor) {
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = currentRoute == Screen.Browser.route,
+                            onClick = {
+                                navigateToBrowser(navController)
+                            },
+                            icon = { Icon(Icons.Default.Language, contentDescription = "Browser") },
+                            label = { Text("Browser") },
+                        )
+                        NavigationBarItem(
+                            selected = currentRoute == Screen.Downloads.route,
+                            onClick = {
+                                navController.navigate(Screen.Downloads.route) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            icon = { Icon(Icons.Default.FileDownload, contentDescription = "Downloads") },
+                            label = { Text("Downloads") },
+                        )
+                    }
                 }
             }
         },
@@ -215,51 +217,53 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
             modifier = Modifier.padding(innerPadding),
         ) {
             composable(Screen.Downloads.route) {
-                DownloadsScreen(
-                    viewModel = viewModel(factory = vmFactory),
-                    downloadsDir = downloadsDir,
-                    onBrowseWeb = { navigateToBrowser(navController) },
-                    onOpenTorrentDetail = { id ->
-                        navController.navigate(Screen.TorrentDetail.route(id))
-                    },
-                    onPlayFile = { path ->
-                        val uri = if (path.startsWith("content://")) {
-                            Uri.parse(path)
-                        } else {
-                            val file = java.io.File(path)
-                            try {
-                                androidx.core.content.FileProvider.getUriForFile(
+                FetchXTheme(seedColor = seedColor) {
+                    DownloadsScreen(
+                        viewModel = viewModel(factory = vmFactory),
+                        downloadsDir = downloadsDir,
+                        onBrowseWeb = { navigateToBrowser(navController) },
+                        onOpenTorrentDetail = { id ->
+                            navController.navigate(Screen.TorrentDetail.route(id))
+                        },
+                        onPlayFile = { path ->
+                            val uri = if (path.startsWith("content://")) {
+                                Uri.parse(path)
+                            } else {
+                                val file = java.io.File(path)
+                                try {
+                                    androidx.core.content.FileProvider.getUriForFile(
+                                        context,
+                                        "${context.packageName}.fileprovider",
+                                        file,
+                                    )
+                                } catch (_: Exception) {
+                                    null
+                                }
+                            }
+                            if (uri == null) {
+                                android.widget.Toast.makeText(
                                     context,
-                                    "${context.packageName}.fileprovider",
-                                    file,
-                                )
-                            } catch (_: Exception) {
-                                null
+                                    "Unable to open file: path is not accessible",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                            } else {
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, "video/*")
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                try {
+                                    context.startActivity(
+                                        android.content.Intent.createChooser(intent, "Play with...")
+                                            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                                    )
+                                } catch (_: ActivityNotFoundException) {
+                                    Toast.makeText(context, "No video player is installed", Toast.LENGTH_LONG).show()
+                                }
                             }
-                        }
-                        if (uri == null) {
-                            android.widget.Toast.makeText(
-                                context,
-                                "Unable to open file: path is not accessible",
-                                android.widget.Toast.LENGTH_LONG,
-                            ).show()
-                        } else {
-                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                setDataAndType(uri, "video/*")
-                                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            try {
-                                context.startActivity(
-                                    android.content.Intent.createChooser(intent, "Play with...")
-                                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION),
-                                )
-                            } catch (_: ActivityNotFoundException) {
-                                Toast.makeText(context, "No video player is installed", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    },
-                )
+                        },
+                    )
+                }
             }
             composable(Screen.Browser.route) {
                 FetchXTheme(seedColor = seedColor) {
@@ -336,15 +340,19 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 }
             }
             composable(Screen.Storage.route) {
-                StorageScreen(onBack = { navController.popBackStack() })
+                FetchXTheme(seedColor = seedColor) {
+                    StorageScreen(onBack = { navController.popBackStack() })
+                }
             }
             composable(Screen.TorrentDetail.ROUTE_PATTERN) { backStackEntry ->
                 val downloadId = backStackEntry.arguments?.getString("downloadId") ?: ""
-                TorrentDetailScreen(
-                    downloadId = downloadId,
-                    viewModel = viewModel(factory = vmFactory),
-                    onBack = { navController.popBackStack() },
-                )
+                FetchXTheme(seedColor = seedColor) {
+                    TorrentDetailScreen(
+                        downloadId = downloadId,
+                        viewModel = viewModel(factory = vmFactory),
+                        onBack = { navController.popBackStack() },
+                    )
+                }
             }
         }
     }
