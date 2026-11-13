@@ -175,7 +175,7 @@ fn main() -> ExitCode {
         }
     }
     if let Some(remux) = parse_native_remux(&arguments) {
-        if remux.container == "mp4"
+        if remux.container == "mov"
             && has_mp4_extension(&remux.input)
             && has_mp4_extension(&remux.output)
         {
@@ -970,7 +970,7 @@ mod tests {
         let remux = parse_native_remux(&arguments).expect("supported remux");
         assert_eq!(remux.input, PathBuf::from("/downloads/input.mp4"));
         assert_eq!(remux.output, PathBuf::from("/downloads/output.mp4"));
-        assert_eq!(remux.container, "mp4");
+        assert_eq!(remux.container, "mov");
     }
 
     #[test]
