@@ -759,10 +759,7 @@ impl RateLimiter {
             queue.pop_front();
         }
         queue.push_back(now);
-        if queue.len() > 120 {
-            return true;
-        }
-        false
+        queue.len() > 120
     }
 }
 
