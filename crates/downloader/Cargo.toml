@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+audio2mp3-core = "0.2.0"
 base64.workspace = true
 fetchx-core = { path = "../core" }
 fetchx-media-extractor = { path = "../media-extractor" }

@@ -40,7 +40,7 @@ pub use http::{
 };
 pub use media_extractor_adapter::{YtDlpProcessRunnerAdapter, parse_yt_dlp_json_to_raw_formats};
 pub use metalink::{MetalinkEngine, MetalinkFile, MetalinkMirror};
-pub use native_media::NativeMediaError;
+pub use native_media::{NativeMediaError, NativeMediaProcessor};
 pub use native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor, NativeMp4Track};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};

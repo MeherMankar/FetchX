@@ -333,6 +333,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audio2mp3-core"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90a29bb6aae828cd82b705981f5340fba5d13f2175ded67d60b81420d4afb31a"
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1992,6 +1998,7 @@ name = "fetchx-downloader"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "audio2mp3-core",
  "base64 0.22.1",
  "digest 0.11.3",
  "ebml-webm",

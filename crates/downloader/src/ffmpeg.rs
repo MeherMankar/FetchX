@@ -736,6 +736,44 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
+        if is_wav_path(&input)
+            && matches!(
+                request.operation,
+                MediaOperation::Transcode {
+                    preset: TranscodePreset::Mp3Audio
+                }
+            )
+        {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::wav_to_mp3(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native WAV-to-MP3 conversion unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         if is_mp4_path(&input)
             && matches!(
                 request.operation,
@@ -2596,11 +2634,37 @@ mod tests {
                     &audio_output,
                     TranscodePreset::FlacAudio,
                 ),
-                cancellation,
+                cancellation.clone(),
                 None,
             )
             .await?;
         assert!(tokio::fs::read(&audio_output).await?.starts_with(b"fLaC"));
+
+        let mp3_input = directory.path().join("audio.mp3.wav");
+        let mp3_output = directory.path().join("audio.mp3");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&mp3_input, spec)?;
+        for sample in 0..4_410_i16 {
+            writer.write_sample(sample.wrapping_mul(3))?;
+        }
+        writer.finalize()?;
+        processor
+            .process(
+                MediaProcessRequest::transcode(&mp3_input, &mp3_output, TranscodePreset::Mp3Audio),
+                cancellation.clone(),
+                None,
+            )
+            .await?;
+        let mp3_bytes = tokio::fs::read(&mp3_output).await?;
+        assert!(mp3_bytes.len() > 128);
+        assert_eq!(mp3_bytes[0], 0xff);
+        assert_eq!(mp3_bytes[1] & 0xe0, 0xe0);
+
         assert_eq!(
             state.lock().expect("fake runner mutex").calls.len(),
             initial_call_count

@@ -5,7 +5,9 @@ use std::{
     process::{Command, ExitCode},
 };
 
-use fetchx_downloader::{NativeMp4Error, NativeMp4Processor};
+use fetchx_downloader::{
+    NativeMediaError, NativeMediaProcessor, NativeMp4Error, NativeMp4Processor,
+};
 
 const MAX_OUTPUT_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 
@@ -16,6 +18,11 @@ struct NativeMerge {
 }
 
 struct NativeAudioExtract {
+    input: PathBuf,
+    output: PathBuf,
+}
+
+struct NativeWavMp3 {
     input: PathBuf,
     output: PathBuf,
 }
@@ -61,6 +68,20 @@ fn main() -> ExitCode {
             Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
             Err(error) => {
                 eprintln!("native AAC extraction unavailable: {error}");
+            }
+        }
+    }
+    if let Some(transcode) = parse_native_wav_mp3(&arguments) {
+        match NativeMediaProcessor::wav_to_mp3(
+            &transcode.input,
+            &transcode.output,
+            MAX_OUTPUT_BYTES,
+            || false,
+        ) {
+            Ok(_) => return ExitCode::SUCCESS,
+            Err(NativeMediaError::Cancelled) => return ExitCode::from(130),
+            Err(error) => {
+                eprintln!("native WAV-to-MP3 conversion unavailable: {error}");
             }
         }
     }
@@ -132,6 +153,59 @@ fn parse_native_audio_extract(arguments: &[OsString]) -> Option<NativeAudioExtra
         input: inputs.into_iter().next()?,
         output,
     })
+}
+
+fn parse_native_wav_mp3(arguments: &[OsString]) -> Option<NativeWavMp3> {
+    let output = path_argument(arguments.last()?)?;
+    if !has_extension(&output, "mp3") || arguments.len() < 2 {
+        return None;
+    }
+
+    let mut input = None;
+    let mut has_audio_only = false;
+    let mut has_mp3_encoder = false;
+    let mut index = 0;
+    while index < arguments.len() - 1 {
+        match arguments[index].to_str()? {
+            "-y" | "-nostdin" | "-hide_banner" => index += 1,
+            "-v" | "-loglevel" => {
+                arguments.get(index + 1)?.to_str()?;
+                index += 2;
+            }
+            "-i" if input.is_none() => {
+                input = Some(path_argument(arguments.get(index + 1)?)?);
+                index += 2;
+            }
+            "-vn" if !has_audio_only => {
+                has_audio_only = true;
+                index += 1;
+            }
+            "-acodec" | "-c:a" if !has_mp3_encoder => {
+                let codec = arguments.get(index + 1)?.to_str()?;
+                if !codec.eq_ignore_ascii_case("libmp3lame") {
+                    return None;
+                }
+                has_mp3_encoder = true;
+                index += 2;
+            }
+            "-b:a" if arguments.get(index + 1)?.to_str()? == "192k" => index += 2,
+            "-map" if arguments.get(index + 1)?.to_str()? == "0:a:0" => index += 2,
+            "-f" if arguments.get(index + 1)?.to_str()? == "mp3" => index += 2,
+            _ => return None,
+        }
+    }
+
+    let input = input?;
+    if !has_extension(&input, "wav") || !has_audio_only || !has_mp3_encoder {
+        return None;
+    }
+    Some(NativeWavMp3 { input, output })
+}
+
+fn has_extension(path: &Path, extension: &str) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
 }
 
 fn parse_native_remux(arguments: &[OsString]) -> Option<NativeRemux> {
@@ -294,6 +368,7 @@ fn fallback_executable() -> Option<PathBuf> {
 mod tests {
     use super::{
         parse_native_audio_extract, parse_native_merge, parse_native_probe, parse_native_remux,
+        parse_native_wav_mp3,
     };
     use std::ffi::OsString;
     use std::path::PathBuf;
@@ -417,6 +492,49 @@ mod tests {
                 "-acodec",
                 "libmp3lame",
                 "source.mp3",
+            ]))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn recognizes_only_supported_wav_to_mp3_arguments() {
+        let arguments = args(&[
+            "-y",
+            "-i",
+            "input.wav",
+            "-vn",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            "output.mp3",
+        ]);
+        let transcode = parse_native_wav_mp3(&arguments).expect("supported WAV-to-MP3");
+        assert_eq!(transcode.input, PathBuf::from("input.wav"));
+        assert_eq!(transcode.output, PathBuf::from("output.mp3"));
+
+        assert!(
+            parse_native_wav_mp3(&args(&[
+                "-i",
+                "input.wav",
+                "-vn",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                "output.mp3",
+            ]))
+            .is_none()
+        );
+        assert!(
+            parse_native_wav_mp3(&args(&[
+                "-i",
+                "input.m4a",
+                "-vn",
+                "-c:a",
+                "libmp3lame",
+                "output.mp3",
             ]))
             .is_none()
         );
