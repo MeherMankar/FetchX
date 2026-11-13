@@ -210,6 +210,9 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Build native messaging host for Tauri resources
+        run: cargo build --release -p fetchx-native-host
+
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/desktop/ui

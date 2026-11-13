@@ -1134,7 +1134,6 @@ mod tests {
     use std::{
         fs,
         io::Write,
-        path::Path,
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -1380,7 +1379,6 @@ mod tests {
         );
     }
 
-    #[test]
     #[test]
     fn installed_helper_is_detected_after_atomic_replacement() {
         let directory = tempdir().expect("temp directory");

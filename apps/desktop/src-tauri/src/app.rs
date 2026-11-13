@@ -302,10 +302,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        if needs_save {
-                            if let Err(error) = state.config_service.save(&config).await {
-                                tracing::warn!(%error, "could not persist automatically installed engine paths");
-                            }
+                        if needs_save
+                            && let Err(error) = state.config_service.save(&config).await
+                        {
+                            tracing::warn!(%error, "could not persist automatically installed engine paths");
                         }
                     }
                     for (helper, result) in results {

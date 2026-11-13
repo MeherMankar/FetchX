@@ -1154,6 +1154,8 @@ pub async fn add_media_download(
     Ok(download)
 }
 
+// Keep the named arguments as the Tauri IPC payload contract.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "snake_case")]
 pub async fn add_download_batch(
     app: AppHandle,
