@@ -1157,7 +1157,8 @@ mod tests {
         let mp3 = directory.path().join("input.mp3");
         write_mp3_wav(&wav)?;
         NativeMediaProcessor::wav_to_flac(&wav, &flac, 1024 * 1024, || false)?;
-        NativeMediaProcessor::wav_to_mp3(&wav, &mp3, 1024 * 1024, || false)?;
+        NativeMediaProcessor::wav_to_mp3(&wav, &mp3, 1024 * 1024, || false)
+            .unwrap_or_else(|error| panic!("prepare MP3 fixture from WAV failed: {error:?}"));
 
         for (input, output_name) in [
             (&wav, "wav.converted.mp3"),
@@ -1165,7 +1166,10 @@ mod tests {
             (&mp3, "mp3.converted.mp3"),
         ] {
             let output = directory.path().join(output_name);
-            NativeMediaProcessor::audio_to_mp3(input, &output, 1024 * 1024, || false)?;
+            NativeMediaProcessor::audio_to_mp3(input, &output, 1024 * 1024, || false)
+                .unwrap_or_else(|error| {
+                    panic!("audio_to_mp3 failed for {}: {error:?}", input.display())
+                });
             let bytes = fs::read(output)?;
             assert!(bytes.len() > 128);
             assert_eq!(bytes[0], 0xff);
@@ -1226,10 +1230,12 @@ mod tests {
         let wav_info = NativeMediaProcessor::probe_wav(&input, || false)?;
         assert_eq!(wav_info.streams[0].channels, Some(spec.channels));
 
-        NativeMediaProcessor::audio_to_flac(&input, &generic_output, 1024 * 1024, || false)?;
+        NativeMediaProcessor::audio_to_flac(&input, &generic_output, 1024 * 1024, || false)
+            .unwrap_or_else(|error| panic!("audio_to_flac failed for WAV input: {error:?}"));
         let bytes = fs::read(&generic_output)?;
         assert!(bytes.starts_with(b"fLaC"));
-        let info = NativeMediaProcessor::probe_audio(&generic_output, || false)?;
+        let info = NativeMediaProcessor::probe_audio(&generic_output, || false)
+            .unwrap_or_else(|error| panic!("probe_audio failed for generated FLAC: {error:?}"));
         assert!(info.streams.iter().any(|stream| {
             stream.sample_rate_hz == Some(spec.sample_rate)
                 && stream.channels == Some(spec.channels)
@@ -1245,14 +1251,17 @@ mod tests {
         let mp3 = directory.path().join("input.mp3");
         write_mp3_wav(&wav)?;
         NativeMediaProcessor::wav_to_flac(&wav, &flac, 1024 * 1024, || false)?;
-        NativeMediaProcessor::wav_to_mp3(&wav, &mp3, 1024 * 1024, || false)?;
+        NativeMediaProcessor::wav_to_mp3(&wav, &mp3, 1024 * 1024, || false)
+            .unwrap_or_else(|error| panic!("prepare MP3 fixture from WAV failed: {error:?}"));
 
         for (input, format_name, codec) in [
             (&wav, "wav", Some("pcm_s16le")),
             (&flac, "flac", Some("flac")),
             (&mp3, "mp3", Some("mp3")),
         ] {
-            let info = NativeMediaProcessor::probe_audio(input, || false)?;
+            let info = NativeMediaProcessor::probe_audio(input, || false).unwrap_or_else(|error| {
+                panic!("probe_audio failed for {}: {error:?}", input.display())
+            });
             assert_eq!(info.format_name.as_deref(), Some(format_name));
             assert_eq!(info.streams.len(), 1);
             assert_eq!(info.streams[0].kind, crate::ffmpeg::MediaStreamKind::Audio);

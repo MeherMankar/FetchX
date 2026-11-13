@@ -1022,7 +1022,7 @@ mod native_only_tests {
             tokio::fs::read_to_string(&webvtt)
                 .await
                 .expect("read WebVTT"),
-            "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\ncaption\n"
+            "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\ncaption\n\n"
         );
 
         let unsupported = directory.path().join("unknown.mp4");
