@@ -645,11 +645,32 @@ jobs:
           done
 
       - name: List release files
-        run: find release-artifacts -type f | sort
+        id: release-files
+        shell: bash
+        run: |
+          mapfile -t files < <(
+            find release-artifacts -type f \
+              \( -iname '*.apk' -o -iname '*.exe' -o -iname '*.msi' \
+                -o -iname '*.deb' -o -iname '*.appimage' -o -iname '*.dmg' \
+                -o -name 'fetchx' -o -name 'fetchx.exe' -o -iname '*.sha256' \) \
+              | sort
+          )
+          if ((${#files[@]} == 0)); then
+            echo "No release artifacts were produced" >&2
+            exit 1
+          fi
+          printf '%s\n' "${files[@]}"
+          {
+            echo "files<<RELEASE_FILES"
+            printf '%s\n' "${files[@]}"
+            echo "RELEASE_FILES"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Set RELEASE_TOKEN if repository/org policy blocks GITHUB_TOKEN release writes.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           name: "FetchX ${{ steps.release-tag.outputs.tag || steps.tag-push.outputs.tag }}"
           tag_name: ${{ steps.release-tag.outputs.tag || steps.tag-push.outputs.tag }}
           target_commitish: ${{ github.sha }}
@@ -667,15 +688,6 @@ jobs:
             macOS packages require Apple signing/notarization secrets for distribution outside development.
           draft: true
           prerelease: ${{ contains(steps.release-tag.outputs.tag || steps.tag-push.outputs.tag, 'alpha') || contains(steps.release-tag.outputs.tag || steps.tag-push.outputs.tag, 'beta') || contains(steps.release-tag.outputs.tag || steps.tag-push.outputs.tag, 'rc') }}
-          files: |
-            release-artifacts/**/*.apk
-            release-artifacts/**/*.exe
-            release-artifacts/**/*.msi
-            release-artifacts/**/*.deb
-            release-artifacts/**/*.AppImage
-            release-artifacts/**/*.dmg
-            release-artifacts/**/fetchx
-            release-artifacts/**/fetchx.exe
-            release-artifacts/**/*.sha256
+          files: ${{ steps.release-files.outputs.files }}
           generate_release_notes: true
           fail_on_unmatched_files: false
