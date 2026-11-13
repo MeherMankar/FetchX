@@ -40,10 +40,12 @@ HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video
 audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
 Compatible H.264/AAC merges also use native stream copy;
 duration mismatches fall back to FFmpeg to preserve its shortest-stream behavior.
-Mono/stereo integer PCM WAV can be transcoded natively to FLAC; 16-bit mono/stereo PCM WAV
-at 32, 44.1, or 48 kHz can also be encoded to 192 kb/s MP3. SRT subtitles can be converted
-to WebVTT. Other transcoding, unsupported MP4 subtitle/data tracks, codecs, and layouts
-continue through FFmpeg. The desktop media manager can run these native operations
+Mono/stereo integer PCM WAV can be transcoded natively to FLAC. Symphonia demuxes common
+audio sources (WAV, AIFF, CAF, MP3, FLAC, AAC/ALAC in MP4/M4A, Vorbis in Ogg, and supported
+audio tracks in Matroska/WebM); mono/stereo sources at 32, 44.1, or 48 kHz can be encoded
+to 192 kb/s MP3. SRT subtitles can be converted to WebVTT. Other transcoding, unsupported
+MP4 subtitle/data tracks, codecs, and layouts continue through FFmpeg. The desktop media
+manager can run these native operations
 without installed FFmpeg or ffprobe; an unavailable helper is reported only when a requested
 operation or probe needs that external fallback. Native output remains size-bounded, cancellable,
 and published without overwriting an existing file.
@@ -54,7 +56,8 @@ reference and does not copy FFmpeg source code. MP4 container handling uses the 
 [`ebml-webm`](https://crates.io/crates/ebml-webm) (MIT OR Apache-2.0), and FLAC encoding
 uses [`flacenc`](https://crates.io/crates/flacenc) (Apache-2.0); MP3 encoding uses
 [`audio2mp3-core`](https://crates.io/crates/audio2mp3-core) (MIT OR Apache-2.0); WAV
-parsing uses [`hound`](https://crates.io/crates/hound) (Apache-2.0).
+parsing uses [`hound`](https://crates.io/crates/hound) (Apache-2.0), and audio demuxing/
+decoding uses [`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0).
 Historical aria2 records remain readable but the external aria2 runtime, daemon RPC,
 process supervision, packaging, settings, and fallback have been removed. Supported
 new work uses FetchX's shared Rust engines; eligible old records can be restarted as
@@ -70,7 +73,7 @@ controls and survives restart.
 Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
 video/audio selections first use a FetchX native FFmpeg-compatible shim for supported
 single-input MP4 stream-copy remuxes, H.264/AAC MP4 merges, AAC-in-MP4 to M4A extraction,
-and supported PCM WAV-to-MP3 conversions. Other codecs, containers, and audio transcoding
+and supported audio-to-MP3 conversions. Other codecs, containers, and audio transcoding
 fall back to the bundled, statically linked FFmpeg 8.1.2 executable (LGPL configuration,
 without GPL-only external libraries), built for the app's supported ABIs with
 `scripts/build-android-ffmpeg.sh`.

@@ -17,11 +17,19 @@ use flacenc::{
     error::{SourceError, SourceErrorReason, Verify},
     source::{MemSource, Source},
 };
+use symphonia::core::{
+    codecs::audio::AudioDecoderOptions,
+    errors::Error as SymphoniaError,
+    formats::probe::Hint,
+    formats::{FormatOptions, TrackType},
+    io::MediaSourceStream,
+    meta::MetadataOptions,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
-const MAX_NATIVE_WAV_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_NATIVE_WAV_SAMPLES: usize = 8_000_000;
+const MAX_NATIVE_AUDIO_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_NATIVE_AUDIO_SAMPLES: usize = 8_000_000;
 const MAX_NATIVE_SUBTITLE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Error)]
@@ -99,7 +107,7 @@ impl NativeMediaProcessor {
     ) -> Result<MediaInfo, NativeMediaError> {
         let input = canonical_input(input.as_ref())?;
         let metadata = fs::metadata(&input)?;
-        if metadata.len() > MAX_NATIVE_WAV_BYTES {
+        if metadata.len() > MAX_NATIVE_AUDIO_BYTES {
             return Err(NativeMediaError::UnsupportedInput);
         }
         let reader = hound::WavReader::open(&input).map_err(|_| NativeMediaError::InvalidInput)?;
@@ -150,7 +158,7 @@ impl NativeMediaProcessor {
             return Err(NativeMediaError::InvalidOutput);
         }
         let input = canonical_input(input.as_ref())?;
-        if fs::metadata(&input)?.len() > MAX_NATIVE_WAV_BYTES {
+        if fs::metadata(&input)?.len() > MAX_NATIVE_AUDIO_BYTES {
             return Err(NativeMediaError::UnsupportedInput);
         }
         let mut reader =
@@ -168,7 +176,7 @@ impl NativeMediaProcessor {
             if is_cancelled() {
                 return Err(NativeMediaError::Cancelled);
             }
-            if samples.len() >= MAX_NATIVE_WAV_SAMPLES {
+            if samples.len() >= MAX_NATIVE_AUDIO_SAMPLES {
                 return Err(NativeMediaError::UnsupportedInput);
             }
             samples.push(sample.map_err(|_| NativeMediaError::InvalidInput)?);
@@ -226,7 +234,7 @@ impl NativeMediaProcessor {
             return Err(NativeMediaError::InvalidOutput);
         }
         let input = canonical_input(input.as_ref())?;
-        if fs::metadata(&input)?.len() > MAX_NATIVE_WAV_BYTES {
+        if fs::metadata(&input)?.len() > MAX_NATIVE_AUDIO_BYTES {
             return Err(NativeMediaError::UnsupportedInput);
         }
         let mut reader =
@@ -239,64 +247,124 @@ impl NativeMediaProcessor {
         {
             return Err(NativeMediaError::UnsupportedInput);
         }
-        let mut encoder = Mp3Encoder::new(EncoderConfig {
-            sample_rate: spec.sample_rate,
-            channels: u8::try_from(spec.channels)
-                .map_err(|_| NativeMediaError::UnsupportedInput)?,
-            bitrate: Bitrate::Kbps192,
-        })
-        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-        encoder
-            .enable_info_frame()
-            .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-
-        let samples_per_chunk = 4096 * usize::from(spec.channels);
-        let mut samples = Vec::with_capacity(samples_per_chunk);
-        let mut output_bytes = Vec::new();
-        let mut sample_count = 0_usize;
+        let channels =
+            u8::try_from(spec.channels).map_err(|_| NativeMediaError::UnsupportedInput)?;
+        let mut samples = Vec::new();
         for sample in reader.samples::<i16>() {
             if is_cancelled() {
                 return Err(NativeMediaError::Cancelled);
             }
-            if sample_count >= MAX_NATIVE_WAV_SAMPLES {
+            if samples.len() >= MAX_NATIVE_AUDIO_SAMPLES {
                 return Err(NativeMediaError::UnsupportedInput);
             }
             samples.push(sample.map_err(|_| NativeMediaError::InvalidInput)?);
-            sample_count += 1;
-            if samples.len() == samples_per_chunk {
-                encode_mp3_chunk(&mut encoder, &samples, &mut output_bytes, max_output_bytes)?;
-                samples.clear();
-            }
         }
-        if sample_count == 0 || !sample_count.is_multiple_of(usize::from(spec.channels)) {
-            return Err(NativeMediaError::InvalidInput);
-        }
-        if !samples.is_empty() {
-            encode_mp3_chunk(&mut encoder, &samples, &mut output_bytes, max_output_bytes)?;
-        }
-        if is_cancelled() {
-            return Err(NativeMediaError::Cancelled);
-        }
-        let mut flush_buffer = vec![0; encoder.max_flush_size()];
-        let flushed = encoder
-            .flush_into(&mut flush_buffer)
-            .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-        append_bounded(
-            &mut output_bytes,
-            &flush_buffer[..flushed],
+        encode_mp3_samples(
+            &samples,
+            spec.sample_rate,
+            channels,
+            output.as_ref(),
             max_output_bytes,
-        )?;
-        let info_frame_size = encoder.info_frame_size();
-        if info_frame_size > output_bytes.len() {
-            return Err(NativeMediaError::Encoding(
-                "MP3 encoder produced an incomplete info frame".to_owned(),
-            ));
+            &is_cancelled,
+        )
+    }
+
+    pub fn audio_to_mp3(
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeMediaError> {
+        if max_output_bytes == 0 {
+            return Err(NativeMediaError::InvalidOutput);
         }
-        encoder
-            .info_frame_into(&mut output_bytes[..info_frame_size])
-            .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-        publish_bytes(
-            &output_bytes,
+        let input = canonical_input(input.as_ref())?;
+        if fs::metadata(&input)?.len() > MAX_NATIVE_AUDIO_BYTES {
+            return Err(NativeMediaError::UnsupportedInput);
+        }
+        let file = File::open(&input)?;
+        let mut hint = Hint::new();
+        if let Some(extension) = input.extension().and_then(|value| value.to_str()) {
+            hint.with_extension(extension);
+        }
+        let stream = MediaSourceStream::new(Box::new(file), Default::default());
+        let mut format = symphonia::default::get_probe()
+            .probe(
+                &hint,
+                stream,
+                FormatOptions::default(),
+                MetadataOptions::default(),
+            )
+            .map_err(|_| NativeMediaError::UnsupportedInput)?;
+        let track = format
+            .default_track(TrackType::Audio)
+            .ok_or(NativeMediaError::UnsupportedInput)?;
+        let track_id = track.id;
+        let codec_params = track
+            .codec_params
+            .as_ref()
+            .ok_or(NativeMediaError::UnsupportedInput)?;
+        let audio_params = codec_params
+            .audio()
+            .ok_or(NativeMediaError::UnsupportedInput)?;
+        let mut decoder = symphonia::default::get_codecs()
+            .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
+            .map_err(|_| NativeMediaError::UnsupportedInput)?;
+
+        let mut samples = Vec::new();
+        let mut stream_spec = None;
+        loop {
+            if is_cancelled() {
+                return Err(NativeMediaError::Cancelled);
+            }
+            let packet = match format.next_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) => break,
+                Err(SymphoniaError::ResetRequired) => {
+                    return Err(NativeMediaError::UnsupportedInput);
+                }
+                Err(_) => return Err(NativeMediaError::InvalidInput),
+            };
+            if packet.track_id != track_id {
+                continue;
+            }
+            let decoded = decoder.decode(&packet).map_err(|error| match error {
+                SymphoniaError::IoError(_) | SymphoniaError::DecodeError(_) => {
+                    NativeMediaError::InvalidInput
+                }
+                _ => NativeMediaError::UnsupportedInput,
+            })?;
+            let decoded_spec = decoded.spec();
+            let channels = decoded_spec.channels().count();
+            if !(1..=2).contains(&channels)
+                || !matches!(decoded_spec.rate(), 32_000 | 44_100 | 48_000)
+            {
+                return Err(NativeMediaError::UnsupportedInput);
+            }
+            if stream_spec
+                .is_some_and(|(rate, count)| rate != decoded_spec.rate() || count != channels)
+            {
+                return Err(NativeMediaError::UnsupportedInput);
+            }
+            stream_spec = Some((decoded_spec.rate(), channels));
+
+            let decoded_sample_count = decoded.samples_interleaved();
+            let new_len = samples
+                .len()
+                .checked_add(decoded_sample_count)
+                .ok_or(NativeMediaError::UnsupportedInput)?;
+            if new_len > MAX_NATIVE_AUDIO_SAMPLES {
+                return Err(NativeMediaError::UnsupportedInput);
+            }
+            let mut packet_samples = Vec::<i16>::new();
+            decoded.copy_to_vec_interleaved(&mut packet_samples);
+            samples.extend(packet_samples);
+        }
+        let (sample_rate, channels) = stream_spec.ok_or(NativeMediaError::InvalidInput)?;
+        encode_mp3_samples(
+            &samples,
+            sample_rate,
+            u8::try_from(channels).map_err(|_| NativeMediaError::UnsupportedInput)?,
             output.as_ref(),
             max_output_bytes,
             &is_cancelled,
@@ -335,6 +403,63 @@ impl NativeMediaProcessor {
             &is_cancelled,
         )
     }
+}
+
+fn encode_mp3_samples(
+    samples: &[i16],
+    sample_rate: u32,
+    channels: u8,
+    output: &Path,
+    max_output_bytes: u64,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<u64, NativeMediaError> {
+    if !(1..=2).contains(&channels) || !matches!(sample_rate, 32_000 | 44_100 | 48_000) {
+        return Err(NativeMediaError::UnsupportedInput);
+    }
+    let channel_count = usize::from(channels);
+    if samples.is_empty() || !samples.len().is_multiple_of(channel_count) {
+        return Err(NativeMediaError::InvalidInput);
+    }
+    let mut encoder = Mp3Encoder::new(EncoderConfig {
+        sample_rate,
+        channels,
+        bitrate: Bitrate::Kbps192,
+    })
+    .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    encoder
+        .enable_info_frame()
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+
+    let samples_per_chunk = 4096 * channel_count;
+    let mut output_bytes = Vec::new();
+    for chunk in samples.chunks(samples_per_chunk) {
+        if is_cancelled() {
+            return Err(NativeMediaError::Cancelled);
+        }
+        encode_mp3_chunk(&mut encoder, chunk, &mut output_bytes, max_output_bytes)?;
+    }
+    if is_cancelled() {
+        return Err(NativeMediaError::Cancelled);
+    }
+    let mut flush_buffer = vec![0; encoder.max_flush_size()];
+    let flushed = encoder
+        .flush_into(&mut flush_buffer)
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    append_bounded(
+        &mut output_bytes,
+        &flush_buffer[..flushed],
+        max_output_bytes,
+    )?;
+    let info_frame_size = encoder.info_frame_size();
+    if info_frame_size > output_bytes.len() {
+        return Err(NativeMediaError::Encoding(
+            "MP3 encoder produced an incomplete info frame".to_owned(),
+        ));
+    }
+    encoder
+        .info_frame_into(&mut output_bytes[..info_frame_size])
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    publish_bytes(&output_bytes, output, max_output_bytes, is_cancelled)
 }
 
 fn encode_mp3_chunk(
@@ -642,6 +767,31 @@ mod tests {
         assert!(bytes.len() > 128);
         assert_eq!(bytes[0], 0xff);
         assert_eq!(bytes[1] & 0xe0, 0xe0);
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_wav_flac_and_mp3_sources_to_mp3() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let wav = directory.path().join("input.wav");
+        let flac = directory.path().join("input.flac");
+        let mp3 = directory.path().join("input.mp3");
+        write_mp3_wav(&wav)?;
+        NativeMediaProcessor::wav_to_flac(&wav, &flac, 1024 * 1024, || false)?;
+        NativeMediaProcessor::wav_to_mp3(&wav, &mp3, 1024 * 1024, || false)?;
+
+        for (input, output_name) in [
+            (&wav, "wav.converted.mp3"),
+            (&flac, "flac.converted.mp3"),
+            (&mp3, "mp3.converted.mp3"),
+        ] {
+            let output = directory.path().join(output_name);
+            NativeMediaProcessor::audio_to_mp3(input, &output, 1024 * 1024, || false)?;
+            let bytes = fs::read(output)?;
+            assert!(bytes.len() > 128);
+            assert_eq!(bytes[0], 0xff);
+            assert_eq!(bytes[1] & 0xe0, 0xe0);
+        }
         Ok(())
     }
 

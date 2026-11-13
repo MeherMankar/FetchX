@@ -736,14 +736,12 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
-        if is_wav_path(&input)
-            && matches!(
-                request.operation,
-                MediaOperation::Transcode {
-                    preset: TranscodePreset::Mp3Audio
-                }
-            )
-        {
+        if matches!(
+            request.operation,
+            MediaOperation::Transcode {
+                preset: TranscodePreset::Mp3Audio
+            }
+        ) {
             let native_input = input.clone();
             let native_output = destination.clone();
             let max_output_bytes = self.max_output_bytes;
@@ -751,7 +749,7 @@ impl FfmpegProcessor {
                 self.process_timeout,
                 cancellation.clone(),
                 move |cancelled, receiver| {
-                    NativeMediaProcessor::wav_to_mp3(
+                    NativeMediaProcessor::audio_to_mp3(
                         &native_input,
                         &native_output,
                         max_output_bytes,
@@ -769,7 +767,7 @@ impl FfmpegProcessor {
                 }
                 Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
                 | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
-                    debug!("native WAV-to-MP3 conversion unsupported; falling back to FFmpeg");
+                    debug!("native audio-to-MP3 conversion unsupported; falling back to FFmpeg");
                 }
                 Err(error) => return Err(error),
             }
