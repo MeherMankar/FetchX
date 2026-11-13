@@ -27,7 +27,7 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
             val urlDelimiter = withFfmpeg.indexOf("--")
             check(urlDelimiter >= 0) { "yt-dlp arguments are missing the URL delimiter" }
             withFfmpeg.add(urlDelimiter, "--ffmpeg-location")
-            withFfmpeg.add(urlDelimiter + 1, ensureFfmpegExecutable().absolutePath)
+            withFfmpeg.add(urlDelimiter + 1, ffmpegExecutableForYtDlp().absolutePath)
             withFfmpeg
         } else {
             mediaArguments
@@ -65,8 +65,20 @@ class AndroidYtDlpRuntime : YtDlpRuntime {
         return executable
     }
 
+    private fun ffmpegExecutableForYtDlp(): File {
+        val nativeExecutable = File(
+            context.applicationInfo.nativeLibraryDir,
+            NATIVE_FFMPEG_LIBRARY_NAME,
+        )
+        if (!nativeExecutable.exists()) return ensureFfmpegExecutable()
+        check(nativeExecutable.isFile) { "Native media processor is not a regular file" }
+        check(nativeExecutable.canExecute()) { "Native media processor is not runnable" }
+        return nativeExecutable
+    }
+
     companion object {
         private const val FFMPEG_LIBRARY_NAME = "libfetchx_ffmpeg.so"
+        private const val NATIVE_FFMPEG_LIBRARY_NAME = "libfetchx_ffmpeg_native.so"
         private val SUPPORTED_FFMPEG_ABIS = setOf("arm64-v8a", "x86_64")
 
         fun start(context: Context): AndroidYtDlpRuntime {

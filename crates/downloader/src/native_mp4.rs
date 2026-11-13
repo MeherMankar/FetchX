@@ -625,6 +625,46 @@ impl NativeMp4Processor {
         publish_output(&temporary, &destination)?;
         Ok(info)
     }
+
+    pub fn extract_aac(
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<NativeMp4Info, NativeMp4Error> {
+        if max_output_bytes == 0 {
+            return Err(NativeMp4Error::InvalidOutput);
+        }
+        let input = canonical_input(input.as_ref())?;
+        let mut reader = open_reader(&input)?;
+        let Some((track_id, track)) = first_track(&reader, TrackType::Audio, MediaType::AAC) else {
+            return Err(NativeMp4Error::RequiredTrackMissing);
+        };
+        let selected = [SelectedTrack {
+            id: track_id,
+            output_id: 1,
+            sample_count: reader.sample_count(track_id)?,
+        }];
+        let configs = [track_config(track)?];
+        let (destination, temporary) = prepare_output(output.as_ref())?;
+        if input == destination {
+            return Err(NativeMp4Error::InvalidOutput);
+        }
+        let _temporary_guard = TemporaryOutput(temporary.clone());
+        let info = write_output(
+            &mut reader,
+            &selected,
+            &configs,
+            &temporary,
+            max_output_bytes,
+            &is_cancelled,
+        )?;
+        if is_cancelled() {
+            return Err(NativeMp4Error::Cancelled);
+        }
+        publish_output(&temporary, &destination)?;
+        Ok(info)
+    }
 }
 
 struct ExtendedInput {
@@ -1725,6 +1765,20 @@ mod tests {
         assert_eq!(info.tracks.len(), 2);
         assert_eq!(info.tracks[0].codec.as_deref(), Some("h264"));
         assert_eq!(info.tracks[1].codec.as_deref(), Some("aac"));
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_aac_audio_as_an_audio_only_mp4() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let input = directory.path().join("audio.mp4");
+        let output = directory.path().join("extracted.m4a");
+        make_mp4(&input, audio_config(), 1000)?;
+
+        let info = NativeMp4Processor::extract_aac(&input, &output, 1024 * 1024, || false)?;
+        assert_eq!(info.tracks.len(), 1);
+        assert_eq!(info.tracks[0].media_type, "audio");
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("aac"));
         Ok(())
     }
 

@@ -66,9 +66,11 @@ field, so the same ordering is used by Android, desktop, CLI, and authenticated 
 controls and survives restart.
 
 Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
-video/audio selections use a bundled, statically linked FFmpeg 8.1.2 executable
-(LGPL configuration, without GPL-only external libraries), built for the app's
-supported ABIs with `scripts/build-android-ffmpeg.sh`.
+video/audio selections first use a FetchX native FFmpeg-compatible shim for supported
+H.264/AAC MP4 stream-copy merges and AAC-in-MP4 to M4A extraction. Other codecs, containers,
+and audio transcoding fall back to the bundled, statically linked FFmpeg 8.1.2 executable
+(LGPL configuration, without GPL-only external libraries), built for the app's supported
+ABIs with `scripts/build-android-ffmpeg.sh`.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`

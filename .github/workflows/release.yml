@@ -169,6 +169,17 @@ jobs:
             build --release \
             -p fetchx-android-bridge
 
+      - name: Build native FFmpeg shim for arm64-v8a
+        run: |
+          cargo ndk \
+            -t arm64-v8a \
+            build --release \
+            -p fetchx-downloader \
+            --bin fetchx-native-ffmpeg
+          mkdir -p apps/android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/fetchx-native-ffmpeg \
+            apps/android/app/src/main/jniLibs/arm64-v8a/libfetchx_ffmpeg_native.so
+
       - name: Free Android Rust build artifacts
         run: cargo clean --target aarch64-linux-android
 
