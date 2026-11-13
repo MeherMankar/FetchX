@@ -1009,7 +1009,7 @@ mod native_only_tests {
         tokio::fs::write(&subtitle, "1\n00:00:01,000 --> 00:00:02,000\ncaption\n")
             .await
             .expect("write subtitle");
-        let (_, cancellation) = watch::channel(false);
+        let (_cancel_sender, cancellation) = watch::channel(false);
 
         processor
             .process(
@@ -1052,7 +1052,7 @@ mod native_only_tests {
         let processor = FfmpegProcessor::initialize(FfmpegConfig::new())
             .await
             .expect("native processor initialization");
-        let (_, cancellation) = watch::channel(false);
+        let (_cancel_sender, cancellation) = watch::channel(false);
 
         processor
             .process(

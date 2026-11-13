@@ -122,11 +122,6 @@ impl NativeMediaProcessor {
         is_cancelled: impl Fn() -> bool,
     ) -> Result<MediaInfo, NativeMediaError> {
         let input = canonical_input(input.as_ref())?;
-        let extension = input
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(str::to_ascii_lowercase)
-            .ok_or(NativeMediaError::UnsupportedInput)?;
         let format_name =
             symphonia_audio_probe_format(&input).ok_or(NativeMediaError::UnsupportedInput)?;
         let metadata = fs::metadata(&input)?;
@@ -139,7 +134,7 @@ impl NativeMediaProcessor {
 
         let file = File::open(&input)?;
         let mut hint = Hint::new();
-        hint.with_extension(&extension);
+        hint.with_extension(format_name);
         let stream = MediaSourceStream::new(Box::new(file), Default::default());
         let format = symphonia::default::get_probe()
             .probe(
@@ -154,7 +149,10 @@ impl NativeMediaProcessor {
             .iter()
             .filter_map(|track| {
                 let params = track.codec_params.as_ref()?.audio()?;
-                let channels = u16::try_from(params.channels.as_ref()?.count()).ok();
+                let channels = params
+                    .channels
+                    .as_ref()
+                    .and_then(|channels| u16::try_from(channels.count()).ok());
                 Some(MediaStream {
                     kind: MediaStreamKind::Audio,
                     codec: symphonia_codec_name(params.codec).map(str::to_owned),
@@ -441,7 +439,7 @@ impl NativeMediaProcessor {
         let track = format
             .default_track(TrackType::Audio)
             .ok_or(NativeMediaError::UnsupportedInput)?;
-        let track_id = track.id;
+        let mut track_id = track.id;
         let codec_params = track
             .codec_params
             .as_ref()
@@ -465,7 +463,19 @@ impl NativeMediaProcessor {
                 Ok(Some(packet)) => packet,
                 Ok(None) => break,
                 Err(SymphoniaError::ResetRequired) => {
-                    return Err(NativeMediaError::UnsupportedInput);
+                    let track = format
+                        .default_track(TrackType::Audio)
+                        .ok_or(NativeMediaError::UnsupportedInput)?;
+                    track_id = track.id;
+                    let audio_params = track
+                        .codec_params
+                        .as_ref()
+                        .and_then(|params| params.audio())
+                        .ok_or(NativeMediaError::UnsupportedInput)?;
+                    decoder = symphonia::default::get_codecs()
+                        .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
+                        .map_err(|_| NativeMediaError::UnsupportedInput)?;
+                    continue;
                 }
                 Err(_) => return Err(NativeMediaError::InvalidInput),
             };
@@ -646,7 +656,7 @@ fn decode_audio_pcm(
     let track = format
         .default_track(TrackType::Audio)
         .ok_or(NativeMediaError::UnsupportedInput)?;
-    let track_id = track.id;
+    let mut track_id = track.id;
     let codec_params = track
         .codec_params
         .as_ref()
@@ -668,7 +678,19 @@ fn decode_audio_pcm(
             Ok(Some(packet)) => packet,
             Ok(None) => break,
             Err(SymphoniaError::ResetRequired) => {
-                return Err(NativeMediaError::UnsupportedInput);
+                let track = format
+                    .default_track(TrackType::Audio)
+                    .ok_or(NativeMediaError::UnsupportedInput)?;
+                track_id = track.id;
+                let audio_params = track
+                    .codec_params
+                    .as_ref()
+                    .and_then(|params| params.audio())
+                    .ok_or(NativeMediaError::UnsupportedInput)?;
+                decoder = symphonia::default::get_codecs()
+                    .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
+                    .map_err(|_| NativeMediaError::UnsupportedInput)?;
+                continue;
             }
             Err(_) => return Err(NativeMediaError::InvalidInput),
         };
@@ -692,14 +714,16 @@ fn decode_audio_pcm(
         }
         sample_spec = Some((decoded_spec.rate(), channels));
 
+        let mut packet_samples = Vec::<i16>::new();
+        decoded.copy_to_vec_interleaved(&mut packet_samples);
         let new_count = samples
             .len()
-            .checked_add(decoded.samples_interleaved())
+            .checked_add(packet_samples.len())
             .ok_or(NativeMediaError::UnsupportedInput)?;
         if new_count > MAX_NATIVE_AUDIO_SAMPLES {
             return Err(NativeMediaError::UnsupportedInput);
         }
-        decoded.copy_to_vec_interleaved(&mut samples);
+        samples.extend(packet_samples);
     }
     let (sample_rate, channels) = sample_spec.ok_or(NativeMediaError::InvalidInput)?;
     if samples.is_empty() || !samples.len().is_multiple_of(channels) {
@@ -1108,16 +1132,19 @@ mod tests {
         let directory = tempdir()?;
         let input = directory.path().join("input.wav");
         let output = directory.path().join("output.wav");
-        write_pcm_wav(&input)?;
+        write_mp3_wav(&input)?;
 
         NativeMediaProcessor::audio_to_wav(&input, &output, 1024 * 1024, || false)?;
         let mut reader = hound::WavReader::open(output)?;
         assert_eq!(reader.spec().channels, 2);
         assert_eq!(reader.spec().sample_rate, 44_100);
         assert_eq!(reader.spec().bits_per_sample, 16);
+        let expected = (0..4_410_i16)
+            .flat_map(|frame| [frame.wrapping_mul(3), frame.wrapping_mul(-2)])
+            .collect::<Vec<_>>();
         assert_eq!(
             reader.samples::<i16>().collect::<Result<Vec<_>, _>>()?,
-            vec![-16_000, 16_000, -8_000, 8_000, 0, 0]
+            expected
         );
         Ok(())
     }

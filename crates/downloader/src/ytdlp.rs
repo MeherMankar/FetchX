@@ -2204,29 +2204,13 @@ mod tests {
         ),
         Box<dyn Error>,
     > {
-        fixture_with_source_options(url, runner, format, None).await
-    }
-
-    async fn fixture_with_audio_format(
-        url: &str,
-        runner: FakeRunner,
-        audio_format: YtDlpAudioFormat,
-    ) -> Result<
-        (
-            YtDlpEngine<fetchx_storage::SqliteDownloadRepository>,
-            PathBuf,
-            DownloadId,
-        ),
-        Box<dyn Error>,
-    > {
-        fixture_with_source_options(url, runner, None, Some(audio_format)).await
+        fixture_with_source_options(url, runner, format).await
     }
 
     async fn fixture_with_source_options(
         url: &str,
         runner: FakeRunner,
         format: Option<&str>,
-        audio_format: Option<YtDlpAudioFormat>,
     ) -> Result<
         (
             YtDlpEngine<fetchx_storage::SqliteDownloadRepository>,
@@ -2245,19 +2229,12 @@ mod tests {
             Some(format) => source.with_yt_dlp_format(format)?,
             None => source,
         };
-        let source = match audio_format {
-            Some(audio_format) => source.with_yt_dlp_audio_format(audio_format)?,
-            None => source,
-        };
-        let filename = format!(
-            "video.{}",
-            audio_format.map_or("webm", YtDlpAudioFormat::extension)
-        );
+        let filename = "video.webm";
         let item = DownloadItem::new(
             id,
             source,
-            FileName::new(&filename)?,
-            base.join(&filename),
+            FileName::new(filename)?,
+            base.join(filename),
             Timestamp::now()?,
         );
         repository.create(&item).await?;
@@ -2808,17 +2785,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ignores_regressing_progress_for_merged_formats() -> Result<(), Box<dyn Error>> {
+    async fn rejects_merged_format_before_starting_process() -> Result<(), Box<dyn Error>> {
         let runner = FakeRunner::default();
-        {
-            let mut state = runner.state.lock().expect("test runner mutex");
-            state.output = b"video!".to_vec();
-            state.progress_lines = vec![
-                "FETCHX_PROGRESS|50%|5|10|NA|1|1".to_owned(),
-                "FETCHX_PROGRESS|40%|4|10|NA|1|1".to_owned(),
-                "FETCHX_PROGRESS|60%|6|10|NA|1|1".to_owned(),
-            ];
-        }
         let state = Arc::clone(&runner.state);
         let (engine, base, id) = fixture_with_format(
             "https://example.test/video",
@@ -2828,30 +2796,31 @@ mod tests {
         .await?;
         let (_cancel_sender, cancellation) = watch::channel(false);
 
-        let completed = engine.download(id, cancellation).await?;
-        assert_eq!(completed.status(), DownloadStatus::Completed);
-        assert_eq!(completed.progress().downloaded_bytes(), 6);
-        assert_eq!(tokio::fs::read(base.join("video.webm")).await?, b"video!");
+        assert!(matches!(
+            engine.download(id, cancellation).await,
+            Err(DownloadEngineError::YtDlp(
+                YtDlpError::NativePostprocessingUnsupported
+            ))
+        ));
+        assert_eq!(state.lock().expect("test runner mutex").run_count, 0);
         assert!(
-            state
-                .lock()
-                .expect("test runner mutex")
-                .diagnostic_codes
-                .is_empty()
+            engine
+                .repository
+                .get(id)
+                .await?
+                .is_some_and(|item| item.status() == DownloadStatus::Failed)
         );
         tokio::fs::remove_dir_all(base).await?;
         Ok(())
     }
 
     #[tokio::test]
-    async fn automatic_merged_progress_reset_completes_and_retains_output()
-    -> Result<(), Box<dyn Error>> {
+    async fn automatic_muxed_progress_completes_and_retains_output() -> Result<(), Box<dyn Error>> {
         let runner = FakeRunner::default();
         {
             let mut state = runner.state.lock().expect("test runner mutex");
-            state.output = b"merged-video".to_vec();
+            state.output = b"muxed-video".to_vec();
             state.progress_lines = vec![
-                "FETCHX_PROGRESS|100%|10|10|NA|1|0".to_owned(),
                 "FETCHX_PROGRESS|0%|0|2|NA|1|1".to_owned(),
                 "FETCHX_PROGRESS|50%|1|2|NA|1|1".to_owned(),
                 "FETCHX_PROGRESS|100%|2|2|NA|1|0".to_owned(),
@@ -2865,16 +2834,20 @@ mod tests {
         assert_eq!(completed.status(), DownloadStatus::Completed);
         assert_eq!(
             tokio::fs::read(base.join("video.webm")).await?,
-            b"merged-video"
+            b"muxed-video"
         );
         {
             let state = state.lock().expect("test runner mutex");
             assert!(state.diagnostic_codes.is_empty());
-            assert!(state.diagnostic_details.iter().any(|detail| {
-                detail.contains("previous_downloaded_bytes=10")
-                    && detail.contains("incoming_downloaded_bytes=0")
-                    && detail.contains("component_selector=true")
-            }));
+            assert_eq!(
+                state.arguments[state
+                    .arguments
+                    .iter()
+                    .position(|argument| argument == "--format")
+                    .expect("format option is present")
+                    + 1],
+                "best"
+            );
         }
         tokio::fs::remove_dir_all(base).await?;
         Ok(())
@@ -2930,9 +2903,7 @@ mod tests {
             state.wait_for_stop = true;
             state.started = Some(Arc::clone(&started));
         }
-        let (engine, base, id) =
-            fixture_with_audio_format("https://example.test/video", runner, YtDlpAudioFormat::Mp3)
-                .await?;
+        let (engine, base, id) = fixture("https://example.test/video", runner).await?;
         let (cancel_sender, cancellation) = watch::channel(false);
         let (pause_sender, pause) = watch::channel(false);
         let (limit_sender, connection_limit) = watch::channel(1);
@@ -2962,7 +2933,7 @@ mod tests {
             .await?
             .ok_or("download not found")?;
         assert_eq!(persisted.status(), DownloadStatus::Cancelled);
-        assert!(workspace_path(&base.join("video.mp3"), id).is_dir());
+        assert!(workspace_path(&base.join("video.webm"), id).is_dir());
         drop((pause_sender, limit_sender));
         tokio::fs::remove_dir_all(base).await?;
         Ok(())
