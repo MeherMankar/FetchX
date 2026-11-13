@@ -13,11 +13,13 @@ use crate::ffmpeg::{MediaInfo, MediaStream, MediaStreamKind};
 use audio2mp3_core::{
     Bitrate, EncoderConfig, Mp3Encoder, PcmConverter, SampleFormat as PcmSampleFormat,
 };
-use flacenc::{
-    bitsink::ByteSink,
-    component::BitRepr,
-    error::{SourceError, SourceErrorReason, Verify},
-    source::{MemSource, Source},
+use oxideav_core::{
+    AudioFrame, CodecId, CodecParameters, Encoder, Error as OxideavError, Frame, SampleFormat,
+    StreamInfo, TimeBase, WriteSeek,
+};
+use oxideav_flac::{
+    container::{FlacMuxerOptions, open_muxer_with_options},
+    encoder::make_encoder as make_flac_encoder,
 };
 use symphonia::core::{
     codecs::audio::{
@@ -263,43 +265,14 @@ impl NativeMediaProcessor {
         if samples.is_empty() || samples.len() % usize::from(spec.channels) != 0 {
             return Err(NativeMediaError::InvalidInput);
         }
-        let mut config = flacenc::config::Encoder::default();
-        config.multithread = false;
-        let config = config
-            .into_verified()
-            .map_err(|error| NativeMediaError::Encoding(format!("{error:?}")))?;
-        let source = CancelableSource {
-            source: MemSource::from_samples(
-                &samples,
-                usize::from(spec.channels),
-                usize::from(spec.bits_per_sample),
-                usize::try_from(spec.sample_rate)
-                    .map_err(|_| NativeMediaError::UnsupportedInput)?,
-            ),
-            is_cancelled: &is_cancelled,
-        };
-        let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
-            .map_err(|error| {
-                if is_cancelled() {
-                    NativeMediaError::Cancelled
-                } else {
-                    NativeMediaError::Encoding(error.to_string())
-                }
-            })?;
-        if is_cancelled() {
-            return Err(NativeMediaError::Cancelled);
-        }
-        let mut sink = ByteSink::new();
-        stream
-            .write(&mut sink)
-            .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-        if is_cancelled() {
-            return Err(NativeMediaError::Cancelled);
-        }
-        let bytes = sink.into_inner();
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_output_bytes {
-            return Err(NativeMediaError::OutputTooLarge);
-        }
+        let bytes = encode_flac(
+            &samples,
+            spec.channels,
+            spec.sample_rate,
+            spec.bits_per_sample,
+            max_output_bytes,
+            &is_cancelled,
+        )?;
         publish_bytes(&bytes, output.as_ref(), max_output_bytes, &is_cancelled)
     }
 
@@ -328,43 +301,14 @@ impl NativeMediaProcessor {
             .copied()
             .map(i32::from)
             .collect::<Vec<_>>();
-        let mut config = flacenc::config::Encoder::default();
-        config.multithread = false;
-        let config = config
-            .into_verified()
-            .map_err(|error| NativeMediaError::Encoding(format!("{error:?}")))?;
-        let source = CancelableSource {
-            source: MemSource::from_samples(
-                &samples,
-                usize::from(decoded.channels),
-                16,
-                usize::try_from(decoded.sample_rate)
-                    .map_err(|_| NativeMediaError::UnsupportedInput)?,
-            ),
-            is_cancelled: &is_cancelled,
-        };
-        let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
-            .map_err(|error| {
-                if is_cancelled() {
-                    NativeMediaError::Cancelled
-                } else {
-                    NativeMediaError::Encoding(error.to_string())
-                }
-            })?;
-        if is_cancelled() {
-            return Err(NativeMediaError::Cancelled);
-        }
-        let mut sink = ByteSink::new();
-        stream
-            .write(&mut sink)
-            .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-        if is_cancelled() {
-            return Err(NativeMediaError::Cancelled);
-        }
-        let bytes = sink.into_inner();
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_output_bytes {
-            return Err(NativeMediaError::OutputTooLarge);
-        }
+        let bytes = encode_flac(
+            &samples,
+            decoded.channels,
+            decoded.sample_rate,
+            16,
+            max_output_bytes,
+            &is_cancelled,
+        )?;
         publish_bytes(&bytes, output.as_ref(), max_output_bytes, &is_cancelled)
     }
 
@@ -848,38 +792,202 @@ fn append_bounded(
     Ok(())
 }
 
-struct CancelableSource<'a> {
-    source: MemSource,
-    is_cancelled: &'a dyn Fn() -> bool,
+fn encode_flac(
+    samples: &[i32],
+    channels: u16,
+    sample_rate: u32,
+    bits_per_sample: u16,
+    max_output_bytes: u64,
+    is_cancelled: &impl Fn() -> bool,
+) -> Result<Vec<u8>, NativeMediaError> {
+    let channel_count = usize::from(channels);
+    if channel_count == 0 || samples.is_empty() || !samples.len().is_multiple_of(channel_count) {
+        return Err(NativeMediaError::InvalidInput);
+    }
+
+    let sample_format = match bits_per_sample {
+        8 => SampleFormat::U8,
+        16 => SampleFormat::S16,
+        24 => SampleFormat::S24,
+        32 => SampleFormat::S32,
+        _ => return Err(NativeMediaError::UnsupportedInput),
+    };
+    let mut params = CodecParameters::audio(CodecId::new("flac"));
+    params.channels = Some(channels);
+    params.sample_rate = Some(sample_rate);
+    params.sample_format = Some(sample_format);
+    let mut encoder = make_flac_encoder(&params)
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+
+    let mut packets = Vec::new();
+    let mut encoded_size = 0_u64;
+    let samples_per_frame = 4096_usize
+        .checked_mul(channel_count)
+        .ok_or(NativeMediaError::UnsupportedInput)?;
+    let mut pts = 0_i64;
+    for chunk in samples.chunks(samples_per_frame) {
+        if is_cancelled() {
+            return Err(NativeMediaError::Cancelled);
+        }
+        let frame_samples = chunk.len() / channel_count;
+        let frame = AudioFrame {
+            samples: u32::try_from(frame_samples)
+                .map_err(|_| NativeMediaError::UnsupportedInput)?,
+            pts: Some(pts),
+            data: vec![encode_flac_samples(chunk, bits_per_sample)?],
+        };
+        encoder.send_frame(&Frame::Audio(frame)).map_err(|error| {
+            if is_cancelled() {
+                NativeMediaError::Cancelled
+            } else {
+                NativeMediaError::Encoding(error.to_string())
+            }
+        })?;
+        pts = pts
+            .checked_add(
+                i64::try_from(frame_samples).map_err(|_| NativeMediaError::UnsupportedInput)?,
+            )
+            .ok_or(NativeMediaError::UnsupportedInput)?;
+        collect_flac_packets(
+            encoder.as_mut(),
+            &mut packets,
+            &mut encoded_size,
+            max_output_bytes,
+        )?;
+    }
+    if is_cancelled() {
+        return Err(NativeMediaError::Cancelled);
+    }
+    encoder
+        .flush()
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    collect_flac_packets(
+        encoder.as_mut(),
+        &mut packets,
+        &mut encoded_size,
+        max_output_bytes,
+    )?;
+
+    let stream = StreamInfo {
+        index: 0,
+        time_base: TimeBase::from_rate(sample_rate),
+        duration: Some(
+            i64::try_from(samples.len() / channel_count)
+                .map_err(|_| NativeMediaError::UnsupportedInput)?,
+        ),
+        start_time: Some(0),
+        params: encoder.output_params().clone(),
+    };
+    let temporary = std::env::temp_dir().join(format!(".fetchx-flac-{}.tmp", Uuid::new_v4()));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let _temporary_guard = TemporaryOutput(temporary.clone());
+    let mut muxer = open_muxer_with_options(
+        Box::new(file) as Box<dyn WriteSeek>,
+        &[stream],
+        FlacMuxerOptions::no_seektable(),
+    )
+    .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    muxer
+        .write_header()
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    ensure_flac_output_size(&temporary, max_output_bytes)?;
+    for packet in &packets {
+        if is_cancelled() {
+            return Err(NativeMediaError::Cancelled);
+        }
+        muxer
+            .write_packet(packet)
+            .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+        ensure_flac_output_size(&temporary, max_output_bytes)?;
+    }
+    muxer
+        .write_trailer()
+        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+    drop(muxer);
+    ensure_flac_output_size(&temporary, max_output_bytes)?;
+
+    if is_cancelled() {
+        return Err(NativeMediaError::Cancelled);
+    }
+    let file = File::open(&temporary)?;
+    let mut bytes = Vec::new();
+    file.take(max_output_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_output_bytes {
+        return Err(NativeMediaError::OutputTooLarge);
+    }
+    Ok(bytes)
 }
 
-impl Source for CancelableSource<'_> {
-    fn channels(&self) -> usize {
-        self.source.channels()
-    }
-
-    fn bits_per_sample(&self) -> usize {
-        self.source.bits_per_sample()
-    }
-
-    fn sample_rate(&self) -> usize {
-        self.source.sample_rate()
-    }
-
-    fn read_samples<F: flacenc::source::Fill>(
-        &mut self,
-        block_size: usize,
-        destination: &mut F,
-    ) -> Result<usize, SourceError> {
-        if (self.is_cancelled)() {
-            return Err(SourceError::by_reason(SourceErrorReason::IO(None)));
+fn encode_flac_samples(samples: &[i32], bits_per_sample: u16) -> Result<Vec<u8>, NativeMediaError> {
+    let bytes_per_sample = match bits_per_sample {
+        8 => 1,
+        16 => 2,
+        24 => 3,
+        32 => 4,
+        _ => return Err(NativeMediaError::UnsupportedInput),
+    };
+    let capacity = samples
+        .len()
+        .checked_mul(bytes_per_sample)
+        .ok_or(NativeMediaError::OutputTooLarge)?;
+    let mut bytes = Vec::with_capacity(capacity);
+    for sample in samples {
+        match bits_per_sample {
+            8 => {
+                let sample = i8::try_from(*sample).map_err(|_| NativeMediaError::InvalidInput)?;
+                let unsigned = u8::try_from(i16::from(sample) + 128)
+                    .map_err(|_| NativeMediaError::InvalidInput)?;
+                bytes.push(unsigned);
+            }
+            16 => {
+                let sample = i16::try_from(*sample).map_err(|_| NativeMediaError::InvalidInput)?;
+                bytes.extend_from_slice(&sample.to_le_bytes());
+            }
+            24 => {
+                if !(-8_388_608..=8_388_607).contains(sample) {
+                    return Err(NativeMediaError::InvalidInput);
+                }
+                bytes.extend_from_slice(&sample.to_le_bytes()[..3]);
+            }
+            32 => bytes.extend_from_slice(&sample.to_le_bytes()),
+            _ => return Err(NativeMediaError::UnsupportedInput),
         }
-        self.source.read_samples(block_size, destination)
     }
+    Ok(bytes)
+}
 
-    fn len_hint(&self) -> Option<usize> {
-        self.source.len_hint()
+fn collect_flac_packets(
+    encoder: &mut dyn Encoder,
+    packets: &mut Vec<oxideav_core::Packet>,
+    encoded_size: &mut u64,
+    max_output_bytes: u64,
+) -> Result<(), NativeMediaError> {
+    loop {
+        match encoder.receive_packet() {
+            Ok(packet) => {
+                *encoded_size = encoded_size
+                    .checked_add(u64::try_from(packet.data.len()).unwrap_or(u64::MAX))
+                    .ok_or(NativeMediaError::OutputTooLarge)?;
+                if *encoded_size > max_output_bytes {
+                    return Err(NativeMediaError::OutputTooLarge);
+                }
+                packets.push(packet);
+            }
+            Err(OxideavError::NeedMore | OxideavError::Eof) => return Ok(()),
+            Err(error) => return Err(NativeMediaError::Encoding(error.to_string())),
+        }
     }
+}
+
+fn ensure_flac_output_size(path: &Path, max_output_bytes: u64) -> Result<(), NativeMediaError> {
+    if fs::metadata(path)?.len() > max_output_bytes {
+        return Err(NativeMediaError::OutputTooLarge);
+    }
+    Ok(())
 }
 
 fn convert_srt_to_webvtt(
@@ -1064,7 +1172,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{NativeMediaError, NativeMediaProcessor};
+    use super::{NativeMediaError, NativeMediaProcessor, encode_flac_samples};
 
     fn write_pcm_wav(path: &Path) -> Result<(), Box<dyn Error>> {
         let spec = hound::WavSpec {
@@ -1094,6 +1202,13 @@ mod tests {
             writer.write_sample(frame.wrapping_mul(-2))?;
         }
         writer.finalize()?;
+        Ok(())
+    }
+
+    #[test]
+    fn converts_signed_eight_bit_wav_samples_to_unsigned_flac_samples() -> Result<(), Box<dyn Error>>
+    {
+        assert_eq!(encode_flac_samples(&[-128, 0, 127], 8)?, [0, 128, 255]);
         Ok(())
     }
 
