@@ -361,30 +361,33 @@ session/state contract exists.
 
 ## 10. New-Tab / Essentials Page
 
-### Recommended hierarchy
+### Start-page hierarchy
 
 ```text
 ┌────────────────────────────────────┐
-│ FetchX       [space/profile]       │
-├────────────────────────────────────┤
-│ Search or type URL                 │
-├────────────────────────────────────┤
-│ Bookmarks  History  Downloads      │
-├────────────────────────────────────┤
-│ Essentials / recent sites          │
-│ [site] [site] [site]               │
-├────────────────────────────────────┤
-│ Tracking protection summary        │
+│ FetchX                 [profile]   │
+│      Search or type URL            │
+│   Downloads · live queue count     │
+│ Top sites                          │
+│ (site)  (site)  (site)  (site)     │
+│ Bookmarks                 History  │
 └────────────────────────────────────┘
 ```
 
 ### Rules
 
-- Keep the search field as the first interactive element.
-- Show three high-value shortcuts before lower-frequency utilities.
+- Visual reference: [Brave Browser UI kit](https://www.figma.com/community/file/1032081846581442397/brave-browser-ui-kit) and
+  [Brave's Android New Tab Page](https://support.brave.app/hc/en-us/articles/36070347466509-How-do-I-customize-the-New-Tab-Page-on-Android).
+- Use a recognizable browser start-page rhythm: brand, search, one compact live
+  status card, then a horizontal top-sites strip.
+- The central search affordance opens the existing address editor; it does not create
+  a separate search flow or duplicate URL state.
+- Keep the download card factual and driven by the current queue. Do not invent privacy
+  counters or show zero-value metrics as decoration.
 - Use the existing essentials/most-visited data.
 - Keep the profile/space identity visible but compact.
 - Show a clear empty state when there are no history/bookmark/essential entries.
+- Keep Bookmarks and History as quiet secondary shortcuts; Tabs remain in the browser bar.
 - Do not add news feeds, sponsored content, weather, or unrelated personalization.
 - Personalization is a future option limited to ordering, accent, and shortcut visibility.
 

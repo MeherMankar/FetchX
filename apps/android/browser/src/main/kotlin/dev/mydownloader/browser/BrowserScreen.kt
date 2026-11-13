@@ -151,6 +151,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -1068,7 +1069,13 @@ fun BrowserScreen(
                 EssentialsPage(
                     recentEntries = uiState.essentials,
                     ongoingDownloadCount = ongoingDownloadCount,
-                    onOpenTabs = { viewModel.openTabOverview() },
+                    selectedSearchEngine = uiState.selectedSearchEngine,
+                    profileName = uiState.selectedProfile?.name ?: "Default",
+                    profileAccentColor = spaceAccentColor,
+                    onSearch = {
+                        isUrlBarExpanded = true
+                        viewModel.onUrlInputChanged("")
+                    },
                     onNavigateRecent = { viewModel.navigateToEssential(it) },
                     onOpenBookmarks = { viewModel.openBookmarks() },
                     onOpenHistory = { viewModel.openHistory() },
@@ -1751,10 +1758,13 @@ private fun FetchxRemotePopupDialog(
 }
 
 @Composable
-private fun EssentialsPage(
+internal fun EssentialsPage(
     recentEntries: List<Essential>,
     ongoingDownloadCount: Int,
-    onOpenTabs: () -> Unit,
+    selectedSearchEngine: SearchEngine,
+    profileName: String,
+    profileAccentColor: Color,
+    onSearch: () -> Unit,
     onNavigateRecent: (String) -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
@@ -1770,145 +1780,303 @@ private fun EssentialsPage(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.Start,
+                .padding(horizontal = 24.dp, vertical = 24.dp),
         ) {
-            Text(
-                text = "Quick access",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onBackground,
-            )
-            Spacer(Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    EssentialsAction(
-                        Icons.Default.Download,
-                        "Downloads",
-                        onOpenDownloads,
-                        Modifier.weight(1f),
-                        badgeText = ongoingDownloadCount.takeIf { it > 0 }?.let {
-                            if (it > 99) "99+" else it.toString()
-                        },
-                        contentDescription = if (ongoingDownloadCount > 0) {
-                            "Downloads, $ongoingDownloadCount in progress"
-                        } else {
-                            "Downloads"
-                        },
-                    )
-                    EssentialsAction(
-                        Icons.Default.GridView,
-                        "Tabs",
-                        onOpenTabs,
-                        Modifier.weight(1f),
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = "FetchX",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onBackground,
                     )
                 }
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    EssentialsAction(
-                        Icons.Default.Bookmarks,
-                        "Bookmarks",
-                        onOpenBookmarks,
-                        Modifier.weight(1f),
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(profileAccentColor, CircleShape),
                     )
-                    EssentialsAction(
-                        Icons.Default.History,
-                        "History",
-                        onOpenHistory,
-                        Modifier.weight(1f),
+                    Text(
+                        text = profileName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
             }
 
-            if (recentEntries.isNotEmpty()) {
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    text = "Frequently visited",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onBackground,
-                )
-                Spacer(Modifier.height(8.dp))
-                recentEntries.take(4).forEach { entry ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Browse the web, then send downloads to FetchX",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            Spacer(Modifier.height(24.dp))
+            Surface(
+                onClick = onSearch,
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .semantics {
+                        contentDescription = "Search or type URL"
+                        role = Role.Button
+                    },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    SearchEngineIcon(engine = selectedSearchEngine, size = 20.dp)
+                    Text(
+                        text = "Search or type URL",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+            Surface(
+                onClick = onOpenDownloads,
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 76.dp)
+                    .semantics {
+                        contentDescription = if (ongoingDownloadCount > 0) {
+                            "Downloads, $ongoingDownloadCount ongoing"
+                        } else {
+                            "Downloads, no ongoing downloads"
+                        }
+                        role = Role.Button
+                    },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     Surface(
-                        onClick = { onNavigateRecent(entry.url) },
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(44.dp),
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Downloads",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = when (ongoingDownloadCount) {
+                                0 -> "No ongoing downloads"
+                                1 -> "1 ongoing download"
+                                else -> "$ongoingDownloadCount ongoing downloads"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(28.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Top sites",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+                if (recentEntries.isNotEmpty()) {
+                    Text(
+                        text = "Most visited",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            if (recentEntries.isEmpty()) {
+                Text(
+                    text = "Sites you visit will appear here",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp),
+                    textAlign = TextAlign.Center,
+                )
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    recentEntries.take(8).forEach { entry ->
+                        Column(
+                            modifier = Modifier.width(68.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            val siteColor = try {
+                                Color(android.graphics.Color.parseColor(entry.colorHex))
+                            } catch (_: IllegalArgumentException) {
+                                MaterialTheme.colorScheme.primary
+                            }
+                            val siteTextColor =
+                                if (android.graphics.Color.luminance(siteColor.toArgb()) > 0.45f) {
+                                    Color(0xFF171717)
+                                } else {
+                                    Color.White
+                                }
+                            Surface(
+                                onClick = { onNavigateRecent(entry.url) },
+                                shape = CircleShape,
+                                color = siteColor,
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .semantics {
+                                        contentDescription = "Open ${entry.title}"
+                                        role = Role.Button
+                                    },
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = entry.initial.take(1).uppercase(),
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = siteTextColor,
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
                             Text(
                                 text = entry.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 2,
+                                minLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = entry.url,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
                             )
                         }
                     }
                 }
+            }
+
+            Spacer(Modifier.height(28.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(20.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                EssentialsLibraryAction(
+                    icon = Icons.Default.Bookmarks,
+                    label = "Bookmarks",
+                    onClick = onOpenBookmarks,
+                    modifier = Modifier.weight(1f),
+                )
+                EssentialsLibraryAction(
+                    icon = Icons.Default.History,
+                    label = "History",
+                    onClick = onOpenHistory,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun EssentialsAction(
+private fun EssentialsLibraryAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    badgeText: String? = null,
-    contentDescription: String = label,
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = modifier.heightIn(min = 64.dp),
+        modifier = modifier.heightIn(min = 56.dp),
     ) {
         Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            BadgedBox(
-                badge = {
-                    if (badgeText != null) {
-                        Badge { Text(badgeText) }
-                    }
-                },
-            ) {
-                Icon(
-                    icon,
-                    contentDescription = contentDescription,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp),
-                )
-            }
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
     }
