@@ -35,17 +35,22 @@ only the `pipe` input protocol enabled, caps output at 100 GiB by default (confi
 up to 1 TiB), and does not own download lifecycle or scheduling. Fake runners keep normal
 tests independent of FFmpeg. The optional yt-dlp engine is configured as an external
 process adapter and uses fake runners in tests; no installed yt-dlp is required for CI.
-An initial native Rust MP4 path probes MP4 metadata and stream-copies H.264/AAC tracks,
-video-only HEVC, VP8, VP9, or AV1 files, and audio-only Opus or FLAC files. Compatible
-H.264/AAC merges also use native stream copy; duration mismatches fall back to FFmpeg
-to preserve its shortest-stream behavior. Other codec combinations continue through FFmpeg.
-Unsupported codecs, subtitle tracks, and unsupported track layouts fall back to FFmpeg;
-other containers, transcoding, and Android yt-dlp merging still use FFmpeg. Native output
-remains size-bounded, cancellable, and published without overwriting an existing file.
+An initial native Rust MP4 path probes MP4 metadata and stream-copies supported H.264/AAC,
+HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video and one
+audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
+Compatible H.264/AAC merges also use native stream copy;
+duration mismatches fall back to FFmpeg to preserve its shortest-stream behavior.
+Mono/stereo integer PCM WAV can be transcoded natively to FLAC, and SRT subtitles can be
+converted to WebVTT. Other transcoding, unsupported MP4 subtitle/data tracks, codecs, and
+layouts continue through FFmpeg. Native output remains size-bounded, cancellable, and published
+without overwriting an existing file.
 This original FetchX implementation takes FFmpeg's stream-copy behavior as a functional
 reference and does not copy FFmpeg source code. MP4 container handling uses the MIT-licensed
 [`mp4` crate](https://crates.io/crates/mp4) and Apache-2.0-licensed
-[`shiguredo_mp4` crate](https://crates.io/crates/shiguredo_mp4).
+[`shiguredo_mp4` crate](https://crates.io/crates/shiguredo_mp4). WebM muxing uses
+[`ebml-webm`](https://crates.io/crates/ebml-webm) (MIT OR Apache-2.0), and FLAC encoding
+uses [`flacenc`](https://crates.io/crates/flacenc) (Apache-2.0); WAV parsing uses
+[`hound`](https://crates.io/crates/hound) (Apache-2.0).
 Historical aria2 records remain readable but the external aria2 runtime, daemon RPC,
 process supervision, packaging, settings, and fallback have been removed. Supported
 new work uses FetchX's shared Rust engines; eligible old records can be restarted as

@@ -36,12 +36,12 @@ const ENGINE_LABELS: Record<string, string> = {
 
 const MEDIA_EXTENSIONS = new Set([
   "aac", "avi", "flac", "m3u8", "m4a", "m4v", "mkv", "mov", "mp3", "mp4",
-  "mpd", "mpeg", "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
+  "mpd", "mpeg", "mpg", "ogg", "srt", "ts", "wav", "webm", "wma", "wmv",
 ]);
 
 const REMUXABLE_EXTENSIONS = new Set([
   "aac", "avi", "flac", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg",
-  "mpg", "ogg", "ts", "wav", "webm", "wma", "wmv",
+  "mpg", "ogg", "srt", "ts", "wav", "webm", "wma", "wmv",
 ]);
 
 function isHttpSource(url: string): boolean {
@@ -313,7 +313,7 @@ export function DetailPanel({
     setMediaLoading(true);
     setMediaError(null);
     try {
-      setMediaJob(await startMediaRemux(download.id, mediaContainer));
+      setMediaJob(await startMediaRemux(download.id, fileExtension === "srt" ? "vtt" : mediaContainer));
     } catch (cause) {
       setMediaError(errorMessage(cause));
     } finally {
@@ -334,6 +334,7 @@ export function DetailPanel({
 
   const fileExtension = download.filename.split(".").pop()?.toLowerCase() ?? "";
   const canRemux = download.status === "completed" && REMUXABLE_EXTENSIONS.has(fileExtension);
+  const isSubtitleConversion = fileExtension === "srt";
   const mediaJobActive = mediaJob?.status === "preparing" || mediaJob?.status === "processing";
   const mediaProgress = mediaJob?.status === "completed"
     ? 100
@@ -632,27 +633,42 @@ export function DetailPanel({
         )}
 
         {canRemux && (
-          <section className="detail-section" aria-label="Media remux">
-            <p className="detail-section-title">Remux media</p>
+          <section
+            className="detail-section"
+            aria-label={isSubtitleConversion ? "Subtitle conversion" : "Media remux"}
+          >
+            <p className="detail-section-title">
+              {isSubtitleConversion ? "Convert subtitles" : "Remux media"}
+            </p>
             <p className="field-hint">
-              Copies the existing streams into another container without re-encoding.
-              The source is preserved and the new file is saved beside it. Closing FetchX cancels the remux.
+              {isSubtitleConversion
+                ? "Converts SRT captions to WebVTT. The source is preserved and the new file is saved beside it."
+                : "Copies the existing streams into another container without re-encoding. The source is preserved and the new file is saved beside it."}
+              {" "}Closing FetchX cancels the operation.
             </p>
             <label className="field-label" htmlFor={`remux-container-${download.id}`}>
-              Output container
+              {isSubtitleConversion ? "Output format" : "Output container"}
             </label>
             <select
               id={`remux-container-${download.id}`}
               className="field-input"
-              value={mediaContainer}
+              value={isSubtitleConversion ? "vtt" : mediaContainer}
               disabled={mediaLoading || mediaJobActive}
-              onChange={(event) =>
-                setMediaContainer(event.target.value as "mp4" | "mkv" | "webm")
-              }
+              onChange={(event) => {
+                if (!isSubtitleConversion) {
+                  setMediaContainer(event.target.value as "mp4" | "mkv" | "webm");
+                }
+              }}
             >
-              <option value="mp4">MP4</option>
-              <option value="mkv">Matroska (MKV)</option>
-              <option value="webm">WebM</option>
+              {isSubtitleConversion ? (
+                <option value="vtt">WebVTT</option>
+              ) : (
+                <>
+                  <option value="mp4">MP4</option>
+                  <option value="mkv">Matroska (MKV)</option>
+                  <option value="webm">WebM</option>
+                </>
+              )}
             </select>
             <div className="detail-actions">
               <button
@@ -663,22 +679,22 @@ export function DetailPanel({
                 {mediaLoading
                   ? "Starting…"
                   : mediaJob?.status === "completed"
-                    ? "Remux again"
-                    : "Remux"}
+                    ? isSubtitleConversion ? "Convert again" : "Remux again"
+                    : isSubtitleConversion ? "Convert" : "Remux"}
               </button>
               {mediaJobActive && (
                 <button
                   className="button button-secondary"
                   onClick={() => void cancelRemux()}
                 >
-                  Cancel remux
+                  {isSubtitleConversion ? "Cancel conversion" : "Cancel remux"}
                 </button>
               )}
             </div>
             {mediaJob && (
               <div role="status" aria-live="polite">
                 <p className="field-hint">
-                  Remux {mediaJob.status}
+                  {isSubtitleConversion ? "Conversion" : "Remux"} {mediaJob.status}
                   {mediaJob.status === "processing" && (
                     <>
                       {" · "}
@@ -695,7 +711,7 @@ export function DetailPanel({
                 {(mediaJobActive || mediaJob.status === "completed") && (
                   <progress
                     className="progress-track"
-                    aria-label="Remux progress"
+                    aria-label={isSubtitleConversion ? "Conversion progress" : "Remux progress"}
                     value={mediaProgress}
                     max={100}
                   />

@@ -25,6 +25,7 @@ use tokio::{
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::native_media::{NativeMediaError, NativeMediaProcessor};
 use crate::native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor};
 
 const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 6);
@@ -49,6 +50,18 @@ pub struct FfmpegConfig {
     process_timeout: Duration,
     max_output_bytes: u64,
     max_concurrent_processes: usize,
+}
+
+fn is_srt_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("srt"))
+}
+
+fn is_wav_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
 }
 
 impl Default for FfmpegConfig {
@@ -99,6 +112,7 @@ pub enum MediaContainer {
     Mp4,
     Matroska,
     WebM,
+    WebVtt,
     Mp3,
     Flac,
     Wav,
@@ -110,6 +124,7 @@ impl MediaContainer {
             Self::Mp4 => "mp4",
             Self::Matroska => "matroska",
             Self::WebM => "webm",
+            Self::WebVtt => "webvtt",
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Wav => "wav",
@@ -121,6 +136,7 @@ impl MediaContainer {
             Self::Mp4 => "mp4",
             Self::Matroska => "mkv",
             Self::WebM => "webm",
+            Self::WebVtt => "vtt",
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Wav => "wav",
@@ -269,6 +285,8 @@ pub enum FfmpegError {
     Cancelled,
     #[error("native MP4 processing failed: {0}")]
     NativeMp4(#[from] NativeMp4Error),
+    #[error("native media processing failed: {0}")]
+    NativeMedia(#[from] NativeMediaError),
 }
 
 pub trait FfmpegProcessRunner: Send + Sync {
@@ -390,7 +408,7 @@ impl FfmpegProcessor {
         let input = canonical_input(input.as_ref()).await?;
         if is_mp4_path(&input) {
             let native_input = input.clone();
-            match run_native_mp4_task(
+            match run_native_task(
                 self.process_timeout,
                 cancellation.clone(),
                 move |cancelled, receiver| {
@@ -459,7 +477,7 @@ impl FfmpegProcessor {
             let native_audio = audio.clone();
             let native_output = destination.clone();
             let max_output_bytes = self.max_output_bytes;
-            match run_native_mp4_task(
+            match run_native_task(
                 self.process_timeout,
                 cancellation.clone(),
                 move |cancelled, receiver| {
@@ -569,6 +587,121 @@ impl FfmpegProcessor {
         let _permit = self.acquire_slot(cancellation.clone()).await?;
         let input = canonical_input(&request.input).await?;
         let destination = resolve_destination(&request.output, &input).await?;
+        if is_srt_path(&input)
+            && matches!(
+                request.operation,
+                MediaOperation::Remux {
+                    container: MediaContainer::WebVtt
+                }
+            )
+        {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::srt_to_webvtt(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native SRT-to-WebVTT conversion unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if is_wav_path(&input)
+            && matches!(
+                request.operation,
+                MediaOperation::Transcode {
+                    preset: TranscodePreset::FlacAudio
+                }
+            )
+        {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMediaProcessor::wav_to_flac(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMedia(NativeMediaError::InvalidInput))
+                | Err(FfmpegError::NativeMedia(NativeMediaError::UnsupportedInput)) => {
+                    debug!("native WAV-to-FLAC conversion unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if is_mp4_path(&input)
+            && matches!(
+                request.operation,
+                MediaOperation::Remux {
+                    container: MediaContainer::WebM
+                }
+            )
+        {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeMp4Processor::remux_to_webm(
+                        &native_input,
+                        &native_output,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeMp4(NativeMp4Error::InvalidInput))
+                | Err(FfmpegError::NativeMp4(NativeMp4Error::UnsupportedCodec))
+                | Err(FfmpegError::NativeMp4(NativeMp4Error::UnsupportedTiming)) => {
+                    debug!("native MP4-to-WebM remux unsupported; falling back to FFmpeg");
+                }
+                Err(error) => return Err(error),
+            }
+        }
         if is_mp4_path(&input)
             && matches!(
                 request.operation,
@@ -580,7 +713,7 @@ impl FfmpegProcessor {
             let native_input = input.clone();
             let native_output = destination.clone();
             let max_output_bytes = self.max_output_bytes;
-            match run_native_mp4_task(
+            match run_native_task(
                 self.process_timeout,
                 cancellation.clone(),
                 move |cancelled, receiver| {
@@ -823,14 +956,15 @@ fn media_info_from_native_mp4(info: NativeMp4Info) -> MediaInfo {
     }
 }
 
-async fn run_native_mp4_task<T, F>(
+async fn run_native_task<T, E, F>(
     process_timeout: Duration,
     mut cancellation: watch::Receiver<bool>,
     operation: F,
 ) -> Result<T, FfmpegError>
 where
     T: Send + 'static,
-    F: FnOnce(Arc<AtomicBool>, watch::Receiver<bool>) -> Result<T, NativeMp4Error> + Send + 'static,
+    E: Into<FfmpegError> + Send + 'static,
+    F: FnOnce(Arc<AtomicBool>, watch::Receiver<bool>) -> Result<T, E> + Send + 'static,
 {
     let cancelled = Arc::new(AtomicBool::new(false));
     let worker_cancelled = Arc::clone(&cancelled);
@@ -840,7 +974,7 @@ where
     tokio::select! {
         biased;
         result = &mut worker => match result {
-            Ok(result) => result.map_err(FfmpegError::NativeMp4),
+            Ok(result) => result.map_err(Into::into),
             Err(_) => Err(FfmpegError::ProcessRunner),
         },
         result = wait_for_native_cancellation(&mut cancellation) => {
@@ -2312,6 +2446,70 @@ mod tests {
                 Err(FfmpegError::InvalidConfiguration)
             ));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_wav_and_srt_operations_bypass_ffmpeg() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        let processor = setup(runner, directory.path()).await?;
+        let initial_call_count = state.lock().expect("fake runner mutex").calls.len();
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        let subtitle_input = directory.path().join("captions.srt");
+        let subtitle_output = directory.path().join("captions.vtt");
+        tokio::fs::write(
+            &subtitle_input,
+            "1\n00:00:01,000 --> 00:00:02,000\ncaption\n",
+        )
+        .await?;
+        processor
+            .process(
+                MediaProcessRequest::remux(
+                    &subtitle_input,
+                    &subtitle_output,
+                    MediaContainer::WebVtt,
+                ),
+                cancellation.clone(),
+                None,
+            )
+            .await?;
+        assert!(
+            tokio::fs::read_to_string(&subtitle_output)
+                .await?
+                .starts_with("WEBVTT\n")
+        );
+
+        let audio_input = directory.path().join("audio.wav");
+        let audio_output = directory.path().join("audio.flac");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&audio_input, spec)?;
+        writer.write_sample(0_i16)?;
+        writer.write_sample(1_i16)?;
+        writer.finalize()?;
+        processor
+            .process(
+                MediaProcessRequest::transcode(
+                    &audio_input,
+                    &audio_output,
+                    TranscodePreset::FlacAudio,
+                ),
+                cancellation,
+                None,
+            )
+            .await?;
+        assert!(tokio::fs::read(&audio_output).await?.starts_with(b"fLaC"));
+        assert_eq!(
+            state.lock().expect("fake runner mutex").calls.len(),
+            initial_call_count
+        );
         Ok(())
     }
 

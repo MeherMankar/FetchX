@@ -40,7 +40,7 @@ export function getMediaProcessForDownload(
 
 export function startMediaRemux(
   downloadId: string,
-  container: "mp4" | "mkv" | "webm",
+  container: "mp4" | "mkv" | "webm" | "vtt",
 ): Promise<MediaProcessJob> {
   return invoke<MediaProcessJob>("start_media_remux", {
     download_id: downloadId,

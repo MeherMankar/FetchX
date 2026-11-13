@@ -32,6 +32,9 @@ md-5 = "=0.11.0"
 hex = "=0.4.3"
 mp4 = "0.14.0"
 shiguredo_mp4 = "=2026.3.0"
+ebml-webm = "=0.2.1"
+flacenc = { version = "=0.5.1", default-features = false }
+hound = "=3.5.1"
 
 [features]
 phase28-benchmark-local-http = []

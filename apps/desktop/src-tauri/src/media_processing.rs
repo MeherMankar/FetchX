@@ -415,6 +415,7 @@ fn parse_container(value: &str) -> Result<MediaContainer, String> {
         "mp4" => Ok(MediaContainer::Mp4),
         "mkv" => Ok(MediaContainer::Matroska),
         "webm" => Ok(MediaContainer::WebM),
+        "vtt" => Ok(MediaContainer::WebVtt),
         _ => Err("The requested output container is not supported.".to_owned()),
     }
 }
@@ -424,6 +425,7 @@ fn container_extension(container: MediaContainer) -> &'static str {
         MediaContainer::Mp4 => "mp4",
         MediaContainer::Matroska => "mkv",
         MediaContainer::WebM => "webm",
+        MediaContainer::WebVtt => "vtt",
         MediaContainer::Mp3 => "mp3",
         MediaContainer::Flac => "flac",
         MediaContainer::Wav => "wav",
@@ -448,6 +450,7 @@ fn is_supported_media_input(input: &Path) -> bool {
             | "mpeg"
             | "mpg"
             | "ogg"
+            | "srt"
             | "ts"
             | "wav"
             | "webm"
@@ -458,7 +461,7 @@ fn is_supported_media_input(input: &Path) -> bool {
 
 fn validate_remux_source(status: DownloadStatus, input: &Path) -> Result<(), String> {
     if status != DownloadStatus::Completed {
-        return Err("Only completed downloads can be remuxed.".to_owned());
+        return Err("Only completed downloads can be processed.".to_owned());
     }
     if !is_supported_media_input(input) {
         return Err("This file type is not supported for remuxing.".to_owned());
@@ -499,13 +502,16 @@ async fn next_output_path(input: &Path, container: MediaContainer) -> Result<Pat
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::*;
 
     #[test]
-    fn accepts_only_video_remux_containers() -> Result<(), Box<dyn Error>> {
+    fn accepts_supported_media_and_subtitle_outputs() -> Result<(), Box<dyn Error>> {
         assert_eq!(parse_container("mp4")?, MediaContainer::Mp4);
         assert_eq!(parse_container("mkv")?, MediaContainer::Matroska);
         assert_eq!(parse_container("webm")?, MediaContainer::WebM);
+        assert_eq!(parse_container("vtt")?, MediaContainer::WebVtt);
         assert!(parse_container("mp3").is_err());
         assert!(parse_container("../mp4").is_err());
         Ok(())
@@ -530,6 +536,9 @@ mod tests {
     #[test]
     fn remux_requires_a_completed_supported_media_file() {
         assert!(validate_remux_source(DownloadStatus::Completed, Path::new("source.mkv")).is_ok());
+        assert!(
+            validate_remux_source(DownloadStatus::Completed, Path::new("captions.srt")).is_ok()
+        );
         assert!(
             validate_remux_source(DownloadStatus::Downloading, Path::new("source.mkv")).is_err()
         );
