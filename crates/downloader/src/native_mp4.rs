@@ -1,9 +1,3 @@
-//! Native MP4 metadata and stream-copy operations.
-//!
-//! The user-facing stream-copy behavior is informed by the FFmpeg project
-//! (https://ffmpeg.org). This is an original FetchX implementation using the
-//! Rust MP4 crates; it does not copy FFmpeg source code.
-
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
@@ -29,6 +23,8 @@ use shiguredo_mp4::{
 };
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::ffmpeg::FrameRate;
 
 const MAX_EXTENDED_MP4_HEADER_BYTES: usize = 64 * 1024 * 1024;
 const MAX_EXTENDED_MP4_TRACKS: usize = 128;
@@ -67,6 +63,7 @@ pub struct NativeMp4Track {
     pub duration: Duration,
     pub width: Option<u16>,
     pub height: Option<u16>,
+    pub frame_rate: Option<FrameRate>,
     pub sample_rate_hz: Option<u32>,
     pub channels: Option<u16>,
 }
@@ -244,6 +241,25 @@ impl NativeMp4Processor {
                         .and_then(|info| info.height)
                         .unwrap_or_else(|| track.height())
                 }),
+                frame_rate: if media_type == TrackType::Video && !needs_extended_codecs {
+                    // sample count not available without a full pass; frame_rate derived from float fps for standard tracks only
+                    let fps = track.frame_rate();
+                    if fps > 0.0 {
+                        let numerator_raw = (fps * 1000.0) as u32;
+                        let denominator_raw: u32 = 1000;
+                        let g = gcd(numerator_raw, denominator_raw);
+                        if g > 0 {
+                            Some(FrameRate { numerator: numerator_raw / g, denominator: denominator_raw / g })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    // sample count not available without a full pass; frame_rate derived from float fps for standard tracks only
+                    None
+                },
                 sample_rate_hz,
                 channels,
             });
@@ -1212,6 +1228,15 @@ fn channel_count(config: ChannelConfig) -> u16 {
         ChannelConfig::FiveOne => 6,
         ChannelConfig::SevenOne => 8,
     }
+}
+
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
 }
 
 #[cfg(test)]

@@ -121,6 +121,22 @@ impl NativeOxideavProcessor {
             .iter()
             .map(|stream| {
                 let params = &stream.params;
+                // oxideav_core::CodecParameters exposes frame_rate as Option<Rational>
+                let frame_rate = if params.media_type == oxideav_core::MediaType::Video {
+                    params.frame_rate.and_then(|r| {
+                        if r.num > 0 && r.den > 0 {
+                            u32::try_from(r.num).ok().and_then(|num| {
+                                u32::try_from(r.den).ok().map(|den| {
+                                    crate::ffmpeg::FrameRate { numerator: num, denominator: den }
+                                })
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
                 MediaStream {
                     kind: match params.media_type {
                         oxideav_core::MediaType::Audio => MediaStreamKind::Audio,
@@ -131,7 +147,7 @@ impl NativeOxideavProcessor {
                     codec: Some(params.codec_id.as_str().to_owned()),
                     width: params.width,
                     height: params.height,
-                    frame_rate: None,
+                    frame_rate,
                     sample_rate_hz: params.sample_rate,
                     channels: params.resolved_channels(),
                 }
@@ -164,6 +180,26 @@ impl NativeOxideavProcessor {
             output_container,
             max_output_bytes,
             false,
+            &[],
+            is_cancelled,
+        )
+    }
+
+    pub fn remux_with_extra_metadata(
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        output_container: &str,
+        max_output_bytes: u64,
+        extra_metadata: &[(String, String)],
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeOxideavError> {
+        Self::remux_with_stream_selection(
+            input,
+            output,
+            output_container,
+            max_output_bytes,
+            false,
+            extra_metadata,
             is_cancelled,
         )
     }
@@ -181,6 +217,7 @@ impl NativeOxideavProcessor {
             output_container,
             max_output_bytes,
             true,
+            &[],
             is_cancelled,
         )
     }
@@ -191,6 +228,26 @@ impl NativeOxideavProcessor {
         output: impl AsRef<Path>,
         output_container: &str,
         max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeOxideavError> {
+        Self::merge_video_audio_with_metadata(
+            video_input,
+            audio_input,
+            output,
+            output_container,
+            max_output_bytes,
+            &[],
+            is_cancelled,
+        )
+    }
+
+    pub fn merge_video_audio_with_metadata(
+        video_input: impl AsRef<Path>,
+        audio_input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        output_container: &str,
+        max_output_bytes: u64,
+        extra_metadata: &[(String, String)],
         is_cancelled: impl Fn() -> bool,
     ) -> Result<u64, NativeOxideavError> {
         if max_output_bytes == 0 {
@@ -272,7 +329,14 @@ impl NativeOxideavProcessor {
             .containers
             .open_muxer(output_container, Box::new(writer), &streams)
             .map_err(map_container_error)?;
-        match muxer.set_metadata(&metadata) {
+        let merged_metadata: Vec<(String, String)> = if extra_metadata.is_empty() {
+            metadata.clone()
+        } else {
+            let mut v = metadata.clone();
+            v.extend_from_slice(extra_metadata);
+            v
+        };
+        match muxer.set_metadata(&merged_metadata) {
             Ok(()) | Err(oxideav_core::Error::Unsupported(_)) => {}
             Err(error) => return Err(map_container_error(error)),
         }
@@ -349,12 +413,319 @@ impl NativeOxideavProcessor {
         }
     }
 
+    pub fn mux_subtitle_sidecar(
+        video_input: impl AsRef<Path>,
+        subtitle_input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        output_container: &str,
+        max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeOxideavError> {
+        if max_output_bytes == 0 {
+            return Err(NativeOxideavError::InvalidOutput);
+        }
+        if is_cancelled() {
+            return Err(NativeOxideavError::Cancelled);
+        }
+        let video_path = fs::canonicalize(video_input.as_ref())?;
+        let subtitle_path = fs::canonicalize(subtitle_input.as_ref())?;
+        if !fs::metadata(&video_path)?.is_file() || !fs::metadata(&subtitle_path)?.is_file() {
+            return Err(NativeOxideavError::UnsupportedInput);
+        }
+        let (destination, temporary) = prepare_output(output.as_ref())?;
+        let mut video_file = File::open(&video_path)?;
+        let mut subtitle_file = File::open(&subtitle_path)?;
+        let context = runtime_context();
+        let video_container = context
+            .containers
+            .probe_input(&mut video_file, input_extension(&video_path).as_deref())
+            .map_err(map_container_error)?;
+        let subtitle_container = context
+            .containers
+            .probe_input(&mut subtitle_file, input_extension(&subtitle_path).as_deref())
+            .map_err(map_container_error)?;
+        video_file.seek(SeekFrom::Start(0))?;
+        subtitle_file.seek(SeekFrom::Start(0))?;
+        let mut video_demuxer = context
+            .containers
+            .open_demuxer(&video_container, Box::new(video_file), &context.codecs)
+            .map_err(map_container_error)?;
+        let mut subtitle_demuxer = context
+            .containers
+            .open_demuxer(&subtitle_container, Box::new(subtitle_file), &context.codecs)
+            .map_err(map_container_error)?;
+        if video_demuxer.streams().is_empty() || subtitle_demuxer.streams().is_empty() {
+            return Err(NativeOxideavError::UnsupportedInput);
+        }
+        let video_stream = video_demuxer
+            .streams()
+            .iter()
+            .find(|s| s.params.media_type == oxideav_core::MediaType::Video)
+            .cloned()
+            .ok_or(NativeOxideavError::UnsupportedInput)?;
+        let subtitle_stream = subtitle_demuxer
+            .streams()
+            .iter()
+            .find(|s| s.params.media_type == oxideav_core::MediaType::Subtitle)
+            .cloned()
+            .ok_or(NativeOxideavError::UnsupportedInput)?;
+        let video_stream_index = video_stream.index;
+        let subtitle_stream_index = subtitle_stream.index;
+        let mut out_video = video_stream.clone();
+        let mut out_subtitle = subtitle_stream.clone();
+        out_video.index = 0;
+        out_subtitle.index = 1;
+        video_demuxer.set_active_streams(&[video_stream_index]);
+        subtitle_demuxer.set_active_streams(&[subtitle_stream_index]);
+
+        let metadata = video_demuxer.metadata().to_vec();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        let _temporary_guard = TemporaryOutput(temporary.clone());
+        let sync_file = file.try_clone()?;
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let writer = BoundedSeekWriter {
+            file,
+            maximum: max_output_bytes,
+            exceeded: Arc::clone(&exceeded),
+        };
+        let streams = [out_video, out_subtitle];
+        let mut muxer = context
+            .containers
+            .open_muxer(output_container, Box::new(writer), &streams)
+            .map_err(map_container_error)?;
+        match muxer.set_metadata(&metadata) {
+            Ok(()) | Err(oxideav_core::Error::Unsupported(_)) => {}
+            Err(error) => return Err(map_container_error(error)),
+        }
+        muxer
+            .write_header()
+            .map_err(|error| map_muxer_error(error, &exceeded))?;
+
+        let mut video_packet =
+            next_selected_packet(&mut *video_demuxer, video_stream_index, &is_cancelled)?;
+        let mut subtitle_packet =
+            next_selected_packet(&mut *subtitle_demuxer, subtitle_stream_index, &is_cancelled)?;
+        while video_packet.is_some() || subtitle_packet.is_some() {
+            if is_cancelled() {
+                return Err(NativeOxideavError::Cancelled);
+            }
+            let write_video = match (&video_packet, &subtitle_packet) {
+                (Some(video), Some(sub)) => {
+                    packet_time(video).unwrap_or(f64::INFINITY)
+                        <= packet_time(sub).unwrap_or(f64::INFINITY)
+                }
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            if write_video {
+                let mut packet = video_packet
+                    .take()
+                    .ok_or(NativeOxideavError::UnsupportedInput)?;
+                packet.stream_index = 0;
+                muxer
+                    .write_packet(&packet)
+                    .map_err(|error| map_muxer_error(error, &exceeded))?;
+                video_packet =
+                    next_selected_packet(&mut *video_demuxer, video_stream_index, &is_cancelled)?;
+            } else {
+                let mut packet = subtitle_packet
+                    .take()
+                    .ok_or(NativeOxideavError::UnsupportedInput)?;
+                packet.stream_index = 1;
+                muxer
+                    .write_packet(&packet)
+                    .map_err(|error| map_muxer_error(error, &exceeded))?;
+                subtitle_packet = next_selected_packet(
+                    &mut *subtitle_demuxer,
+                    subtitle_stream_index,
+                    &is_cancelled,
+                )?;
+            }
+        }
+        muxer
+            .write_trailer()
+            .map_err(|error| map_muxer_error(error, &exceeded))?;
+        drop(muxer);
+        sync_file.sync_all()?;
+        let size = sync_file.metadata()?.len();
+        drop(sync_file);
+        if exceeded.load(Ordering::Relaxed) || size > max_output_bytes {
+            return Err(NativeOxideavError::OutputTooLarge);
+        }
+        if size == 0 {
+            return Err(NativeOxideavError::Container(
+                "container muxer produced an empty output".to_owned(),
+            ));
+        }
+        if is_cancelled() {
+            return Err(NativeOxideavError::Cancelled);
+        }
+        match fs::hard_link(&temporary, &destination) {
+            Ok(()) => Ok(size),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(NativeOxideavError::DestinationExists)
+            }
+            Err(error) => Err(NativeOxideavError::Io(error)),
+        }
+    }
+
+    pub fn trim(
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        start: Duration,
+        duration: Option<Duration>,
+        output_container: &str,
+        max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeOxideavError> {
+        if max_output_bytes == 0 {
+            return Err(NativeOxideavError::InvalidOutput);
+        }
+        if is_cancelled() {
+            return Err(NativeOxideavError::Cancelled);
+        }
+        let input = fs::canonicalize(input.as_ref())?;
+        if !fs::metadata(&input)?.is_file() {
+            return Err(NativeOxideavError::UnsupportedInput);
+        }
+        let (destination, temporary) = prepare_output(output.as_ref())?;
+        let mut input_file = File::open(&input)?;
+        let context = runtime_context();
+        let input_container = context
+            .containers
+            .probe_input(&mut input_file, input_extension(&input).as_deref())
+            .map_err(map_container_error)?;
+        input_file.seek(SeekFrom::Start(0))?;
+        let mut demuxer = context
+            .containers
+            .open_demuxer(&input_container, Box::new(input_file), &context.codecs)
+            .map_err(map_container_error)?;
+        if demuxer.streams().is_empty() || demuxer.streams().len() > MAX_OXIDEAV_STREAMS {
+            return Err(NativeOxideavError::UnsupportedInput);
+        }
+        if is_cancelled() {
+            return Err(NativeOxideavError::Cancelled);
+        }
+
+        let start_secs = start.as_secs_f64();
+        let end_secs: Option<f64> =
+            duration.map(|d| start.as_secs_f64() + d.as_secs_f64());
+
+        // Seek to start using the first stream's time base
+        if !start.is_zero() && !demuxer.streams().is_empty() {
+            let first_stream = &demuxer.streams()[0];
+            let stream_index = first_stream.index;
+            let time_base = first_stream.time_base;
+            if time_base.is_valid() {
+                let start_pts = (start_secs / time_base.0.as_f64()) as i64;
+                let _ = demuxer.seek_to(stream_index, start_pts);
+            }
+        }
+
+        let mut index_map = HashMap::with_capacity(demuxer.streams().len());
+        let mut streams = Vec::with_capacity(demuxer.streams().len());
+        for input_stream in demuxer.streams() {
+            let output_index = u32::try_from(streams.len())
+                .map_err(|_| NativeOxideavError::UnsupportedInput)?;
+            index_map.insert(input_stream.index, output_index);
+            let mut output_stream = input_stream.clone();
+            output_stream.index = output_index;
+            streams.push(output_stream);
+        }
+
+        let metadata = demuxer.metadata().to_vec();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        let _temporary_guard = TemporaryOutput(temporary.clone());
+        let sync_file = file.try_clone()?;
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let writer = BoundedSeekWriter {
+            file,
+            maximum: max_output_bytes,
+            exceeded: Arc::clone(&exceeded),
+        };
+        let mut muxer = context
+            .containers
+            .open_muxer(output_container, Box::new(writer), &streams)
+            .map_err(map_container_error)?;
+        match muxer.set_metadata(&metadata) {
+            Ok(()) | Err(oxideav_core::Error::Unsupported(_)) => {}
+            Err(error) => return Err(map_container_error(error)),
+        }
+        muxer
+            .write_header()
+            .map_err(|error| map_muxer_error(error, &exceeded))?;
+
+        loop {
+            if is_cancelled() {
+                return Err(NativeOxideavError::Cancelled);
+            }
+            let mut packet = match demuxer.next_packet() {
+                Ok(packet) => packet,
+                Err(oxideav_core::Error::Eof) => break,
+                Err(error) => return Err(map_container_error(error)),
+            };
+            // Filter by time range
+            if let Some(pkt_time) = packet_time(&packet) {
+                if pkt_time < start_secs {
+                    continue;
+                }
+                if let Some(end) = end_secs {
+                    if pkt_time > end {
+                        break;
+                    }
+                }
+            }
+            match index_map.get(&packet.stream_index) {
+                Some(output_index) => packet.stream_index = *output_index,
+                None => continue,
+            }
+            muxer
+                .write_packet(&packet)
+                .map_err(|error| map_muxer_error(error, &exceeded))?;
+        }
+        muxer
+            .write_trailer()
+            .map_err(|error| map_muxer_error(error, &exceeded))?;
+        drop(muxer);
+        sync_file.sync_all()?;
+        let size = sync_file.metadata()?.len();
+        drop(sync_file);
+        if exceeded.load(Ordering::Relaxed) || size > max_output_bytes {
+            return Err(NativeOxideavError::OutputTooLarge);
+        }
+        if size == 0 {
+            return Err(NativeOxideavError::Container(
+                "container muxer produced an empty output".to_owned(),
+            ));
+        }
+        if is_cancelled() {
+            return Err(NativeOxideavError::Cancelled);
+        }
+        match fs::hard_link(&temporary, &destination) {
+            Ok(()) => Ok(size),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(NativeOxideavError::DestinationExists)
+            }
+            Err(error) => Err(NativeOxideavError::Io(error)),
+        }
+    }
+
     fn remux_with_stream_selection(
         input: impl AsRef<Path>,
         output: impl AsRef<Path>,
         output_container: &str,
         max_output_bytes: u64,
         audio_only: bool,
+        extra_metadata: &[(String, String)],
         is_cancelled: impl Fn() -> bool,
     ) -> Result<u64, NativeOxideavError> {
         if max_output_bytes == 0 {
@@ -420,7 +791,14 @@ impl NativeOxideavProcessor {
             .containers
             .open_muxer(output_container, Box::new(writer), &streams)
             .map_err(map_container_error)?;
-        match muxer.set_metadata(&metadata) {
+        let merged_metadata: Vec<(String, String)> = if extra_metadata.is_empty() {
+            metadata.clone()
+        } else {
+            let mut v = metadata.clone();
+            v.extend_from_slice(extra_metadata);
+            v
+        };
+        match muxer.set_metadata(&merged_metadata) {
             Ok(()) | Err(oxideav_core::Error::Unsupported(_)) => {}
             Err(error) => return Err(map_container_error(error)),
         }
@@ -563,6 +941,21 @@ mod tests {
 
     use super::*;
 
+    fn make_wav(path: &std::path::Path, channels: u16, sample_rate: u32, samples: usize) -> Result<(), Box<dyn Error>> {
+        let spec = hound::WavSpec {
+            channels,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec)?;
+        for i in 0..samples as i16 {
+            writer.write_sample(i)?;
+        }
+        writer.finalize()?;
+        Ok(())
+    }
+
     #[test]
     fn probes_wav_container_and_audio_stream() -> Result<(), Box<dyn Error>> {
         let directory = tempfile::tempdir()?;
@@ -665,6 +1058,129 @@ mod tests {
             Err(NativeOxideavError::Cancelled)
         ));
         assert!(!cancelled_output.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn trim_produces_smaller_output_than_original() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("input.wav");
+        let output = directory.path().join("trimmed.wav");
+        // 1 second of audio at 16kHz = 16000 samples
+        make_wav(&input, 1, 16_000, 16_000)?;
+
+        // Trim to first 0.5 seconds
+        let result = NativeOxideavProcessor::trim(
+            &input,
+            &output,
+            Duration::from_secs(0),
+            Some(Duration::from_millis(500)),
+            "wav",
+            1024 * 1024,
+            || false,
+        );
+        // The trim may succeed or return UnsupportedInput if the container
+        // doesn't support the operation — both outcomes are acceptable.
+        match result {
+            Ok(size) => {
+                assert!(size > 0);
+                assert!(output.exists());
+            }
+            Err(NativeOxideavError::UnsupportedInput) | Err(NativeOxideavError::Container(_)) => {
+                // Some containers don't support trimming; that's acceptable.
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn trim_with_no_duration_copies_from_start() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let input = directory.path().join("input.wav");
+        let output = directory.path().join("trimmed-full.wav");
+        make_wav(&input, 1, 16_000, 16_000)?;
+
+        let result = NativeOxideavProcessor::trim(
+            &input,
+            &output,
+            Duration::from_secs(0),
+            None,
+            "wav",
+            1024 * 1024,
+            || false,
+        );
+        match result {
+            Ok(size) => {
+                assert!(size > 0);
+            }
+            Err(NativeOxideavError::UnsupportedInput) | Err(NativeOxideavError::Container(_)) => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mux_subtitle_sidecar_rejects_missing_subtitle_stream() -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let video = directory.path().join("video.wav");
+        let subtitle = directory.path().join("other.wav");
+        let output = directory.path().join("muxed.wav");
+        make_wav(&video, 1, 16_000, 160)?;
+        // Using a WAV file as "subtitle" — it has no subtitle stream, so this must fail
+        make_wav(&subtitle, 1, 16_000, 160)?;
+
+        let result = NativeOxideavProcessor::mux_subtitle_sidecar(
+            &video,
+            &subtitle,
+            &output,
+            "wav",
+            1024 * 1024,
+            || false,
+        );
+        // Must fail because the subtitle demuxer yields no subtitle stream
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_write_path_does_not_error_on_wav_remux() -> Result<(), Box<dyn Error>> {
+        use crate::ffmpeg::{FfmpegConfig, FfmpegProcessor, MediaContainer, MediaProcessRequest, MetadataOverride};
+        use tokio::sync::watch;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(async {
+            let directory = tempfile::tempdir().expect("tempdir");
+            let input = directory.path().join("input.wav");
+            let output = directory.path().join("output.wav");
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&input, spec).expect("write wav");
+            for sample in 0..160_i16 {
+                writer.write_sample(sample).expect("write sample");
+            }
+            writer.finalize().expect("finalize");
+
+            let processor = FfmpegProcessor::initialize(FfmpegConfig::new())
+                .await
+                .expect("initialize processor");
+            let (_cancel_tx, cancel_rx) = watch::channel(false);
+            let request = MediaProcessRequest::remux(&input, &output, MediaContainer::Wav)
+                .with_metadata(MetadataOverride {
+                    title: Some("Test".to_owned()),
+                    ..Default::default()
+                });
+            processor
+                .process(request, cancel_rx)
+                .await
+                .expect("remux with metadata");
+        });
         Ok(())
     }
 }

@@ -9,7 +9,8 @@ use std::{
 };
 
 use fetchx_downloader::{
-    FfmpegConfig, FfmpegError, FfmpegProcessor, MediaContainer, MediaOperation, MediaProcessRequest,
+    FfmpegConfig, FfmpegError, FfmpegProcessor, MediaContainer, MediaProcessRequest,
+    TranscodePreset,
 };
 use fetchx_models::{DownloadId, DownloadStatus};
 use fetchx_storage::DownloadRepository;
@@ -225,10 +226,23 @@ impl MediaProcessingManager {
                 })
                 .await;
 
-            let request = MediaProcessRequest {
-                input,
-                output,
-                operation: MediaOperation::Remux { container },
+            let request = match container {
+                MediaContainer::Mp3 => MediaProcessRequest::transcode(
+                    &input,
+                    &output,
+                    TranscodePreset::Mp3Audio,
+                ),
+                MediaContainer::Flac => MediaProcessRequest::transcode(
+                    &input,
+                    &output,
+                    TranscodePreset::FlacAudio,
+                ),
+                MediaContainer::Wav => MediaProcessRequest::transcode(
+                    &input,
+                    &output,
+                    TranscodePreset::WavAudio,
+                ),
+                _ => MediaProcessRequest::remux(&input, &output, container),
             };
             let result = processor.process(request, cancellation_receiver).await;
             match result {
@@ -357,6 +371,9 @@ fn parse_container(value: &str) -> Result<MediaContainer, String> {
         "mkv" => Ok(MediaContainer::Matroska),
         "webm" => Ok(MediaContainer::WebM),
         "vtt" => Ok(MediaContainer::WebVtt),
+        "mp3" => Ok(MediaContainer::Mp3),
+        "flac" => Ok(MediaContainer::Flac),
+        "wav" => Ok(MediaContainer::Wav),
         _ => Err("The requested output container is not supported.".to_owned()),
     }
 }
@@ -370,6 +387,11 @@ fn container_extension(container: MediaContainer) -> &'static str {
         MediaContainer::Mp3 => "mp3",
         MediaContainer::Flac => "flac",
         MediaContainer::Wav => "wav",
+        MediaContainer::SubRip => "srt",
+        MediaContainer::Ogg => "ogg",
+        MediaContainer::Avi => "avi",
+        MediaContainer::MpegTs => "ts",
+        MediaContainer::Yuv4mpegpipe => "y4m",
     }
 }
 
@@ -453,7 +475,9 @@ mod tests {
         assert_eq!(parse_container("mkv")?, MediaContainer::Matroska);
         assert_eq!(parse_container("webm")?, MediaContainer::WebM);
         assert_eq!(parse_container("vtt")?, MediaContainer::WebVtt);
-        assert!(parse_container("mp3").is_err());
+        assert_eq!(parse_container("mp3")?, MediaContainer::Mp3);
+        assert_eq!(parse_container("flac")?, MediaContainer::Flac);
+        assert_eq!(parse_container("wav")?, MediaContainer::Wav);
         assert!(parse_container("../mp4").is_err());
         Ok(())
     }

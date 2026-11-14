@@ -28,7 +28,7 @@ pub use error::DownloadEngineError;
 pub use ffmpeg::{
     FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo,
     MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaStream, MediaStreamKind,
-    TranscodePreset,
+    MetadataOverride, TranscodePreset,
 };
 pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};

@@ -83,9 +83,14 @@ pub enum MediaContainer {
     Matroska,
     WebM,
     WebVtt,
+    SubRip,
     Mp3,
     Flac,
     Wav,
+    Ogg,
+    Avi,
+    MpegTs,
+    Yuv4mpegpipe,
 }
 
 impl MediaContainer {
@@ -95,9 +100,14 @@ impl MediaContainer {
             Self::Matroska => "matroska",
             Self::WebM => "webm",
             Self::WebVtt => "webvtt",
+            Self::SubRip => "srt",
             Self::Mp3 => "mp3",
             Self::Flac => "flac",
             Self::Wav => "wav",
+            Self::Ogg => "ogg",
+            Self::Avi => "avi",
+            Self::MpegTs => "mpegts",
+            Self::Yuv4mpegpipe => "y4m",
         }
     }
 }
@@ -112,17 +122,29 @@ pub enum TranscodePreset {
     WavAudio,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MediaOperation {
     Remux { container: MediaContainer },
     Transcode { preset: TranscodePreset },
+    MuxSubtitle { container: MediaContainer, subtitle: PathBuf },
+    Trim { container: MediaContainer, start: Duration, end: Option<Duration> },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MetadataOverride {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<u32>,
+    pub comment: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct MediaProcessRequest {
     pub input: PathBuf,
     pub output: PathBuf,
     pub operation: MediaOperation,
+    pub metadata: Option<MetadataOverride>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -728,7 +750,7 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
-        if let MediaOperation::Remux { container } = request.operation {
+        if let MediaOperation::MuxSubtitle { container, subtitle } = request.operation.clone() {
             let native_input = input.clone();
             let native_output = destination.clone();
             let output_container = container.oxideav_muxer();
@@ -737,11 +759,104 @@ impl FfmpegProcessor {
                 self.process_timeout,
                 cancellation.clone(),
                 move |cancelled, receiver| {
-                    NativeOxideavProcessor::remux(
+                    NativeOxideavProcessor::mux_subtitle_sidecar(
+                        &native_input,
+                        &subtitle,
+                        &native_output,
+                        output_container,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeOxideav(
+                    NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_),
+                )) => {
+                    debug!("native OxideAV mux-subtitle unsupported");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if let MediaOperation::Trim { container, start, end } = request.operation.clone() {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let output_container = container.oxideav_muxer();
+            let max_output_bytes = self.max_output_bytes;
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeOxideavProcessor::trim(
+                        &native_input,
+                        &native_output,
+                        start,
+                        end,
+                        output_container,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            {
+                Ok(size_bytes) => {
+                    return Ok(MediaProcessOutput {
+                        destination,
+                        size_bytes,
+                    });
+                }
+                Err(FfmpegError::NativeOxideav(
+                    NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_),
+                )) => {
+                    debug!("native OxideAV trim unsupported");
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if let MediaOperation::Remux { container } = request.operation {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let output_container = container.oxideav_muxer();
+            let max_output_bytes = self.max_output_bytes;
+            let extra_meta: Vec<(String, String)> = if let Some(ref m) = request.metadata {
+                let mut v: Vec<(String, String)> = Vec::new();
+                if let Some(ref t) = m.title {
+                    v.push(("title".to_owned(), t.clone()));
+                }
+                if let Some(ref a) = m.artist {
+                    v.push(("artist".to_owned(), a.clone()));
+                }
+                if let Some(ref a) = m.album {
+                    v.push(("album".to_owned(), a.clone()));
+                }
+                if let Some(y) = m.year {
+                    v.push(("date".to_owned(), y.to_string()));
+                }
+                if let Some(ref c) = m.comment {
+                    v.push(("comment".to_owned(), c.clone()));
+                }
+                v
+            } else {
+                Vec::new()
+            };
+            match run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeOxideavProcessor::remux_with_extra_metadata(
                         &native_input,
                         &native_output,
                         output_container,
                         max_output_bytes,
+                        &extra_meta,
                         || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
                     )
                 },
@@ -818,6 +933,7 @@ impl MediaProcessRequest {
             input: input.into(),
             output: output.into(),
             operation: MediaOperation::Remux { container },
+            metadata: None,
         }
     }
 
@@ -830,7 +946,45 @@ impl MediaProcessRequest {
             input: input.into(),
             output: output.into(),
             operation: MediaOperation::Transcode { preset },
+            metadata: None,
         }
+    }
+
+    pub fn mux_subtitle(
+        input: impl Into<PathBuf>,
+        output: impl Into<PathBuf>,
+        container: MediaContainer,
+        subtitle: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            input: input.into(),
+            output: output.into(),
+            operation: MediaOperation::MuxSubtitle {
+                container,
+                subtitle: subtitle.into(),
+            },
+            metadata: None,
+        }
+    }
+
+    pub fn trim(
+        input: impl Into<PathBuf>,
+        output: impl Into<PathBuf>,
+        container: MediaContainer,
+        start: Duration,
+        end: Option<Duration>,
+    ) -> Self {
+        Self {
+            input: input.into(),
+            output: output.into(),
+            operation: MediaOperation::Trim { container, start, end },
+            metadata: None,
+        }
+    }
+
+    pub fn with_metadata(mut self, m: MetadataOverride) -> Self {
+        self.metadata = Some(m);
+        self
     }
 }
 
@@ -862,7 +1016,7 @@ fn media_info_from_native_mp4(info: NativeMp4Info) -> MediaInfo {
             codec: track.codec,
             width: track.width.map(u32::from),
             height: track.height.map(u32::from),
-            frame_rate: None,
+            frame_rate: track.frame_rate,
             sample_rate_hz: track.sample_rate_hz,
             channels: track.channels,
         })
