@@ -93,6 +93,49 @@ class MappingTest {
     }
 
     @Test
+    fun batchRequestLeavesManifestRoutingToSharedCore() {
+        val hlsRequest = createBatchDownloadRequestDto(
+            item = DownloadBatchItem(
+                url = "https://cdn.example.test/playlist.m3u8?token=abc",
+                fileName = "playlist.m3u8",
+                destinationPath = "/private/playlist.m3u8",
+            ),
+            expectedSha256 = null,
+            stageDestination = { it },
+        )
+        val metalinkRequest = createBatchDownloadRequestDto(
+            item = DownloadBatchItem(
+                url = "https://cdn.example.test/files.meta4",
+                fileName = "files.meta4",
+                destinationPath = "/private/files.meta4",
+            ),
+            expectedSha256 = null,
+            stageDestination = { it },
+        )
+
+        assertEquals(BatchDownloadEngineDto.DIRECT_HTTP, hlsRequest.engine)
+        assertEquals("/private/playlist.m3u8", hlsRequest.destination)
+        assertEquals(BatchDownloadEngineDto.DIRECT_HTTP, metalinkRequest.engine)
+        assertEquals("/private/files.meta4", metalinkRequest.destination)
+    }
+
+    @Test
+    fun batchRequestUsesDirectHttpForUnknownExtensionlessUrls() {
+        val request = createBatchDownloadRequestDto(
+            item = DownloadBatchItem(
+                url = "https://cdn.example.test/download?id=123",
+                fileName = "download",
+                destinationPath = "/private/download",
+            ),
+            expectedSha256 = null,
+            stageDestination = { it },
+        )
+
+        assertEquals(BatchDownloadEngineDto.DIRECT_HTTP, request.engine)
+        assertEquals("/private/download", request.destination)
+    }
+
+    @Test
     fun batchRequestPreservesAudioFormatExtensions() {
         val request = createBatchDownloadRequestDto(
             item = DownloadBatchItem(

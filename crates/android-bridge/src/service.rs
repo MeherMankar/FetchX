@@ -14,7 +14,7 @@ use fetchx_core_services::{
 };
 use fetchx_downloader::{
     YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent,
-    YtDlpRunnerFuture, is_hls_url, parse_format_output,
+    YtDlpRunnerFuture, parse_format_output, validate_http_source_url,
 };
 use fetchx_models::{
     DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId, DownloadItem,
@@ -169,45 +169,41 @@ pub struct DownloadService {
     inner: Mutex<Option<ServiceInner>>,
 }
 
-/// Returns `true` for URLs that point directly to a media file and can be
-/// downloaded without yt-dlp format extraction.
-fn is_direct_media_url(url: &str) -> bool {
-    let Ok(url) = Url::parse(url) else {
-        return false;
-    };
-    let extension = url
-        .path_segments()
-        .and_then(|segments| segments.rev().find(|segment| !segment.is_empty()))
-        .and_then(|filename| filename.rsplit_once('.').map(|(_, ext)| ext))
-        .unwrap_or_default();
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "mp4"
-            | "m4v"
-            | "webm"
-            | "mkv"
-            | "avi"
-            | "mov"
-            | "ts"
-            | "m3u8"
-            | "m4a"
-            | "mp3"
-            | "ogg"
-            | "flac"
-            | "aac"
-            | "wav"
-    )
-}
-
-fn engine_for_url(url: &str) -> EngineKind {
-    match Url::parse(url)
-        .ok()
-        .map(|url| url.scheme().to_ascii_lowercase())
-    {
-        Some(scheme) if scheme == "ftp" => EngineKind::Ftp,
-        Some(scheme) if scheme == "ftps" => EngineKind::Ftps,
-        Some(scheme) if scheme == "sftp" => EngineKind::Sftp,
-        _ => EngineKind::DirectHttp,
+fn canonical_source_url(url: &str, engine: EngineKind) -> Result<String, MobileApiError> {
+    match engine {
+        EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls | EngineKind::Metalink => {
+            validate_http_source_url(url)
+                .map_err(|_| MobileApiError::Validation("invalid HTTP(S) download URL".to_owned()))
+        }
+        EngineKind::Ftp | EngineKind::Ftps | EngineKind::Sftp => {
+            if url.split('/').any(|segment| segment == "..") {
+                return Err(MobileApiError::Validation(
+                    "invalid file-transfer URL".to_owned(),
+                ));
+            }
+            let parsed = Url::parse(url)
+                .map_err(|_| MobileApiError::Validation("invalid file-transfer URL".to_owned()))?;
+            let expected_scheme = match engine {
+                EngineKind::Ftp => "ftp",
+                EngineKind::Ftps => "ftps",
+                EngineKind::Sftp => "sftp",
+                _ => unreachable!(),
+            };
+            if parsed.scheme() != expected_scheme
+                || parsed.password().is_some()
+                || parsed.host_str().is_none()
+                || parsed.path().is_empty()
+                || parsed.path() == "/"
+            {
+                return Err(MobileApiError::Validation(
+                    "invalid file-transfer URL".to_owned(),
+                ));
+            }
+            Ok(parsed.to_string())
+        }
+        EngineKind::NativeTorrent | EngineKind::Aria2 => Err(MobileApiError::Validation(
+            "unsupported download URL type".to_owned(),
+        )),
     }
 }
 
@@ -517,7 +513,7 @@ impl DownloadService {
         destination: String,
         priority: DownloadPriorityDto,
     ) -> Result<String, MobileApiError> {
-        let engine = engine_for_url(&url);
+        let engine = EngineKind::from_source_url(&url);
         self.add_download_for_engine(
             url,
             filename,
@@ -540,7 +536,7 @@ impl DownloadService {
         expected_sha256: String,
     ) -> Result<String, MobileApiError> {
         validate_sha256(&expected_sha256).map_err(MobileApiError::Validation)?;
-        let engine = engine_for_url(&url);
+        let engine = EngineKind::from_source_url(&url);
         let result = self.add_download_for_engine(
             url,
             filename,
@@ -566,21 +562,24 @@ impl DownloadService {
     ) -> Result<Vec<BatchDownloadOutcomeDto>, MobileApiError> {
         let requests = requests
             .into_iter()
-            .map(|request| BatchDownloadDestinationRequest {
-                url: request.url,
-                filename: request.filename,
-                destination: PathBuf::from(request.destination),
-                engine: match request.engine {
-                    BatchDownloadEngineDto::DirectHttp => EngineKind::DirectHttp,
+            .map(|request| {
+                let engine = match request.engine {
+                    BatchDownloadEngineDto::DirectHttp => EngineKind::from_source_url(&request.url),
                     BatchDownloadEngineDto::YtDlp => EngineKind::YtDlp,
-                },
-                format_id: request.format_id,
-                extension: request.extension,
-                audio_format: request.audio_format.map(|format| match format {
-                    BatchDownloadAudioFormatDto::Mp3 => YtDlpAudioFormat::Mp3,
-                    BatchDownloadAudioFormatDto::M4a => YtDlpAudioFormat::M4a,
-                }),
-                expected_sha256: request.expected_sha256,
+                };
+                BatchDownloadDestinationRequest {
+                    url: request.url,
+                    filename: request.filename,
+                    destination: PathBuf::from(request.destination),
+                    engine,
+                    format_id: request.format_id,
+                    extension: request.extension,
+                    audio_format: request.audio_format.map(|format| match format {
+                        BatchDownloadAudioFormatDto::Mp3 => YtDlpAudioFormat::Mp3,
+                        BatchDownloadAudioFormatDto::M4a => YtDlpAudioFormat::M4a,
+                    }),
+                    expected_sha256: request.expected_sha256,
+                }
             })
             .collect::<Vec<_>>();
 
@@ -817,18 +816,10 @@ impl DownloadService {
             .map(YtDlpAudioFormat::try_from)
             .transpose()
             .map_err(|error| MobileApiError::Validation(error.to_string()))?;
-        // For direct media URLs (mp4, m3u8, webm, etc.) use the appropriate native engine
-        // instead of routing through yt-dlp which is unavailable via subprocess on Android.
-        let engine = if audio_format.is_some() {
+        let engine = if audio_format.is_some() || format_id.is_some() {
             EngineKind::YtDlp
-        } else if format_id.is_none() && is_direct_media_url(&url) {
-            if is_hls_url(&url) {
-                EngineKind::Hls
-            } else {
-                EngineKind::DirectHttp
-            }
         } else {
-            EngineKind::YtDlp
+            EngineKind::from_source_url(&url)
         };
         if audio_format.is_some() && format_id.is_some() {
             return Err(MobileApiError::Validation(
@@ -950,7 +941,8 @@ impl DownloadService {
                     .to_owned(),
             ));
         }
-        let source = DownloadSource::new(&url, engine)
+        let canonical_url = canonical_source_url(&url, engine)?;
+        let source = DownloadSource::new(&canonical_url, engine)
             .and_then(|source| match (format_id, audio_format) {
                 (Some(format_id), None) if engine == EngineKind::YtDlp => {
                     source.with_yt_dlp_format(format_id)
@@ -1493,8 +1485,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        AndroidYtDlpProcessRunner, DownloadService, batch_error_code, engine_for_url,
-        is_direct_media_url, media_formats_to_dto,
+        AndroidYtDlpProcessRunner, DownloadService, batch_error_code, canonical_source_url,
+        media_formats_to_dto,
     };
     use crate::YtDlpRuntime;
     use crate::dto::{
@@ -1581,29 +1573,56 @@ mod tests {
     }
 
     #[test]
-    fn add_download_selects_engine_from_url_scheme() {
-        assert_eq!(engine_for_url("ftp://example.test/file"), EngineKind::Ftp);
-        assert_eq!(engine_for_url("FTPS://example.test/file"), EngineKind::Ftps);
-        assert_eq!(engine_for_url("sftp://example.test/file"), EngineKind::Sftp);
+    fn add_download_selects_engine_from_source_type() {
         assert_eq!(
-            engine_for_url("https://example.test/file"),
+            EngineKind::from_source_url("ftp://example.test/file"),
+            EngineKind::Ftp
+        );
+        assert_eq!(
+            EngineKind::from_source_url("FTPS://example.test/file"),
+            EngineKind::Ftps
+        );
+        assert_eq!(
+            EngineKind::from_source_url("sftp://example.test/file"),
+            EngineKind::Sftp
+        );
+        assert_eq!(
+            EngineKind::from_source_url("https://cdn.example.test/video.mp4?token=abc#t=10"),
+            EngineKind::DirectHttp
+        );
+        assert_eq!(
+            EngineKind::from_source_url("https://cdn.example.test/playlist.m3u8"),
+            EngineKind::Hls
+        );
+        assert_eq!(
+            EngineKind::from_source_url("https://cdn.example.test/file.meta4"),
+            EngineKind::Metalink
+        );
+        assert_eq!(
+            EngineKind::from_source_url("https://www.youtube.com/watch?v=example"),
+            EngineKind::YtDlp
+        );
+        assert_eq!(
+            EngineKind::from_source_url("https://example.test/watch?id=example"),
+            EngineKind::YtDlp
+        );
+        assert_eq!(
+            EngineKind::from_source_url("https://example.test/file"),
             EngineKind::DirectHttp
         );
     }
 
     #[test]
-    fn direct_media_detection_uses_url_path_not_host_query_or_fragment() {
-        assert!(is_direct_media_url(
-            "https://cdn.example.test/video.mp4?token=abc#t=10"
-        ));
-        assert!(is_direct_media_url(
-            "https://cdn.example.test/get_file/123/808341_720p.mp4/"
-        ));
-        assert!(!is_direct_media_url("https://video.mp4/"));
-        assert!(!is_direct_media_url(
-            "https://example.test/watch?format=video.mp4"
-        ));
-        assert!(!is_direct_media_url("https://example.test/watch#video.mp4"));
+    fn file_transfer_sources_reject_passwords_and_traversal() {
+        assert!(canonical_source_url("ftp://example.test/file.zip", EngineKind::Ftp).is_ok());
+        assert!(
+            canonical_source_url(
+                "sftp://user:password@example.test/file.zip",
+                EngineKind::Sftp
+            )
+            .is_err()
+        );
+        assert!(canonical_source_url("ftp://example.test/../secret", EngineKind::Ftp).is_err());
     }
 
     #[test]

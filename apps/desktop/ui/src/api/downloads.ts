@@ -105,7 +105,7 @@ export function addDownload(request: AddDownloadRequest): Promise<Download> {
 export function addDownloadBatch(options: {
   urls: string[];
   packageName?: string;
-  engine: "direct_http" | "yt_dlp";
+  engine: "direct_http" | "yt_dlp" | "hls" | "metalink";
   priority: DownloadPriority;
   formatId?: string;
   extension?: string | null;

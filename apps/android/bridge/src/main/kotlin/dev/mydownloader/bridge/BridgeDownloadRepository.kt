@@ -280,7 +280,11 @@ class BridgeDownloadRepository(
         } else if (!url.contains("://") && url.trim().endsWith(".torrent", ignoreCase = true)) {
             service.addTorrentFileDownload(url.trim(), mapPriorityToDto(priority))
         } else if (isMediaUrl(url)) {
-            val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) destinationPath else "$destinationPath.mp4"
+            val safeDestination = if (destinationPath.endsWith(".mp4", ignoreCase = true)) {
+                destinationPath
+            } else {
+                "$destinationPath.mp4"
+            }
             val stagingPath = publicDownloadStorage.stageDestinationIfPublic(safeDestination)
             service.addMediaDownload(url, fileName, stagingPath, mapPriorityToDto(priority), null, null)
         } else {
@@ -810,8 +814,14 @@ internal fun createBatchDownloadRequestDto(
     expectedSha256: String?,
     stageDestination: (String) -> String,
 ): BatchDownloadRequestDto {
-    val media = item.isMedia || isMediaUrl(item.url) ||
-        item.formatId != null || item.extension != null || item.audioFormat != null
+    val selectedMedia = item.isMedia || item.formatId != null ||
+        item.extension != null || item.audioFormat != null
+    val engine = if (selectedMedia) {
+        BatchDownloadEngineDto.YT_DLP
+    } else {
+        BatchDownloadEngineDto.DIRECT_HTTP
+    }
+    val media = selectedMedia || isMediaUrl(item.url)
     val selectedExtension = item.audioFormat?.lowercase() ?: item.extension
     val audioFormat = when (item.audioFormat?.lowercase()) {
         "mp3" -> BatchDownloadAudioFormatDto.MP3
@@ -831,7 +841,7 @@ internal fun createBatchDownloadRequestDto(
         url = item.url,
         filename = selectedExtension?.let { item.fileName.withExtension(it) } ?: item.fileName,
         destination = stagedDestination,
-        engine = if (media) BatchDownloadEngineDto.YT_DLP else BatchDownloadEngineDto.DIRECT_HTTP,
+        engine = engine,
         formatId = item.formatId,
         extension = selectedExtension,
         audioFormat = audioFormat,
@@ -903,13 +913,38 @@ internal class SnapshotRefreshWorker(
     }
 }
 
-internal fun isMediaUrl(url: String): Boolean {
-    val host = try {
-        java.net.URI(url).host?.lowercase() ?: ""
-    } catch (_: Exception) {
-        ""
+internal fun isMediaUrl(url: String): Boolean =
+    isLikelyMediaExtractionUrl(url)
+
+private fun isLikelyMediaExtractionUrl(url: String): Boolean {
+    val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+    if (!uri.scheme.equals("http", ignoreCase = true) &&
+        !uri.scheme.equals("https", ignoreCase = true)
+    ) {
+        return false
     }
-    return host.contains("youtube.com") || host == "youtu.be"
+
+    val filename = uri.path.orEmpty().substringAfterLast('/')
+    val extension = filename.substringAfterLast('.', "").lowercase()
+    if (extension.isNotEmpty()) {
+        return extension in setOf("mpd", "html", "htm", "php", "asp", "aspx")
+    }
+
+    val host = uri.host?.lowercase().orEmpty()
+    val knownMediaHost = listOf(
+        "youtube.com",
+        "youtu.be",
+        "vimeo.com",
+        "twitch.tv",
+        "dailymotion.com",
+        "tiktok.com",
+        "facebook.com",
+        "instagram.com",
+        "soundcloud.com",
+    ).any { host == it || host.endsWith(".$it") }
+    val mediaPagePath = listOf("/watch", "/video/", "/videos/", "/stream/", "/player/", "/embed/")
+        .any { uri.path.orEmpty().contains(it, ignoreCase = true) }
+    return knownMediaHost || mediaPagePath
 }
 
 private fun mapTorrentMetadata(metadata: TorrentMetadataDto) = TorrentMetadata(

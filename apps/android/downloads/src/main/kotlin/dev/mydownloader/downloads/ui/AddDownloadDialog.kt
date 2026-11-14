@@ -542,10 +542,13 @@ internal fun validateUrl(url: String): String? {
     if (trimmed.isBlank()) return "URL cannot be empty"
     if (!trimmed.startsWith("http://", ignoreCase = true) &&
         !trimmed.startsWith("https://", ignoreCase = true) &&
+        !trimmed.startsWith("ftp://", ignoreCase = true) &&
+        !trimmed.startsWith("ftps://", ignoreCase = true) &&
+        !trimmed.startsWith("sftp://", ignoreCase = true) &&
         !trimmed.startsWith("magnet:", ignoreCase = true) &&
         (trimmed.contains("://") || !trimmed.endsWith(".torrent", ignoreCase = true))
     ) {
-        return "Enter an HTTP(S) URL, magnet URI, or local .torrent path"
+        return "Enter a supported download URL, magnet URI, or local .torrent path"
     }
 
     return null

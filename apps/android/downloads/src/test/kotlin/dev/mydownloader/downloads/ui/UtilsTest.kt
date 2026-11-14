@@ -183,6 +183,13 @@ class UtilsTest {
     }
 
     @Test
+    fun validateUrl_ftpProtocols_pass() {
+        assertNull(validateUrl("ftp://example.com/file.zip"))
+        assertNull(validateUrl("ftps://example.com/file.zip"))
+        assertNull(validateUrl("sftp://example.com/file.zip"))
+    }
+
+    @Test
     fun validateUrl_magnet_passes_to_rust_core_validation() {
         assertNull(
             validateUrl(
@@ -194,14 +201,13 @@ class UtilsTest {
     @Test
     fun validateUrl_local_torrent_path_passes_to_rust_core_validation() {
         assertNull(validateUrl("C:\\FetchX\\legal-fixture.torrent"))
-        assertNotNull(validateUrl("ftp://example.com/file.torrent"))
     }
 
     @Test
     fun validateUrl_missing_scheme_returns_error() {
         assertNotNull(validateUrl("example.com/file.zip"))
-        assertNotNull(validateUrl("ftp://example.com/file.zip"))
         assertNotNull(validateUrl("//example.com/file.zip"))
+        assertNotNull(validateUrl("file:///example.com/file.zip"))
     }
 
     @Test

@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import { getEngineStatus } from "../api/engine";
 import {
-  addTorrentDownload,
   addDownload,
   addDownloadBatch,
+  addTorrentDownload,
   addMediaDownload,
   discoverYtDlpFormats,
   extractDownloadLinks,
@@ -14,7 +13,7 @@ import {
   scheduleDownload,
   setDownloadPriority,
 } from "../api/downloads";
-import type { DownloadPriority, EngineKind, EngineStatus, YtDlpFormat } from "../api/types";
+import type { DownloadPriority, YtDlpFormat } from "../api/types";
 import { errorMessage, formatBytes, msToDatetimeLocal } from "../lib/format";
 
 interface AddDialogProps {
@@ -23,40 +22,39 @@ interface AddDialogProps {
   onClose: () => void;
 }
 
-/** Display label and serde key for each engine option. */
-const ENGINE_OPTIONS: { kind: EngineKind; label: string }[] = [
-  { kind: "direct_http", label: "Direct HTTP" },
-  { kind: "yt_dlp",      label: "yt-dlp" },
-];
-
-type TorrentEngineChoice = "automatic" | "native_torrent";
-
-/**
- * Returns true when the given engine kind is runtime-available according to
- * the status object loaded from the backend.
- * Direct HTTP is always available; optional engines must be Available.
- */
-function isEngineAvailable(kind: EngineKind, status: EngineStatus | null): boolean {
-  if (!status) return kind === "direct_http"; // safe default while loading
-  switch (kind) {
-    case "direct_http": return status.direct_http.available;
-    case "yt_dlp":      return status.yt_dlp.available;
-    case "native_torrent": return status.native_torrent.available;
+function isLikelyYtDlpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) return false;
+    const filename = parsed.pathname.split("/").pop() ?? "";
+    const extension = filename.includes(".")
+      ? filename.split(".").pop()?.toLowerCase()
+      : undefined;
+    if (extension) return ["mpd", "html", "htm", "php", "asp", "aspx"].includes(extension);
+    const host = parsed.hostname.toLowerCase();
+    const knownMediaHost = [
+      "youtube.com",
+      "youtu.be",
+      "vimeo.com",
+      "twitch.tv",
+      "dailymotion.com",
+      "tiktok.com",
+      "facebook.com",
+      "instagram.com",
+      "soundcloud.com",
+    ].some((domain) => host === domain || host.endsWith(`.${domain}`));
+    const mediaPagePath = /\/(watch|video|videos|stream|player|embed)(\/|$)/i.test(parsed.pathname);
+    return knownMediaHost || mediaPagePath;
+  } catch {
+    return false;
   }
 }
 
-function engineUnavailableReason(kind: EngineKind, status: EngineStatus | null): string | null {
-  if (!status) return null;
-  switch (kind) {
-    case "direct_http": return null;
-    case "yt_dlp":
-      if (!status.yt_dlp.enabled) return "disabled in Settings";
-      if (!status.yt_dlp.available) return status.yt_dlp.error ?? "unavailable";
-      return null;
-    case "native_torrent":
-      if (!status.native_torrent.enabled) return "disabled in Settings";
-      if (!status.native_torrent.available) return status.native_torrent.error ?? "unavailable";
-      return null;
+function isHttpUrl(value: string): boolean {
+  try {
+    return ["http:", "https:"].includes(new URL(value.trim()).protocol);
+  } catch {
+    return false;
   }
 }
 
@@ -65,10 +63,6 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [packageName, setPackageName] = useState("");
   const [packageNameEdited, setPackageNameEdited] = useState(false);
   const [priority, setPriority] = useState<DownloadPriority>("normal");
-  const [engineKind, setEngineKind] = useState<EngineKind>("direct_http");
-  const [torrentEngineChoice, setTorrentEngineChoice] = useState<TorrentEngineChoice>("automatic");
-  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
-  const [engineStatusLoading, setEngineStatusLoading] = useState(true);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduledAt, setScheduledAt] = useState(
     msToDatetimeLocal(Math.ceil(Date.now() / 60000) * 60000 + 3_600_000),
@@ -84,6 +78,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
   const isTorrent = isMagnet || isTorrentFile;
+  const isYtDlpUrl = !isTorrent && isLikelyYtDlpUrl(url);
 
   useEffect(() => {
     if (packageNameEdited || packageName.trim() || !url.trim()) return;
@@ -100,26 +95,6 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, [url, packageName, packageNameEdited]);
-
-  // Load engine availability once when the dialog opens.
-  // No polling — one fetch on mount.
-  useEffect(() => {
-    let cancelled = false;
-    void getEngineStatus()
-      .then((status) => {
-        if (!cancelled) {
-          setEngineStatus(status);
-          setEngineStatusLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          // If the status fetch fails, fall back to Direct HTTP only.
-          setEngineStatusLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
-  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -139,16 +114,17 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
     setBusy(true);
     try {
-      // Pass the selected engine to the backend.
-      // The backend re-validates availability — the frontend cannot bypass this check.
-      // Omit engine_kind when Direct HTTP is selected to use the backend default.
       const bulkLinks = await extractDownloadLinks(url);
       const urlsToAdd = bulkLinks.length > 1 ? bulkLinks : [url];
-      if (urlsToAdd.length > 1) {
+      if (
+        urlsToAdd.length > 1
+        && !isTorrent
+        && urlsToAdd.every(isHttpUrl)
+      ) {
         const results = await addDownloadBatch({
           urls: urlsToAdd,
           packageName: packageNameEdited ? packageName.trim() || undefined : undefined,
-          engine: engineKind === "yt_dlp" ? "yt_dlp" : "direct_http",
+          engine: selectedFormatId ? "yt_dlp" : "direct_http",
           priority,
           formatId: selectedFormatId || undefined,
           extension: formats?.find((format) => format.format_id === selectedFormatId)?.extension,
@@ -188,36 +164,57 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
         return;
       }
 
+      let queuedCount = 0;
+      const failures: string[] = [];
+      const failedInputs: string[] = [];
+      const packageNameForBatch = urlsToAdd.length > 1 && !packageNameEdited
+        ? undefined
+        : packageName.trim() || undefined;
+
       for (const targetUrl of urlsToAdd) {
-        const download = isTorrentFile && torrentInspection
-          ? await addTorrentDownload(
-              url.trim(),
-              selectedTorrentFiles,
-              torrentEngineChoice === "automatic" ? undefined : torrentEngineChoice,
-            )
-          : engineKind === "yt_dlp" && !isTorrent
-          ? await addMediaDownload(
-              targetUrl,
-              selectedFormatId || undefined,
-              formats?.find((format) => format.format_id === selectedFormatId)?.extension,
-              undefined,
-            )
-          : await addDownload({
-              url: targetUrl.trim(),
-              package_name: packageName.trim() || undefined,
-              engine_kind: isTorrent
-                ? torrentEngineChoice === "automatic" ? undefined : torrentEngineChoice
-                : engineKind === "direct_http" ? undefined : engineKind,
-            });
+        let admitted = false;
+        try {
+          const download = isTorrentFile && torrentInspection
+            ? await addTorrentDownload(url.trim(), selectedTorrentFiles)
+            : selectedFormatId && isYtDlpUrl
+              ? await addMediaDownload(
+                  targetUrl,
+                  selectedFormatId,
+                  formats?.find((format) => format.format_id === selectedFormatId)?.extension,
+                  undefined,
+                )
+              : await addDownload({
+                  url: targetUrl.trim(),
+                  package_name: urlsToAdd.length > 1
+                    ? packageNameForBatch
+                    : packageName.trim() || undefined,
+                });
+          admitted = true;
+          queuedCount += 1;
 
-        if (priority !== "normal") {
-          await setDownloadPriority(download.id, priority);
-        }
+          if (priority !== "normal") {
+            await setDownloadPriority(download.id, priority);
+          }
 
-        if (scheduleEnabled) {
-          const ms = new Date(scheduledAt).getTime();
-          await scheduleDownload(download.id, ms);
+          if (scheduleEnabled) {
+            const ms = new Date(scheduledAt).getTime();
+            await scheduleDownload(download.id, ms);
+          }
+        } catch (cause) {
+          failures.push(`${targetUrl}: ${errorMessage(cause)}`);
+          if (!admitted) failedInputs.push(targetUrl);
         }
+      }
+
+      if (failures.length > 0) {
+        setUrl(failedInputs.join("\n"));
+        setSelectedFormatId("");
+        setError(
+          `${queuedCount} of ${urlsToAdd.length} downloads were queued. ` +
+            failures.slice(0, 5).join(" "),
+        );
+        setBusy(false);
+        return;
       }
 
       onAdded();
@@ -420,62 +417,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             )}
           </div>
 
-          <div className="field">
-            <label htmlFor="add-engine" className="field-label">
-              Engine
-            </label>
-            {engineStatusLoading ? (
-              <p className="field-hint">Loading engine status…</p>
-            ) : (
-              <select
-                id="add-engine"
-                className="field-select"
-                value={isTorrent ? torrentEngineChoice : engineKind}
-                onChange={(e) => {
-                  if (isTorrent) {
-                    setTorrentEngineChoice(e.target.value as TorrentEngineChoice);
-                  } else {
-                    setEngineKind(e.target.value as EngineKind);
-                  }
-                  setFormats(null);
-                  setSelectedFormatId("");
-                }}
-                disabled={busy || formatsLoading}
-                aria-describedby="add-engine-hint"
-              >
-                {isTorrent ? (
-                  <>
-                    <option value="automatic">Native torrent (default)</option>
-                    {(["native_torrent"] as const).map((kind) => {
-                      const available = isEngineAvailable(kind, engineStatus);
-                      const reason = engineUnavailableReason(kind, engineStatus);
-                      const label = "Native torrent";
-                      return (
-                        <option key={kind} value={kind} disabled={!available}>
-                          {available ? label : `${label} — ${reason ?? "unavailable"}`}
-                        </option>
-                      );
-                    })}
-                  </>
-                ) : ENGINE_OPTIONS.map(({ kind, label }) => {
-                  const available = isEngineAvailable(kind, engineStatus);
-                  const reason = engineUnavailableReason(kind, engineStatus);
-                  return (
-                    <option key={kind} value={kind} disabled={!available}>
-                      {available ? label : `${label} — ${reason ?? "unavailable"}`}
-                    </option>
-                  );
-                })}
-              </select>
-            )}
-            <p id="add-engine-hint" className="field-hint">
-              {isTorrent
-                ? "New torrent downloads use the native Rust engine."
-                : "Only available engines are selectable. Configure engines in Settings."}
-            </p>
-          </div>
-
-          {engineKind === "yt_dlp" && (
+          {isYtDlpUrl && (
             <div className="field">
               {formats === null ? (
                 <button
@@ -577,7 +519,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               <button
                 type="submit"
                 className="button button-primary"
-                disabled={busy || formatsLoading || !url || engineStatusLoading}
+                disabled={busy || formatsLoading || !url}
               >
                 {busy ? "Adding…" : "Add download"}
               </button>

@@ -370,17 +370,26 @@ async fn create_http_download(
     params: &DownloadCreateParams,
     priority: DownloadPriority,
 ) -> Result<DownloadId, RpcError> {
-    if params
-        .engine
-        .is_some_and(|engine| engine != EngineKind::DirectHttp)
-    {
-        return Err(RpcError::new(
-            RpcErrorCode::UnsupportedOperation,
-            "only direct_http is supported for remote HTTP downloads",
-        ));
-    }
     let validated_url = validate_http_source_url(&params.url)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
+    let engine = params
+        .engine
+        .unwrap_or_else(|| EngineKind::from_source_url(&validated_url));
+    if !matches!(
+        engine,
+        EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls | EngineKind::Metalink
+    ) {
+        return Err(RpcError::new(
+            RpcErrorCode::UnsupportedOperation,
+            "the selected engine does not support remote HTTP downloads",
+        ));
+    }
+    if !services.engine_runtime.is_available(engine) {
+        return Err(RpcError::new(
+            RpcErrorCode::ServiceUnavailable,
+            "the selected download engine is unavailable",
+        ));
+    }
     let url = url::Url::parse(&validated_url)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
     let filename = safe_filename(
@@ -390,8 +399,14 @@ async fn create_http_download(
             .filter(|filename| !filename.trim().is_empty())
             .or_else(|| url.path_segments().and_then(Iterator::last)),
     );
+    let filename = if engine == EngineKind::YtDlp && PathBuf::from(&filename).extension().is_none()
+    {
+        format!("{filename}.mp4")
+    } else {
+        filename
+    };
     let id = DownloadId::new();
-    let source = DownloadSource::new(validated_url.clone(), EngineKind::DirectHttp)
+    let source = DownloadSource::new(validated_url.clone(), engine)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid HTTP(S) URL"))?;
     let filename = FileName::new(filename)
         .map_err(|_| RpcError::new(RpcErrorCode::InvalidParams, "invalid filename"))?;
@@ -572,6 +587,37 @@ mod tests {
         .expect_err("explicit aria2 requests must not be routed to native torrent");
         assert_eq!(error.code(), RpcErrorCode::UnsupportedOperation);
         assert!(services.repository.list().await?.is_empty());
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_http_request_automatically_selects_hls_engine()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let services = CoreServices::start(CoreServicesConfig {
+            database_path: directory.path().join("fetchx.db"),
+            downloads_dir: directory.path().join("downloads"),
+            runtime_dir: directory.path().join("runtime"),
+            bundled_engines_dir: None,
+            defer_queued_on_start: true,
+        })
+        .await?;
+        let request = fetchx_remote_protocol::parse_request(
+            br#"{"jsonrpc":"2.0","id":1,"method":"download.create","params":{"url":"https://cdn.example.test/playlist.m3u8"}}"#,
+        )?;
+        dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::Operator),
+            request,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await
+        .expect("HTTP download should be admitted");
+        let downloads = services.repository.list().await?;
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].source().engine(), EngineKind::Hls);
         services.shutdown().await?;
         Ok(())
     }

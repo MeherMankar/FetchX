@@ -120,9 +120,7 @@ impl AppState {
         .then(|| Path::new(&request.url).to_path_buf());
         let canonical_url = match (magnet.is_some(), torrent_path.is_some()) {
             (true, _) | (_, true) => request.url.clone(),
-            (false, false) => {
-                validate_http_source_url(&request.url).map_err(|_| IpcError::invalid_request())?
-            }
+            (false, false) => validate_source_url(&request.url)?,
         };
         let parsed_url = if magnet.is_none() && torrent_path.is_none() {
             Some(Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?)
@@ -143,7 +141,7 @@ impl AppState {
         {
             return Err(IpcError::invalid_request());
         }
-        // Resolve the requested engine, defaulting to DirectHttp when unspecified.
+        // Resolve the requested engine from the source when no override is present.
         let engine_kind = match (
             magnet.is_some() || torrent_path.is_some(),
             request.engine_kind,
@@ -151,8 +149,16 @@ impl AppState {
             (true, None) => EngineKind::NativeTorrent,
             (true, Some(EngineKind::NativeTorrent)) => EngineKind::NativeTorrent,
             (true, Some(_)) => return Err(IpcError::invalid_request()),
-            (false, Some(engine)) => engine,
-            (false, None) => EngineKind::DirectHttp,
+            (false, Some(engine)) => {
+                if !engine_matches_source(
+                    engine,
+                    parsed_url.as_ref().ok_or_else(IpcError::invalid_request)?,
+                ) {
+                    return Err(IpcError::invalid_request());
+                }
+                engine
+            }
+            (false, None) => EngineKind::from_source_url(&canonical_url),
         };
 
         // Backend validates availability — the frontend cannot bypass this check.
@@ -528,13 +534,46 @@ impl AppState {
     }
 }
 
+fn validate_source_url(source: &str) -> Result<String, IpcError> {
+    let parsed = Url::parse(source).map_err(|_| IpcError::invalid_request())?;
+    match parsed.scheme() {
+        "http" | "https" => {
+            validate_http_source_url(source).map_err(|_| IpcError::invalid_request())
+        }
+        "ftp" | "ftps" | "sftp" => {
+            if source.split('/').any(|segment| segment == "..")
+                || parsed.password().is_some()
+                || parsed.host_str().is_none()
+                || parsed.path().is_empty()
+                || parsed.path() == "/"
+            {
+                return Err(IpcError::invalid_request());
+            }
+            Ok(parsed.to_string())
+        }
+        _ => Err(IpcError::invalid_request()),
+    }
+}
+
+fn engine_matches_source(engine: EngineKind, source: &Url) -> bool {
+    match engine {
+        EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls | EngineKind::Metalink => {
+            matches!(source.scheme(), "http" | "https")
+        }
+        EngineKind::Ftp => source.scheme() == "ftp",
+        EngineKind::Ftps => source.scheme() == "ftps",
+        EngineKind::Sftp => source.scheme() == "sftp",
+        EngineKind::NativeTorrent | EngineKind::Aria2 => false,
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddDownloadRequest {
     pub url: String,
     #[serde(default)]
     pub package_name: Option<String>,
-    /// Optional engine selection.  `None` (or absent from JSON) means Direct HTTP.
+    /// Optional engine override. When absent, the backend selects an engine by source type.
     /// The backend validates availability; the frontend cannot bypass this check.
     #[serde(default)]
     pub engine_kind: Option<EngineKind>,
@@ -758,7 +797,7 @@ impl IpcError {
     fn invalid_request() -> Self {
         Self {
             code: IpcErrorCode::InvalidRequest,
-            message: "Enter a valid HTTP or HTTPS URL without embedded credentials.",
+            message: "Enter a valid supported download URL without embedded passwords.",
         }
     }
 
@@ -847,8 +886,8 @@ impl IpcError {
         }
     }
 
-    /// Used when an explicitly requested engine is not available at runtime.
-    /// The user's engine selection is respected — we do not silently fall back.
+    /// Used when the engine selected for a source is not available at runtime.
+    /// We do not silently fall back to a different engine.
     pub(crate) fn engine_unavailable(kind: EngineKind) -> Self {
         // Static messages per engine; do not expose process details or secrets.
         let message: &'static str = match kind {
@@ -1104,7 +1143,11 @@ pub async fn add_download_batch(
         .map(|url| BatchDownloadRequest {
             url: url.clone(),
             package_name: package_name.clone(),
-            engine,
+            engine: if engine == EngineKind::DirectHttp {
+                EngineKind::from_source_url(url)
+            } else {
+                engine
+            },
             format_id: format_id.clone(),
             extension: extension.clone(),
             audio_format,
@@ -1883,8 +1926,9 @@ mod tests {
     use tokio::{sync::watch, time::timeout};
 
     use super::{
-        AddDownloadRequest, AppState, DownloadDto, IpcError, IpcErrorCode, extension_is_safe,
-        filename_for_url, parse_download_id, validate_http_source_url,
+        AddDownloadRequest, AppState, DownloadDto, EngineKind, IpcError, IpcErrorCode,
+        engine_matches_source, extension_is_safe, filename_for_url, parse_download_id,
+        validate_http_source_url, validate_source_url,
     };
     use fetchx_core_services::{ConfigService, EngineConfig, EngineRuntime};
 
@@ -2027,6 +2071,37 @@ mod tests {
             "https"
         );
         Ok(())
+    }
+
+    #[test]
+    fn automatic_engine_selection_covers_supported_source_types() -> Result<(), Box<dyn Error>> {
+        for (source, expected) in [
+            ("https://example.test/video.mp4", EngineKind::DirectHttp),
+            ("https://example.test/watch", EngineKind::YtDlp),
+            ("https://www.youtube.com/watch?v=abc", EngineKind::YtDlp),
+            ("https://example.test/playlist.m3u8", EngineKind::Hls),
+            ("https://example.test/manifest.mpd", EngineKind::YtDlp),
+            ("https://example.test/file.meta4", EngineKind::Metalink),
+            ("ftp://example.test/file.zip", EngineKind::Ftp),
+            ("ftps://example.test/file.zip", EngineKind::Ftps),
+            ("sftp://example.test/file.zip", EngineKind::Sftp),
+        ] {
+            assert_eq!(EngineKind::from_source_url(source), expected, "{source}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn source_url_validation_accepts_supported_protocols_only() {
+        assert!(validate_source_url("ftp://example.test/file.zip").is_ok());
+        assert!(validate_source_url("ftps://example.test/file.zip").is_ok());
+        assert!(validate_source_url("sftp://example.test/file.zip").is_ok());
+        assert!(validate_source_url("sftp://user:password@example.test/file.zip").is_err());
+        assert!(validate_source_url("file:///etc/passwd").is_err());
+        assert!(!engine_matches_source(
+            EngineKind::Ftp,
+            &reqwest::Url::parse("https://example.test/file.zip").expect("valid URL")
+        ));
     }
 
     #[test]
