@@ -683,6 +683,10 @@ fn browser_executable(target: &BrowserTarget) -> Option<PathBuf> {
 
     for relative_path in target.detect_paths {
         let executable_name = Path::new(relative_path).file_name()?.to_string_lossy();
+        if !app_path_fallback_is_unambiguous(target, &executable_name) {
+            continue;
+        }
+
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         for root in [
@@ -694,7 +698,9 @@ fn browser_executable(target: &BrowserTarget) -> Option<PathBuf> {
             let mut command = std::process::Command::new("reg");
             command.creation_flags(CREATE_NO_WINDOW);
             command.args(["query", &key, "/ve"]);
-            let output = command.output().ok()?;
+            let Ok(output) = command.output() else {
+                continue;
+            };
             if !output.status.success() {
                 continue;
             }
@@ -712,6 +718,24 @@ fn browser_executable(target: &BrowserTarget) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn app_path_fallback_is_unambiguous(target: &BrowserTarget, executable_name: &str) -> bool {
+    let has_executable_name = |candidate: &BrowserTarget| {
+        candidate.detect_paths.iter().any(|path| {
+            Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().eq_ignore_ascii_case(executable_name))
+                .unwrap_or(false)
+        })
+    };
+
+    has_executable_name(target)
+        && BROWSER_TARGETS
+            .iter()
+            .filter(|candidate| has_executable_name(candidate))
+            .count()
+            == 1
 }
 
 fn is_browser_detected(_target: &BrowserTarget) -> bool {
@@ -1042,6 +1066,33 @@ mod tests {
         assert!(names.contains(&"Mozilla Firefox"));
         assert!(names.contains(&"LibreWolf"));
         assert!(names.contains(&"Waterfox"));
+    }
+
+    #[test]
+    fn app_path_fallback_does_not_match_uninstalled_browser_variants() {
+        let target = |name| {
+            BROWSER_TARGETS
+                .iter()
+                .find(|target| target.display_name == name)
+                .expect("browser target exists")
+        };
+
+        assert!(!app_path_fallback_is_unambiguous(
+            target("Google Chrome Beta"),
+            "chrome.exe"
+        ));
+        assert!(!app_path_fallback_is_unambiguous(
+            target("Microsoft Edge Dev"),
+            "msedge.exe"
+        ));
+        assert!(!app_path_fallback_is_unambiguous(
+            target("Opera GX"),
+            "opera.exe"
+        ));
+        assert!(app_path_fallback_is_unambiguous(
+            target("Arc Browser"),
+            "Arc.exe"
+        ));
     }
 
     #[test]
