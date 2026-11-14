@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -9,7 +10,7 @@ use fetchx_models::{
     DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, global_diagnostics,
 };
 use serde::Serialize;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqlitePool, migrate::Migration};
 
 use crate::{Database, StorageError, database::MIGRATOR};
 
@@ -372,19 +373,112 @@ pub(crate) async fn prepare_migration(
             ));
         }
     }
+    let checksum_repairs = legacy_migration_checksum_repairs(&database.pool).await?;
     let Some(database_path) = database.path.as_deref() else {
+        repair_legacy_migration_checksums(&database.pool, &checksum_repairs).await?;
         return Ok(None);
     };
     let has_existing_data = std::fs::metadata(database_path)
         .map(|metadata| metadata.len() > 0)
         .unwrap_or(false);
     if !has_existing_data || status.state == DatabaseSchemaState::EmptyDatabase {
+        repair_legacy_migration_checksums(&database.pool, &checksum_repairs).await?;
         return Ok(None);
     }
     let snapshot = recovery_snapshot_path(database_path)?;
     create_snapshot(&database.pool, &snapshot).await?;
     validate_snapshot(&snapshot).await?;
+    repair_legacy_migration_checksums(&database.pool, &checksum_repairs).await?;
     Ok(Some(snapshot))
+}
+
+#[derive(Debug)]
+struct MigrationChecksumRepair {
+    version: i64,
+    description: String,
+    legacy_checksum: Vec<u8>,
+    current_checksum: Vec<u8>,
+}
+
+async fn legacy_migration_checksum_repairs(
+    pool: &SqlitePool,
+) -> Result<Vec<MigrationChecksumRepair>, StorageError> {
+    let rows = sqlx::query(
+        "SELECT version, description, success, checksum
+         FROM _sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut repairs = Vec::new();
+    for row in rows {
+        let version: i64 = row.get("version");
+        let description: String = row.get("description");
+        let success: bool = row.get("success");
+        let checksum: Vec<u8> = row.get("checksum");
+        let Some(migration) = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == version)
+        else {
+            continue;
+        };
+        let legacy_checksum = crlf_migration_checksum(migration);
+        if success
+            && migration.description.as_ref() == description
+            && checksum == legacy_checksum
+            && checksum.as_slice() != migration.checksum.as_ref()
+        {
+            repairs.push(MigrationChecksumRepair {
+                version,
+                description,
+                legacy_checksum,
+                current_checksum: migration.checksum.to_vec(),
+            });
+        }
+    }
+    Ok(repairs)
+}
+
+fn crlf_migration_checksum(migration: &Migration) -> Vec<u8> {
+    Migration::new(
+        migration.version,
+        migration.description.clone(),
+        migration.migration_type,
+        Cow::Owned(migration.sql.replace('\n', "\r\n")),
+        migration.no_tx,
+    )
+    .checksum
+    .into_owned()
+}
+
+async fn repair_legacy_migration_checksums(
+    pool: &SqlitePool,
+    repairs: &[MigrationChecksumRepair],
+) -> Result<(), StorageError> {
+    if repairs.is_empty() {
+        return Ok(());
+    }
+    let mut transaction = pool.begin().await?;
+    for repair in repairs {
+        let result = sqlx::query(
+            "UPDATE _sqlx_migrations
+             SET checksum = ?
+             WHERE version = ? AND description = ? AND success = 1 AND checksum = ?",
+        )
+        .bind(&repair.current_checksum)
+        .bind(repair.version)
+        .bind(&repair.description)
+        .bind(&repair.legacy_checksum)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() != 1 {
+            return Err(StorageError::Maintenance(format!(
+                "migration {} changed during checksum normalization",
+                repair.version
+            )));
+        }
+    }
+    transaction.commit().await?;
+    Ok(())
 }
 
 fn recovery_snapshot_path(database_path: &Path) -> Result<PathBuf, StorageError> {
@@ -522,6 +616,7 @@ async fn inspect_schema(pool: &SqlitePool) -> SchemaMigrationStatus {
         }
     };
     let mut previous_version = 0_i64;
+    let mut has_legacy_line_endings = false;
     for row in &rows {
         let version: i64 = row.get("version");
         let description: String = row.get("description");
@@ -563,8 +658,7 @@ async fn inspect_schema(pool: &SqlitePool) -> SchemaMigrationStatus {
                 Some(format!("migration {version} is unavailable in this build")),
             );
         };
-        if migration.description.as_ref() != description || migration.checksum.as_ref() != checksum
-        {
+        if migration.description.as_ref() != description {
             return default(
                 DatabaseSchemaState::Corrupted,
                 Some(version),
@@ -573,13 +667,29 @@ async fn inspect_schema(pool: &SqlitePool) -> SchemaMigrationStatus {
                 )),
             );
         }
+        if migration.checksum.as_ref() != checksum {
+            if crlf_migration_checksum(migration) == checksum {
+                has_legacy_line_endings = true;
+            } else {
+                return default(
+                    DatabaseSchemaState::Corrupted,
+                    Some(version),
+                    Some(format!(
+                        "migration {version} checksum or description changed"
+                    )),
+                );
+            }
+        }
         previous_version = version;
     }
+    let detail = has_legacy_line_endings.then(|| {
+        "migration history uses a legacy CRLF checksum; normalization is required".to_owned()
+    });
     if previous_version < MIN_SUPPORTED_SCHEMA_VERSION {
         let mut status = default(
             DatabaseSchemaState::MigrationRequired,
             Some(previous_version),
-            None,
+            detail,
         );
         status.migration_path = (previous_version + 1..=CURRENT_SCHEMA_VERSION).collect();
         return status;
@@ -588,10 +698,17 @@ async fn inspect_schema(pool: &SqlitePool) -> SchemaMigrationStatus {
         let mut status = default(
             DatabaseSchemaState::MigrationRequired,
             Some(previous_version),
-            None,
+            detail,
         );
         status.migration_path = (previous_version + 1..=CURRENT_SCHEMA_VERSION).collect();
         return status;
+    }
+    if has_legacy_line_endings {
+        return default(
+            DatabaseSchemaState::MigrationRequired,
+            Some(previous_version),
+            detail,
+        );
     }
     default(DatabaseSchemaState::UpToDate, Some(previous_version), None)
 }
@@ -845,6 +962,107 @@ mod tests {
             snapshot_check.schema.state,
             DatabaseSchemaState::MigrationRequired
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_crlf_migration_checksums_are_repaired_after_snapshot()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("legacy-crlf.db");
+        let database = Database::connect_path(&path).await?;
+        sqlx::query("INSERT INTO app_config (key, value) VALUES ('preserved', 'yes')")
+            .execute(&database.pool)
+            .await?;
+        for migration in MIGRATOR.iter() {
+            sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+                .bind(crlf_migration_checksum(migration))
+                .bind(migration.version)
+                .execute(&database.pool)
+                .await?;
+        }
+        database.pool.close().await;
+
+        assert_eq!(
+            Database::check_path(&path).await.schema.state,
+            DatabaseSchemaState::MigrationRequired
+        );
+        let database = Database::connect_path(&path).await?;
+        assert_eq!(
+            database.check().await?.schema.state,
+            DatabaseSchemaState::UpToDate
+        );
+        let value: String =
+            sqlx::query_scalar("SELECT value FROM app_config WHERE key = 'preserved'")
+                .fetch_one(&database.pool)
+                .await?;
+        assert_eq!(value, "yes");
+        let checksums: Vec<Vec<u8>> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations ORDER BY version")
+                .fetch_all(&database.pool)
+                .await?;
+        assert_eq!(
+            checksums,
+            MIGRATOR
+                .iter()
+                .map(|migration| migration.checksum.to_vec())
+                .collect::<Vec<_>>()
+        );
+
+        let snapshots = std::fs::read_dir(directory.path())?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("pre-migration")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = Database::open_read_only_path(snapshots[0].path()).await?;
+        let snapshot_checksum: Vec<u8> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 4")
+                .fetch_one(&snapshot.pool)
+                .await?;
+        assert_eq!(
+            snapshot_checksum,
+            crlf_migration_checksum(
+                MIGRATOR
+                    .iter()
+                    .find(|migration| migration.version == 4)
+                    .expect("migration 4 exists")
+            )
+        );
+        let snapshot_value: String =
+            sqlx::query_scalar("SELECT value FROM app_config WHERE key = 'preserved'")
+                .fetch_one(&snapshot.pool)
+                .await?;
+        assert_eq!(snapshot_value, "yes");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_migration_checksum_is_rejected_without_rewriting_database()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("tampered-checksum.db");
+        let database = Database::connect_path(&path).await?;
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = X'00' WHERE version = 12")
+            .execute(&database.pool)
+            .await?;
+        database.pool.close().await;
+
+        assert_eq!(
+            Database::check_path(&path).await.schema.state,
+            DatabaseSchemaState::Corrupted
+        );
+        assert!(Database::connect_path(&path).await.is_err());
+        let database = Database::open_existing_path(&path).await?;
+        let checksum: Vec<u8> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 12")
+                .fetch_one(&database.pool)
+                .await?;
+        assert_eq!(checksum, [0]);
         Ok(())
     }
 

@@ -15,113 +15,79 @@ use crate::{
 
 pub(crate) static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
     migrations: Cow::Owned(vec![
-        Migration::new(
+        embedded_migration(
             1,
-            Cow::Borrowed("create_downloads"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0001_create_downloads.sql"
-            )),
-            false,
+            "create_downloads",
+            include_str!("../../../migrations/0001_create_downloads.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             2,
-            Cow::Borrowed("add_queue_order"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!("../../../migrations/0002_add_queue_order.sql")),
-            false,
+            "add_queue_order",
+            include_str!("../../../migrations/0002_add_queue_order.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             3,
-            Cow::Borrowed("create_download_schedules"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0003_create_download_schedules.sql"
-            )),
-            false,
+            "create_download_schedules",
+            include_str!("../../../migrations/0003_create_download_schedules.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             4,
-            Cow::Borrowed("create_engine_config"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0004_create_engine_config.sql"
-            )),
-            false,
+            "create_engine_config",
+            include_str!("../../../migrations/0004_create_engine_config.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             5,
-            Cow::Borrowed("add_ytdlp_format"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0005_add_ytdlp_format.sql"
-            )),
-            false,
+            "add_ytdlp_format",
+            include_str!("../../../migrations/0005_add_ytdlp_format.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             6,
-            Cow::Borrowed("add_hls_engine_kind"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0006_add_hls_engine_kind.sql"
-            )),
-            false,
+            "add_hls_engine_kind",
+            include_str!("../../../migrations/0006_add_hls_engine_kind.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             7,
-            Cow::Borrowed("torrent_metadata"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0007_torrent_metadata.sql"
-            )),
-            false,
+            "torrent_metadata",
+            include_str!("../../../migrations/0007_torrent_metadata.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             8,
-            Cow::Borrowed("magnet_metadata"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!("../../../migrations/0008_magnet_metadata.sql")),
-            false,
+            "magnet_metadata",
+            include_str!("../../../migrations/0008_magnet_metadata.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             9,
-            Cow::Borrowed("native_torrent_engine"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0009_native_torrent_engine.sql"
-            )),
-            false,
+            "native_torrent_engine",
+            include_str!("../../../migrations/0009_native_torrent_engine.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             10,
-            Cow::Borrowed("add_ftp_sftp_metalink_engines"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0010_add_ftp_sftp_metalink_engines.sql"
-            )),
-            false,
+            "add_ftp_sftp_metalink_engines",
+            include_str!("../../../migrations/0010_add_ftp_sftp_metalink_engines.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             11,
-            Cow::Borrowed("allow_merged_ytdlp_format_selectors"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0011_allow_merged_ytdlp_format_selectors.sql"
-            )),
-            false,
+            "allow_merged_ytdlp_format_selectors",
+            include_str!("../../../migrations/0011_allow_merged_ytdlp_format_selectors.sql"),
         ),
-        Migration::new(
+        embedded_migration(
             12,
-            Cow::Borrowed("add_ytdlp_audio_format"),
-            MigrationType::Simple,
-            Cow::Borrowed(include_str!(
-                "../../../migrations/0012_add_ytdlp_audio_format.sql"
-            )),
-            false,
+            "add_ytdlp_audio_format",
+            include_str!("../../../migrations/0012_add_ytdlp_audio_format.sql"),
         ),
     ]),
     ..Migrator::DEFAULT
 });
+
+fn embedded_migration(version: i64, description: &'static str, sql: &'static str) -> Migration {
+    Migration::new(
+        version,
+        Cow::Borrowed(description),
+        MigrationType::Simple,
+        Cow::Owned(sql.replace("\r\n", "\n")),
+        false,
+    )
+}
 
 /// Owns the SQLite connection pool and initializes the schema on connection.
 #[derive(Clone)]
