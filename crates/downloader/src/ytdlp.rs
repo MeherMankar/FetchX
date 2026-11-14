@@ -46,7 +46,7 @@ const MAX_DISCOVERED_FORMATS: usize = 100;
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
-const AUTO_FORMAT_SELECTOR: &str = "bestvideo[ext=webm]/bestvideo[ext=mp4][vcodec^=avc1],bestaudio[ext=webm]/bestaudio[ext=m4a][acodec^=mp4a]";
+const AUTO_FORMAT_SELECTOR: &str = "bestvideo[ext=mp4][vcodec^=avc1]/bestvideo[ext=webm],bestaudio[ext=m4a][acodec^=mp4a]/bestaudio[ext=webm]";
 const MERGED_OUTPUT_MKV_NAME: &str = ".fetchx-merged.mkv";
 const MERGED_OUTPUT_MP4_NAME: &str = ".fetchx-merged.mp4";
 const MERGED_OUTPUT_NAMES: [&str; 2] = [MERGED_OUTPUT_MKV_NAME, MERGED_OUTPUT_MP4_NAME];
@@ -2846,7 +2846,7 @@ mod tests {
         assert_eq!(
             args[format_index + 1],
             OsStr::new(
-                "bestvideo[ext=webm]/bestvideo[ext=mp4][vcodec^=avc1],bestaudio[ext=webm]/bestaudio[ext=m4a][acodec^=mp4a]"
+                "bestvideo[ext=mp4][vcodec^=avc1]/bestvideo[ext=webm],bestaudio[ext=m4a][acodec^=mp4a]/bestaudio[ext=webm]"
             )
         );
         let output_index = args
