@@ -361,11 +361,7 @@ fun BrowserScreen(
             isUrlBarExpanded = false
         }
     }
-    val spaceAccentColor = remember(uiState.selectedProfileId) {
-        val hex = uiState.profiles.find { it.id == uiState.selectedProfileId }?.accent ?: "#0F62FE"
-        try { android.graphics.Color.parseColor(hex).let { androidx.compose.ui.graphics.Color(it) } }
-        catch (_: Exception) { androidx.compose.ui.graphics.Color(0xFF0F62FE) }
-    }
+    val browserAccentColor = MaterialTheme.colorScheme.primary
 
     Scaffold(
         snackbarHost = { SnackbarHost(magnetSnackbarHostState) },
@@ -376,7 +372,7 @@ fun BrowserScreen(
                         BrowserTabStrip(
                             tabs = uiState.tabs,
                             activeTabId = uiState.activeTabId,
-                            spaceAccentColor = spaceAccentColor,
+                            browserAccentColor = browserAccentColor,
                             onSelectTab = { viewModel.selectTab(it) },
                             onCloseTab = { viewModel.closeTab(it) },
                             onNewTab = { viewModel.newTabInCurrentSpace() },
@@ -660,7 +656,7 @@ fun BrowserScreen(
                                 Icon(
                                     if (isBookmarked) Icons.Default.Star else Icons.Default.StarOutline,
                                     contentDescription = if (isBookmarked) "Bookmarked" else "Bookmark",
-                                    tint = if (isBookmarked) spaceAccentColor
+                                    tint = if (isBookmarked) browserAccentColor
                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (canBookmark) 1f else 0.4f),
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -675,12 +671,12 @@ fun BrowserScreen(
                         LinearProgressIndicator(
                             progress = { currentProgress },
                             modifier = Modifier.fillMaxWidth().height(2.5.dp),
-                            color = spaceAccentColor,
+                            color = browserAccentColor,
                         )
                     } else {
                         LinearProgressIndicator(
                             modifier = Modifier.fillMaxWidth().height(2.5.dp),
-                            color = spaceAccentColor,
+                            color = browserAccentColor,
                         )
                     }
                 }
@@ -887,7 +883,7 @@ fun BrowserScreen(
                 BrowserMenuSheet(
                     activeTab = activeTab,
                     uiState = uiState,
-                    spaceAccentColor = spaceAccentColor,
+                    browserAccentColor = browserAccentColor,
                     onDismiss = closeMenu,
                     onNavigateHome = {
                         closeMenu()
@@ -1070,7 +1066,7 @@ fun BrowserScreen(
                     ongoingDownloadCount = ongoingDownloadCount,
                     selectedSearchEngine = uiState.selectedSearchEngine,
                     profileName = uiState.selectedProfile?.name ?: "Default",
-                    profileAccentColor = spaceAccentColor,
+                    profileAccentColor = browserAccentColor,
                     onSearch = {
                         isUrlBarExpanded = true
                         viewModel.onUrlInputChanged("")
@@ -1567,7 +1563,6 @@ fun BrowserScreen(
             activeTabId = uiState.activeTabId,
             profiles = uiState.profiles,
             selectedProfileId = uiState.selectedProfileId,
-            spaceAccentColor = spaceAccentColor,
             onSelect = { viewModel.selectTab(it); viewModel.closeTabOverview() },
             onClose = { viewModel.closeTab(it) },
             onCloseAll = { spaceId -> viewModel.closeAllTabs(spaceId) },
@@ -2308,7 +2303,7 @@ internal fun BrowserBottomBar(
 private fun BrowserMenuSheet(
     activeTab: TabState?,
     uiState: BrowserUiState,
-    spaceAccentColor: Color,
+    browserAccentColor: Color,
     onDismiss: () -> Unit,
     onNavigateHome: () -> Unit,
     onGoBack: () -> Unit,
@@ -2363,7 +2358,7 @@ private fun BrowserMenuSheet(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = spaceAccentColor,
+                        color = browserAccentColor,
                         modifier = Modifier.size(24.dp),
                     ) {}
                     Spacer(Modifier.width(10.dp))
@@ -3336,7 +3331,6 @@ internal fun TabGridSheet(
     activeTabId: String?,
     profiles: List<BrowserProfile> = emptyList(),
     selectedProfileId: String = "default",
-    spaceAccentColor: Color = Color(0xFF0F62FE),
     onSelect: (String) -> Unit,
     onClose: (String) -> Unit,
     onCloseAll: (String?) -> Unit,
@@ -3360,6 +3354,7 @@ internal fun TabGridSheet(
     val previewSurfaceColor = MaterialTheme.colorScheme.surfaceContainerLow
     val primaryTextColor = MaterialTheme.colorScheme.onSurface
     val secondaryTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val browserAccentColor = MaterialTheme.colorScheme.primary
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -3418,7 +3413,7 @@ internal fun TabGridSheet(
                                 Icon(
                                     Icons.Default.Search,
                                     contentDescription = "Search tabs",
-                                    tint = if (showSearchField || searchQuery.isNotEmpty()) spaceAccentColor else secondaryTextColor,
+                                    tint = if (showSearchField || searchQuery.isNotEmpty()) browserAccentColor else secondaryTextColor,
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
@@ -3470,7 +3465,7 @@ internal fun TabGridSheet(
                                 Text(
                                     text = "Done",
                                     fontWeight = FontWeight.Medium,
-                                    color = spaceAccentColor,
+                                    color = browserAccentColor,
                                 )
                             }
                         }
@@ -3502,7 +3497,7 @@ internal fun TabGridSheet(
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                                 unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                focusedBorderColor = spaceAccentColor.copy(alpha = 0.6f),
+                                focusedBorderColor = browserAccentColor.copy(alpha = 0.6f),
                                 unfocusedBorderColor = cardBorder.copy(alpha = 0.6f),
                                 focusedTextColor = primaryTextColor,
                                 unfocusedTextColor = primaryTextColor,
@@ -3532,7 +3527,7 @@ internal fun TabGridSheet(
                                 },
                                 border = BorderStroke(
                                     1.dp,
-                                    if (isAllSelected) spaceAccentColor.copy(alpha = 0.55f) else cardBorder.copy(alpha = 0.6f),
+                                    if (isAllSelected) browserAccentColor.copy(alpha = 0.55f) else cardBorder.copy(alpha = 0.6f),
                                 ),
                             ) {
                                 Text(
@@ -3549,7 +3544,7 @@ internal fun TabGridSheet(
                                 val profileColor = try {
                                     Color(android.graphics.Color.parseColor(profile.accent))
                                 } catch (_: Exception) {
-                                    spaceAccentColor
+                                    browserAccentColor
                                 }
                                 val count = tabs.count { it.spaceId == profile.id }
                                 Surface(
@@ -3563,7 +3558,7 @@ internal fun TabGridSheet(
                                     },
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isSelected) profileColor.copy(alpha = 0.55f) else cardBorder.copy(alpha = 0.6f),
+                                        if (isSelected) browserAccentColor.copy(alpha = 0.55f) else cardBorder.copy(alpha = 0.6f),
                                     ),
                                 ) {
                                     Row(
@@ -3634,7 +3629,7 @@ internal fun TabGridSheet(
                                     Surface(
                                         onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
                                         shape = RoundedCornerShape(8.dp),
-                                        color = spaceAccentColor,
+                                        color = browserAccentColor,
                                         modifier = Modifier.heightIn(min = 48.dp),
                                     ) {
                                         Row(
@@ -3691,8 +3686,8 @@ internal fun TabGridSheet(
 
                                 val tabSpace = profiles.firstOrNull { it.id == tab.spaceId }
                                 val tabSpaceColor = tabSpace?.accent?.let {
-                                    try { Color(android.graphics.Color.parseColor(it)) } catch (_: Exception) { spaceAccentColor }
-                                } ?: spaceAccentColor
+                                    try { Color(android.graphics.Color.parseColor(it)) } catch (_: Exception) { browserAccentColor }
+                                } ?: browserAccentColor
 
                                 SwipeToDismissBox(
                                     state = dismissState,
@@ -3729,7 +3724,7 @@ internal fun TabGridSheet(
                                         },
                                         border = BorderStroke(
                                             width = 1.dp,
-                                            color = if (isActive) spaceAccentColor.copy(alpha = 0.72f) else cardBorder,
+                                            color = if (isActive) browserAccentColor else cardBorder,
                                         ),
                                         shadowElevation = 0.dp,
                                         modifier = Modifier
@@ -3830,7 +3825,7 @@ internal fun TabGridSheet(
                                                                     .fillMaxWidth()
                                                                     .padding(top = 5.dp)
                                                                     .height(2.dp),
-                                                                color = spaceAccentColor,
+                                                                color = browserAccentColor,
                                                             )
                                                         }
                                                     }
@@ -3881,7 +3876,7 @@ internal fun TabGridSheet(
                         onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
                         icon = { Icon(Icons.Default.Add, contentDescription = null) },
                         text = { Text("New tab") },
-                        containerColor = spaceAccentColor,
+                        containerColor = browserAccentColor,
                     )
                     IconButton(onClick = onOpenBrowserMenu) {
                         Icon(Icons.Default.MoreVert, contentDescription = "Browser menu")
@@ -3924,7 +3919,7 @@ internal fun TabGridSheet(
 private fun BrowserTabStrip(
     tabs: List<TabState>,
     activeTabId: String?,
-    spaceAccentColor: Color,
+    browserAccentColor: Color,
     onSelectTab: (String) -> Unit,
     onCloseTab: (String) -> Unit,
     onNewTab: () -> Unit,
@@ -4016,7 +4011,7 @@ private fun BrowserTabStrip(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(2.dp)
-                                .background(if (isActive) spaceAccentColor else Color.Transparent),
+                                .background(if (isActive) browserAccentColor else Color.Transparent),
                         )
                     }
                 }
