@@ -3,32 +3,32 @@
    ============================================================ */
 
 :root {
-  --bg:              #f5f6f7;
+  --bg:              #f4f4f4;
   --surface:         #ffffff;
-  --surface-2:       #f6f7f9;
-  --surface-3:       #edf0f4;
-  --border:          #dde1ea;
-  --border-light:    #eaecf2;
+  --surface-2:       #e8e8e8;
+  --surface-3:       #e0e0e0;
+  --border:          #c6c6c6;
+  --border-light:    #e0e0e0;
 
-  --text:            #111927;
-  --text-2:          #4b5a6a;
-  --text-3:          #687585;
+  --text:            #161616;
+  --text-2:          #525252;
+  --text-3:          #6f6f6f;
 
-  --accent:          #2463eb;
-  --accent-hover:    #1c54ce;
-  --accent-subtle:   #eaf0ff;
+  --accent:          #0f62fe;
+  --accent-hover:    #0353e9;
+  --accent-subtle:   #edf5ff;
 
-  --green:           #15803d;
-  --green-bg:        #f0faf4;
-  --green-border:    #bbf7d0;
+  --green:           #198038;
+  --green-bg:        #defbe6;
+  --green-border:    #a7f0ba;
 
-  --red:             #b91c1c;
-  --red-bg:          #fef2f2;
-  --red-border:      #fecaca;
+  --red:             #da1e28;
+  --red-bg:          #fff1f1;
+  --red-border:      #ffb3b8;
 
-  --amber:           #92400e;
-  --amber-bg:        #fffbeb;
-  --amber-border:    #fde68a;
+  --amber:           #8a3800;
+  --amber-bg:        #fcf4d6;
+  --amber-border:    #f1c21b;
 
   /* keep legacy names used by existing components */
   --color-bg:             var(--bg);
@@ -50,22 +50,22 @@
   --color-warning:        var(--amber);
   --color-warning-subtle: var(--amber-bg);
 
-  --color-sidebar:        #1a2233;
-  --color-sidebar-text:   #b4c0ce;
-  --color-sidebar-hover:  rgba(255 255 255 / 6%);
-  --color-sidebar-active: rgba(36 99 235 / 16%);
+  --color-sidebar:        #f4f4f4;
+  --color-sidebar-text:   #393939;
+  --color-sidebar-hover:  #e8e8e8;
+  --color-sidebar-active: #e0e0e0;
 
   --sidebar-width:  240px;
   --detail-width:   320px;
   --toolbar-height: 56px;
 
-  --radius:    8px;
-  --radius-sm: 6px;
-  --radius-xs: 4px;
+  --radius:    0;
+  --radius-sm: 0;
+  --radius-xs: 0;
 
   color: var(--text);
   background: var(--bg);
-  font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -885,4 +885,303 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   .content-area--split .detail-panel { display: none; }
   .download-card { flex-direction: column; }
   .download-actions { justify-content: flex-start; width: 100%; }
+}
+
+/* Carbon-inspired application theme */
+:root {
+  color-scheme: light;
+  --sidebar-width: 256px;
+  --toolbar-height: 64px;
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-brand {
+  min-height: 64px;
+  padding: 16px 20px;
+  border-bottom-color: var(--border);
+}
+
+.brand-name {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.nav-list {
+  padding: 16px 8px;
+}
+
+.nav-item {
+  min-height: 40px;
+  color: var(--color-sidebar-text);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.nav-item:hover {
+  color: var(--text);
+}
+
+.nav-item--active {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.nav-item--active::before {
+  width: 3px;
+  background: var(--accent);
+}
+
+.nav-count {
+  font-family: "IBM Plex Mono", Consolas, monospace;
+}
+
+.sidebar-footer-nav {
+  border-top-color: var(--border);
+}
+
+.snapshot-bar {
+  border-top-color: var(--border);
+}
+
+.snapshot-label,
+.snapshot-sep {
+  color: var(--text-3);
+}
+
+.snapshot-value {
+  color: var(--text-2);
+  font-family: "IBM Plex Mono", Consolas, monospace;
+}
+
+.toolbar {
+  padding-right: 24px;
+  padding-left: 24px;
+}
+
+.toolbar-count,
+.toolbar-version,
+.download-meta,
+.download-speed,
+.download-time {
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-input,
+.sort-select,
+.priority-select,
+.schedule-input,
+.field-input,
+.field-select,
+.settings-input {
+  border-radius: 0;
+  background-color: var(--surface);
+}
+
+.search-input:focus,
+.schedule-input:focus,
+.field-input:focus,
+.settings-input:focus {
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.button {
+  border-radius: 0;
+  transition: background-color 100ms, border-color 100ms, color 100ms;
+}
+
+.button-secondary {
+  color: var(--text);
+  border-color: transparent;
+  background: var(--surface-2);
+}
+
+.button-secondary:not(:disabled):hover {
+  background: #d1d1d1;
+}
+
+.button-danger {
+  color: var(--red);
+  border-color: transparent;
+  background: var(--surface-2);
+}
+
+.button-danger:not(:disabled):hover {
+  background: var(--red-bg);
+  border-color: var(--red-border);
+}
+
+.download-card {
+  border-radius: 0;
+}
+
+.download-card--checked {
+  background: var(--accent-subtle);
+  border-color: #a6c8ff;
+}
+
+.status {
+  border-radius: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+}
+
+.status-downloading,
+.status-preparing,
+.status-seeding {
+  color: #0043ce;
+  background: #d0e2ff;
+}
+
+.status-completed {
+  color: #0e6027;
+}
+
+.status-failed {
+  color: #a2191f;
+}
+
+.status-paused {
+  color: #8a3800;
+}
+
+.dialog {
+  border-radius: 0;
+  box-shadow: 0 12px 24px rgb(0 0 0 / 18%);
+}
+
+.dialog-header,
+.dialog-footer,
+.settings-section,
+.settings-notice,
+.helper-manager-item,
+.torrent-file-list,
+.secret-badge,
+.runtime-badge,
+.toast {
+  border-radius: 0;
+}
+
+.toast {
+  box-shadow: 0 4px 14px rgb(0 0 0 / 14%);
+}
+
+.bulk-bar {
+  background: var(--accent-subtle);
+  border-bottom-color: #a6c8ff;
+}
+
+.app-footer {
+  font-size: 12px;
+}
+
+.footer-hint kbd {
+  border-radius: 0;
+  font-family: "IBM Plex Mono", Consolas, monospace;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .toolbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: var(--toolbar-height);
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .toolbar-controls {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-layout {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand settings"
+      "nav nav";
+    width: 100%;
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-brand {
+    grid-area: brand;
+    min-height: 48px;
+    padding: 8px 12px;
+  }
+
+  .brand-name,
+  .nav-label,
+  .nav-count {
+    display: block;
+  }
+
+  .nav-list {
+    grid-area: nav;
+    display: flex;
+    overflow-x: auto;
+    padding: 4px 8px 8px;
+  }
+
+  .nav-list li {
+    flex: 0 0 auto;
+  }
+
+  .nav-item {
+    width: auto;
+    min-height: 36px;
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .nav-item--active::before {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    height: 3px;
+  }
+
+  .sidebar-footer-nav {
+    grid-area: settings;
+    border: 0;
+    padding: 4px 8px;
+  }
+
+  .snapshot-bar {
+    display: none;
+  }
+
+  .toolbar {
+    align-items: flex-start;
+    padding: 12px 16px;
+  }
+
+  .toolbar-controls {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .search-input {
+    flex: 1 1 160px;
+  }
+
+  .content-area--split .detail-panel {
+    display: none;
+  }
 }
