@@ -190,7 +190,7 @@ internal fun browserLoadingActionDescription(isLoading: Boolean): String =
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun BrowserScreen(
-    themeSeedColor: Long = 0xFF0F62FEL,
+    themeSeedColor: Long = 0xFF8ECAE6L,
     onThemeColorChange: (Long) -> Unit = {},
     homeRequest: Long = 0L,
     searchRequest: Long = 0L,
@@ -3045,16 +3045,16 @@ private fun ThemePickerDialog(
     onDismiss: () -> Unit,
 ) {
     val presets = listOf(
-        "Ocean" to 0xFF4F8EF7L,
-        "Violet" to 0xFF7C6AF2L,
-        "Emerald" to 0xFF3AAE7AL,
-        "Sunset" to 0xFFFF6B35L,
-        "Rose" to 0xFFE91E8CL,
-        "Teal" to 0xFF00BCD4L,
-        "Amber" to 0xFFFFC107L,
-        "Indigo" to 0xFF3F51B5L,
-        "Crimson" to 0xFFDC143CL,
-        "Sage" to 0xFF6B8E5AL,
+        "Ocean" to 0xFF2A6F8BL,
+        "Violet" to 0xFF766B96L,
+        "Emerald" to 0xFF4E8063L,
+        "Sunset" to 0xFFA66B4FL,
+        "Rose" to 0xFFA65F6DL,
+        "Teal" to 0xFF4D8182L,
+        "Amber" to 0xFF9A7A3FL,
+        "Indigo" to 0xFF596C9CL,
+        "Crimson" to 0xFFA34F54L,
+        "Sage" to 0xFF6D8061L,
     )
     var selectedSeed by remember { mutableLongStateOf(currentSeed) }
     var hue by remember {
@@ -3093,7 +3093,7 @@ private fun ThemePickerDialog(
                     value = hue,
                     onValueChange = { newHue ->
                         hue = newHue
-                        val hsv = floatArrayOf(newHue, 0.7f, 0.85f)
+                        val hsv = floatArrayOf(newHue, 0.36f, 0.78f)
                         val argb = android.graphics.Color.HSVToColor(hsv)
                         selectedSeed = (0xFF000000L or (argb.toLong() and 0xFFFFFFL))
                     },
