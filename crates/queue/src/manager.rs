@@ -347,11 +347,10 @@ impl QueueManager {
         Ok(())
     }
 
-    /// Requeues a failed or cancelled yt-dlp download under the same ID so
-    /// the engine can continue using its existing output workspace.
-    pub async fn retry_ytdlp(&self, id: DownloadId) -> Result<(), QueueError> {
-        self.request(|reply| Command::RetryYtDlp { id, reply })
-            .await?;
+    /// Requeues a failed or cancelled download under the same ID so its engine
+    /// can continue using persisted partial data and workspaces.
+    pub async fn retry_download(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::Retry { id, reply }).await?;
         Ok(())
     }
 
@@ -612,7 +611,7 @@ enum Command {
         id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
-    RetryYtDlp {
+    Retry {
         id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
@@ -1260,7 +1259,7 @@ where
                 let _ = reply.send(result);
             }
         }
-        Command::RetryYtDlp { id, reply } => {
+        Command::Retry { id, reply } => {
             let result = async {
                 if active.contains_key(&id) {
                     return Err(QueueError::InvalidStatus {
@@ -1273,15 +1272,18 @@ where
                     .get(id)
                     .await?
                     .ok_or(StateMachineError::NotFound(id))?;
-                if item.source().engine() != EngineKind::YtDlp
-                    || !matches!(
-                        item.status(),
-                        DownloadStatus::Failed | DownloadStatus::Cancelled
-                    )
-                {
+                if item.source().engine() == EngineKind::Aria2 {
+                    return Err(QueueError::Engine(
+                        DownloadEngineError::LegacyAria2Unavailable,
+                    ));
+                }
+                if !matches!(
+                    item.status(),
+                    DownloadStatus::Failed | DownloadStatus::Cancelled
+                ) {
                     return Err(QueueError::InvalidStatus {
                         id,
-                        action: "retry yt-dlp",
+                        action: "retry",
                         status: item.status(),
                     });
                 }
@@ -2322,13 +2324,25 @@ mod tests {
         ))
     }
 
-    fn ytdlp_item() -> Result<DownloadItem, Box<dyn std::error::Error>> {
+    fn item_for_engine(engine: EngineKind) -> Result<DownloadItem, Box<dyn std::error::Error>> {
+        let id = DownloadId::new();
+        let url = match engine {
+            EngineKind::Ftp => "ftp://example.test/video",
+            EngineKind::Ftps => "ftps://example.test/video",
+            EngineKind::Sftp => "sftp://example.test/video",
+            EngineKind::NativeTorrent => {
+                "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+            }
+            EngineKind::Hls => "https://example.test/video.m3u8",
+            EngineKind::Metalink => "https://example.test/video.meta4",
+            _ => "https://example.test/video",
+        };
         Ok(DownloadItem::new(
-            DownloadId::new(),
-            DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
+            id,
+            DownloadSource::new(url, engine)?,
             FileName::new("video.mp4")?,
             std::env::temp_dir()
-                .join(format!("fetchx-ytdlp-queue-{}", DownloadId::new()))
+                .join(format!("fetchx-retry-queue-{id}"))
                 .join("video.mp4"),
             Timestamp::from_unix_millis(1),
         ))
@@ -3784,38 +3798,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_ytdlp_requeues_same_item_and_preserves_partial_progress()
+    async fn retry_requeues_supported_engines_in_place_and_preserves_progress()
     -> Result<(), Box<dyn std::error::Error>> {
         let (repository, engine, _release) = setup_engine().await?;
-        let mut download = ytdlp_item()?;
-        let id = download.id();
-        let expected_progress =
-            fetchx_models::DownloadProgress::new(388_578_224, Some(575_522_542), None, None)?;
-        download.set_progress_at(expected_progress.clone(), Timestamp::from_unix_millis(2))?;
-        download.set_error_at(
-            Some(DownloadError::new(
-                DownloadErrorCode::Engine,
-                "The yt-dlp download could not be completed safely.",
-            )?),
-            Timestamp::from_unix_millis(3),
-        )?;
-        repository.create(&download).await?;
         let state_machine = DownloadStateMachine::new(repository.clone());
-        state_machine
-            .transition(id, DownloadStatus::Preparing)
-            .await?;
-        state_machine.transition(id, DownloadStatus::Failed).await?;
+        let engines = [
+            EngineKind::DirectHttp,
+            EngineKind::YtDlp,
+            EngineKind::Hls,
+            EngineKind::NativeTorrent,
+            EngineKind::Ftp,
+            EngineKind::Ftps,
+            EngineKind::Sftp,
+            EngineKind::Metalink,
+        ];
+        let expected_progress =
+            fetchx_models::DownloadProgress::new(1_000_000, Some(2_000_000), None, None)?;
+        let mut records = Vec::new();
+        for engine_kind in engines {
+            let mut download = item_for_engine(engine_kind)?;
+            let id = download.id();
+            download.set_progress_at(expected_progress.clone(), Timestamp::from_unix_millis(2))?;
+            download.set_error_at(
+                Some(DownloadError::new(
+                    DownloadErrorCode::Engine,
+                    "The download could not be completed.",
+                )?),
+                Timestamp::from_unix_millis(3),
+            )?;
+            repository.create(&download).await?;
+            state_machine
+                .transition(id, DownloadStatus::Preparing)
+                .await?;
+            state_machine.transition(id, DownloadStatus::Failed).await?;
+            records.push((id, engine_kind, download.destination().to_path_buf()));
+        }
 
         let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
         manager.pause_dispatch().await?;
-        manager.retry_ytdlp(id).await?;
+        for (id, _, _) in &records {
+            manager.retry_download(*id).await?;
+        }
 
-        let retried = repository.get(id).await?.ok_or("retry record missing")?;
-        assert_eq!(retried.status(), DownloadStatus::Queued);
-        assert_eq!(retried.id(), id);
-        assert_eq!(retried.progress(), &expected_progress);
-        assert!(retried.error().is_none());
-        assert_eq!(manager.snapshot().await?.queued, [id]);
+        for (id, engine_kind, destination) in &records {
+            let retried = repository.get(*id).await?.ok_or("retry record missing")?;
+            assert_eq!(retried.status(), DownloadStatus::Queued);
+            assert_eq!(retried.id(), *id);
+            assert_eq!(retried.source().engine(), *engine_kind);
+            assert_eq!(retried.destination(), destination);
+            assert_eq!(retried.progress(), &expected_progress);
+            assert!(retried.error().is_none());
+        }
+        let snapshot = manager.snapshot().await?;
+        assert_eq!(snapshot.queued.len(), records.len());
+        assert!(
+            records
+                .iter()
+                .all(|(id, _, _)| snapshot.queued.contains(id))
+        );
 
         manager.shutdown().await?;
         Ok(())

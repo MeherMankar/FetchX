@@ -1133,50 +1133,11 @@ impl DownloadService {
                 )));
             }
 
-            if engine == EngineKind::YtDlp {
-                inner
-                    .runtime
-                    .block_on(inner.core.queue().retry_ytdlp(old_id))
-                    .map_err(MobileApiError::from)?;
-                return Ok(old_id.to_string());
-            }
-
-            // 4. Remove old record.
             inner
                 .runtime
-                .block_on(inner.core.queue().remove_download(old_id))
+                .block_on(inner.core.queue().retry_download(old_id))
                 .map_err(MobileApiError::from)?;
-
-            // 5. Build a new item preserving source/filename/destination (or resolving collision if destination exists).
-            let created_at =
-                Timestamp::now().map_err(|e| MobileApiError::Runtime(e.to_string()))?;
-            let new_id = DownloadId::new();
-            let (destination, filename) = if item.destination().exists() {
-                let unique_dest = unique_destination_path(item.destination());
-                let unique_fname = unique_dest
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .and_then(|n| FileName::new(n).ok())
-                    .unwrap_or_else(|| item.filename().clone());
-                (unique_dest, unique_fname)
-            } else {
-                (item.destination().to_path_buf(), item.filename().clone())
-            };
-            let new_item = DownloadItem::new(
-                new_id,
-                item.source().clone(),
-                filename,
-                destination,
-                created_at,
-            );
-
-            // 6. Enqueue the new item.
-            inner
-                .runtime
-                .block_on(inner.core.queue().enqueue(new_item))
-                .map_err(MobileApiError::from)?;
-
-            Ok(new_id.to_string())
+            Ok(old_id.to_string())
         })
     }
 
@@ -2065,6 +2026,39 @@ mod tests {
         assert!(
             matches!(result, Err(MobileApiError::InvalidStateTransition(_))),
             "expected InvalidStateTransition, got {result:?}"
+        );
+        svc.shutdown();
+    }
+
+    #[test]
+    fn retry_reuses_the_existing_download_id() {
+        let (config, _dir) = make_config();
+        let svc = DownloadService::new(config, None).expect("service creation failed");
+        svc.pause_queue_dispatch()
+            .expect("pause_queue_dispatch failed");
+        let id = svc
+            .add_download(
+                "https://example.com/resumable.bin".to_string(),
+                "resumable.bin".to_string(),
+                std::env::temp_dir()
+                    .join("fetchx-android-retry-resumable.bin")
+                    .to_string_lossy()
+                    .into_owned(),
+                DownloadPriorityDto::Normal,
+            )
+            .expect("add_download failed");
+        svc.cancel_download(id.clone())
+            .expect("cancel_download failed");
+
+        assert_eq!(
+            svc.retry_download(id.clone())
+                .expect("retry_download failed"),
+            id
+        );
+        assert!(
+            svc.get_download(id)
+                .expect("get_download failed")
+                .is_some_and(|item| matches!(item.status, crate::DownloadStatusDto::Queued))
         );
         svc.shutdown();
     }

@@ -222,12 +222,12 @@ where
             ));
         }
 
-        // Create temp dir for staging.
+        // Keep this ID-scoped staging directory on interruption; DirectHTTP
+        // validates its saved URL and range validator before resuming a partial.
         let temp_dir = std::env::temp_dir().join(format!("fetchx-metalink-{id}"));
         if let Err(e) = fs::create_dir_all(&temp_dir).await {
             return Err(DownloadEngineError::Io(e));
         }
-        let preserve_verified_chunks = files.iter().any(|file| !file.chunk_checksums.is_empty());
 
         // Transition to Downloading.
         let mut tracked = if item.status() == DownloadStatus::Preparing {
@@ -244,15 +244,9 @@ where
         for mf in &files {
             // Cooperative check between files.
             if *control.cancellation.borrow_and_update() {
-                if !preserve_verified_chunks {
-                    let _ = fs::remove_dir_all(&temp_dir).await;
-                }
                 return Err(DownloadEngineError::Cancelled);
             }
             if *control.pause.borrow_and_update() {
-                if !preserve_verified_chunks {
-                    let _ = fs::remove_dir_all(&temp_dir).await;
-                }
                 return Err(DownloadEngineError::Paused);
             }
 
@@ -267,7 +261,6 @@ where
                 && let Some(parent) = final_path.parent()
                 && let Err(e) = fs::create_dir_all(parent).await
             {
-                let _ = fs::remove_dir_all(&temp_dir).await;
                 return Err(DownloadEngineError::Io(e));
             }
 
@@ -287,21 +280,12 @@ where
                     }
                 }
                 Err(DownloadEngineError::Cancelled) => {
-                    if !preserve_verified_chunks {
-                        let _ = fs::remove_dir_all(&temp_dir).await;
-                    }
                     return Err(DownloadEngineError::Cancelled);
                 }
                 Err(DownloadEngineError::Paused) => {
-                    if !preserve_verified_chunks {
-                        let _ = fs::remove_dir_all(&temp_dir).await;
-                    }
                     return Err(DownloadEngineError::Paused);
                 }
-                Err(e) => {
-                    let _ = fs::remove_dir_all(&temp_dir).await;
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
 
@@ -1767,7 +1751,7 @@ mod tests {
 
     use digest::Digest;
     use fetchx_models::{
-        DownloadId, DownloadItem, DownloadSource, EngineKind, FileName, Timestamp,
+        DownloadId, DownloadItem, DownloadSource, DownloadStatus, EngineKind, FileName, Timestamp,
     };
     use fetchx_storage::{Database, DownloadRepository};
     use tokio::sync::watch;
@@ -2704,6 +2688,86 @@ mod tests {
             requests[4]
                 .to_ascii_lowercase()
                 .contains("range: bytes=5-9")
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn metalink_retry_resumes_unchecksummed_http_partial() -> Result<(), Box<dyn Error>> {
+        use crate::tests::start_cancel_resume_server;
+
+        let body = vec![0x5a; 1024 * 1024];
+        let (url, notified, continue_server, server) =
+            start_cancel_resume_server(body.clone()).await?;
+        let db = Database::connect("sqlite::memory:").await?;
+        let (engine, _) = make_engine(&db).await;
+        let dir = tempfile::tempdir()?;
+        let manifest_path = dir.path().join("resume.meta4");
+        std::fs::write(
+            &manifest_path,
+            format!(
+                r#"<?xml version="1.0"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="resume.bin">
+    <size>{}</size>
+    <url priority="1">{url}</url>
+  </file>
+</metalink>"#,
+                body.len()
+            ),
+        )?;
+        let destination = dir.path().join("resume.bin");
+        let item = make_metalink_item(&manifest_path, &destination)?;
+        let id = item.id();
+        db.downloads().create(&item).await?;
+        let temp_dir = std::env::temp_dir().join(format!("fetchx-metalink-{id}"));
+        let staging_path = temp_dir.join(format!("{id}-resume.bin"));
+        let partial_path = PathBuf::from(format!("{}.part", staging_path.display()));
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let download = DownloadEngine::download(&engine, id, cancel_rx);
+        tokio::pin!(download);
+        tokio::select! {
+            result = &mut download => panic!("download completed before cancellation: {result:?}"),
+            started = notified => {
+                started?;
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    loop {
+                        if tokio::fs::metadata(&partial_path)
+                            .await
+                            .is_ok_and(|metadata| metadata.len() > 0)
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    }
+                })
+                .await?;
+                cancel_tx.send(true)?;
+            }
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), download)
+            .await
+            .map_err(|error| format!("cancellation timed out: {error}"))?;
+        assert!(matches!(result, Err(DownloadEngineError::Cancelled)));
+
+        let partial_size = tokio::fs::metadata(&partial_path).await?.len();
+        assert!(partial_size > 0 && partial_size < body.len() as u64);
+
+        continue_server
+            .send(())
+            .map_err(|_| "resume test server stopped before retry")?;
+        let (_cancel_tx, cancellation) = watch::channel(false);
+        let completed = DownloadEngine::download(&engine, id, cancellation).await?;
+        let requests = server.await?;
+
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(destination).await?, body);
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains(&format!("range: bytes={partial_size}-"))
         );
         Ok(())
     }

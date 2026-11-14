@@ -332,7 +332,7 @@ async fn start_disconnect_then_success_server(
     Ok((format!("http://{address}/file"), task))
 }
 
-async fn start_cancel_resume_server(
+pub(crate) async fn start_cancel_resume_server(
     body: Vec<u8>,
 ) -> Result<
     (

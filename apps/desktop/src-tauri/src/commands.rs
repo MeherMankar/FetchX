@@ -417,8 +417,7 @@ impl AppState {
             .map_err(IpcError::from_queue)
     }
 
-    /// Retry failed yt-dlp downloads in place to preserve their resumable
-    /// workspace. Other engine types retain their existing fresh-attempt path.
+    /// Retry in place so the original engine can reuse its persisted partial data.
     async fn retry(&self, id: DownloadId) -> Result<DownloadDto, IpcError> {
         let item = self
             .repository
@@ -440,76 +439,11 @@ impl AppState {
             return Err(IpcError::engine_unavailable(original_engine));
         }
 
-        if original_engine == EngineKind::YtDlp {
-            self.queue
-                .retry_ytdlp(id)
-                .await
-                .map_err(IpcError::from_queue)?;
-            return self.get(id).await;
-        }
-
-        // Remove the old record (preserves partial files).
         self.queue
-            .remove_download(id)
+            .retry_download(id)
             .await
             .map_err(IpcError::from_queue)?;
-
-        let source = item.source();
-        let url = source.url();
-
-        // Dispatch based on source type, mirroring the `add` command logic.
-        if url.starts_with("magnet:") {
-            // Re-enqueue as magnet via CoreServices.
-            let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
-            let new_id = core_services
-                .enqueue_magnet_with_engine(
-                    url,
-                    original_engine,
-                    fetchx_models::DownloadPriority::Normal,
-                    None,
-                )
-                .await
-                .map_err(|_| IpcError::internal())?;
-            return self.get(new_id).await;
-        }
-
-        if source.is_torrent_file() {
-            // Re-enqueue as torrent file via CoreServices.
-            let torrent_path = source
-                .torrent_file_path()
-                .ok_or_else(IpcError::invalid_request)?;
-            let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
-            let new_id = core_services
-                .enqueue_torrent_file_with_selection_and_engine(
-                    torrent_path,
-                    original_engine,
-                    fetchx_models::DownloadPriority::Normal,
-                    None,
-                    None,
-                )
-                .await
-                .map_err(|_| IpcError::internal())?;
-            return self.get(new_id).await;
-        }
-
-        // HTTP/HTTPS source — validate and re-enqueue as before.
-        let canonical_url =
-            validate_http_source_url(url).map_err(|_| IpcError::invalid_request())?;
-        let parsed_url = Url::parse(&canonical_url).map_err(|_| IpcError::invalid_request())?;
-        let filename = filename_for_url(&parsed_url);
-        let filename = FileName::new(filename).map_err(|_| IpcError::invalid_request())?;
-        let destination = self.downloads_dir.join(filename.as_str());
-        let new_id = DownloadId::new();
-        let source = DownloadSource::new(canonical_url, original_engine)
-            .map_err(|_| IpcError::invalid_request())?;
-        let created_at = Timestamp::now().map_err(|_| IpcError::internal())?;
-        let new_item = DownloadItem::new(new_id, source, filename, destination, created_at);
-
-        self.queue
-            .enqueue(new_item)
-            .await
-            .map_err(IpcError::from_queue)?;
-        self.get(new_id).await
+        self.get(id).await
     }
 
     async fn snapshot(&self) -> Result<QueueSnapshotDto, IpcError> {
@@ -2417,7 +2351,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_failed_creates_fresh_download() -> Result<(), Box<dyn Error>> {
+    async fn retry_failed_reuses_existing_download() -> Result<(), Box<dyn Error>> {
         let state = test_state().await?;
         let download = state
             .add(AddDownloadRequest {
@@ -2433,7 +2367,7 @@ mod tests {
         let cancelled = state.cancel(id).await?;
         assert_eq!(cancelled.status, DownloadStatus::Cancelled);
 
-        // Retry should create a new download.
+        // Retry should retain the record so the engine can reuse partial data.
         let retried = state.retry(id).await?;
         assert!(
             matches!(
@@ -2443,10 +2377,8 @@ mod tests {
             "unexpected retry status: {:?}",
             retried.status
         );
-        assert_ne!(retried.id, download.id, "retry must produce a new ID");
-
-        // Original record must be gone.
-        assert!(state.repository.get(id).await?.is_none());
+        assert_eq!(retried.id, download.id, "retry must retain the existing ID");
+        assert!(state.repository.get(id).await?.is_some());
 
         state.scheduler.shutdown().await?;
         Ok(())
@@ -2623,17 +2555,14 @@ mod tests {
         let cancelled = state.cancel(id).await?;
         assert_eq!(cancelled.status, DownloadStatus::Cancelled);
 
-        // Retry must produce a new download with the same engine.
+        // Retry must preserve the engine and existing download ID.
         let retried = state.retry(id).await?;
         assert_eq!(
             retried.engine,
             fetchx_models::EngineKind::DirectHttp,
             "retry must preserve DirectHttp engine assignment"
         );
-        assert_ne!(
-            retried.id, download.id,
-            "retry must create a new download ID"
-        );
+        assert_eq!(retried.id, download.id);
 
         state.scheduler.shutdown().await?;
         Ok(())
