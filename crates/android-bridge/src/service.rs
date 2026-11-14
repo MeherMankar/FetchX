@@ -1555,6 +1555,29 @@ mod tests {
         fn report_failure(&self, _diagnostic_code: String) {}
     }
 
+    struct FormatDiscoveryRuntime;
+
+    impl YtDlpRuntime for FormatDiscoveryRuntime {
+        fn validate_version(&self) -> String {
+            "fixture-version".to_owned()
+        }
+
+        fn run(
+            &self,
+            _arguments: Vec<String>,
+            _progress_path: String,
+            _cancel_path: String,
+        ) -> String {
+            String::new()
+        }
+
+        fn discover_formats(&self, _url: String) -> String {
+            r#"{"title":"Fixture video","extractor_key":"generic","formats":[{"format_id":"137","ext":"mp4","height":1080,"vcodec":"avc1.640028","acodec":"none","filesize":1234}]}"#.to_owned()
+        }
+
+        fn report_failure(&self, _diagnostic_code: String) {}
+    }
+
     #[tokio::test]
     async fn android_version_validation_honors_timeout() {
         let directory = tempdir().expect("tempdir");
@@ -1570,6 +1593,55 @@ mod tests {
 
         assert!(matches!(result, Err(YtDlpError::VersionTimeout)));
         assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn discovered_quality_is_available_and_persisted_on_the_download() {
+        use fetchx_storage::DownloadRepository as _;
+
+        let (config, directory) = make_config();
+        let svc = DownloadService::new(config, Some(Box::new(FormatDiscoveryRuntime)))
+            .expect("service creation failed");
+        svc.pause_queue_dispatch().expect("pause queue");
+
+        let url = "https://example.test/watch?id=fixture";
+        let formats = svc
+            .discover_media_formats(url.to_owned())
+            .expect("format discovery should succeed");
+        let selected = formats
+            .iter()
+            .find(|format| format.label.contains("1080p"))
+            .expect("1080p quality should be returned");
+        assert_eq!(selected.format_id, "137+bestaudio/137");
+        assert_eq!(selected.extension.as_deref(), Some("mp4"));
+
+        let destination = directory.path().join("selected.mp4");
+        let id = svc
+            .add_media_download(
+                url.to_owned(),
+                "selected.mp4".to_owned(),
+                destination.to_string_lossy().into_owned(),
+                DownloadPriorityDto::Normal,
+                Some(selected.format_id.clone()),
+                None,
+            )
+            .expect("selected quality should be queued");
+        let id = fetchx_models::DownloadId::parse(&id).expect("valid download ID");
+        let persisted_format = svc
+            .with_inner(|inner| {
+                let item = inner
+                    .runtime
+                    .block_on(inner.core.repository.get(id))
+                    .map_err(|error| MobileApiError::Storage(error.to_string()))?
+                    .ok_or_else(|| {
+                        MobileApiError::Runtime("queued download was not persisted".to_owned())
+                    })?;
+                Ok(item.source().yt_dlp_format().map(str::to_owned))
+            })
+            .expect("persisted download lookup should succeed");
+
+        assert_eq!(persisted_format.as_deref(), Some("137+bestaudio/137"));
+        svc.shutdown();
     }
 
     #[test]
