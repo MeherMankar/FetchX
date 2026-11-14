@@ -419,7 +419,7 @@ fun BrowserScreen(
                                 leadingIcon = {
                                     Surface(
                                         onClick = { viewModel.openSearchEngineSelector() },
-                                        shape = RoundedCornerShape(0.dp),
+                                        shape = RoundedCornerShape(8.dp),
                                         color = MaterialTheme.colorScheme.surfaceVariant,
                                         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
                                         modifier = Modifier.padding(start = 8.dp),
@@ -470,7 +470,7 @@ fun BrowserScreen(
                                         }
                                     }
                                 },
-                                shape = RoundedCornerShape(0.dp),
+                                shape = RoundedCornerShape(8.dp),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
@@ -567,7 +567,7 @@ fun BrowserScreen(
                                         url.takeUnless { it == "about:blank" }.orEmpty(),
                                     )
                                 },
-                                shape = RoundedCornerShape(0.dp),
+                                shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                 modifier = Modifier
@@ -606,7 +606,7 @@ fun BrowserScreen(
                                         if (uiState.activeTabBlockedRequests > 0) {
                                             Spacer(Modifier.width(6.dp))
                                             Surface(
-                                                shape = RoundedCornerShape(0.dp),
+                                                shape = RoundedCornerShape(8.dp),
                                                 color = MaterialTheme.colorScheme.primaryContainer,
                                                 modifier = Modifier.padding(vertical = 2.dp),
                                             ) {
@@ -696,7 +696,7 @@ fun BrowserScreen(
                 ) {
                     Surface(
                         tonalElevation = 6.dp,
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                     ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -1140,7 +1140,7 @@ fun BrowserScreen(
 
                 Surface(
                     tonalElevation = 6.dp,
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(8.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -1435,7 +1435,7 @@ fun BrowserScreen(
                     )
                 }
                 Surface(
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(8.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerHighest,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -1726,7 +1726,7 @@ private fun FetchxRemotePopupDialog(
             modifier = Modifier
                 .fillMaxWidth(0.94f)
                 .height(440.dp),
-            shape = RoundedCornerShape(0.dp),
+            shape = RoundedCornerShape(8.dp),
             tonalElevation = 8.dp,
         ) {
             Column {
@@ -1791,7 +1791,7 @@ internal fun EssentialsPage(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(8.dp),
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(48.dp),
                     ) {
@@ -1841,7 +1841,7 @@ internal fun EssentialsPage(
             Spacer(Modifier.height(24.dp))
             Surface(
                 onClick = onSearch,
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
@@ -1876,7 +1876,7 @@ internal fun EssentialsPage(
             Spacer(Modifier.height(20.dp))
             Surface(
                 onClick = onOpenDownloads,
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
@@ -2056,7 +2056,7 @@ private fun EssentialsLibraryAction(
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(0.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.heightIn(min = 56.dp),
@@ -2117,7 +2117,7 @@ private fun BrowserDownloadStatus(
 
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(0.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 4.dp,
         modifier = modifier.fillMaxWidth(),
@@ -2241,7 +2241,7 @@ internal fun BrowserBottomBar(
                     },
             ) {
                 Surface(
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.onSurface),
                     color = Color.Transparent,
                     modifier = Modifier.size(22.dp),
@@ -2341,7 +2341,7 @@ private fun BrowserMenuSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = null,
-        shape = RoundedCornerShape(0.dp),
+        shape = RoundedCornerShape(8.dp),
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f),
@@ -2362,7 +2362,7 @@ private fun BrowserMenuSheet(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Surface(
-                        shape = RoundedCornerShape(0.dp),
+                        shape = RoundedCornerShape(8.dp),
                         color = spaceAccentColor,
                         modifier = Modifier.size(24.dp),
                     ) {}
@@ -2390,7 +2390,7 @@ private fun BrowserMenuSheet(
             // Quick Actions Grid (labeled icon buttons)
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2419,7 +2419,7 @@ private fun BrowserMenuSheet(
                         ),
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(0.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (activeTab?.canGoBack == true) MaterialTheme.colorScheme.surfaceVariant
                                    else MaterialTheme.colorScheme.surface,
                             modifier = Modifier.size(48.dp),
@@ -2447,7 +2447,7 @@ private fun BrowserMenuSheet(
                         ),
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(0.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (activeTab?.canGoForward == true) MaterialTheme.colorScheme.surfaceVariant
                                    else MaterialTheme.colorScheme.surface,
                             modifier = Modifier.size(48.dp),
@@ -2475,7 +2475,7 @@ private fun BrowserMenuSheet(
                         modifier = Modifier.clickable(onClick = onReload),
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(0.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.size(48.dp),
                         ) {
@@ -2502,7 +2502,7 @@ private fun BrowserMenuSheet(
                         ),
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(0.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (isBookmarked) MaterialTheme.colorScheme.primaryContainer
                                    else if (canBookmark) MaterialTheme.colorScheme.surfaceVariant
                                    else MaterialTheme.colorScheme.surface,
@@ -2535,7 +2535,7 @@ private fun BrowserMenuSheet(
                         ),
                     ) {
                         Surface(
-                            shape = RoundedCornerShape(0.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (canDownload) MaterialTheme.colorScheme.primaryContainer
                                    else MaterialTheme.colorScheme.surface,
                             border = if (canDownload) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
@@ -2780,7 +2780,7 @@ internal fun FindInPagePanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(0.dp),
+            shape = RoundedCornerShape(8.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = MaterialTheme.colorScheme.onSurface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -2930,7 +2930,7 @@ private fun BrowserMenuItemRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = resolvedIconTint.copy(alpha = 0.12f),
                 modifier = Modifier.size(36.dp),
             ) {
@@ -2964,7 +2964,7 @@ private fun BrowserMenuItemRow(
             }
             if (!badgeText.isNullOrBlank()) {
                 Surface(
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(8.dp),
                     color = badgeColor ?: MaterialTheme.colorScheme.surfaceVariant,
                 ) {
                     Text(
@@ -3151,7 +3151,7 @@ fun SearchEngineIcon(
     size: androidx.compose.ui.unit.Dp = 20.dp,
 ) {
     Surface(
-        shape = RoundedCornerShape(0.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.size(size),
@@ -3498,7 +3498,7 @@ internal fun TabGridSheet(
                                     Icon(Icons.Default.Close, contentDescription = "Close search", tint = secondaryTextColor)
                                 }
                             },
-                            shape = RoundedCornerShape(0.dp),
+                            shape = RoundedCornerShape(8.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                                 unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -3633,7 +3633,7 @@ internal fun TabGridSheet(
                                 if (searchQuery.isBlank()) {
                                     Surface(
                                         onClick = { onNewTab(filterSpaceId ?: selectedProfileId) },
-                                        shape = RoundedCornerShape(0.dp),
+                                        shape = RoundedCornerShape(8.dp),
                                         color = spaceAccentColor,
                                         modifier = Modifier.heightIn(min = 48.dp),
                                     ) {
@@ -3699,7 +3699,7 @@ internal fun TabGridSheet(
                                     backgroundContent = {
                                         Surface(
                                             color = MaterialTheme.colorScheme.errorContainer,
-                                            shape = RoundedCornerShape(0.dp),
+                                            shape = RoundedCornerShape(8.dp),
                                             modifier = Modifier.fillMaxSize(),
                                         ) {
                                             Box(
@@ -3721,7 +3721,7 @@ internal fun TabGridSheet(
                                     // Tab card
                                     Surface(
                                         onClick = { onSelect(tab.id) },
-                                        shape = RoundedCornerShape(0.dp),
+                                        shape = RoundedCornerShape(8.dp),
                                         color = if (isActive) {
                                             MaterialTheme.colorScheme.surfaceContainerHigh
                                         } else {
@@ -3962,7 +3962,7 @@ private fun BrowserTabStrip(
 
                 Surface(
                     onClick = { onSelectTab(tab.id) },
-                    shape = RoundedCornerShape(0.dp),
+                    shape = RoundedCornerShape(8.dp),
                     color = if (isActive) {
                         MaterialTheme.colorScheme.surfaceContainerHigh
                     } else MaterialTheme.colorScheme.surface,
@@ -4024,7 +4024,7 @@ private fun BrowserTabStrip(
 
             Surface(
                 onClick = onNewTab,
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.size(48.dp),
@@ -4802,7 +4802,7 @@ private fun VideoDownloadBanner(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        shape = RoundedCornerShape(0.dp),
+        shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.secondaryContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.fillMaxWidth(),
@@ -4813,7 +4813,7 @@ private fun VideoDownloadBanner(
         ) {
             // Video icon in accent circle
             Surface(
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                 modifier = Modifier.size(40.dp),
             ) {
@@ -4854,7 +4854,7 @@ private fun VideoDownloadBanner(
             // Download pill button
             Surface(
                 onClick = onDownload,
-                shape = RoundedCornerShape(0.dp),
+                shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.primary,
             ) {
                 Text(

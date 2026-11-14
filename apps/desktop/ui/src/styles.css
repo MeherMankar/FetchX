@@ -3,32 +3,32 @@
    ============================================================ */
 
 :root {
-  --bg:              #f4f4f4;
-  --surface:         #ffffff;
-  --surface-2:       #e8e8e8;
-  --surface-3:       #e0e0e0;
-  --border:          #c6c6c6;
-  --border-light:    #e0e0e0;
+  --bg:              #111517;
+  --surface:         #191f21;
+  --surface-2:       #222a2c;
+  --surface-3:       #2d3638;
+  --border:          #394447;
+  --border-light:    #303a3d;
 
-  --text:            #161616;
-  --text-2:          #525252;
-  --text-3:          #6f6f6f;
+  --text:            #edf2f2;
+  --text-2:          #bcc8ca;
+  --text-3:          #89979a;
 
-  --accent:          #0f62fe;
-  --accent-hover:    #0353e9;
-  --accent-subtle:   #edf5ff;
+  --accent:          #55c7f2;
+  --accent-hover:    #39b2df;
+  --accent-subtle:   #203941;
 
-  --green:           #198038;
-  --green-bg:        #defbe6;
-  --green-border:    #a7f0ba;
+  --green:           #69c991;
+  --green-bg:        #1d3328;
+  --green-border:    #385844;
 
-  --red:             #da1e28;
-  --red-bg:          #fff1f1;
-  --red-border:      #ffb3b8;
+  --red:             #f08a8f;
+  --red-bg:          #3b2729;
+  --red-border:      #654044;
 
-  --amber:           #8a3800;
-  --amber-bg:        #fcf4d6;
-  --amber-border:    #f1c21b;
+  --amber:           #e7bd6e;
+  --amber-bg:        #392f20;
+  --amber-border:    #655333;
 
   /* keep legacy names used by existing components */
   --color-bg:             var(--bg);
@@ -50,18 +50,18 @@
   --color-warning:        var(--amber);
   --color-warning-subtle: var(--amber-bg);
 
-  --color-sidebar:        #f4f4f4;
-  --color-sidebar-text:   #393939;
-  --color-sidebar-hover:  #e8e8e8;
-  --color-sidebar-active: #e0e0e0;
+  --color-sidebar:        #1d3538;
+  --color-sidebar-text:   #c4d2d3;
+  --color-sidebar-hover:  #284549;
+  --color-sidebar-active: #2d5054;
 
   --sidebar-width:  240px;
   --detail-width:   320px;
   --toolbar-height: 56px;
 
-  --radius:    0;
-  --radius-sm: 0;
-  --radius-xs: 0;
+  --radius:    8px;
+  --radius-sm: 6px;
+  --radius-xs: 4px;
 
   color: var(--text);
   background: var(--bg);
@@ -85,8 +85,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 /* ── Scrollbar ──────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(0 0 0 / 14%); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(0 0 0 / 22%); }
+::-webkit-scrollbar-thumb { background: rgba(255 255 255 / 18%); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255 255 255 / 28%); }
 
 /* ── App shell ──────────────────────────────────────────── */
 .app-layout { display: flex; height: 100vh; overflow: hidden; }
@@ -148,7 +148,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   position: relative;
 }
 
-.nav-item:hover { background: var(--color-sidebar-hover); color: #dce5f0; }
+.nav-item:hover { background: var(--color-sidebar-hover); color: var(--text); }
 
 .nav-item--active {
   background: var(--color-sidebar-active);
@@ -160,7 +160,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   position: absolute;
   left: 0; top: 0; bottom: 0;
   width: 2px;
-  background: #4d8aff;
+  background: var(--accent);
 }
 
 .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -245,7 +245,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .search-input::placeholder { color: var(--text-3); }
-.search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36 99 235 / 10%); background: var(--surface); }
+.search-input:focus { border-color: var(--accent); background: var(--surface); }
 
 .sort-select {
   height: 32px;
@@ -276,6 +276,12 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   position: relative;
 }
 
+.download-pane:has(.empty-state) {
+  margin: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
 /* ============================================================
    Error banner
    ============================================================ */
@@ -293,7 +299,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   cursor: pointer; flex-shrink: 0;
 }
 
-.icon-button:hover { background: rgba(0 0 0 / 7%); }
+.icon-button:hover { background: rgba(255 255 255 / 8%); }
 
 /* ============================================================
    Buttons
@@ -313,7 +319,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .button-primary {
-  color: #fff;
+  color: #102124;
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -381,14 +387,14 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .download-card[data-status="recovering"]::before  { background: var(--accent); }
 .download-card[data-status="completed"]::before   { background: var(--green); }
 .download-card[data-status="failed"]::before      { background: var(--red); }
-.download-card[data-status="paused"]::before      { background: #b7791f; }
+.download-card[data-status="paused"]::before      { background: var(--amber); }
 .download-card[data-status="cancelled"]::before   { background: var(--text-3); }
 .download-card[data-status="seeding"]::before     { background: var(--accent); }
 
 .download-card:hover { border-color: var(--border); }
 .download-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .download-card--selected { border-color: var(--accent); outline: 1px solid var(--accent); }
-.download-card--checked  { background: #f4f7ff; border-color: #c5d8ff; }
+.download-card--checked  { background: var(--accent-subtle); border-color: #426f7d; }
 
 .download-main { flex: 1; min-width: 0; }
 
@@ -496,7 +502,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   font-size: 12px; color: var(--text); background: var(--surface); outline: none;
 }
 
-.schedule-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(36 99 235 / 10%); }
+.schedule-input:focus { border-color: var(--accent); }
 
 /* ============================================================
    Empty state
@@ -621,7 +627,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   transition: border-color 100ms, box-shadow 100ms;
 }
 
-.field-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36 99 235 / 10%); }
+.field-input:focus { border-color: var(--accent); }
 
 .aria2-native-restart { margin-top: 12px; }
 .aria2-native-restart form { display: grid; gap: 8px; }
@@ -693,7 +699,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .bulk-bar {
   display: flex; align-items: center; gap: 12px;
   padding: 8px 20px; background: var(--accent-subtle);
-  border-bottom: 1px solid #c5d8ff; flex-shrink: 0;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
 
 .bulk-count  { font-size: 13px; font-weight: 500; color: var(--accent); white-space: nowrap; }
@@ -793,7 +799,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   transition: border-color 100ms, box-shadow 100ms;
 }
 
-.settings-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(36 99 235 / 10%); }
+.settings-input:focus { border-color: var(--accent); }
 .settings-input-sm    { width: 100px; }
 .settings-hint        { font-size: 11px; color: var(--text-3); line-height: 1.4; }
 .weekday-picker { flex-direction: row; flex-wrap: wrap; gap: 8px; }
@@ -887,9 +893,9 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   .download-actions { justify-content: flex-start; width: 100%; }
 }
 
-/* Carbon-inspired application theme */
+/* Motrix and FDM-inspired download surfaces */
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   --sidebar-width: 256px;
   --toolbar-height: 64px;
 }
@@ -977,7 +983,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .field-input,
 .field-select,
 .settings-input {
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   background-color: var(--surface);
 }
 
@@ -990,7 +996,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .button {
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   transition: background-color 100ms, border-color 100ms, color 100ms;
 }
 
@@ -1001,7 +1007,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .button-secondary:not(:disabled):hover {
-  background: #d1d1d1;
+  background: var(--surface-3);
 }
 
 .button-danger {
@@ -1016,41 +1022,41 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .download-card {
-  border-radius: 0;
+  border-radius: 8px;
 }
 
 .download-card--checked {
   background: var(--accent-subtle);
-  border-color: #a6c8ff;
+  border-color: #426f7d;
 }
 
 .status {
-  border-radius: 0;
+  border-radius: var(--radius-xs);
   font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
 }
 
 .status-downloading,
 .status-preparing,
 .status-seeding {
-  color: #0043ce;
-  background: #d0e2ff;
+  color: #8bdcf8;
+  background: #203941;
 }
 
 .status-completed {
-  color: #0e6027;
+  color: #86dba6;
 }
 
 .status-failed {
-  color: #a2191f;
+  color: #ff9a9e;
 }
 
 .status-paused {
-  color: #8a3800;
+  color: #f0cb83;
 }
 
 .dialog {
-  border-radius: 0;
-  box-shadow: 0 12px 24px rgb(0 0 0 / 18%);
+  border-radius: 10px;
+  box-shadow: 0 12px 24px rgb(0 0 0 / 36%);
 }
 
 .dialog-header,
@@ -1062,7 +1068,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .secret-badge,
 .runtime-badge,
 .toast {
-  border-radius: 0;
+  border-radius: 8px;
 }
 
 .toast {
@@ -1071,7 +1077,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .bulk-bar {
   background: var(--accent-subtle);
-  border-bottom-color: #a6c8ff;
+  border-bottom-color: #426f7d;
 }
 
 .app-footer {
@@ -1079,7 +1085,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .footer-hint kbd {
-  border-radius: 0;
+  border-radius: var(--radius-xs);
   font-family: "IBM Plex Mono", Consolas, monospace;
 }
 

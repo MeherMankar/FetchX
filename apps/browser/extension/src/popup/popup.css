@@ -3,29 +3,30 @@
    ============================================================= */
 
 :root {
-  --bg:          #f4f4f4;
-  --bg-card:     #ffffff;
-  --bg-raised:   #e8e8e8;
-  --bg-input:    #ffffff;
-  --border:      #e0e0e0;
-  --border-mid:  #c6c6c6;
-  --border-focus:#0f62fe;
-  --accent:      #0f62fe;
-  --accent-hover:#0353e9;
-  --accent-dim:  #edf5ff;
-  --green:       #198038;
-  --green-bg:    #defbe6;
-  --green-border:#a7f0ba;
-  --red:         #da1e28;
-  --red-bg:      #fff1f1;
-  --red-border:  #ffb3b8;
-  --amber:       #8a3800;
-  --amber-bg:    #fcf4d6;
-  --amber-border:#f1c21b;
-  --text:        #161616;
-  --text-2:      #525252;
-  --text-3:      #6f6f6f;
-  --r-xs: 0; --r-sm: 0; --r: 0; --r-lg: 0; --r-full: 10px;
+  color-scheme: dark;
+  --bg:          #111517;
+  --bg-card:     #191f21;
+  --bg-raised:   #222a2c;
+  --bg-input:    #171d1f;
+  --border:      #303a3d;
+  --border-mid:  #394447;
+  --border-focus:#55c7f2;
+  --accent:      #55c7f2;
+  --accent-hover:#39b2df;
+  --accent-dim:  #203941;
+  --green:       #78d49b;
+  --green-bg:    #1d3328;
+  --green-border:#385844;
+  --red:         #ff9a9e;
+  --red-bg:      #3b2729;
+  --red-border:  #654044;
+  --amber:       #f0cb83;
+  --amber-bg:    #392f20;
+  --amber-border:#655333;
+  --text:        #edf2f2;
+  --text-2:      #bcc8ca;
+  --text-3:      #89979a;
+  --r-xs: 4px; --r-sm: 6px; --r: 8px; --r-lg: 12px; --r-full: 10px;
   --t: 120ms ease;
 }
 
@@ -33,7 +34,7 @@
 button,input,select  { font: inherit; }
 ::-webkit-scrollbar  { width: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #c6c6c6; }
+::-webkit-scrollbar-thumb { background: #394447; }
 
 body {
   font-family: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
@@ -154,7 +155,7 @@ body {
 .btn-primary {
   display: flex; align-items: center; justify-content: center;
   width: 100%; height: 40px;
-  background: var(--accent); color: #fff; border: none; border-radius: var(--r);
+  background: var(--accent); color: #102124; border: none; border-radius: var(--r);
   font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background var(--t);
 }

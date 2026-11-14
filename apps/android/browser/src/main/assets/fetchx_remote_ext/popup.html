@@ -7,42 +7,65 @@
     <style>
       :root {
         color-scheme: light;
+        --bg: #f4f4f4;
+        --surface: #ffffff;
+        --surface-raised: #e8e8e8;
+        --border: #c6c6c6;
+        --text: #161616;
+        --text-secondary: #525252;
+        --accent: #0f62fe;
+        --accent-hover: #0353e9;
+        --accent-ink: #ffffff;
         font-family: "IBM Plex Sans", Roboto, "Segoe UI", sans-serif;
-        color: #161616;
-        background: #f4f4f4;
+        color: var(--text);
+        background: var(--bg);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: #111517;
+          --surface: #191f21;
+          --surface-raised: #222a2c;
+          --border: #394447;
+          --text: #edf2f2;
+          --text-secondary: #bcc8ca;
+          --accent: #55c7f2;
+          --accent-hover: #39b2df;
+          --accent-ink: #102124;
+        }
       }
 
       * { box-sizing: border-box; }
-      body { margin: 0; min-width: 280px; background: #f4f4f4; }
+      body { margin: 0; min-width: 280px; background: var(--bg); }
       main { display: grid; gap: 12px; padding: 20px; }
       h1 { font-size: 20px; font-weight: 500; }
-      p { color: #525252; font-size: 14px; }
+      p { color: var(--text-secondary); font-size: 14px; }
       button, input { font: inherit; }
       button {
         min-height: 40px;
         padding: 0 16px;
         border: 0;
-        border-radius: 0;
-        color: #161616;
-        background: #e8e8e8;
+        border-radius: 6px;
+        color: var(--text);
+        background: var(--surface-raised);
       }
-      button:hover { background: #d1d1d1; }
+      button:hover { filter: brightness(0.94); }
       form { display: grid; gap: 8px; margin-top: 4px; }
-      label { color: #525252; font-size: 13px; }
+      label { color: var(--text-secondary); font-size: 13px; }
       input {
         height: 40px;
         padding: 0 12px;
-        border: 1px solid #c6c6c6;
-        border-bottom: 2px solid #8d8d8d;
-        border-radius: 0;
-        color: #161616;
-        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text);
+        background: var(--surface);
       }
-      input:focus { border-bottom-color: #0f62fe; outline: 0; }
-      #download { color: #fff; background: #0f62fe; }
-      #download:hover { background: #0353e9; }
-      :focus-visible { outline: 2px solid #0f62fe; outline-offset: 2px; }
-      #result { color: #525252; font-size: 13px; }
+      input:focus { border-color: var(--accent); outline: 0; }
+      #download { color: var(--accent-ink); background: var(--accent); }
+      #download:hover { background: var(--accent-hover); filter: none; }
+      :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      #result { color: var(--text-secondary); font-size: 13px; }
     </style>
   </head>
   <body>
