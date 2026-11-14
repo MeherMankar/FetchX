@@ -39,11 +39,11 @@ Write-Host $arm64Cmd
 Invoke-Expression $arm64Cmd
 if ($LASTEXITCODE -ne 0) { throw "arm64-v8a build failed" }
 
-Write-Host "[Phase 20C] Building native FFmpeg shim for arm64-v8a..."
+Write-Host "[Phase 20C] Building yt-dlp media compatibility shim for arm64-v8a..."
 cargo ndk -t arm64-v8a build $Profile -p fetchx-downloader --bin fetchx-native-ffmpeg
-if ($LASTEXITCODE -ne 0) { throw "arm64-v8a native FFmpeg shim build failed" }
+if ($LASTEXITCODE -ne 0) { throw "arm64-v8a native media compatibility shim build failed" }
 $arm64Binary = "target\aarch64-linux-android\$ProfileDirectory\fetchx-native-ffmpeg"
-if (!(Test-Path $arm64Binary)) { throw "arm64-v8a native FFmpeg shim is missing: $arm64Binary" }
+if (!(Test-Path $arm64Binary)) { throw "arm64-v8a native media compatibility shim is missing: $arm64Binary" }
 $arm64Destination = "apps/android/app/src/main/jniLibs/arm64-v8a/libfetchx_ffmpeg_native.so"
 New-Item -ItemType Directory -Force -Path (Split-Path $arm64Destination) | Out-Null
 Copy-Item -Force $arm64Binary $arm64Destination
@@ -54,11 +54,11 @@ Write-Host $x64Cmd
 Invoke-Expression $x64Cmd
 if ($LASTEXITCODE -ne 0) { throw "x86_64 build failed" }
 
-Write-Host "[Phase 20C] Building native FFmpeg shim for x86_64..."
+Write-Host "[Phase 20C] Building yt-dlp media compatibility shim for x86_64..."
 cargo ndk -t x86_64 build $Profile -p fetchx-downloader --bin fetchx-native-ffmpeg
-if ($LASTEXITCODE -ne 0) { throw "x86_64 native FFmpeg shim build failed" }
+if ($LASTEXITCODE -ne 0) { throw "x86_64 native media compatibility shim build failed" }
 $x64Binary = "target\x86_64-linux-android\$ProfileDirectory\fetchx-native-ffmpeg"
-if (!(Test-Path $x64Binary)) { throw "x86_64 native FFmpeg shim is missing: $x64Binary" }
+if (!(Test-Path $x64Binary)) { throw "x86_64 native media compatibility shim is missing: $x64Binary" }
 $x64Destination = "apps/android/app/src/main/jniLibs/x86_64/libfetchx_ffmpeg_native.so"
 New-Item -ItemType Directory -Force -Path (Split-Path $x64Destination) | Out-Null
 Copy-Item -Force $x64Binary $x64Destination

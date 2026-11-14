@@ -4528,7 +4528,7 @@ private fun BrowserUpdatesDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("FetchX version $versionName")
                 Text(
-                    "yt-dlp, FFmpeg, and aria2 are delivered with FetchX. " +
+                    "yt-dlp and native media processing are delivered with FetchX. " +
                         "Engine bundle updates are installed as browser updates.",
                     style = MaterialTheme.typography.bodyMedium,
                 )

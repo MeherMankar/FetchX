@@ -46,7 +46,7 @@ object MediaDownloadPreferences {
     }
 
     fun isMetadataEmbeddingEnabled(context: Context): Boolean =
-        preferences(context).getBoolean(KEY_EMBED_METADATA, true)
+        preferences(context).getBoolean(KEY_EMBED_METADATA, false)
 
     fun setMetadataEmbeddingEnabled(context: Context, enabled: Boolean) {
         preferences(context).edit().putBoolean(KEY_EMBED_METADATA, enabled).apply()

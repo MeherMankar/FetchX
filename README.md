@@ -26,12 +26,14 @@ installation is optional and does not affect Android or CLI startup. Installed
 engine paths are persisted and take effect after restarting FetchX.
 
 The downloader crate includes a native media post-processing service for metadata
-inspection, remuxing, and supported audio conversions. It does not discover, install,
-or launch external FFmpeg/ffprobe executables. Native processing is bounded, supports
-cancellation but not active pause/resume, caps output at 100 GiB by default (configurable
-up to 1 TiB), and does not own download lifecycle or scheduling. The optional yt-dlp
-engine is configured as an external process adapter and uses fake runners in tests;
-no installed yt-dlp is required for CI.
+inspection, remuxing, and supported audio conversions. It uses FetchX's native Rust
+MP4 and OxideAV paths for probing, stream-copy remuxing, and merging, with Symphonia
+and native audio codecs for supported audio conversions. No upstream FFmpeg source,
+library, or executable is bundled or linked. Native processing is bounded, supports
+cancellation but not active pause/resume, caps output at 100 GiB by default
+(configurable up to 1 TiB), and does not own download lifecycle or scheduling. The
+optional yt-dlp engine is configured as an external process adapter and uses fake
+runners in tests; no installed yt-dlp is required for CI.
 An initial native Rust MP4 path probes MP4 metadata and stream-copies supported H.264/AAC,
 HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video and one
 audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
@@ -50,20 +52,21 @@ supplies native container and stream probes and attempts stream-copy remuxes int
 registered MOV/MP4, Matroska, WebM, Ogg, AVI, MPEG-TS, WAV, FLAC, and subtitle
 containers when stream codecs are compatible.
 Unsupported probes, remuxes, codecs, merges, and transcoding return an explicit native
-unsupported-operation error; broad video transcoding and full FFmpeg feature parity are
-not implemented. Android's yt-dlp adapter supplies the FetchX native compatibility shim
-for supported post-processing only, with no external FFmpeg executable fallback.
+unsupported-operation error; broad video transcoding is not implemented. Android's
+yt-dlp adapter supplies a FetchX native compatibility shim for the supported
+post-processing operations below. The shim preserves yt-dlp's expected command-line
+interface but uses the same native Rust media processors.
 Native output remains size-bounded, cancellable, and published without overwriting an
 existing file.
-This original FetchX implementation takes FFmpeg's stream-copy behavior as a functional
-reference and does not copy FFmpeg source code. MP4 container handling uses the MIT-licensed
+MP4 container handling also uses the MIT-licensed
 [`mp4` crate](https://crates.io/crates/mp4) and Apache-2.0-licensed
 [`shiguredo_mp4` crate](https://crates.io/crates/shiguredo_mp4). WebM muxing uses
 [`ebml-webm`](https://crates.io/crates/ebml-webm) (MIT OR Apache-2.0), and FLAC encoding
 uses [`flacenc`](https://crates.io/crates/flacenc) (Apache-2.0); MP3 encoding uses
 [`audio2mp3-core`](https://crates.io/crates/audio2mp3-core) (MIT OR Apache-2.0); WAV
-parsing uses [`hound`](https://crates.io/crates/hound) (Apache-2.0), and audio demuxing/
-decoding uses [`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0). Additional media
+parsing uses [`hound`](https://crates.io/crates/hound) (Apache-2.0), WAV output uses
+[`ffmpreg`](https://crates.io/crates/ffmpreg) (Apache-2.0), and audio demuxing/decoding
+uses [`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0). Additional media
 container probing and stream-copy remuxing use the MIT-licensed
 [`oxideav-core`](https://crates.io/crates/oxideav-core) and
 [`oxideav-meta`](https://crates.io/crates/oxideav-meta). OxideAV requires Rust 1.95 or newer.
@@ -80,11 +83,11 @@ field, so the same ordering is used by Android, desktop, CLI, and authenticated 
 controls and survives restart.
 
 Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
-video/audio selections first use a FetchX native FFmpeg-compatible shim for supported
+video/audio selections first use a FetchX native compatibility shim for supported
 single-input registered-container stream-copy remuxes, H.264/AAC MP4 merges, compatible
 audio-in-MP4 to M4A extraction, and supported audio-to-WAV/MP3/FLAC conversions. Other
-codecs, containers, and audio transcoding fail as unsupported; no external FFmpeg
-executable is bundled or launched.
+codecs, containers, and audio transcoding fail as unsupported; no upstream FFmpeg
+library or executable is bundled or launched.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`
@@ -131,6 +134,7 @@ responses carrying that header are not retried automatically.
 ## Technology stack
 
 - Rust (stable toolchain, edition 2024)
+- Native Rust media processing with OxideAV, Symphonia, and MP4/container crates
 - Tokio for asynchronous operations
 - Reqwest for streaming HTTP/HTTPS requests
 - Serde and Serde JSON for serialization
@@ -139,7 +143,7 @@ responses carrying that header are not retried automatically.
 
 The dependency versions and shared configuration are centralized in the root
 `Cargo.toml`. Crate manifests opt into dependencies as the corresponding functionality
-is implemented.
+is implemented. Android native builds require the Android NDK and `cargo-ndk`.
 
 ## Diagnostics
 

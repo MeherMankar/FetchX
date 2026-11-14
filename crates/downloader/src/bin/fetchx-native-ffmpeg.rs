@@ -6,8 +6,9 @@ use std::{
 };
 
 use fetchx_downloader::{
-    MediaInfo, MediaStreamKind, NativeMediaError, NativeMediaProcessor, NativeMp4Error,
-    NativeMp4Processor, NativeOxideavError, NativeOxideavProcessor,
+    FfmpegConfig, FfmpegError, FfmpegProcessor, MediaContainer, MediaInfo, MediaProcessRequest,
+    MediaStreamKind, NativeMediaError, NativeMediaProcessor, NativeMp4Error, NativeMp4Processor,
+    NativeOxideavError, NativeOxideavProcessor,
 };
 
 const MAX_OUTPUT_BYTES: u64 = 100 * 1024 * 1024 * 1024;
@@ -45,7 +46,8 @@ struct NativeRemux {
     container: &'static str,
 }
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
     if arguments
         .iter()
@@ -56,42 +58,14 @@ fn main() -> ExitCode {
     }
 
     if let Some(merge) = parse_native_merge(&arguments) {
-        if merge.container == "mov"
-            && has_mp4_extension(&merge.video)
-            && has_mp4_extension(&merge.audio)
-        {
-            match NativeMp4Processor::merge_h264_aac(
-                &merge.video,
-                &merge.audio,
-                &merge.output,
-                MAX_OUTPUT_BYTES,
-                || false,
-            ) {
-                Ok(_) => return ExitCode::SUCCESS,
-                Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
-                Err(error) => {
-                    eprintln!("native MP4 merge unavailable: {error}");
-                }
-            }
-        }
-        match NativeOxideavProcessor::merge_video_audio(
-            &merge.video,
-            &merge.audio,
-            &merge.output,
-            merge.container,
-            MAX_OUTPUT_BYTES,
-            || false,
-        ) {
-            Ok(_) => return ExitCode::SUCCESS,
-            Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
-            Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
-                eprintln!("native merge does not support these streams");
-            }
+        return match run_native_merge(merge).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(FfmpegError::Cancelled) => ExitCode::from(130),
             Err(error) => {
-                eprintln!("native merge failed: {error}");
-                return ExitCode::FAILURE;
+                eprintln!("native media merge failed: {error}");
+                ExitCode::FAILURE
             }
-        }
+        };
     }
     if let Some(extract) = parse_native_audio_extract(&arguments) {
         match NativeMp4Processor::extract_aac(
@@ -175,40 +149,14 @@ fn main() -> ExitCode {
         }
     }
     if let Some(remux) = parse_native_remux(&arguments) {
-        if remux.container == "mov"
-            && has_mp4_extension(&remux.input)
-            && has_mp4_extension(&remux.output)
-        {
-            match NativeMp4Processor::remux(&remux.input, &remux.output, MAX_OUTPUT_BYTES, || false)
-            {
-                Ok(_) => return ExitCode::SUCCESS,
-                Err(NativeMp4Error::Cancelled) => return ExitCode::from(130),
-                Err(NativeMp4Error::InvalidInput | NativeMp4Error::UnsupportedCodec) => {
-                    eprintln!("native MP4 remux unsupported; trying OxideAV");
-                }
-                Err(error) => {
-                    eprintln!("native MP4 remux failed: {error}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        match NativeOxideavProcessor::remux(
-            &remux.input,
-            &remux.output,
-            remux.container,
-            MAX_OUTPUT_BYTES,
-            || false,
-        ) {
-            Ok(_) => return ExitCode::SUCCESS,
-            Err(NativeOxideavError::Cancelled) => return ExitCode::from(130),
-            Err(NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_)) => {
-                eprintln!("native remux does not support this input");
-            }
+        return match run_native_remux(remux).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(FfmpegError::Cancelled) => ExitCode::from(130),
             Err(error) => {
-                eprintln!("native remux failed: {error}");
-                return ExitCode::FAILURE;
+                eprintln!("native media remux failed: {error}");
+                ExitCode::FAILURE
             }
-        }
+        };
     }
     if let Some(input) = parse_native_probe(&arguments) {
         if has_mp4_extension(&input) {
@@ -253,6 +201,53 @@ fn main() -> ExitCode {
 
     eprintln!("requested operation is not supported by FetchX native media processing");
     ExitCode::FAILURE
+}
+
+async fn run_native_merge(merge: NativeMerge) -> Result<(), FfmpegError> {
+    if container_for_muxer(merge.container).is_none() {
+        return Err(FfmpegError::NativeUnsupported);
+    }
+    let processor =
+        FfmpegProcessor::initialize(FfmpegConfig::new().with_max_output_bytes(MAX_OUTPUT_BYTES))
+            .await?;
+    let (_cancel_sender, cancellation) = tokio::sync::watch::channel(false);
+    processor
+        .merge_audio_video(&merge.video, &merge.audio, &merge.output, cancellation)
+        .await?;
+    Ok(())
+}
+
+async fn run_native_remux(remux: NativeRemux) -> Result<(), FfmpegError> {
+    let container = container_for_muxer(remux.container).ok_or(FfmpegError::NativeUnsupported)?;
+    let processor =
+        FfmpegProcessor::initialize(FfmpegConfig::new().with_max_output_bytes(MAX_OUTPUT_BYTES))
+            .await?;
+    let (_cancel_sender, cancellation) = tokio::sync::watch::channel(false);
+    processor
+        .process(
+            MediaProcessRequest::remux(remux.input, remux.output, container),
+            cancellation,
+        )
+        .await?;
+    Ok(())
+}
+
+fn container_for_muxer(muxer: &str) -> Option<MediaContainer> {
+    Some(match muxer {
+        "mov" => MediaContainer::Mp4,
+        "matroska" => MediaContainer::Matroska,
+        "webm" => MediaContainer::WebM,
+        "webvtt" => MediaContainer::WebVtt,
+        "srt" => MediaContainer::SubRip,
+        "mp3" => MediaContainer::Mp3,
+        "flac" => MediaContainer::Flac,
+        "wav" => MediaContainer::Wav,
+        "ogg" => MediaContainer::Ogg,
+        "avi" => MediaContainer::Avi,
+        "mpegts" => MediaContainer::MpegTs,
+        "y4m" => MediaContainer::Yuv4mpegpipe,
+        _ => return None,
+    })
 }
 
 fn run_native_oxideav_probe(input: &Path) -> Option<ExitCode> {

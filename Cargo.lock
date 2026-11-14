@@ -2039,6 +2039,7 @@ dependencies = [
  "fetchx-media-extractor",
  "fetchx-models",
  "fetchx-storage",
+ "ffmpreg",
  "hex",
  "hound",
  "librqbit",
@@ -2244,6 +2245,15 @@ checksum = "a1f686ab92a9fb0eaf188f6c6c87b89490baa6fdb0db4544ba4dc47f7942489f"
 dependencies = [
  "rand_core 0.10.1",
  "subtle",
+]
+
+[[package]]
+name = "ffmpreg"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e36378dec1f7d49d04a95bf169fa4a593a364ef12cc05b85525d3c6ff0a2818"
+dependencies = [
+ "clap",
 ]
 
 [[package]]

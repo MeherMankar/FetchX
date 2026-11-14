@@ -38,6 +38,7 @@ symphonia = { version = "=0.6.1", default-features = false, features = ["aac", "
 oxideav-core = "=0.1.43"
 oxideav-flac = "=0.0.13"
 oxideav-meta = { version = "=0.0.4", default-features = false, features = ["audio", "video", "subtitles"] }
+ffmpreg = "=0.1.2"
 
 [features]
 phase28-benchmark-local-http = []
