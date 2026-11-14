@@ -45,6 +45,24 @@ fn checksum_sidecar_path(destination: &Path) -> PathBuf {
     PathBuf::from(sidecar)
 }
 
+fn media_formats_to_dto(info: fetchx_media_extractor::MediaInfo) -> Vec<YtDlpFormatDto> {
+    let title = info.title;
+    info.formats
+        .into_iter()
+        .map(|format| YtDlpFormatDto {
+            format_id: format.id,
+            label: format.label,
+            extension: if format.ext.is_empty() {
+                None
+            } else {
+                Some(format.ext)
+            },
+            title: Some(title.clone()),
+            platform: None,
+        })
+        .collect()
+}
+
 fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
     match error {
         BatchDownloadError::DuplicateUrl => BatchDownloadErrorCodeDto::DuplicateUrl,
@@ -892,17 +910,7 @@ impl DownloadService {
                     },
                 ))
                 .map_err(|error| MobileApiError::Runtime(error.to_string()))?;
-            Ok(info
-                .formats
-                .into_iter()
-                .map(|f| YtDlpFormatDto {
-                    format_id: f.id,
-                    label: f.label,
-                    extension: if f.ext.is_empty() { None } else { Some(f.ext) },
-                    title: None,
-                    platform: None,
-                })
-                .collect())
+            Ok(media_formats_to_dto(info))
         })
     }
 
@@ -1517,7 +1525,7 @@ mod tests {
 
     use super::{
         AndroidYtDlpProcessRunner, DownloadService, batch_error_code, engine_for_url,
-        is_direct_media_url,
+        is_direct_media_url, media_formats_to_dto,
     };
     use crate::YtDlpRuntime;
     use crate::dto::{
@@ -1627,6 +1635,40 @@ mod tests {
             "https://example.test/watch?format=video.mp4"
         ));
         assert!(!is_direct_media_url("https://example.test/watch#video.mp4"));
+    }
+
+    #[test]
+    fn android_media_format_dtos_preserve_the_extracted_title() {
+        let title = "# छोटू पानी पूरी लगा | Phir Hera Pheri Movie Clip";
+        let info = fetchx_media_extractor::MediaInfo {
+            title: title.to_owned(),
+            duration: None,
+            thumbnail_url: None,
+            webpage_url: "https://www.youtube.com/watch?v=example".to_owned(),
+            extractor_name: "Youtube".to_owned(),
+            formats: vec![fetchx_media_extractor::MediaFormat {
+                id: "137".to_owned(),
+                ext: "mp4".to_owned(),
+                protocol: fetchx_media_extractor::MediaProtocol::YtDlp,
+                url: String::new(),
+                label: "1080p".to_owned(),
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: Some(1080),
+                fps: None,
+                bitrate: None,
+                filesize: None,
+                required_headers: Vec::new(),
+            }],
+        };
+
+        let formats = media_formats_to_dto(info);
+
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].title.as_deref(), Some(title));
+        assert_eq!(formats[0].format_id, "137");
+        assert_eq!(formats[0].extension.as_deref(), Some("mp4"));
     }
 
     #[test]

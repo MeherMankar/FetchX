@@ -8,7 +8,7 @@ use fetchx_core_services::{
     BatchDownloadRequest, ConfigService, CoreRepository, CoreServices, EngineRuntime,
 };
 use fetchx_downloader::{DownloadEngineError, YtDlpError, YtDlpFormat, validate_http_source_url};
-use fetchx_media_extractor::{ExtractOptions, MediaProtocol, sanitise_title_for_filename};
+use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
     EngineKind, FileName, Timestamp, YtDlpAudioFormat, parse_magnet_uri,
@@ -214,19 +214,11 @@ impl AppState {
             .ok_or_else(IpcError::invalid_request)?;
         let filename = if engine_kind == EngineKind::YtDlp {
             match self.core_services.as_ref() {
-                Some(core_services) => match core_services
-                    .extract_media(&canonical_url, ExtractOptions::default())
-                    .await
-                {
-                    Ok(media) => filename_for_media_title(Some(&media.title), &url_filename),
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            "media title extraction failed; using URL-derived filename"
-                        );
-                        url_filename
-                    }
-                },
+                Some(core_services) => {
+                    core_services
+                        .resolve_media_filename(&canonical_url, &url_filename)
+                        .await
+                }
                 None => {
                     tracing::warn!(
                         "media title extraction is unavailable; using URL-derived filename"
@@ -1893,12 +1885,6 @@ fn filename_for_url(url: &Url) -> String {
     candidate.unwrap_or("download").to_owned()
 }
 
-fn filename_for_media_title(title: Option<&str>, url_filename: &str) -> String {
-    title
-        .map(sanitise_title_for_filename)
-        .unwrap_or_else(|| url_filename.to_owned())
-}
-
 fn is_single_normal_component(value: &str) -> bool {
     let mut components = Path::new(value).components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
@@ -1991,7 +1977,7 @@ mod tests {
 
     use super::{
         AddDownloadRequest, AppState, DownloadDto, IpcError, IpcErrorCode, extension_is_safe,
-        filename_for_media_title, filename_for_url, parse_download_id, validate_http_source_url,
+        filename_for_url, parse_download_id, validate_http_source_url,
     };
     use fetchx_core_services::{ConfigService, EngineConfig, EngineRuntime};
 
@@ -2147,16 +2133,6 @@ mod tests {
             "download"
         );
         Ok(())
-    }
-
-    #[test]
-    fn media_filename_uses_sanitized_title_and_falls_back_to_url_name() {
-        let title = "# छोटू पानी पूरी लगा | Rajpal Yadav, Akshay Kumar, Suniel Shetty | Phir Hera Pheri Movie | Movie Clip";
-        assert_eq!(
-            filename_for_media_title(Some(title), "watch"),
-            "# छोटू पानी पूरी लगा _ Rajpal Yadav, Akshay Kumar, Suniel Shetty _ Phir Hera Pheri Movie _ Movie Clip"
-        );
-        assert_eq!(filename_for_media_title(None, "watch"), "watch");
     }
 
     #[test]

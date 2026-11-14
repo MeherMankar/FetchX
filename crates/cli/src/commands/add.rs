@@ -191,10 +191,16 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
             }
         }
     } else {
-        let filename = parsed_url
+        let url_filename = parsed_url
             .as_ref()
             .map(filename_for_url)
             .unwrap_or_else(|| "download".to_owned());
+        let filename = if engine_kind == EngineKind::YtDlp {
+            svc.resolve_media_filename(&canonical_url, &url_filename)
+                .await
+        } else {
+            url_filename
+        };
         let filename = audio_format.map_or(filename.clone(), |format| {
             Path::new(&filename)
                 .with_extension(format.extension())

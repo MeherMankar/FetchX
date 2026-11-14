@@ -46,6 +46,7 @@ use fetchx_media_extractor::{
     ExtractorRegistry, GenericExtractor, GlobalPlayerExtractor, JwPlatformExtractor,
     KalturaExtractor, NdrExtractor, PolskieRadioExtractor, RadioFranceExtractor, TvpExtractor,
     UnsupportedExtractor, VimeoExtractor, YoutubeExtractor, YtDlpExtractor,
+    sanitise_title_for_filename,
 };
 use fetchx_models::{
     ApplicationDiagnostics, DIAGNOSTICS_SCHEMA_VERSION, DiagnosticComponentStatus,
@@ -967,6 +968,21 @@ impl CoreServices {
         opts: MediaExtractOptions,
     ) -> Result<fetchx_media_extractor::MediaInfo, ExtractionError> {
         self.engine_runtime.media_registry.extract(url, opts).await
+    }
+
+    /// Resolve a media title to a safe filename, falling back to the supplied
+    /// URL-derived name when metadata extraction fails.
+    pub async fn resolve_media_filename(&self, url: &str, fallback: &str) -> String {
+        match self
+            .extract_media(url, MediaExtractOptions::default())
+            .await
+        {
+            Ok(media) => filename_for_media_title(Some(&media.title), fallback),
+            Err(error) => {
+                warn!(%error, "media title extraction failed; using URL-derived filename");
+                filename_for_media_title(None, fallback)
+            }
+        }
     }
 
     /// Discover selectable formats using the configured yt-dlp engine.
@@ -3277,6 +3293,12 @@ pub enum CoreServicesError {
     Shutdown(String),
 }
 
+fn filename_for_media_title(title: Option<&str>, fallback: &str) -> String {
+    title
+        .map(sanitise_title_for_filename)
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -3294,7 +3316,7 @@ mod tests {
     use super::{
         BatchDownloadDestinationRequest, BatchDownloadError, BatchDownloadRequest, ConfigService,
         CoreServices, CoreServicesConfig, CoreServicesError, EngineAvailability, EngineConfig,
-        HttpMultiSourceRequest, NativeTorrentConfig, append_path_suffix,
+        HttpMultiSourceRequest, NativeTorrentConfig, append_path_suffix, filename_for_media_title,
         suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
@@ -3310,6 +3332,16 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+
+    #[test]
+    fn media_filename_uses_sanitized_title_and_falls_back_to_url_name() {
+        let title = "# छोटू पानी पूरी लगा | Rajpal Yadav, Akshay Kumar, Suniel Shetty | Phir Hera Pheri Movie | Movie Clip";
+        assert_eq!(
+            filename_for_media_title(Some(title), "watch"),
+            "# छोटू पानी पूरी लगा _ Rajpal Yadav, Akshay Kumar, Suniel Shetty _ Phir Hera Pheri Movie _ Movie Clip"
+        );
+        assert_eq!(filename_for_media_title(None, "watch"), "watch");
+    }
 
     fn config(root: &std::path::Path) -> CoreServicesConfig {
         CoreServicesConfig {
