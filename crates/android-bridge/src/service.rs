@@ -1133,6 +1133,14 @@ impl DownloadService {
                 )));
             }
 
+            if engine == EngineKind::YtDlp {
+                inner
+                    .runtime
+                    .block_on(inner.core.queue().retry_ytdlp(old_id))
+                    .map_err(MobileApiError::from)?;
+                return Ok(old_id.to_string());
+            }
+
             // 4. Remove old record.
             inner
                 .runtime

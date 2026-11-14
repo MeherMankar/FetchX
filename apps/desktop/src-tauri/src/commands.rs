@@ -417,39 +417,9 @@ impl AppState {
             .map_err(IpcError::from_queue)
     }
 
-    /// Retry a failed or cancelled download by transitioning it back to Queued.
-    ///
-    /// The existing `QueueManager::resume` only handles `Paused`.  Failed and
-    /// Cancelled items need to be re-enqueued through their own path: the
-    /// StateMachine allows `Failed|Cancelled → Preparing`, and QueueManager
-    /// startup already reconciles `Preparing → Queued`.  The simplest safe
-    /// approach is to transition through the state machine directly, then
-    /// update the queue's in-memory entries by calling `enqueue` on the item
-    /// after it has been moved to the queue tail (so it sorts after existing
-    /// queued items).  We use `QueueManager::enqueue` after a state-machine
-    /// reset.  Since enqueue persists the item, we first delete the record
-    /// and re-create it via the state machine's own `recover_interrupted`
-    /// path — but that requires the engine to be running.
-    ///
-    /// The cleaner and architecturally correct solution is to expose the
-    /// queue's existing `resume` path for the two extra statuses, which would
-    /// require a QueueManager change.  For Phase 15B we implement a targeted
-    /// Tauri command that does the minimum: transitions the item back to
-    /// `Queued` through the StateMachine and then calls `enqueue` on the
-    /// existing repository record (the queue's `new_with_deferred` already
-    /// loads persisted items at startup; we can't call it again, but we CAN
-    /// use `enqueue` because `enqueue` calls `repository.create` which will
-    /// fail on a duplicate).  Instead, the cleanest path available is:
-    /// delete the record, then re-add it (preserving filename/URL) as a fresh
-    /// queued download via the existing `add` path.  This is exactly what a
-    /// "retry" means from the user's perspective: a fresh attempt.
-    ///
-    /// NOTE: This intentionally creates a new download ID. The old failed
-    /// record is removed. Partial files and destination are preserved because
-    /// `remove_download` preserves filesystem state.  The original engine
-    /// kind is preserved and re-validated for current availability.
+    /// Retry failed yt-dlp downloads in place to preserve their resumable
+    /// workspace. Other engine types retain their existing fresh-attempt path.
     async fn retry(&self, id: DownloadId) -> Result<DownloadDto, IpcError> {
-        // Load the existing item before removing it.
         let item = self
             .repository
             .get(id)
@@ -465,21 +435,24 @@ impl AppState {
             return Err(IpcError::conflict());
         }
 
+        let original_engine = item.source().engine();
+        if !self.engine_runtime.is_available(original_engine) {
+            return Err(IpcError::engine_unavailable(original_engine));
+        }
+
+        if original_engine == EngineKind::YtDlp {
+            self.queue
+                .retry_ytdlp(id)
+                .await
+                .map_err(IpcError::from_queue)?;
+            return self.get(id).await;
+        }
+
         // Remove the old record (preserves partial files).
         self.queue
             .remove_download(id)
             .await
             .map_err(IpcError::from_queue)?;
-
-        // Re-enqueue preserving the original engine kind.
-        // The engine is re-validated for current availability so a retry
-        // cannot silently switch engines.
-        let original_engine = item.source().engine();
-        if !self.engine_runtime.is_available(original_engine) {
-            // The engine that was used originally is no longer available.
-            // Reject rather than silently switching to a different engine.
-            return Err(IpcError::engine_unavailable(original_engine));
-        }
 
         let source = item.source();
         let url = source.url();

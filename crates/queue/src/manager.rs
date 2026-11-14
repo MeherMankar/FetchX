@@ -347,6 +347,14 @@ impl QueueManager {
         Ok(())
     }
 
+    /// Requeues a failed or cancelled yt-dlp download under the same ID so
+    /// the engine can continue using its existing output workspace.
+    pub async fn retry_ytdlp(&self, id: DownloadId) -> Result<(), QueueError> {
+        self.request(|reply| Command::RetryYtDlp { id, reply })
+            .await?;
+        Ok(())
+    }
+
     pub async fn cancel(&self, id: DownloadId) -> Result<(), QueueError> {
         self.request(|reply| Command::Cancel { id, reply }).await?;
         global_diagnostics().record(
@@ -601,6 +609,10 @@ enum Command {
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
     Resume {
+        id: DownloadId,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    RetryYtDlp {
         id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
@@ -1247,6 +1259,54 @@ where
                 .await;
                 let _ = reply.send(result);
             }
+        }
+        Command::RetryYtDlp { id, reply } => {
+            let result = async {
+                if active.contains_key(&id) {
+                    return Err(QueueError::InvalidStatus {
+                        id,
+                        action: "retry",
+                        status: DownloadStatus::Downloading,
+                    });
+                }
+                let item = repository
+                    .get(id)
+                    .await?
+                    .ok_or(StateMachineError::NotFound(id))?;
+                if item.source().engine() != EngineKind::YtDlp
+                    || !matches!(
+                        item.status(),
+                        DownloadStatus::Failed | DownloadStatus::Cancelled
+                    )
+                {
+                    return Err(QueueError::InvalidStatus {
+                        id,
+                        action: "retry yt-dlp",
+                        status: item.status(),
+                    });
+                }
+                if !entries.contains_key(&id) {
+                    return Err(QueueError::DownloadNotFound(id));
+                }
+                let sequence = *next_sequence;
+                let next = next_sequence
+                    .checked_add(1)
+                    .ok_or(QueueError::ResourceInvariant)?;
+                repository.move_to_queue_tail(id).await?;
+                let queued = state_machine.transition(id, DownloadStatus::Queued).await?;
+                *next_sequence = next;
+                deferred.remove(&id);
+                entries.insert(
+                    id,
+                    Entry {
+                        item: queued,
+                        sequence,
+                    },
+                );
+                Ok(())
+            }
+            .await;
+            let _ = reply.send(result);
         }
         Command::Cancel { id, reply } => {
             let current = match repository.get(id).await {
@@ -1937,8 +1997,9 @@ mod tests {
         YtDlpError, YtDlpProcessExit, YtDlpProcessRunner, YtDlpRunnerEvent, YtDlpRunnerFuture,
     };
     use fetchx_models::{
-        DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus, EngineKind,
-        FileName, ResourcePolicy, ResourcePressure, ResourceProfile, Timestamp,
+        DownloadError, DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority,
+        DownloadSource, DownloadStatus, EngineKind, FileName, ResourcePolicy, ResourcePressure,
+        ResourceProfile, Timestamp,
     };
     use fetchx_storage::{Database, DownloadRepository, SqliteDownloadRepository};
     #[cfg(feature = "phase30-queue-fault-injection")]
@@ -2257,6 +2318,18 @@ mod tests {
             std::env::temp_dir()
                 .join(format!("fetchx-queue-{}", DownloadId::new()))
                 .join("file.bin"),
+            Timestamp::from_unix_millis(1),
+        ))
+    }
+
+    fn ytdlp_item() -> Result<DownloadItem, Box<dyn std::error::Error>> {
+        Ok(DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://example.test/video", EngineKind::YtDlp)?,
+            FileName::new("video.mp4")?,
+            std::env::temp_dir()
+                .join(format!("fetchx-ytdlp-queue-{}", DownloadId::new()))
+                .join("video.mp4"),
             Timestamp::from_unix_millis(1),
         ))
     }
@@ -3706,6 +3779,44 @@ mod tests {
                 .iter()
                 .all(|item| item.id() != id)
         );
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retry_ytdlp_requeues_same_item_and_preserves_partial_progress()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let mut download = ytdlp_item()?;
+        let id = download.id();
+        let expected_progress =
+            fetchx_models::DownloadProgress::new(388_578_224, Some(575_522_542), None, None)?;
+        download.set_progress_at(expected_progress.clone(), Timestamp::from_unix_millis(2))?;
+        download.set_error_at(
+            Some(DownloadError::new(
+                DownloadErrorCode::Engine,
+                "The yt-dlp download could not be completed safely.",
+            )?),
+            Timestamp::from_unix_millis(3),
+        )?;
+        repository.create(&download).await?;
+        let state_machine = DownloadStateMachine::new(repository.clone());
+        state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        state_machine.transition(id, DownloadStatus::Failed).await?;
+
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        manager.pause_dispatch().await?;
+        manager.retry_ytdlp(id).await?;
+
+        let retried = repository.get(id).await?.ok_or("retry record missing")?;
+        assert_eq!(retried.status(), DownloadStatus::Queued);
+        assert_eq!(retried.id(), id);
+        assert_eq!(retried.progress(), &expected_progress);
+        assert!(retried.error().is_none());
+        assert_eq!(manager.snapshot().await?.queued, [id]);
+
         manager.shutdown().await?;
         Ok(())
     }

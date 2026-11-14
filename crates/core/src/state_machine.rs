@@ -36,7 +36,9 @@ pub fn validate_transition(
             | (DownloadStatus::Paused, DownloadStatus::Queued)
             | (DownloadStatus::Paused, DownloadStatus::Cancelled)
             | (DownloadStatus::Failed, DownloadStatus::Preparing)
+            | (DownloadStatus::Failed, DownloadStatus::Queued)
             | (DownloadStatus::Cancelled, DownloadStatus::Preparing)
+            | (DownloadStatus::Cancelled, DownloadStatus::Queued)
             // Torrent-specific lifecycle edges.
             | (DownloadStatus::MetadataAcquiring, DownloadStatus::Downloading)
             | (DownloadStatus::MetadataAcquiring, DownloadStatus::Failed)
@@ -144,8 +146,8 @@ where
 
         let updated_at = Timestamp::now()?.max(item.updated_at());
         item.set_status_at(to, updated_at)?;
-        if let Some(error) = error {
-            item.set_error_at(Some(error), updated_at)?;
+        if error.is_some() || to == DownloadStatus::Queued {
+            item.set_error_at(error, updated_at)?;
         }
 
         if self
@@ -169,6 +171,12 @@ where
                     ("download_cancelled", DiagnosticLevel::Info)
                 }
                 DownloadStatus::Preparing
+                    if matches!(from, DownloadStatus::Failed | DownloadStatus::Cancelled) =>
+                {
+                    recorder.increment(DiagnosticCounter::DownloadsRetried);
+                    ("download_retried", DiagnosticLevel::Info)
+                }
+                DownloadStatus::Queued
                     if matches!(from, DownloadStatus::Failed | DownloadStatus::Cancelled) =>
                 {
                     recorder.increment(DiagnosticCounter::DownloadsRetried);
@@ -278,7 +286,7 @@ mod tests {
         DownloadStatus::Stopped,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 41] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 43] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
         (DownloadStatus::Queued, DownloadStatus::Paused),
         (DownloadStatus::Preparing, DownloadStatus::Paused),
@@ -297,7 +305,9 @@ mod tests {
         (DownloadStatus::Queued, DownloadStatus::Cancelled),
         (DownloadStatus::Paused, DownloadStatus::Cancelled),
         (DownloadStatus::Failed, DownloadStatus::Preparing),
+        (DownloadStatus::Failed, DownloadStatus::Queued),
         (DownloadStatus::Cancelled, DownloadStatus::Preparing),
+        (DownloadStatus::Cancelled, DownloadStatus::Queued),
         // Torrent lifecycle.
         (DownloadStatus::Queued, DownloadStatus::MetadataAcquiring),
         (
