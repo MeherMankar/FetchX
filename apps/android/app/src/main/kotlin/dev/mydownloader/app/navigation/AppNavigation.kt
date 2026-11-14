@@ -51,7 +51,7 @@ import java.io.File
 
 private const val BROWSER_DATA_PREFERENCES_FILE = "fetchx_browser_data"
 private const val BROWSER_THEME_SEED_KEY = "browser_theme_seed"
-private const val DEFAULT_BROWSER_THEME_SEED = 0xFF4F8EF7L
+private const val DEFAULT_BROWSER_THEME_SEED = 0xFF0F62FEL
 
 /**
  * Root NavHost for the FetchX application.

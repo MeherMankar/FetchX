@@ -3,36 +3,40 @@
    ============================================================= */
 
 :root {
-  --bg:        #141415;
-  --bg-card:   #19191b;
-  --bg-raised: #232325;
-  --bg-input:  #19191b;
-  --border:    rgba(255,255,255,0.08);
-  --border-mid:rgba(255,255,255,0.13);
-  --border-focus: #2463eb;
-  --accent:    #2463eb;
-  --accent-dim:rgba(36,99,235,0.12);
-  --green:     #4cc38a;
-  --green-bg:  rgba(76,195,138,0.12);
-  --red:       #e5484d;
-  --red-bg:    rgba(229,72,77,0.12);
-  --amber:     #e8ad4c;
-  --amber-bg:  rgba(232,173,76,0.12);
-  --text:      #ededed;
-  --text-2:    #a1a1a6;
-  --text-3:    #85858b;
-  --r-xs: 4px; --r-sm: 6px; --r: 8px; --r-lg: 12px; --r-full: 10px;
-  --t: 140ms ease;
+  --bg:          #f4f4f4;
+  --bg-card:     #ffffff;
+  --bg-raised:   #e8e8e8;
+  --bg-input:    #ffffff;
+  --border:      #e0e0e0;
+  --border-mid:  #c6c6c6;
+  --border-focus:#0f62fe;
+  --accent:      #0f62fe;
+  --accent-hover:#0353e9;
+  --accent-dim:  #edf5ff;
+  --green:       #198038;
+  --green-bg:    #defbe6;
+  --green-border:#a7f0ba;
+  --red:         #da1e28;
+  --red-bg:      #fff1f1;
+  --red-border:  #ffb3b8;
+  --amber:       #8a3800;
+  --amber-bg:    #fcf4d6;
+  --amber-border:#f1c21b;
+  --text:        #161616;
+  --text-2:      #525252;
+  --text-3:      #6f6f6f;
+  --r-xs: 0; --r-sm: 0; --r: 0; --r-lg: 0; --r-full: 10px;
+  --t: 120ms ease;
 }
 
 *,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
 button,input,select  { font: inherit; }
-::-webkit-scrollbar  { width: 4px; }
+::-webkit-scrollbar  { width: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.10); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: #c6c6c6; }
 
 body {
-  font-family: -apple-system,"Segoe UI",system-ui,sans-serif;
+  font-family: "IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -73,11 +77,11 @@ body {
   white-space: nowrap;
 }
 .status-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-.status-checking     { background: var(--amber-bg); color: var(--amber); border-color: rgba(232,173,76,.2); }
+.status-checking     { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
 .status-checking .status-dot { background: var(--amber); }
-.status-connected    { background: var(--green-bg); color: var(--green); border-color: rgba(76,195,138,.2); }
+.status-connected    { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
 .status-connected .status-dot { background: var(--green); }
-.status-disconnected { background: var(--red-bg);   color: var(--red);   border-color: rgba(229,72,77,.2); }
+.status-disconnected { background: var(--red-bg);   color: var(--red);   border-color: var(--red-border); }
 .status-disconnected .status-dot { background: var(--red); }
 /* Ghost button */
 .btn-ghost {
@@ -154,7 +158,7 @@ body {
   font-size: 13px; font-weight: 500; cursor: pointer;
   transition: background var(--t);
 }
-.btn-primary:not(:disabled):hover { background: #1c54ce; }
+.btn-primary:not(:disabled):hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-primary-sm { width: auto; height: 32px; padding: 0 12px; font-size: 12px; }
 
@@ -187,8 +191,8 @@ body {
   padding: 8px 12px; border-radius: var(--r-sm); font-size: 12px;
   background: var(--bg-raised); border: 1px solid var(--border-mid); color: var(--text-2);
 }
-.banner-success { background: var(--green-bg); color: var(--green); border-color: rgba(76,195,138,.2); }
-.banner-error   { background: var(--red-bg);   color: var(--red);   border-color: rgba(229,72,77,.2); }
+.banner-success { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
+.banner-error   { background: var(--red-bg);   color: var(--red);   border-color: var(--red-border); }
 
 /* TASK LIST */
 .section-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }

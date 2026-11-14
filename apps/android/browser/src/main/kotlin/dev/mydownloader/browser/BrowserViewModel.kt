@@ -117,7 +117,7 @@ data class BrowserUiState(
     val showProfileSwitcher: Boolean = false,
     val findInPage: FindInPageState? = null,
     val profiles: List<BrowserProfile> = listOf(
-        BrowserProfile("default", "Default", "#4F8EF7", "Daily browsing"),
+        BrowserProfile("default", "Default", "#0F62FE", "Daily browsing"),
         BrowserProfile("work", "Work", "#7C6AF2", "Productivity"),
         BrowserProfile("research", "Research", "#3AAE7A", "Study and reading"),
     ),

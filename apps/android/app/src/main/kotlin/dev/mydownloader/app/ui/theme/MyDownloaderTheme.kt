@@ -1,80 +1,89 @@
 package dev.fetchx.app.ui.theme
 
-import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.unit.dp
 
 private val FetchXDarkColorScheme = darkColorScheme(
-    primary = Color(0xFF9CCBFF),
-    onPrimary = Color(0xFF003258),
-    primaryContainer = Color(0xFF164A75),
-    onPrimaryContainer = Color(0xFFD1E8FF),
-    secondary = Color(0xFFB8C8DA),
-    onSecondary = Color(0xFF22313F),
-    secondaryContainer = Color(0xFF394957),
-    onSecondaryContainer = Color(0xFFD4E5F5),
-    tertiary = Color(0xFF8FD0B0),
-    onTertiary = Color(0xFF003822),
-    tertiaryContainer = Color(0xFF005333),
-    onTertiaryContainer = Color(0xFFAAEFC7),
-    background = Color(0xFF101418),
-    onBackground = Color(0xFFE1E2E5),
-    surface = Color(0xFF101418),
-    onSurface = Color(0xFFE1E2E5),
-    surfaceVariant = Color(0xFF41474E),
-    onSurfaceVariant = Color(0xFFC1C7CF),
-    outline = Color(0xFF8B9198),
-    outlineVariant = Color(0xFF41474E),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6),
+    primary = Color(0xFF78A9FF),
+    onPrimary = Color(0xFF001D6C),
+    primaryContainer = Color(0xFF0043CE),
+    onPrimaryContainer = Color(0xFFD0E2FF),
+    secondary = Color(0xFFC6C6C6),
+    onSecondary = Color(0xFF262626),
+    secondaryContainer = Color(0xFF525252),
+    onSecondaryContainer = Color(0xFFF4F4F4),
+    tertiary = Color(0xFF42BE65),
+    onTertiary = Color(0xFF071908),
+    tertiaryContainer = Color(0xFF044317),
+    onTertiaryContainer = Color(0xFFA7F0BA),
+    background = Color(0xFF161616),
+    onBackground = Color(0xFFF4F4F4),
+    surface = Color(0xFF262626),
+    onSurface = Color(0xFFF4F4F4),
+    surfaceVariant = Color(0xFF393939),
+    onSurfaceVariant = Color(0xFFC6C6C6),
+    outline = Color(0xFF8D8D8D),
+    outlineVariant = Color(0xFF525252),
+    error = Color(0xFFFF8389),
+    onError = Color(0xFF410002),
+    errorContainer = Color(0xFFA2191F),
+    onErrorContainer = Color(0xFFFFF1F1),
+    surfaceContainerLowest = Color(0xFF161616),
+    surfaceContainerLow = Color(0xFF262626),
+    surfaceContainer = Color(0xFF393939),
+    surfaceContainerHigh = Color(0xFF525252),
+    surfaceContainerHighest = Color(0xFF6F6F6F),
 )
 
 private val FetchXLightColorScheme = lightColorScheme(
-    primary = Color(0xFF00639A),
+    primary = Color(0xFF0F62FE),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFCDE5FF),
-    onPrimaryContainer = Color(0xFF001D33),
-    secondary = Color(0xFF50606F),
+    primaryContainer = Color(0xFFD0E2FF),
+    onPrimaryContainer = Color(0xFF001D6C),
+    secondary = Color(0xFF393939),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFD4E5F5),
-    onSecondaryContainer = Color(0xFF0D1D2A),
-    tertiary = Color(0xFF006D42),
+    secondaryContainer = Color(0xFFE0E0E0),
+    onSecondaryContainer = Color(0xFF161616),
+    tertiary = Color(0xFF198038),
     onTertiary = Color.White,
-    tertiaryContainer = Color(0xFF9AF6C2),
-    onTertiaryContainer = Color(0xFF002110),
-    background = Color(0xFFF9F9FC),
-    onBackground = Color(0xFF191C20),
-    surface = Color(0xFFF9F9FC),
-    onSurface = Color(0xFF191C20),
-    surfaceVariant = Color(0xFFDDE3EA),
-    onSurfaceVariant = Color(0xFF41474E),
-    outline = Color(0xFF72787F),
-    outlineVariant = Color(0xFFC1C7CF),
-    error = Color(0xFFBA1A1A),
+    tertiaryContainer = Color(0xFFDEFBE6),
+    onTertiaryContainer = Color(0xFF0E6027),
+    background = Color(0xFFF4F4F4),
+    onBackground = Color(0xFF161616),
+    surface = Color.White,
+    onSurface = Color(0xFF161616),
+    surfaceVariant = Color(0xFFE8E8E8),
+    onSurfaceVariant = Color(0xFF525252),
+    outline = Color(0xFF6F6F6F),
+    outlineVariant = Color(0xFFC6C6C6),
+    error = Color(0xFFDA1E28),
     onError = Color.White,
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
+    errorContainer = Color(0xFFFFF1F1),
+    onErrorContainer = Color(0xFFA2191F),
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFF4F4F4),
+    surfaceContainer = Color(0xFFE8E8E8),
+    surfaceContainerHigh = Color(0xFFE0E0E0),
+    surfaceContainerHighest = Color(0xFFC6C6C6),
 )
 
-/**
- * FetchX Material 3 theme.
- *
- * [seedColor]: when non-null, overrides the wallpaper-based dynamic color with a
- * custom primary seed. On API 31+ we fall back to the wallpaper dynamic scheme when
- * seedColor is null. On older APIs we always use a static scheme derived from seedColor
- * (or the built-in default when seedColor is null).
- */
+private val FetchXShapes = Shapes(
+    extraSmall = RoundedCornerShape(0.dp),
+    small = RoundedCornerShape(0.dp),
+    medium = RoundedCornerShape(0.dp),
+    large = RoundedCornerShape(0.dp),
+    extraLarge = RoundedCornerShape(0.dp),
+)
+
 @Composable
 fun FetchXTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
@@ -82,10 +91,9 @@ fun FetchXTheme(
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {
-        // Keep FetchX surfaces and semantic colors stable while the accent follows the saved seed.
         seedColor != null -> {
             val onAccent = if (seedColor.luminance() > 0.179f) {
-                Color(0xFF111827)
+                Color(0xFF161616)
             } else {
                 Color.White
             }
@@ -93,30 +101,25 @@ fun FetchXTheme(
                 FetchXDarkColorScheme.copy(
                     primary = seedColor,
                     onPrimary = onAccent,
-                    primaryContainer = lerp(Color(0xFF19191B), seedColor, 0.36f),
-                    onPrimaryContainer = Color(0xFFEDF2F8),
+                    primaryContainer = lerp(Color(0xFF262626), seedColor, 0.36f),
+                    onPrimaryContainer = Color(0xFFF4F4F4),
                 )
             } else {
                 FetchXLightColorScheme.copy(
                     primary = seedColor,
                     onPrimary = onAccent,
                     primaryContainer = lerp(Color.White, seedColor, 0.16f),
-                    onPrimaryContainer = Color(0xFF171717),
+                    onPrimaryContainer = Color(0xFF161616),
                 )
             }
         }
-        // API 31+: wallpaper-based dynamic color
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        // Fallback static scheme
         darkTheme -> FetchXDarkColorScheme
         else -> FetchXLightColorScheme
     }
 
     MaterialTheme(
         colorScheme = colorScheme,
+        shapes = FetchXShapes,
         content = content,
     )
 }

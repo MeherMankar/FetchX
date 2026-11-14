@@ -192,7 +192,7 @@ private fun BookmarkRow(
     onDelete: () -> Unit,
 ) {
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(0.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = Modifier
             .fillMaxWidth()

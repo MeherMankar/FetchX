@@ -1,3 +1,5 @@
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-500.css";
 import "./popup.css";
 import { isError, userMessageForCode } from "../types/protocol";
 import type { BrowserResponse, RpcRequest, RpcTarget } from "../types/protocol";

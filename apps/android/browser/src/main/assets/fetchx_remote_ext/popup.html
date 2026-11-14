@@ -4,6 +4,46 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>FetchX</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "IBM Plex Sans", Roboto, "Segoe UI", sans-serif;
+        color: #161616;
+        background: #f4f4f4;
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 280px; background: #f4f4f4; }
+      main { display: grid; gap: 12px; padding: 20px; }
+      h1 { font-size: 20px; font-weight: 500; }
+      p { color: #525252; font-size: 14px; }
+      button, input { font: inherit; }
+      button {
+        min-height: 40px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 0;
+        color: #161616;
+        background: #e8e8e8;
+      }
+      button:hover { background: #d1d1d1; }
+      form { display: grid; gap: 8px; margin-top: 4px; }
+      label { color: #525252; font-size: 13px; }
+      input {
+        height: 40px;
+        padding: 0 12px;
+        border: 1px solid #c6c6c6;
+        border-bottom: 2px solid #8d8d8d;
+        border-radius: 0;
+        color: #161616;
+        background: #fff;
+      }
+      input:focus { border-bottom-color: #0f62fe; outline: 0; }
+      #download { color: #fff; background: #0f62fe; }
+      #download:hover { background: #0353e9; }
+      :focus-visible { outline: 2px solid #0f62fe; outline-offset: 2px; }
+      #result { color: #525252; font-size: 13px; }
+    </style>
   </head>
   <body>
     <main>

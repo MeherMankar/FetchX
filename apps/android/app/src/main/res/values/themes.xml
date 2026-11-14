@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Base application theme — Material 3, edge-to-edge. -->
+    <!-- Android window theme; Compose colors and shapes are defined by FetchXTheme. -->
     <style name="Theme.FetchX" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
 

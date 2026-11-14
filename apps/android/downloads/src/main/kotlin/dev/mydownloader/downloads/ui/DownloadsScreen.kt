@@ -264,7 +264,7 @@ fun DownloadsScreen(
                                 .padding(24.dp),
                         ) {
                             Surface(
-                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
                                 modifier = Modifier.size(48.dp),
                             ) {
