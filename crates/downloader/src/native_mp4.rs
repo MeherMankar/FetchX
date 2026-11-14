@@ -1239,8 +1239,10 @@ mod tests {
         mux::{Mp4FileMuxer, Sample as MuxSample},
     };
     use tempfile::tempdir;
+    use tokio::sync::watch;
 
     use super::{NativeMp4Error, NativeMp4Processor};
+    use crate::ffmpeg::{FfmpegConfig, FfmpegProcessor};
 
     fn make_mp4(
         path: &Path,
@@ -1768,6 +1770,27 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn ffmpeg_processor_merges_h264_with_m4a_aac_audio() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let video = directory.path().join("video.mp4");
+        let audio = directory.path().join("audio.m4a");
+        let output = directory.path().join("merged.mp4");
+        make_mp4(&video, video_config(), 1000)?;
+        make_mp4(&audio, audio_config(), 1000)?;
+        let processor = FfmpegProcessor::initialize(FfmpegConfig::new()).await?;
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        processor
+            .merge_audio_video(&video, &audio, &output, cancellation)
+            .await?;
+        let info = NativeMp4Processor::probe(&output)?;
+        assert_eq!(info.tracks.len(), 2);
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("h264"));
+        assert_eq!(info.tracks[1].codec.as_deref(), Some("aac"));
+        Ok(())
+    }
+
     #[test]
     fn merges_oxideav_compatible_mp4_streams_natively() -> Result<(), Box<dyn Error>> {
         let directory = tempdir()?;
@@ -1776,6 +1799,30 @@ mod tests {
         let output = directory.path().join("merged.mp4");
         make_mp4(&video, video_config(), 1000)?;
         make_mp4(&audio, audio_config(), 1000)?;
+
+        crate::native_oxideav::NativeOxideavProcessor::merge_video_audio(
+            &video,
+            &audio,
+            &output,
+            "mov",
+            1024 * 1024,
+            || false,
+        )?;
+        let info = NativeMp4Processor::probe(&output)?;
+        assert_eq!(info.tracks.len(), 2);
+        assert_eq!(info.tracks[0].codec.as_deref(), Some("h264"));
+        assert_eq!(info.tracks[1].codec.as_deref(), Some("aac"));
+        Ok(())
+    }
+
+    #[test]
+    fn muxes_streams_with_different_declared_durations() -> Result<(), Box<dyn Error>> {
+        let directory = tempdir()?;
+        let video = directory.path().join("video.mp4");
+        let audio = directory.path().join("audio.mp4");
+        let output = directory.path().join("merged.mp4");
+        make_mp4(&video, video_config(), 1000)?;
+        make_mp4(&audio, audio_config(), 500)?;
 
         crate::native_oxideav::NativeOxideavProcessor::merge_video_audio(
             &video,

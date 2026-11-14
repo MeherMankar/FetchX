@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::{io::AsyncReadExt, time::timeout};
 use tracing::warn;
 
-use crate::ytdlp::{YtDlpError, YtDlpProcessRunner};
+use crate::ytdlp::{MAX_FORMAT_OUTPUT_BYTES, YtDlpError, YtDlpProcessRunner};
 
 /// Header names that must never be forwarded from yt-dlp JSON output.
 ///
@@ -34,9 +34,6 @@ const BLOCKED_HEADERS: &[&str] = &[
     "x-forwarded-for",
     "x-real-ip",
 ];
-
-/// Maximum bytes of yt-dlp `--dump-single-json` output accepted.
-const MAX_FORMAT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
 /// Adapter that implements `fetchx_media_extractor::ProcessRunner` by
 /// either delegating to a wrapped [`YtDlpProcessRunner`] (e.g. Android's

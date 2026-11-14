@@ -27,8 +27,9 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::{
-    BandwidthControl, DownloadEngine, DownloadEngineError, ManagedDownloadControl,
-    ManagedDownloadEngine, ResourceDemand, is_dash_url,
+    BandwidthControl, DownloadEngine, DownloadEngineError, FfmpegConfig, FfmpegError,
+    FfmpegProcessor, ManagedDownloadControl, ManagedDownloadEngine, MediaStreamKind,
+    ResourceDemand, is_dash_url,
 };
 
 // Cold Python/packaged-runtime startup can exceed five seconds on Windows and
@@ -39,12 +40,16 @@ const FORMAT_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
-const MAX_FORMAT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+/// YouTube metadata can exceed 10 MiB when it includes many adaptive formats.
+pub(crate) const MAX_FORMAT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DISCOVERED_FORMATS: usize = 100;
 const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
-const AUTO_FORMAT_SELECTOR: &str = "best";
+const AUTO_FORMAT_SELECTOR: &str = "bestvideo[ext=webm]/bestvideo[ext=mp4][vcodec^=avc1],bestaudio[ext=webm]/bestaudio[ext=m4a][acodec^=mp4a]";
+const MERGED_OUTPUT_MKV_NAME: &str = ".fetchx-merged.mkv";
+const MERGED_OUTPUT_MP4_NAME: &str = ".fetchx-merged.mp4";
+const MERGED_OUTPUT_NAMES: [&str; 2] = [MERGED_OUTPUT_MKV_NAME, MERGED_OUTPUT_MP4_NAME];
 const MAX_PROGRESS_EVENTS: usize = 32;
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -175,10 +180,14 @@ pub enum YtDlpError {
     OutputUnavailable,
     #[error("yt-dlp left separate output files instead of a merged media file")]
     UnmergedOutput,
+    #[error("the native media processor failed while merging video and audio streams")]
+    NativeMergeFailed,
     #[error(
         "this platform does not have a supported native media post-processor for the requested selection"
     )]
     NativePostprocessingUnsupported,
+    #[error("the built-in media processor could not be initialized")]
+    NativeProcessorInitialization,
     #[error("yt-dlp output destination already exists")]
     DestinationExists,
     #[error("yt-dlp output workspace could not be used safely")]
@@ -219,7 +228,9 @@ impl YtDlpError {
             Self::ProgressRegression => "progress_regression",
             Self::OutputUnavailable => "output_unavailable",
             Self::UnmergedOutput => "unmerged_output",
+            Self::NativeMergeFailed => "native_merge_failed",
             Self::NativePostprocessingUnsupported => "native_postprocessing_unsupported",
+            Self::NativeProcessorInitialization => "native_processor_initialization",
             Self::DestinationExists => "destination_exists",
             Self::WorkspaceUnavailable => "workspace_unavailable",
             Self::ProcessCleanup => "process_cleanup",
@@ -269,6 +280,7 @@ pub struct YtDlpEngine<R> {
     executable: PathBuf,
     version: String,
     runner: Arc<dyn YtDlpProcessRunner>,
+    native_media_processor: Arc<FfmpegProcessor>,
 }
 
 impl<R> YtDlpEngine<R>
@@ -308,12 +320,17 @@ where
         if version.is_empty() || version.len() > MAX_VERSION_OUTPUT_BYTES {
             return Err(YtDlpError::InvalidVersion);
         }
+        let native_media_processor = FfmpegProcessor::initialize(FfmpegConfig::new())
+            .await
+            .map(Arc::new)
+            .map_err(|_| YtDlpError::NativeProcessorInitialization)?;
         Ok(Self {
             state_machine: DownloadStateMachine::new(repository.clone()),
             repository,
             executable,
             version,
             runner,
+            native_media_processor,
         })
     }
 
@@ -423,11 +440,7 @@ where
         let audio_format = item.source().yt_dlp_audio_format();
         validate_audio_destination(item.destination(), audio_format)?;
         #[cfg(not(target_os = "android"))]
-        if audio_format.is_some()
-            || format_selector(item.source().yt_dlp_format())
-                .split('/')
-                .any(|alternative| alternative.contains('+'))
-        {
+        if audio_format.is_some() {
             return Err(YtDlpError::NativePostprocessingUnsupported.into());
         }
         let arguments = build_arguments(
@@ -437,10 +450,8 @@ where
             audio_format,
             control.bandwidth.external_download_rate_bytes_per_second,
         );
-        let allows_component_reset = audio_format.is_some()
-            || format_selector(item.source().yt_dlp_format())
-                .split('/')
-                .any(|alternative| alternative.contains('+'));
+        let allows_component_reset =
+            audio_format.is_some() || format_selector(item.source().yt_dlp_format()).contains(',');
         report_resource_demand(control, id, 1, 0).await?;
 
         if item.status() == DownloadStatus::Preparing {
@@ -555,7 +566,12 @@ where
             return Err(YtDlpError::ProcessFailure { code: exit.code }.into());
         }
 
-        let output = find_output(&workspace).await?;
+        let output = find_output_or_merge(
+            &self.native_media_processor,
+            &workspace,
+            control.cancellation.clone(),
+        )
+        .await?;
         let metadata = tokio::fs::symlink_metadata(&output).await?;
         if !metadata.file_type().is_file() {
             return Err(YtDlpError::OutputUnavailable.into());
@@ -629,8 +645,25 @@ where
         item: &mut DownloadItem,
         workspace: &Path,
     ) -> Result<bool, DownloadEngineError> {
-        let Some(record) = load_finalization_record(workspace).await? else {
-            return Ok(false);
+        let record = match load_finalization_record(workspace).await? {
+            Some(record) => record,
+            None => {
+                let Some(output) = merged_output_if_present(workspace).await? else {
+                    return Ok(false);
+                };
+                let metadata = tokio::fs::symlink_metadata(&output).await?;
+                let output_name = output
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or(YtDlpError::OutputUnavailable)?
+                    .to_owned();
+                let record = YtDlpFinalizationRecord {
+                    output_name,
+                    output_size: metadata.len(),
+                };
+                save_finalization_record(workspace, &output, metadata.len()).await?;
+                record
+            }
         };
         let output = match find_output(workspace).await {
             Ok(output) => output,
@@ -1212,7 +1245,7 @@ fn build_arguments(
     max_download_rate_bytes_per_second: Option<u64>,
 ) -> Vec<OsString> {
     let selected_format = if audio_format.is_some() {
-        "bestaudio/best"
+        "bestaudio/best".to_owned()
     } else {
         format_selector(selected_format)
     };
@@ -1253,7 +1286,7 @@ fn build_arguments(
     }
     arguments.extend([
         "--output".into(),
-        "%(id)s.%(ext)s".into(),
+        "%(id)s.%(format_id)s.%(ext)s".into(),
         "--".into(),
         url.into(),
     ]);
@@ -1275,8 +1308,16 @@ fn validate_audio_destination(
     Ok(())
 }
 
-fn format_selector(selected_format: Option<&str>) -> &str {
-    selected_format.unwrap_or(AUTO_FORMAT_SELECTOR)
+fn format_selector(selected_format: Option<&str>) -> String {
+    let Some(selected_format) = selected_format else {
+        return AUTO_FORMAT_SELECTOR.to_owned();
+    };
+    if let Some((video_format, fallback)) = selected_format.split_once("+bestaudio/")
+        && video_format == fallback
+    {
+        return format!("{video_format},bestaudio");
+    }
+    selected_format.to_owned()
 }
 
 pub fn parse_format_output(bytes: &[u8]) -> Result<Vec<YtDlpFormat>, YtDlpError> {
@@ -1610,10 +1651,131 @@ async fn restrict_workspace_permissions(_path: &Path) -> Result<(), YtDlpError> 
 }
 
 async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
+    if let Some(output) = merged_output_if_present(workspace).await? {
+        return Ok(output);
+    }
+
+    let mut outputs = find_output_candidates(workspace).await?;
+    match outputs.len() {
+        0 => Err(YtDlpError::OutputUnavailable),
+        1 => Ok(outputs.remove(0)),
+        _ => Err(YtDlpError::UnmergedOutput),
+    }
+}
+
+async fn find_output_or_merge(
+    processor: &FfmpegProcessor,
+    workspace: &Path,
+    cancellation: watch::Receiver<bool>,
+) -> Result<PathBuf, DownloadEngineError> {
+    match find_output(workspace).await {
+        Ok(output) => Ok(output),
+        Err(YtDlpError::UnmergedOutput) => {
+            merge_output_candidates(processor, workspace, cancellation).await
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn merge_output_candidates(
+    processor: &FfmpegProcessor,
+    workspace: &Path,
+    cancellation: watch::Receiver<bool>,
+) -> Result<PathBuf, DownloadEngineError> {
+    let outputs = find_output_candidates(workspace).await?;
+    if outputs.len() != 2 {
+        return Err(YtDlpError::UnmergedOutput.into());
+    }
+
+    let first_info = processor
+        .probe(&outputs[0], cancellation.clone())
+        .await
+        .map_err(map_native_merge_error)?;
+    let second_info = processor
+        .probe(&outputs[1], cancellation.clone())
+        .await
+        .map_err(map_native_merge_error)?;
+    let first_has_video = first_info
+        .streams
+        .iter()
+        .any(|stream| stream.kind == MediaStreamKind::Video);
+    let first_has_audio = first_info
+        .streams
+        .iter()
+        .any(|stream| stream.kind == MediaStreamKind::Audio);
+    let second_has_video = second_info
+        .streams
+        .iter()
+        .any(|stream| stream.kind == MediaStreamKind::Video);
+    let second_has_audio = second_info
+        .streams
+        .iter()
+        .any(|stream| stream.kind == MediaStreamKind::Audio);
+    let (video, audio, video_info, audio_info) = match (
+        first_has_video,
+        first_has_audio,
+        second_has_video,
+        second_has_audio,
+    ) {
+        (true, false, false, true) => (&outputs[0], &outputs[1], &first_info, &second_info),
+        (false, true, true, false) => (&outputs[1], &outputs[0], &second_info, &first_info),
+        _ => return Err(YtDlpError::UnmergedOutput.into()),
+    };
+
+    let output_name = if video_info.streams.iter().any(|stream| {
+        stream.kind == MediaStreamKind::Video
+            && stream
+                .codec
+                .as_deref()
+                .is_some_and(|codec| codec.eq_ignore_ascii_case("h264"))
+    }) && audio_info.streams.iter().any(|stream| {
+        stream.kind == MediaStreamKind::Audio
+            && stream
+                .codec
+                .as_deref()
+                .is_some_and(|codec| codec.eq_ignore_ascii_case("aac"))
+    }) {
+        MERGED_OUTPUT_MP4_NAME
+    } else {
+        MERGED_OUTPUT_MKV_NAME
+    };
+    let output = workspace.join(output_name);
+    processor
+        .merge_audio_video(video, audio, &output, cancellation)
+        .await
+        .map_err(map_native_merge_error)?;
+    Ok(output)
+}
+
+fn map_native_merge_error(error: FfmpegError) -> DownloadEngineError {
+    match error {
+        FfmpegError::Cancelled => DownloadEngineError::Cancelled,
+        FfmpegError::NativeUnsupported => YtDlpError::UnmergedOutput.into(),
+        _ => YtDlpError::NativeMergeFailed.into(),
+    }
+}
+
+async fn merged_output_if_present(workspace: &Path) -> Result<Option<PathBuf>, YtDlpError> {
+    let mut merged_output = None;
+    for name in MERGED_OUTPUT_NAMES {
+        let output = workspace.join(name);
+        match tokio::fs::symlink_metadata(&output).await {
+            Ok(metadata) if metadata.file_type().is_file() && merged_output.is_none() => {
+                merged_output = Some(output)
+            }
+            Ok(_) => return Err(YtDlpError::OutputUnavailable),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err(YtDlpError::OutputUnavailable),
+        }
+    }
+    Ok(merged_output)
+}
+
+async fn find_output_candidates(workspace: &Path) -> Result<Vec<PathBuf>, YtDlpError> {
     let mut entries = tokio::fs::read_dir(workspace)
         .await
         .map_err(|_| YtDlpError::OutputUnavailable)?;
-    let mut output = None;
+    let mut outputs = Vec::new();
     while let Some(entry) = entries
         .next_entry()
         .await
@@ -1642,12 +1804,12 @@ async fn find_output(workspace: &Path) -> Result<PathBuf, YtDlpError> {
         {
             continue;
         }
-        if output.is_some() {
+        outputs.push(path);
+        if outputs.len() > 2 {
             return Err(YtDlpError::UnmergedOutput);
         }
-        output = Some(path);
     }
-    output.ok_or(YtDlpError::OutputUnavailable)
+    Ok(outputs)
 }
 
 async fn files_equal(left: &Path, right: &Path) -> Result<bool, DownloadEngineError> {
@@ -2541,6 +2703,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_large_adaptive_format_lists_within_the_output_limit() -> Result<(), Box<dyn Error>> {
+        let large_url = format!("https://example.test/{}", "x".repeat(64 * 1024));
+        let formats = (0..183)
+            .map(|index| {
+                serde_json::json!({
+                    "format_id": index.to_string(),
+                    "ext": "mp4",
+                    "height": 720,
+                    "vcodec": "avc1",
+                    "acodec": "none",
+                    "url": large_url.clone()
+                })
+            })
+            .collect::<Vec<_>>();
+        let bytes = serde_json::to_vec(&serde_json::json!({"formats": formats}))?;
+        assert!(bytes.len() > 2 * 1024 * 1024);
+        assert!(bytes.len() <= MAX_FORMAT_OUTPUT_BYTES);
+
+        let parsed = parse_format_output(&bytes)?;
+        assert_eq!(parsed.len(), MAX_DISCOVERED_FORMATS);
+        Ok(())
+    }
+
+    #[test]
     fn runtime_failure_diagnostic_does_not_include_raw_details() {
         let error = YtDlpError::RuntimeFailure(
             "request failed for https://private.example/video?token=secret".to_owned(),
@@ -2557,6 +2743,22 @@ mod tests {
             },
         );
         assert_eq!(download_failure_diagnostic_code(&error), "progress");
+    }
+
+    #[test]
+    fn native_merge_failures_have_stable_diagnostics() {
+        assert_eq!(
+            download_failure_diagnostic_code(&map_native_merge_error(
+                FfmpegError::InvalidConfiguration
+            )),
+            "native_merge_failed"
+        );
+        assert_eq!(
+            download_failure_diagnostic_code(&map_native_merge_error(
+                FfmpegError::NativeUnsupported
+            )),
+            "unmerged_output"
+        );
     }
 
     #[test]
@@ -2598,7 +2800,7 @@ mod tests {
             .iter()
             .position(|argument| argument == OsStr::new("--format"))
             .expect("format option is present");
-        assert_eq!(args[format_index + 1], OsStr::new("137+bestaudio/137"));
+        assert_eq!(args[format_index + 1], OsStr::new("137,bestaudio"));
         assert!(
             !args
                 .iter()
@@ -2624,7 +2826,20 @@ mod tests {
             .iter()
             .position(|argument| argument == OsStr::new("--format"))
             .expect("format option is present");
-        assert_eq!(args[format_index + 1], OsStr::new("best"));
+        assert_eq!(
+            args[format_index + 1],
+            OsStr::new(
+                "bestvideo[ext=webm]/bestvideo[ext=mp4][vcodec^=avc1],bestaudio[ext=webm]/bestaudio[ext=m4a][acodec^=mp4a]"
+            )
+        );
+        let output_index = args
+            .iter()
+            .position(|argument| argument == OsStr::new("--output"))
+            .expect("output template is present");
+        assert_eq!(
+            args[output_index + 1],
+            OsStr::new("%(id)s.%(format_id)s.%(ext)s")
+        );
     }
 
     #[test]
@@ -2764,6 +2979,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovers_a_native_merged_output_without_a_finalization_record()
+    -> Result<(), Box<dyn Error>> {
+        let runner = FakeRunner::default();
+        let state = Arc::clone(&runner.state);
+        let (engine, base, id) = fixture("https://example.test/video", runner).await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Preparing)
+            .await?;
+        engine
+            .state_machine
+            .transition(id, DownloadStatus::Downloading)
+            .await?;
+        engine.state_machine.recover_interrupted(id).await?;
+
+        let destination = base.join("video.webm");
+        let workspace = workspace_path(&destination, id);
+        tokio::fs::create_dir_all(&workspace).await?;
+        tokio::fs::write(workspace.join("video.f616.mp4"), b"video stream").await?;
+        tokio::fs::write(workspace.join("audio.f251.webm"), b"audio stream").await?;
+        tokio::fs::write(workspace.join(MERGED_OUTPUT_MKV_NAME), b"merged media").await?;
+
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        let completed = engine.download(id, cancellation).await?;
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        assert_eq!(tokio::fs::read(&destination).await?, b"merged media");
+        assert_eq!(state.lock().expect("test runner mutex").run_count, 0);
+        assert!(!workspace.exists());
+        tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn rejects_embedded_credentials_before_starting_process() -> Result<(), Box<dyn Error>> {
         let runner = FakeRunner::default();
         let state = Arc::clone(&runner.state);
@@ -2785,7 +3033,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_merged_format_before_starting_process() -> Result<(), Box<dyn Error>> {
+    async fn selects_separate_streams_for_native_postprocessing() -> Result<(), Box<dyn Error>> {
         let runner = FakeRunner::default();
         let state = Arc::clone(&runner.state);
         let (engine, base, id) = fixture_with_format(
@@ -2796,21 +3044,40 @@ mod tests {
         .await?;
         let (_cancel_sender, cancellation) = watch::channel(false);
 
-        assert!(matches!(
-            engine.download(id, cancellation).await,
-            Err(DownloadEngineError::YtDlp(
-                YtDlpError::NativePostprocessingUnsupported
-            ))
-        ));
-        assert_eq!(state.lock().expect("test runner mutex").run_count, 0);
-        assert!(
-            engine
-                .repository
-                .get(id)
-                .await?
-                .is_some_and(|item| item.status() == DownloadStatus::Failed)
-        );
+        let completed = engine.download(id, cancellation).await?;
+        assert_eq!(completed.status(), DownloadStatus::Completed);
+        {
+            let state = state.lock().expect("test runner mutex");
+            assert_eq!(state.run_count, 1);
+            let format_index = state
+                .arguments
+                .iter()
+                .position(|argument| argument == "--format")
+                .expect("format option is present");
+            assert_eq!(state.arguments[format_index + 1], "602,bestaudio");
+        }
         tokio::fs::remove_dir_all(base).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reports_unsupported_separate_streams_without_publishing() -> Result<(), Box<dyn Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let processor = FfmpegProcessor::initialize(FfmpegConfig::new()).await?;
+        let video = directory.path().join("video.f616.mp4");
+        let audio = directory.path().join("audio.f251.webm");
+        tokio::fs::write(&video, b"not a video stream").await?;
+        tokio::fs::write(&audio, b"not an audio stream").await?;
+
+        let (_cancel_sender, cancellation) = watch::channel(false);
+        let result = merge_output_candidates(&processor, directory.path(), cancellation).await;
+
+        assert!(matches!(
+            result,
+            Err(DownloadEngineError::YtDlp(YtDlpError::UnmergedOutput))
+        ));
+        assert!(!directory.path().join(MERGED_OUTPUT_MKV_NAME).exists());
         Ok(())
     }
 
@@ -2846,7 +3113,7 @@ mod tests {
                     .position(|argument| argument == "--format")
                     .expect("format option is present")
                     + 1],
-                "best"
+                "bestvideo[ext=webm]/bestvideo[ext=mp4][vcodec^=avc1],bestaudio[ext=webm]/bestaudio[ext=m4a][acodec^=mp4a]"
             );
         }
         tokio::fs::remove_dir_all(base).await?;

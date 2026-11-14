@@ -364,16 +364,9 @@ impl FfmpegProcessor {
 
         let video = canonical_input(video_input.as_ref()).await?;
         let audio = canonical_input(audio_input.as_ref()).await?;
-        let destination =
-            canonical_input(output.as_ref().parent().unwrap_or(Path::new("."))).await?;
-        let destination = destination.join(
-            output
-                .as_ref()
-                .file_name()
-                .ok_or(FfmpegError::InvalidOutput)?,
-        );
-        if tokio::fs::symlink_metadata(&destination).await.is_ok() {
-            return Err(FfmpegError::DestinationExists);
+        let destination = resolve_destination(output.as_ref(), &video).await?;
+        if same_path(&audio, &destination) {
+            return Err(FfmpegError::InputOutputCollision);
         }
 
         if is_mp4_path(&video) && is_mp4_path(&audio) && uses_mp4_output(&destination) {
@@ -844,7 +837,9 @@ impl MediaProcessRequest {
 fn is_mp4_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("m4a")
+        })
 }
 
 fn uses_mp4_output(path: &Path) -> bool {
@@ -1031,6 +1026,31 @@ mod native_only_tests {
             .expect("write unsupported media");
         assert!(matches!(
             processor.probe(&unsupported, cancellation).await,
+            Err(FfmpegError::NativeUnsupported)
+        ));
+    }
+
+    #[tokio::test]
+    async fn audio_video_merge_accepts_a_directory_as_the_output_parent() {
+        let directory = tempdir().expect("temporary directory");
+        let video = directory.path().join("video.mp4");
+        let audio = directory.path().join("audio.webm");
+        let output = directory.path().join("merged.mkv");
+        tokio::fs::write(&video, b"unsupported video")
+            .await
+            .expect("write video input");
+        tokio::fs::write(&audio, b"unsupported audio")
+            .await
+            .expect("write audio input");
+        let processor = FfmpegProcessor::initialize(FfmpegConfig::new())
+            .await
+            .expect("native processor initialization");
+        let (_cancel_sender, cancellation) = watch::channel(false);
+
+        assert!(matches!(
+            processor
+                .merge_audio_video(&video, &audio, &output, cancellation)
+                .await,
             Err(FfmpegError::NativeUnsupported)
         ));
     }

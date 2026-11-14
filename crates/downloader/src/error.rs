@@ -202,10 +202,19 @@ impl DownloadEngineError {
                 "The selected video and audio streams could not be merged by the native media processor."
                     .to_owned(),
             ),
+            Self::YtDlp(YtDlpError::NativeMergeFailed) => (
+                DownloadErrorCode::Engine,
+                "The built-in media processor failed while merging the video and audio streams."
+                    .to_owned(),
+            ),
             Self::YtDlp(YtDlpError::NativePostprocessingUnsupported) => (
                 DownloadErrorCode::Engine,
                 "This media selection requires post-processing that is not supported on this platform."
                     .to_owned(),
+            ),
+            Self::YtDlp(YtDlpError::NativeProcessorInitialization) => (
+                DownloadErrorCode::Engine,
+                "The built-in media processor could not be initialized.".to_owned(),
             ),
             Self::YtDlp(_) => (
                 DownloadErrorCode::Engine,

@@ -234,18 +234,6 @@ impl NativeOxideavProcessor {
         {
             return Err(NativeOxideavError::UnsupportedInput);
         }
-        let video_duration = video_demuxer
-            .duration_micros()
-            .filter(|duration| *duration > 0)
-            .ok_or(NativeOxideavError::UnsupportedInput)?;
-        let audio_duration = audio_demuxer
-            .duration_micros()
-            .filter(|duration| *duration > 0)
-            .ok_or(NativeOxideavError::UnsupportedInput)?;
-        if video_duration != audio_duration {
-            return Err(NativeOxideavError::UnsupportedInput);
-        }
-
         let mut video_stream = video_demuxer
             .streams()
             .iter()
