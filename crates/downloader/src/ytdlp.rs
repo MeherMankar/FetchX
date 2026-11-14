@@ -1254,7 +1254,6 @@ fn build_arguments(
         "--no-plugin-dirs".into(),
         "--no-colors".into(),
         "--no-playlist".into(),
-        "--force-overwrites".into(),
         "--continue".into(),
         "--no-cache-dir".into(),
         "--no-write-thumbnail".into(),
@@ -2811,6 +2810,24 @@ mod tests {
             .position(|argument| argument == OsStr::new("--limit-rate"))
             .expect("rate limit option is present");
         assert_eq!(args[limit_index + 1], OsStr::new("4096"));
+    }
+
+    #[test]
+    fn retry_arguments_resume_existing_partial_files_without_forcing_overwrite() {
+        let args = build_arguments(
+            Path::new("workspace"),
+            "https://example.test/video",
+            Some("571+bestaudio/571"),
+            None,
+            None,
+        );
+
+        assert!(args.iter().any(|arg| arg == OsStr::new("--continue")));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == OsStr::new("--force-overwrites"))
+        );
     }
 
     #[test]
