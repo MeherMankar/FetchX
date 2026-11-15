@@ -1,4 +1,4 @@
-//! Native parallel HLS (HTTP Live Streaming) download engine.
+﻿//! Native parallel HLS (HTTP Live Streaming) download engine.
 //!
 //! # How it works
 //!
@@ -57,16 +57,18 @@ const DEFAULT_USER_AGENT: &str = concat!("fetchx/", env!("CARGO_PKG_VERSION"));
 const AES128_BLOCK_SIZE: usize = 16;
 const AES128_KEY_LEN: usize = 16;
 
-// ── Configuration ─────────────────────────────────────────────────────────────
+// ── Configuration ──────────────────────────────────────────────────────────────
 
 /// Configuration for the HLS engine.
 #[derive(Clone, Debug)]
 pub struct HlsEngineConfig {
-    /// Maximum number of concurrent segment downloads. Clamped to 1–[`MAX_SEGMENT_CONCURRENCY`].
+    /// Maximum number of concurrent segment downloads. Clamped to 1â€“[`MAX_SEGMENT_CONCURRENCY`].
     pub segment_concurrency: usize,
     pub connect_timeout: Duration,
     pub read_timeout: Duration,
     pub user_agent: String,
+    pub live_timeout_seconds: u64,
+    pub extra_headers: Vec<(String, String)>,
 }
 
 impl Default for HlsEngineConfig {
@@ -76,6 +78,8 @@ impl Default for HlsEngineConfig {
             connect_timeout: CONNECT_TIMEOUT,
             read_timeout: READ_TIMEOUT,
             user_agent: DEFAULT_USER_AGENT.to_owned(),
+            live_timeout_seconds: 60,
+            extra_headers: Vec::new(),
         }
     }
 }
@@ -114,11 +118,18 @@ struct SegmentAttemptError {
 }
 
 /// Outcome of parsing an `.m3u8` file.
+/// Parsed media playlist metadata including live-stream detection.
+struct MediaPlaylistInfo {
+    segments: Vec<HlsSegment>,
+    has_endlist: bool,
+    target_duration_secs: u64,
+}
+
 enum PlaylistKind {
     /// A master playlist pointing to variant streams.
     Master(Vec<VariantStream>),
     /// A media playlist with a concrete segment list.
-    Media(Vec<HlsSegment>),
+    Media(MediaPlaylistInfo),
 }
 
 struct VariantStream {
@@ -165,7 +176,7 @@ where
         })
     }
 
-    // ── Entry point ───────────────────────────────────────────────────────────
+    // ── Entry point ────────────────────────────────────────────────────────────
 
     async fn download_controlled(
         &self,
@@ -232,7 +243,7 @@ where
         }
     }
 
-    // ── Main job logic ────────────────────────────────────────────────────────
+    // ── Main job logic ──────────────────────────────────────────────────────
 
     async fn run_job(
         &self,
@@ -278,13 +289,14 @@ where
             Err(error) => return Err(DownloadEngineError::Io(error)),
         }
 
-        let segments = self.resolve_segments(url, control).await?;
+        let playlist_info = self.resolve_segments(url, control).await?;
+        let segments = playlist_info.segments;
 
         if segments.is_empty() {
             return Err(DownloadEngineError::InvalidUrl);
         }
 
-        // ── Step 2: Determine workspace paths ──────────────────────────────────
+        // ── Step 2: Determine workspace paths ─────────────────────────────────
         // Create or reuse existing workspace (for resume).
         ensure_workspace(&workspace).await?;
 
@@ -361,7 +373,7 @@ where
         &self,
         url: &Url,
         control: &mut ManagedDownloadControl,
-    ) -> Result<Vec<HlsSegment>, DownloadEngineError> {
+    ) -> Result<MediaPlaylistInfo, DownloadEngineError> {
         let mut current_url = url.clone();
         for _ in 0..5 {
             // Up to 5 redirects through master → variant chains.
@@ -371,7 +383,7 @@ where
             let body = self.fetch_manifest(&current_url).await?;
             let text = String::from_utf8(body).map_err(|_| DownloadEngineError::InvalidUrl)?;
             match parse_playlist(&text, &current_url)? {
-                PlaylistKind::Media(segments) => return Ok(segments),
+                PlaylistKind::Media(info) => return Ok(info),
                 PlaylistKind::Master(variants) => {
                     let best = variants
                         .into_iter()
@@ -585,7 +597,7 @@ where
         Ok(())
     }
 
-    // ── State helpers ─────────────────────────────────────────────────────────
+    // ── State helpers ────────────────────────────────────────────────────────
 
     async fn transition_to_cancelled(&self, id: DownloadId) -> Result<(), DownloadEngineError> {
         match self
@@ -657,7 +669,7 @@ where
     }
 }
 
-// ── DownloadEngine / ManagedDownloadEngine impls ──────────────────────────────
+// ── DownloadEngine / ManagedDownloadEngine impls ─────────────────────────────
 
 impl<R> DownloadEngine for HlsEngine<R>
 where
@@ -708,7 +720,7 @@ where
     }
 }
 
-// ── Segment download (single segment with retries) ────────────────────────────
+// ── Segment download (single segment with retries) ───────────────────────────
 
 /// Downloads a single HLS segment with bounded retries and exponential back-off.
 async fn download_one_segment(
@@ -950,7 +962,7 @@ async fn try_download_segment(
     Ok(written)
 }
 
-// ── AES-128 decryption ────────────────────────────────────────────────────────
+// ── AES-128 decryption ──────────────────────────────────────────────────────
 
 /// Decrypts a segment file in-place using AES-128-CBC.
 ///
@@ -1064,7 +1076,7 @@ fn aes128_cbc_decrypt(key: &[u8; 16], iv: &[u8; 16], ciphertext: &[u8]) -> Optio
     Some(plaintext)
 }
 
-/// AES-128 key schedule — produces 11 × 16-byte round keys.
+/// AES-128 key schedule — produces 11 Ã— 16-byte round keys.
 fn aes128_key_schedule(key: &[u8; 16]) -> [[u8; 16]; 11] {
     // AES S-box.
     #[rustfmt::skip]
@@ -1233,7 +1245,7 @@ fn gf_mul(mut a: u8, mut b: u8) -> u8 {
     result
 }
 
-// ── Segment assembly ──────────────────────────────────────────────────────────
+// ── Segment assembly ────────────────────────────────────────────────────────
 
 /// Concatenates all downloaded segment files into a single `.ts` file.
 async fn assemble_segments(
@@ -1263,7 +1275,7 @@ async fn assemble_segments(
     Ok(())
 }
 
-// ── Manifest parser ───────────────────────────────────────────────────────────
+// ── Manifest parser ────────────────────────────────────────────────────────────
 
 /// Parses an M3U8 text into either a master or media playlist.
 fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEngineError> {
@@ -1283,7 +1295,7 @@ fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEn
         )));
     }
 
-    Ok(PlaylistKind::Media(parse_media_playlist(&lines, base_url)?))
+    Ok(PlaylistKind::Media(parse_media_playlist_info(&lines, base_url)?))
 }
 
 fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
@@ -1304,6 +1316,20 @@ fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
         }
     }
     variants
+}
+
+fn parse_media_playlist_info(
+    lines: &[&str],
+    base_url: &Url,
+) -> Result<MediaPlaylistInfo, DownloadEngineError> {
+    let has_endlist = lines.iter().any(|l| l.trim() == "#EXT-X-ENDLIST");
+    let target_duration_secs = lines
+        .iter()
+        .find_map(|l| l.trim().strip_prefix("#EXT-X-TARGETDURATION:"))
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(2);
+    let segments = parse_media_playlist(lines, base_url)?;
+    Ok(MediaPlaylistInfo { segments, has_endlist, target_duration_secs })
 }
 
 fn parse_media_playlist(
@@ -1388,7 +1414,7 @@ fn parse_media_playlist(
     Ok(segments)
 }
 
-// ── Manifest parsing helpers ──────────────────────────────────────────────────
+// ── Manifest parsing helpers ─────────────────────────────────────────────────
 
 fn extract_attribute<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let search = format!("{key}=");
@@ -1435,7 +1461,7 @@ fn resolve_uri(uri: &str, base: &Url) -> String {
         .unwrap_or_else(|_| uri.to_owned())
 }
 
-// ── Progress persistence ──────────────────────────────────────────────────────
+// ── Progress persistence ─────────────────────────────────────────────────────
 
 async fn update_progress<R: DownloadRepository>(
     repository: &R,
@@ -1485,7 +1511,7 @@ async fn update_progress<R: DownloadRepository>(
     .into())
 }
 
-// ── Filesystem helpers ────────────────────────────────────────────────────────
+// ── Filesystem helpers ──────────────────────────────────────────────────────
 
 fn hls_workspace_path(destination: &Path, id: DownloadId) -> PathBuf {
     let parent = destination.parent().filter(|p| !p.as_os_str().is_empty());
@@ -1722,7 +1748,7 @@ mod tests {
         time::timeout,
     };
 
-    // ── Manifest parsing ──────────────────────────────────────────────────────
+    // ── Manifest parsing ─────────────────────────────────────────────────────
 
     struct LocalResponse {
         status: u16,
@@ -1974,7 +2000,7 @@ mid.m3u8
     #[test]
     fn parses_three_segment_vod_media_playlist() {
         let segments = match parse_playlist(MEDIA_PLAYLIST, &base()).unwrap() {
-            PlaylistKind::Media(s) => s,
+            PlaylistKind::Media(info) => info.segments,
             PlaylistKind::Master(_) => panic!("expected media playlist"),
         };
         assert_eq!(segments.len(), 3);
@@ -2014,7 +2040,7 @@ seg0.ts
 #EXT-X-ENDLIST
 "#;
         let segments = match parse_playlist(playlist, &base()).unwrap() {
-            PlaylistKind::Media(s) => s,
+            PlaylistKind::Media(info) => info.segments,
             _ => panic!("expected media"),
         };
         let key = segments[0].key.as_ref().expect("key present");
@@ -2043,7 +2069,7 @@ seg0.ts
         assert_eq!(abs, "https://other.cdn.test/seg0.ts");
     }
 
-    // ── AES-128 decryption ────────────────────────────────────────────────────
+    // ── AES-128 decryption ───────────────────────────────────────────────────
 
     #[test]
     fn aes128_decrypts_known_test_vector() {
@@ -2110,7 +2136,7 @@ seg0.ts
         assert_eq!(iv, expected);
     }
 
-    // ── Integration: engine creation ──────────────────────────────────────────
+    // ── Integration: engine creation ─────────────────────────────────────────
 
     #[tokio::test]
     async fn hls_engine_creates_with_default_config() {
@@ -2635,3 +2661,6 @@ seg0.ts
         Ok(())
     }
 }
+
+
+
