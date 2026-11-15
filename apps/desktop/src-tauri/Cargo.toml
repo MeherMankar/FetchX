@@ -21,7 +21,6 @@ fetchx-remote-server = { path = "../../../crates/remote-server" }
 fetchx-scheduler = { path = "../../../crates/scheduler" }
 fetchx-storage = { path = "../../../crates/storage" }
 reqwest = { workspace = true, features = ["stream"] }
-sha2 = "0.10"
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }

@@ -16,15 +16,6 @@ pause/resume/cancel/removal controls, startup recovery, and a global connection 
 Tauri 2 desktop foundation is in place with a minimal React + TypeScript shell. It
 currently exposes direct HTTP/HTTPS downloads, queue controls, and explicit refresh;
 live progress notifications and engine selection are not yet wired to the desktop.
-The desktop app includes an optional per-user helper manager for yt-dlp. Installs
-are initiated explicitly in Settings, use allowlisted
-HTTPS distributions, verify published SHA-256 checksums, validate Windows x64 PE
-architecture and executable version output, and install into the FetchX application
-data `bin` directory without changing the system PATH. The supported source is the
-yt-dlp GitHub release digest. The helper manager is Windows desktop only; helper
-installation is optional and does not affect Android or CLI startup. Installed
-engine paths are persisted and take effect after restarting FetchX.
-
 The downloader crate includes a native media post-processing service for metadata
 inspection, remuxing, and supported audio conversions. It uses FetchX's native Rust
 MP4 and OxideAV paths for probing, stream-copy remuxing, and merging, with Symphonia
@@ -32,9 +23,10 @@ and native audio codecs for supported audio conversions. No upstream FFmpeg sour
 library, or executable is bundled or linked. Native processing is bounded, supports
 cancellation but not active pause/resume, caps output at 100 GiB by default
 (configurable up to 1 TiB), and does not own download lifecycle or scheduling. The
-yt-dlp now uses the `yt-dlp-rs` Rust library in-process by default, pinned to a Git
-commit and declared directly from its upstream repository. An explicitly configured
-executable remains available as a compatibility override.
+yt-dlp uses the pinned `yt-dlp-rs` Rust library in-process across the Android,
+desktop, and CLI apps. The legacy executable-path setting is ignored and cleared
+when desktop engine settings are saved; no yt-dlp executable or Python runtime is
+installed or launched by these apps.
 An initial native Rust MP4 path probes MP4 metadata and stream-copies supported H.264/AAC,
 HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video and one
 audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
@@ -85,11 +77,9 @@ controls and survives restart.
 
 The native yt-dlp engine supports selectable media formats and uses FetchX's native
 processors for supported stream merges and MP3 conversion. Other codecs, containers,
-or post-processing fail explicitly when unsupported. Android starts its legacy
-Chaquopy compatibility runtime only when SponsorBlock, subtitle downloading, or
-metadata embedding is enabled; those settings are read at app startup, so changes
-take effect after restarting the app. No upstream FFmpeg library or executable is
-bundled or launched by the native path.
+or post-processing fail explicitly when unsupported. SponsorBlock, subtitle
+post-processing, and metadata embedding are not currently exposed by the Android
+settings because those options are not supported by the native integration.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`

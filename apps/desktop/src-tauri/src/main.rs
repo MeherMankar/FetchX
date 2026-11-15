@@ -7,7 +7,6 @@ mod browser_ipc;
 mod commands;
 mod engine_commands;
 mod events;
-mod helper_manager;
 mod media_processing;
 
 fn main() {

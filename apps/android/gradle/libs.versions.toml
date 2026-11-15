@@ -8,7 +8,6 @@ activityCompose = "1.9.3"
 navigationCompose = "2.8.5"
 coroutines = "1.9.0"
 geckoview = "158.0.20261007201254"
-chaquopy = "17.1.0"
 androidxTestRunner = "1.6.2"
 androidxTestJunit = "1.2.1"
 
@@ -40,4 +39,3 @@ geckoview = { group = "org.mozilla.geckoview", name = "geckoview", version.ref =
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-chaquopy = { id = "com.chaquo.python", version.ref = "chaquopy" }

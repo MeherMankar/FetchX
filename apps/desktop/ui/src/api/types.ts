@@ -213,7 +213,6 @@ export interface DirectHttpConfigDto {
 
 export interface YtDlpConfigDto {
   enabled: boolean;
-  executable_path: string | null;
 }
 
 export interface EngineConfigDto {
@@ -253,7 +252,6 @@ export interface WeeklyQueueScheduleDto {
 
 export interface SaveYtDlpConfigRequest {
   enabled: boolean;
-  executable_path: string | null;
 }
 
 export interface SaveEngineConfigRequest {
@@ -264,13 +262,12 @@ export interface SaveEngineConfigRequest {
 
 export interface DiagnosticResult {
   available: boolean;
-  executable: string | null;
   version: string | null;
   message: string;
 }
 
 export interface EngineIpcError {
-  code: "invalid_config" | "executable_not_found" | "executable_invalid";
+  code: "invalid_config";
   message: string;
 }
 
@@ -292,23 +289,3 @@ export interface EngineStatus {
   native_torrent: EngineInstanceStatus;
 }
 
-export type ManagedHelperId = "yt_dlp";
-
-export interface HelperStatus {
-  helper: ManagedHelperId;
-  installed: boolean;
-  executable_path: string | null;
-  version: string | null;
-  architecture: string | null;
-  available: boolean;
-  validation: string;
-  install_supported: boolean;
-}
-
-export interface HelperInstallProgress {
-  helper: ManagedHelperId;
-  phase: "downloading" | "verifying" | "installing" | "completed" | "failed" | "cancelled";
-  received_bytes: number;
-  total_bytes: number | null;
-  message: string | null;
-}

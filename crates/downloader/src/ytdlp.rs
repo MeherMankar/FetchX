@@ -4,7 +4,6 @@ use std::{
     io,
     path::{Path, PathBuf},
     pin::Pin,
-    process::{ExitStatus, Stdio},
     sync::Arc,
     time::Duration,
 };
@@ -18,11 +17,9 @@ use fetchx_storage::DownloadRepository;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader},
-    process::{Child, Command},
+    io::{AsyncReadExt, AsyncWriteExt},
     sync::{mpsc, watch},
-    task::JoinHandle,
-    time::{Instant, timeout},
+    time::Instant,
 };
 use tracing::{info, warn};
 
@@ -32,18 +29,14 @@ use crate::{
     ResourceDemand, is_dash_url,
 };
 
-// Cold Python/packaged-runtime startup can exceed five seconds on Windows and
-// on first launch in Android's embedded runtime. Keep validation bounded, but
-// leave enough time for a healthy binary to initialize.
+// Explicit process-runner integrations may need startup time on first launch.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 const FORMAT_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const VERSION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
-const PROCESS_KILL_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_VERSION_OUTPUT_BYTES: usize = 128;
 /// YouTube metadata can exceed 10 MiB when it includes many adaptive formats.
 pub(crate) const MAX_FORMAT_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DISCOVERED_FORMATS: usize = 100;
-const MAX_PROGRESS_LINE_BYTES: usize = 1024;
 const PROGRESS_PREFIX: &str = "FETCHX_PROGRESS|";
 const PROGRESS_TEMPLATE: &str = "download:FETCHX_PROGRESS|%(progress._percent_str)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s";
 const AUTO_FORMAT_SELECTOR: &str = "bestvideo[ext=mp4][vcodec^=avc1]/bestvideo[ext=webm],bestaudio[ext=m4a][acodec^=mp4a]/bestaudio[ext=webm]";
@@ -77,6 +70,10 @@ impl YtDlpConfig {
         }
     }
 
+    /// Sets the executable used by explicit process-runner integrations.
+    ///
+    /// [`YtDlpEngine::initialize`] always uses the in-process Rust engine and
+    /// ignores this compatibility setting.
     pub fn with_executable(mut self, executable: impl Into<PathBuf>) -> Self {
         self.executable = Some(executable.into());
         self
@@ -287,11 +284,8 @@ impl<R> YtDlpEngine<R>
 where
     R: DownloadRepository + Clone,
 {
+    /// Initializes FetchX's in-process Rust yt-dlp runner.
     pub async fn initialize(repository: R, config: YtDlpConfig) -> Result<Self, YtDlpError> {
-        if config.executable.is_some() {
-            return Self::initialize_with_runner(repository, config, Arc::new(TokioYtDlpRunner))
-                .await;
-        }
         Self::initialize_with_runner_and_executable(
             repository,
             config,
@@ -1903,260 +1897,6 @@ fn next_timestamp(previous: Timestamp) -> Result<Timestamp, DownloadEngineError>
     Ok(Timestamp::now()?.max(Timestamp::from_unix_millis(next)))
 }
 
-struct TokioYtDlpRunner;
-
-impl YtDlpProcessRunner for TokioYtDlpRunner {
-    fn validate_version<'a>(
-        &'a self,
-        executable: &'a Path,
-        command_timeout: Duration,
-    ) -> YtDlpRunnerFuture<'a, Result<String, YtDlpError>> {
-        Box::pin(async move {
-            let mut command = Command::new(executable);
-            command
-                .arg("--ignore-config")
-                .arg("--no-plugin-dirs")
-                .arg("--version")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true);
-            // Suppress the console window that would otherwise flash on Windows.
-            #[cfg(windows)]
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
-            let result = timeout(command_timeout, async {
-                let stdout = child.stdout.take().ok_or(YtDlpError::InvalidVersion)?;
-                let mut bytes = Vec::new();
-                stdout
-                    .take((MAX_VERSION_OUTPUT_BYTES + 1) as u64)
-                    .read_to_end(&mut bytes)
-                    .await
-                    .map_err(|_| YtDlpError::InvalidVersion)?;
-                let status = child.wait().await.map_err(|_| YtDlpError::InvalidVersion)?;
-                if !status.success() || bytes.is_empty() || bytes.len() > MAX_VERSION_OUTPUT_BYTES {
-                    return Err(YtDlpError::InvalidVersion);
-                }
-                let version = String::from_utf8(bytes).map_err(|_| YtDlpError::InvalidVersion)?;
-                Ok(version.trim().to_owned())
-            })
-            .await;
-            match result {
-                Ok(result) => result,
-                Err(_) => {
-                    terminate_child(&mut child).await?;
-                    Err(YtDlpError::VersionTimeout)
-                }
-            }
-        })
-    }
-
-    fn run<'a>(
-        &'a self,
-        executable: &'a Path,
-        arguments: &'a [OsString],
-        mut stop: watch::Receiver<bool>,
-        events: mpsc::Sender<YtDlpRunnerEvent>,
-    ) -> YtDlpRunnerFuture<'a, Result<YtDlpProcessExit, YtDlpError>> {
-        Box::pin(async move {
-            if *stop.borrow_and_update() {
-                return Err(YtDlpError::ProcessCleanup);
-            }
-            let mut command = Command::new(executable);
-            command
-                .args(arguments)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            // Suppress the console window that would otherwise flash on Windows.
-            #[cfg(windows)]
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
-            let stdout = child.stdout.take().ok_or(YtDlpError::ProcessRunner)?;
-            let stderr = child.stderr.take().ok_or(YtDlpError::ProcessRunner)?;
-            let stdout_events = events.clone();
-            let stderr_events = events;
-            let stdout_reader = tokio::spawn(read_progress(stdout, stdout_events));
-            let stderr_reader = tokio::spawn(read_progress(stderr, stderr_events));
-            let exit = tokio::select! {
-                biased;
-                changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow_and_update() {
-                        terminate_child(&mut child).await?
-                    } else {
-                        child.wait().await.map_err(|_| YtDlpError::ProcessRunner)?
-                    }
-                }
-                status = child.wait() => status.map_err(|_| YtDlpError::ProcessRunner)?,
-            };
-            let stdout_result = finish_reader(stdout_reader).await;
-            let stderr_result = finish_reader(stderr_reader).await;
-            stdout_result?;
-            stderr_result?;
-            Ok(YtDlpProcessExit {
-                success: exit.success(),
-                code: exit.code(),
-            })
-        })
-    }
-
-    fn discover_formats<'a>(
-        &'a self,
-        executable: &'a Path,
-        url: &'a str,
-        command_timeout: Duration,
-    ) -> YtDlpRunnerFuture<'a, Result<Vec<YtDlpFormat>, YtDlpError>> {
-        Box::pin(async move {
-            let mut command = Command::new(executable);
-            command
-                .args([
-                    "--ignore-config",
-                    "--no-plugin-dirs",
-                    "--no-warnings",
-                    "--quiet",
-                    "--skip-download",
-                    "--no-playlist",
-                    "--dump-single-json",
-                    "--",
-                    url,
-                ])
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .kill_on_drop(true);
-            // Suppress the console window that would otherwise flash on Windows.
-            #[cfg(windows)]
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            let mut child = command.spawn().map_err(|_| YtDlpError::ExecutableStart)?;
-            let result = timeout(command_timeout, async {
-                let stdout = child.stdout.take().ok_or(YtDlpError::ProcessRunner)?;
-                let mut bytes = Vec::new();
-                stdout
-                    .take((MAX_FORMAT_OUTPUT_BYTES + 1) as u64)
-                    .read_to_end(&mut bytes)
-                    .await
-                    .map_err(|_| YtDlpError::ProcessRunner)?;
-                if bytes.len() > MAX_FORMAT_OUTPUT_BYTES {
-                    terminate_child(&mut child).await?;
-                    return Err(YtDlpError::FormatOutputTooLarge);
-                }
-                let status = child.wait().await.map_err(|_| YtDlpError::ProcessRunner)?;
-                if !status.success() {
-                    return Err(YtDlpError::ProcessFailure {
-                        code: status.code(),
-                    });
-                }
-                parse_format_output(&bytes)
-            })
-            .await;
-            match result {
-                Ok(result) => result,
-                Err(_) => {
-                    terminate_child(&mut child).await?;
-                    Err(YtDlpError::FormatDiscoveryTimeout)
-                }
-            }
-        })
-    }
-}
-
-async fn terminate_child(child: &mut Child) -> Result<ExitStatus, YtDlpError> {
-    if child.id().is_none() {
-        return timeout(PROCESS_KILL_TIMEOUT, child.wait())
-            .await
-            .map_err(|_| YtDlpError::ProcessCleanup)?
-            .map_err(|_| YtDlpError::ProcessCleanup);
-    }
-    match timeout(PROCESS_KILL_TIMEOUT, child.kill()).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) if error.kind() == io::ErrorKind::InvalidInput => {}
-        Ok(Err(_)) | Err(_) => return Err(YtDlpError::ProcessCleanup),
-    }
-    timeout(PROCESS_KILL_TIMEOUT, child.wait())
-        .await
-        .map_err(|_| YtDlpError::ProcessCleanup)?
-        .map_err(|_| YtDlpError::ProcessCleanup)
-}
-
-async fn finish_reader(mut reader: JoinHandle<()>) -> Result<(), YtDlpError> {
-    match timeout(PROCESS_KILL_TIMEOUT, &mut reader).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err(YtDlpError::ProcessRunner),
-        Err(_) => {
-            reader.abort();
-            let _ = reader.await;
-            Err(YtDlpError::ProcessCleanup)
-        }
-    }
-}
-
-async fn read_progress<R>(reader: R, events: mpsc::Sender<YtDlpRunnerEvent>)
-where
-    R: AsyncRead + Unpin,
-{
-    let mut reader = BufReader::new(reader);
-    loop {
-        match read_bounded_line(&mut reader, MAX_PROGRESS_LINE_BYTES).await {
-            Ok(Some((line, too_large))) => {
-                let line = String::from_utf8_lossy(&line).into_owned();
-                let event = if too_large {
-                    line.starts_with(PROGRESS_PREFIX)
-                        .then_some(YtDlpRunnerEvent::ProgressOutputTooLarge)
-                } else {
-                    line.starts_with(PROGRESS_PREFIX)
-                        .then_some(YtDlpRunnerEvent::ProgressLine(line))
-                };
-                if let Some(event) = event
-                    && events.send(event).await.is_err()
-                {
-                    break;
-                }
-            }
-            Ok(None) => break,
-            Err(_) => {
-                let _ = events.send(YtDlpRunnerEvent::OutputReadFailed).await;
-                break;
-            }
-        }
-    }
-}
-
-async fn read_bounded_line<R>(reader: &mut R, maximum: usize) -> io::Result<Option<(Vec<u8>, bool)>>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut line = Vec::new();
-    let mut too_large = false;
-    loop {
-        let available = reader.fill_buf().await?;
-        if available.is_empty() {
-            if line.is_empty() && !too_large {
-                return Ok(None);
-            }
-            break;
-        }
-        let consumed = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |index| index + 1);
-        let retained = maximum.saturating_sub(line.len()).min(consumed);
-        line.extend_from_slice(&available[..retained]);
-        if retained < consumed {
-            too_large = true;
-        }
-        let complete = available[..consumed].last() == Some(&b'\n');
-        reader.consume(consumed);
-        if complete {
-            break;
-        }
-    }
-    while matches!(line.last(), Some(b'\n' | b'\r')) {
-        line.pop();
-    }
-    Ok(Some((line, too_large)))
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2171,6 +1911,124 @@ mod tests {
 
     use super::*;
     use crate::{DownloadEngine, ManagedDownloadControl};
+
+    #[derive(Clone)]
+    struct UnusedRepository;
+
+    fn unexpected_repository_call<T>() -> std::future::Ready<Result<T, fetchx_storage::StorageError>>
+    {
+        std::future::ready(Err(fetchx_storage::StorageError::Maintenance(
+            "unexpected repository call during engine initialization".to_owned(),
+        )))
+    }
+
+    impl DownloadRepository for UnusedRepository {
+        fn create(
+            &self,
+            _item: &DownloadItem,
+        ) -> impl Future<Output = Result<(), fetchx_storage::StorageError>> + Send {
+            unexpected_repository_call()
+        }
+
+        fn get(
+            &self,
+            _id: DownloadId,
+        ) -> impl Future<Output = Result<Option<DownloadItem>, fetchx_storage::StorageError>> + Send
+        {
+            std::future::ready(Ok(None))
+        }
+
+        fn list(
+            &self,
+        ) -> impl Future<Output = Result<Vec<DownloadItem>, fetchx_storage::StorageError>> + Send
+        {
+            std::future::ready(Ok(Vec::new()))
+        }
+
+        fn move_to_queue_tail(
+            &self,
+            _id: DownloadId,
+        ) -> impl Future<Output = Result<(), fetchx_storage::StorageError>> + Send {
+            unexpected_repository_call()
+        }
+
+        fn set_queue_order(
+            &self,
+            _ids: &[DownloadId],
+        ) -> impl Future<Output = Result<(), fetchx_storage::StorageError>> + Send {
+            unexpected_repository_call()
+        }
+
+        fn set_priority(
+            &self,
+            _id: DownloadId,
+            _priority: fetchx_models::DownloadPriority,
+        ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
+            std::future::ready(Ok(false))
+        }
+
+        fn save_schedule(
+            &self,
+            _schedule: &fetchx_models::DownloadSchedule,
+        ) -> impl Future<Output = Result<(), fetchx_storage::StorageError>> + Send {
+            unexpected_repository_call()
+        }
+
+        fn get_schedule(
+            &self,
+            _id: DownloadId,
+        ) -> impl Future<
+            Output = Result<Option<fetchx_models::DownloadSchedule>, fetchx_storage::StorageError>,
+        > + Send {
+            std::future::ready(Ok(None))
+        }
+
+        fn list_schedules(
+            &self,
+        ) -> impl Future<
+            Output = Result<Vec<fetchx_models::DownloadSchedule>, fetchx_storage::StorageError>,
+        > + Send {
+            std::future::ready(Ok(Vec::new()))
+        }
+
+        fn delete_schedule(
+            &self,
+            _id: DownloadId,
+        ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
+            std::future::ready(Ok(false))
+        }
+
+        fn update(
+            &self,
+            _item: &DownloadItem,
+        ) -> impl Future<Output = Result<(), fetchx_storage::StorageError>> + Send {
+            unexpected_repository_call()
+        }
+
+        fn update_if_status_current(
+            &self,
+            _item: &DownloadItem,
+            _expected_status: DownloadStatus,
+        ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
+            std::future::ready(Ok(false))
+        }
+
+        fn update_if_status_and_timestamp_current(
+            &self,
+            _item: &DownloadItem,
+            _expected_status: DownloadStatus,
+            _expected_updated_at: Timestamp,
+        ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
+            std::future::ready(Ok(false))
+        }
+
+        fn delete(
+            &self,
+            _id: DownloadId,
+        ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
+            std::future::ready(Ok(false))
+        }
+    }
 
     #[test]
     fn default_version_validation_timeout_allows_cold_runtime_startup() {
@@ -2346,6 +2204,22 @@ mod tests {
                 .version_validation_count,
             2
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_initialization_uses_native_runner_even_with_executable_configured()
+    -> Result<(), Box<dyn Error>> {
+        let directory = tempfile::tempdir()?;
+        let configured_executable = directory.path().join("external-yt-dlp");
+        let engine = YtDlpEngine::initialize(
+            UnusedRepository,
+            YtDlpConfig::new().with_executable(configured_executable.clone()),
+        )
+        .await?;
+
+        assert!(!configured_executable.exists());
+        assert_eq!(engine.executable(), Path::new("fetchx-native-yt-dlp-rs"));
         Ok(())
     }
 

@@ -111,6 +111,8 @@ pub struct CoreServicesConfig {
     pub runtime_dir: PathBuf,
     /// Optional directory containing installer-bundled desktop engine binaries.
     /// Used only to seed engine defaults when no engine config has been stored.
+    /// Retained for configuration compatibility; the native yt-dlp engine
+    /// does not load executables from this directory.
     pub bundled_engines_dir: Option<PathBuf>,
     /// Defers persisted runnable work while a short-lived host performs a CLI
     /// operation. Long-running app and server hosts should leave this false.
@@ -518,7 +520,7 @@ impl CoreServices {
         let engine_config = match engine_config_override {
             Some(config) => config,
             None => {
-                let defaults = bundled_engine_defaults(cfg.bundled_engines_dir.as_deref());
+                let defaults = EngineConfig::default();
                 config_service
                     .initialize_if_missing(&defaults)
                     .await
@@ -2695,13 +2697,9 @@ impl EngineRuntime {
         let native_torrent_metadata = torrent_metadata.clone();
         // Clone the runner before moving it into init_ytdlp so we can also
         // pass it to YtDlpProcessRunnerAdapter for the media extraction registry.
-        let ytdlp_runner_for_registry = ytdlp_runner.clone().or_else(|| {
-            config
-                .yt_dlp
-                .executable_path
-                .is_none()
-                .then(|| Arc::new(NativeYtDlpProcessRunner) as Arc<dyn YtDlpProcessRunner>)
-        });
+        let ytdlp_runner_for_registry = ytdlp_runner
+            .clone()
+            .unwrap_or_else(|| Arc::new(NativeYtDlpProcessRunner));
         let (yt_dlp_engine, ytdlp_avail) =
             init_ytdlp(repository.clone(), config, runtime_dir, ytdlp_runner).await;
         let (native_torrent_engine, native_torrent_avail) =
@@ -2773,8 +2771,7 @@ impl EngineRuntime {
 
         // ── Media extraction registry ────────────────────────────────────
         // Build the ExtractorRegistry here in the composition root.
-        // The adapter delegates to the injected runner. Without an explicit
-        // executable or platform compatibility runtime, that runner is native Rust.
+        // The adapter delegates to the injected runner, or to the native Rust runner.
         let media_registry = {
             let mut registry = ExtractorRegistry::new();
             registry.register(Arc::new(YoutubeExtractor));
@@ -2790,21 +2787,12 @@ impl EngineRuntime {
             registry.register(Arc::new(GlobalPlayerExtractor));
             if matches!(&ytdlp_avail, EngineAvailability::Available { .. }) {
                 // Use the resolved executable path captured before the engine was moved.
-                let executable = ytdlp_executable.unwrap_or_else(|| {
-                    // Fallback: use config path (shouldn't reach here when Available).
-                    if let Some(p) = &config.yt_dlp.executable_path {
-                        p.clone()
-                    } else if cfg!(target_os = "windows") {
-                        "yt-dlp.exe".into()
-                    } else {
-                        "yt-dlp".into()
-                    }
-                });
-                let adapter = Arc::new(if let Some(runner) = ytdlp_runner_for_registry {
-                    YtDlpProcessRunnerAdapter::new(runner, executable.clone())
-                } else {
-                    YtDlpProcessRunnerAdapter::from_executable(executable.clone())
-                });
+                let executable =
+                    ytdlp_executable.unwrap_or_else(|| "fetchx-native-yt-dlp-rs".into());
+                let adapter = Arc::new(YtDlpProcessRunnerAdapter::new(
+                    ytdlp_runner_for_registry,
+                    executable.clone(),
+                ));
                 let extractor = Arc::new(YtDlpExtractor::new(adapter, executable));
                 registry.register(extractor);
             } else {
@@ -2866,25 +2854,6 @@ impl EngineRuntime {
     }
 }
 
-fn bundled_engine_defaults(directory: Option<&std::path::Path>) -> EngineConfig {
-    let mut config = EngineConfig::default();
-    let Some(directory) = directory else {
-        return config;
-    };
-
-    let ytdlp = directory.join(if cfg!(target_os = "windows") {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    });
-    if ytdlp.is_file() {
-        config.yt_dlp.enabled = true;
-        config.yt_dlp.executable_path = Some(ytdlp);
-    }
-
-    config
-}
-
 fn log_avail(name: &str, avail: &EngineAvailability) {
     match avail {
         EngineAvailability::Available { version } => info!(engine = name, %version, "engine ready"),
@@ -2907,8 +2876,8 @@ async fn init_ytdlp(
         return (None, EngineAvailability::Disabled);
     }
     let mut ytdlp_cfg = DownloaderYtDlpConfig::new();
-    if let Some(p) = &config.yt_dlp.executable_path {
-        ytdlp_cfg = ytdlp_cfg.with_executable(p.clone());
+    if config.yt_dlp.executable_path.is_some() && runner.is_none() {
+        warn!("configured yt-dlp executable is ignored; using the native Rust engine");
     }
     if runner.is_none() {
         ytdlp_cfg = ytdlp_cfg.with_version_cache_path(runtime_dir.join("yt-dlp-version.json"));

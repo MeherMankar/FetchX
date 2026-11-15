@@ -12,8 +12,7 @@ pub async fn run(json: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 "version": cfg.version,
                 "direct_http": { "enabled": cfg.direct_http.enabled },
                 "yt_dlp": {
-                    "enabled": cfg.yt_dlp.enabled,
-                    "executable_path": cfg.yt_dlp.executable_path,
+                    "enabled": cfg.yt_dlp.enabled
                 }
             }
         }));
@@ -26,14 +25,7 @@ pub async fn run(json: bool) -> Result<ExitCode, Box<dyn std::error::Error>> {
         println!();
         println!("  yt-dlp");
         println!("    Enabled:      {}", cfg.yt_dlp.enabled);
-        println!(
-            "    Executable:   {}",
-            cfg.yt_dlp
-                .executable_path
-                .as_deref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "(PATH discovery)".to_owned())
-        );
+        println!("    Runtime:      in-process Rust");
     }
 
     svc.shutdown().await?;

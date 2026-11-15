@@ -837,19 +837,6 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .settings-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .settings-section-header .settings-section-title { margin-bottom: 0; }
 
-.helper-manager-list { display: grid; gap: 8px; margin-top: 12px; }
-
-.helper-manager-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 8px 12px; border: 1px solid var(--border-light); border-radius: var(--radius-sm);
-}
-
-.helper-manager-details { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: 12px; }
-.helper-manager-available { color: var(--green); }
-.helper-manager-missing, .helper-manager-error { color: var(--red); }
-.helper-manager-path   { overflow-wrap: anywhere; color: var(--text-3); font-size: 11px; }
-.helper-manager-actions { display: flex; flex-shrink: 0; gap: 8px; }
-
 .secret-display, .secret-edit { display: flex; align-items: center; gap: 8px; }
 
 .secret-badge {
@@ -1075,7 +1062,6 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .dialog-footer,
 .settings-section,
 .settings-notice,
-.helper-manager-item,
 .torrent-file-list,
 .secret-badge,
 .runtime-badge,

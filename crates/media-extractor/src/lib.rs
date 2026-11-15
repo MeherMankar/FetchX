@@ -4,17 +4,12 @@
 //! downloadable formats." This crate performs no downloading. It defines the
 //! [`MediaExtractor`] trait, the [`MediaInfo`]/[`MediaFormat`] model pair, an
 //! [`ExtractorRegistry`] for runtime dispatch, native YouTube and Generic
-//! extractors, a [`YtDlpExtractor`] that wraps the existing yt-dlp process
-//! runner, an [`UnsupportedExtractor`] stub, format-to-engine mapping, and URL
-//! safety validation.
+//! extractors, a [`YtDlpExtractor`] that wraps an injected yt-dlp runner, an
+//! [`UnsupportedExtractor`] stub, format-to-engine mapping, and URL safety
+//! validation.
 //!
-//! # Android note
-//! [`YtDlpExtractor`] spawns a subprocess and is a **desktop/CLI feature only**.
-//! On Android, process spawning is blocked by the SELinux sandbox. The
-//! [`GenericExtractor`] is Rust-native and can handle its limited HTML slice
-//! on Android. The Android-side yt-dlp fallback still uses Chaquopy
-//! (Python in-process) via `AndroidYtDlpRuntime`, which implements the UniFFI
-//! `YtDlpRuntime` interface.
+//! FetchX app composition roots supply the in-process native Rust yt-dlp runner.
+//! The extractor can also accept explicit compatibility runners.
 
 #![forbid(unsafe_code)]
 

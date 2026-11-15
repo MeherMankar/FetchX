@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.chaquopy)
 }
 
 val releaseSigningVariables = listOf(
@@ -106,19 +105,6 @@ android {
                     "lib/x86_64/**"
                 )
             }
-        }
-    }
-}
-
-chaquopy {
-    defaultConfig {
-        version = "3.13"
-        buildPython = if (System.getenv("pythonLocation") != null)
-            listOf("${System.getenv("pythonLocation")}/bin/python3.13")
-        else
-            null
-        pip {
-            install("yt-dlp==2026.8.19")
         }
     }
 }

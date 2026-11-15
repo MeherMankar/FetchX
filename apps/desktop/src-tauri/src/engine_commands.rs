@@ -1,16 +1,10 @@
 //! Tauri commands for native engine configuration and diagnostics.
 
-use std::{path::PathBuf, time::Duration};
-
-use fetchx_core_services::{
-    ConfigError, EngineAvailability, EngineConfig, YtDlpConfig as PersistedYtDlpConfig,
-};
+use crate::commands::AppState;
+use fetchx_core_services::{ConfigError, EngineAvailability, EngineConfig};
 use fetchx_models::{ResourcePolicy, ResourceProfile, WeeklyQueueSchedule};
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use tokio::{fs, process::Command};
-
-use crate::commands::AppState;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,7 +19,6 @@ pub struct SaveEngineConfigRequest {
 #[serde(deny_unknown_fields)]
 pub struct SaveYtDlpConfigRequest {
     pub enabled: bool,
-    pub executable_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,7 +37,6 @@ pub struct DirectHttpConfigDto {
 #[derive(Clone, Debug, Serialize)]
 pub struct YtDlpConfigDto {
     pub enabled: bool,
-    pub executable_path: Option<String>,
 }
 
 impl From<&EngineConfig> for EngineConfigDto {
@@ -55,11 +47,6 @@ impl From<&EngineConfig> for EngineConfigDto {
             },
             yt_dlp: YtDlpConfigDto {
                 enabled: config.yt_dlp.enabled,
-                executable_path: config
-                    .yt_dlp
-                    .executable_path
-                    .as_deref()
-                    .map(|path| path.to_string_lossy().into_owned()),
             },
             resource_policy: config.resource_policy.clone(),
             weekly_queue_schedule: config.weekly_queue_schedule.clone(),
@@ -70,7 +57,6 @@ impl From<&EngineConfig> for EngineConfigDto {
 #[derive(Clone, Debug, Serialize)]
 pub struct DiagnosticResult {
     pub available: bool,
-    pub executable: Option<String>,
     pub version: Option<String>,
     pub message: String,
 }
@@ -79,8 +65,6 @@ pub struct DiagnosticResult {
 #[serde(rename_all = "snake_case")]
 pub enum EngineIpcErrorCode {
     InvalidConfig,
-    ExecutableNotFound,
-    ExecutableInvalid,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -106,40 +90,6 @@ impl From<ConfigError> for EngineIpcError {
     }
 }
 
-async fn validate_executable_path(path: &str) -> Result<PathBuf, EngineIpcError> {
-    if path.trim().is_empty() {
-        return Err(EngineIpcError {
-            code: EngineIpcErrorCode::ExecutableNotFound,
-            message: "Executable path must not be empty.".to_owned(),
-        });
-    }
-    let path_buf = PathBuf::from(path);
-    match fs::metadata(&path_buf).await {
-        Ok(metadata) if metadata.is_file() => Ok(path_buf),
-        Ok(_) => Err(EngineIpcError {
-            code: EngineIpcErrorCode::ExecutableInvalid,
-            message: format!("Path '{}' exists but is not a regular file.", path),
-        }),
-        Err(_) => Err(EngineIpcError {
-            code: EngineIpcErrorCode::ExecutableNotFound,
-            message: format!("Executable not found at '{}'.", path),
-        }),
-    }
-}
-
-async fn resolve_ytdlp_executable(
-    config: &PersistedYtDlpConfig,
-) -> Result<PathBuf, EngineIpcError> {
-    if let Some(path) = &config.executable_path {
-        return validate_executable_path(&path.to_string_lossy()).await;
-    }
-    Ok(PathBuf::from(if cfg!(target_os = "windows") {
-        "yt-dlp.exe"
-    } else {
-        "yt-dlp"
-    }))
-}
-
 #[tauri::command]
 pub async fn get_engine_config(
     state: State<'_, AppState>,
@@ -163,10 +113,7 @@ pub async fn save_engine_config(
         .await
         .map_err(EngineIpcError::from)?;
     config.yt_dlp.enabled = request.yt_dlp.enabled;
-    config.yt_dlp.executable_path = match &request.yt_dlp.executable_path {
-        Some(path) if !path.trim().is_empty() => Some(validate_executable_path(path).await?),
-        _ => None,
-    };
+    config.yt_dlp.executable_path = None;
     if let Some(policy) = request.resource_policy {
         config.resource_policy = match policy.profile {
             ResourceProfile::Custom => policy,
@@ -271,60 +218,29 @@ pub async fn get_engine_status(
 pub async fn test_ytdlp_config(
     state: State<'_, AppState>,
 ) -> Result<DiagnosticResult, EngineIpcError> {
-    let config = state
-        .config_service
-        .load()
-        .await
-        .map_err(EngineIpcError::from)?;
-    let executable = match resolve_ytdlp_executable(&config.yt_dlp).await {
-        Ok(path) => path,
-        Err(error) => {
-            return Ok(DiagnosticResult {
-                available: false,
-                executable: None,
-                version: None,
-                message: error.message,
-            });
-        }
+    let status = &state.engine_runtime.status.yt_dlp;
+    let (available, version, message) = match status {
+        EngineAvailability::Disabled => (
+            false,
+            None,
+            "The native yt-dlp engine is disabled.".to_owned(),
+        ),
+        EngineAvailability::Available { version } => (
+            true,
+            Some(version.clone()),
+            "FetchX's native Rust yt-dlp engine is ready.".to_owned(),
+        ),
+        EngineAvailability::Unavailable { reason } => (
+            false,
+            None,
+            format!("The native Rust yt-dlp engine is unavailable: {reason}"),
+        ),
     };
-    let mut command = Command::new(&executable);
-    command.arg("--version");
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    let result = tokio::time::timeout(Duration::from_secs(5), command.output()).await;
-    match result {
-        Ok(Ok(output)) if output.status.success() => Ok(DiagnosticResult {
-            available: true,
-            executable: Some(executable.to_string_lossy().into_owned()),
-            version: Some(String::from_utf8_lossy(&output.stdout).trim().to_owned()),
-            message: "yt-dlp is available.".to_owned(),
-        }),
-        Ok(Ok(output)) => Ok(DiagnosticResult {
-            available: false,
-            executable: Some(executable.to_string_lossy().into_owned()),
-            version: None,
-            message: format!(
-                "yt-dlp exited with status {}.",
-                output
-                    .status
-                    .code()
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "unknown".to_owned())
-            ),
-        }),
-        Ok(Err(error)) => Ok(DiagnosticResult {
-            available: false,
-            executable: Some(executable.to_string_lossy().into_owned()),
-            version: None,
-            message: format!("Could not start yt-dlp: {error}"),
-        }),
-        Err(_) => Ok(DiagnosticResult {
-            available: false,
-            executable: Some(executable.to_string_lossy().into_owned()),
-            version: None,
-            message: "yt-dlp version check timed out.".to_owned(),
-        }),
-    }
+    Ok(DiagnosticResult {
+        available,
+        version,
+        message,
+    })
 }
 
 #[cfg(test)]
@@ -335,7 +251,7 @@ mod tests {
     fn save_request_rejects_aria2_fields() {
         let json = r#"{
             "aria2": {"enabled": true, "rpc_port": 6800},
-            "yt_dlp": {"enabled": false, "executable_path": null}
+            "yt_dlp": {"enabled": false}
         }"#;
         assert!(serde_json::from_str::<SaveEngineConfigRequest>(json).is_err());
     }
@@ -343,7 +259,7 @@ mod tests {
     #[test]
     fn save_request_accepts_native_engine_settings() {
         let json = r#"{
-            "yt_dlp": {"enabled": false, "executable_path": null}
+            "yt_dlp": {"enabled": false}
         }"#;
         assert!(serde_json::from_str::<SaveEngineConfigRequest>(json).is_ok());
     }

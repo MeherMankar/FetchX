@@ -36,25 +36,17 @@ const BLOCKED_HEADERS: &[&str] = &[
 ];
 
 /// Adapter that implements `fetchx_media_extractor::ProcessRunner` by
-/// either delegating to a wrapped [`YtDlpProcessRunner`] (e.g. Android's
-/// Chaquopy in-process runner) or by spawning yt-dlp directly when no
-/// runner is available (desktop / CLI subprocess path).
+/// delegating to a wrapped [`YtDlpProcessRunner`]. FetchX app composition roots
+/// always supply a runner, normally the in-process native Rust implementation.
 ///
-/// # Subprocess path
-/// When `runner` is `None`, the adapter spawns yt-dlp and parses the richer
-/// `--dump-single-json` field set (`url`, `protocol`, codec fields, etc.) that
-/// `TokioYtDlpRunner::discover_formats` intentionally discards.
-///
-/// # Delegation path
-/// When `runner` is `Some`, the adapter calls `runner.discover_formats` and
+/// The adapter calls `runner.discover_formats` and
 /// converts the returned `Vec<YtDlpFormat>` display DTOs into `Vec<RawFormat>`
-/// pipeline DTOs.  This enables the Android Chaquopy path without spawning a
-/// subprocess (which SELinux blocks on Android).
+/// pipeline DTOs without spawning an external process.
 pub struct YtDlpProcessRunnerAdapter {
-    /// The executable path used both as the fallback subprocess command and
-    /// as the `executable` argument forwarded to the wrapped runner.
+    /// Runner identifier forwarded to the wrapped runner, or executable path
+    /// for explicit compatibility subprocess use.
     executable: PathBuf,
-    /// Wrapped runner, present when an in-process runner is available (Android).
+    /// Wrapped process or in-process runner.
     runner: Option<Arc<dyn YtDlpProcessRunner>>,
 }
 
@@ -71,11 +63,9 @@ impl YtDlpProcessRunnerAdapter {
         }
     }
 
-    /// Create an adapter from an executable path only (no runner reference).
+    /// Create an adapter for explicit compatibility subprocess use.
     ///
-    /// `discover_formats` will spawn yt-dlp as a subprocess.  Use this when
-    /// the runner is not accessible (e.g. the desktop / CLI path where
-    /// `YtDlpEngine` was initialized with its default internal runner).
+    /// App composition roots should use [`Self::new`] with an in-process runner.
     pub fn from_executable(executable: PathBuf) -> Self {
         Self {
             executable,
@@ -149,7 +139,7 @@ impl ProcessRunner for YtDlpProcessRunnerAdapter {
         options: &'a RunnerOptions<'a>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<RawFormat>, RunnerError>> + Send + 'a>>
     {
-        // If a wrapped runner is present, delegate to it (e.g. Android Chaquopy).
+        // App composition roots provide the runner, so normal app use stays in-process.
         if let Some(ref runner) = self.runner {
             let runner = Arc::clone(runner);
             let executable = self.executable.clone();

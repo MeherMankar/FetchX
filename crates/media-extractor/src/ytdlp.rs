@@ -1,9 +1,8 @@
 //! [`YtDlpExtractor`] — wraps the existing yt-dlp process runner.
 //!
-//! # Desktop/CLI only
-//! This extractor spawns yt-dlp as a subprocess and is **not Android-safe**.
-//! On Android, SELinux prevents executing binaries from writable storage paths.
-//! The Android path uses Chaquopy (CPython in-process) via `AndroidYtDlpRuntime`.
+//! The extractor delegates format discovery to an injected runner. FetchX apps
+//! use the in-process native Rust yt-dlp runner; the process runner remains
+//! available for explicit compatibility integrations.
 //!
 //! # Dependency note
 //! `fetchx-media-extractor` does **not** depend on `fetchx-downloader` at the

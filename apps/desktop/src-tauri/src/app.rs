@@ -11,7 +11,6 @@ use crate::engine_commands;
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
-use crate::helper_manager::{self, HelperManager};
 use crate::media_processing::{self, MediaProcessingManager};
 
 const SHUTDOWN_RUNNING: u8 = 0;
@@ -232,9 +231,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             engine_commands::reset_engine_config,
             engine_commands::test_ytdlp_config,
             engine_commands::get_engine_status,
-            helper_manager::get_helper_status,
-            helper_manager::install_helper,
-            helper_manager::cancel_helper_install,
             commands::register_browser_extensions,
             commands::get_browser_extension_status,
             commands::open_browser_extension_install_page,
@@ -242,79 +238,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .setup(|app| {
             let paths = resolve_app_paths(app);
             let database_path = paths.app_data_dir.join("fetchx.db");
-            let helper_manager = HelperManager::new(
-                paths.app_data_dir.join("bin"),
-                paths.bundled_engines_dir.clone(),
-            );
             let state = tauri::async_runtime::block_on(AppState::initialize(
                 database_path,
                 paths.downloads_dir,
                 paths.bundled_engines_dir.clone(),
             ))?;
-            if !app.manage(helper_manager) {
-                return Err("desktop helper manager was already initialized".into());
-            }
             if !app.manage(MediaProcessingManager::default()) {
                 return Err("desktop media processing manager was already initialized".into());
             }
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
-            }
-
-            {
-                let app_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    if cfg!(target_os = "android") {
-                        return;
-                    }
-                    let results = {
-                        let manager = app_handle.state::<HelperManager>();
-                        manager.ensure_all_installed(&app_handle).await
-                    };
-                    let mut needs_save = false;
-                    let state = app_handle.state::<AppState>();
-                    if let Ok(mut config) = state.config_service.load().await {
-                        let manager = app_handle.state::<HelperManager>();
-                        let configured_paths = config
-                            .yt_dlp
-                            .executable_path
-                            .clone()
-                            .map(|path| {
-                                std::collections::HashMap::from([(
-                                    crate::helper_manager::HelperId::YtDlp,
-                                    path,
-                                )])
-                            })
-                            .unwrap_or_default();
-                        let statuses = manager.get_statuses(&configured_paths).await;
-                        for status in statuses {
-                            let Some(path) = status.executable_path else {
-                                continue;
-                            };
-                            let path = std::path::PathBuf::from(path);
-                            match status.helper {
-                                crate::helper_manager::HelperId::YtDlp => {
-                                    if config.yt_dlp.executable_path.as_deref() != Some(path.as_path()) {
-                                        config.yt_dlp.executable_path = Some(path.clone());
-                                        needs_save = true;
-                                    }
-                                }
-                            }
-                        }
-                        if needs_save
-                            && let Err(error) = state.config_service.save(&config).await
-                        {
-                            tracing::warn!(%error, "could not persist automatically installed engine paths");
-                        }
-                    }
-                    for (helper, result) in results {
-                        match result {
-                            Ok(()) => tracing::info!(?helper, "desktop engine installed automatically"),
-                            Err(error) => tracing::warn!(?helper, %error, "automatic desktop engine installation failed"),
-                        }
-                    }
-                });
             }
 
             // Start the browser integration IPC server after state is managed.

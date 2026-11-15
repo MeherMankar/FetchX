@@ -77,18 +77,6 @@ internal fun StorageScreen(onBack: () -> Unit) {
     var quickSharedDownloads by remember(context) {
         mutableStateOf(MediaDownloadPreferences.isQuickDownloadEnabled(context))
     }
-    var removeSponsorSegments by remember(context) {
-        mutableStateOf(MediaDownloadPreferences.isSponsorBlockEnabled(context))
-    }
-    var downloadSubtitles by remember(context) {
-        mutableStateOf(MediaDownloadPreferences.areSubtitlesEnabled(context))
-    }
-    var embedSubtitles by remember(context) {
-        mutableStateOf(MediaDownloadPreferences.areSubtitlesEmbedded(context))
-    }
-    var embedMetadata by remember(context) {
-        mutableStateOf(MediaDownloadPreferences.isMetadataEmbeddingEnabled(context))
-    }
 
     LaunchedEffect(refreshRequest) {
         isLoading = true
@@ -175,41 +163,11 @@ internal fun StorageScreen(onBack: () -> Unit) {
                             MediaDownloadPreferences.setQuickDownloadEnabled(context, enabled)
                         },
                     )
-                    PolicySwitch(
-                        title = "Remove SponsorBlock segments",
-                        description = "Remove sponsors, introductions, outros, and self-promotions from supported yt-dlp videos.",
-                        checked = removeSponsorSegments,
-                        onCheckedChange = { enabled ->
-                            removeSponsorSegments = enabled
-                            MediaDownloadPreferences.setSponsorBlockEnabled(context, enabled)
-                        },
-                    )
-                    PolicySwitch(
-                        title = "Download subtitles",
-                        description = "Write subtitles using the preferred language matching rules.",
-                        checked = downloadSubtitles,
-                        onCheckedChange = { enabled ->
-                            downloadSubtitles = enabled
-                            MediaDownloadPreferences.setSubtitlesEnabled(context, enabled)
-                        },
-                    )
-                    PolicySwitch(
-                        title = "Embed subtitles",
-                        description = "Embed downloaded subtitles when the selected output format supports them.",
-                        checked = embedSubtitles,
-                        onCheckedChange = { enabled ->
-                            embedSubtitles = enabled
-                            MediaDownloadPreferences.setSubtitlesEmbedded(context, enabled)
-                        },
-                    )
-                    PolicySwitch(
-                        title = "Embed media metadata",
-                        description = "Add title, author, and other available metadata to media files.",
-                        checked = embedMetadata,
-                        onCheckedChange = { enabled ->
-                            embedMetadata = enabled
-                            MediaDownloadPreferences.setMetadataEmbeddingEnabled(context, enabled)
-                        },
+                    Text(
+                        "Media extraction uses FetchX's native Rust yt-dlp engine. " +
+                            "SponsorBlock, subtitle post-processing, and metadata embedding are not currently available.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 StorageSection("Network conditions") {

@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-
 import {
   getBrowserExtensionStatus,
   openBrowserExtensionInstallPage,
 } from "../api/browserExtensions";
 import {
-  cancelHelperInstall,
-  getHelperStatus,
   getEngineConfig,
   getEngineStatus,
-  installHelper,
   resetEngineConfig,
   saveEngineConfig,
   testYtDlpConfig,
@@ -21,9 +16,6 @@ import type {
   EngineConfigDto,
   EngineInstanceStatus,
   EngineStatus,
-  HelperInstallProgress,
-  HelperStatus,
-  ManagedHelperId,
   ResourcePolicyDto,
   ResourceProfile,
   SaveYtDlpConfigRequest,
@@ -185,11 +177,6 @@ function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
         {result.version && (
           <span className="diagnostic-version">Version: {result.version}</span>
         )}
-        {result.executable && (
-          <span className="diagnostic-path" title={result.executable}>
-            {result.executable}
-          </span>
-        )}
       </div>
     </div>
   );
@@ -208,14 +195,12 @@ interface YtDlpSectionProps {
 
 function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProps) {
   const [enabled, setEnabled] = useState(cfg.yt_dlp.enabled);
-  const [execPath, setExecPath] = useState(cfg.yt_dlp.executable_path ?? "");
   const [busy, setBusy] = useState(false);
   const [diagnostic, setDiagnostic] = useState<DiagnosticResult | null>(null);
   const [testBusy, setTestBusy] = useState(false);
 
   useEffect(() => {
     setEnabled(cfg.yt_dlp.enabled);
-    setExecPath(cfg.yt_dlp.executable_path ?? "");
     setDiagnostic(null);
   }, [cfg]);
 
@@ -224,7 +209,6 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
     try {
       const req: SaveYtDlpConfigRequest = {
         enabled,
-        executable_path: execPath.trim() || null,
       };
       const updated = await saveEngineConfig({
         yt_dlp: req,
@@ -255,7 +239,7 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
   return (
     <section className="settings-section" aria-labelledby="ytdlp-heading">
       <div className="settings-section-header">
-        <h3 id="ytdlp-heading" className="settings-section-title">yt-dlp</h3>
+        <h3 id="ytdlp-heading" className="settings-section-title">Native yt-dlp (Rust)</h3>
         <RuntimeStatusBadge status={runtimeStatus} />
       </div>
 
@@ -272,23 +256,9 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
         </div>
       </div>
 
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="ytdlp-exec">Executable path</label>
-        <div className="settings-control">
-          <input
-            id="ytdlp-exec"
-            type="text"
-            className="settings-input"
-            placeholder="yt-dlp (discovered from PATH)"
-            value={execPath}
-            onChange={(e) => setExecPath(e.target.value)}
-            disabled={busy}
-          />
-          <p className="settings-hint">
-            Leave blank to discover from PATH. Must point to the yt-dlp executable.
-          </p>
-        </div>
-      </div>
+      <p className="settings-hint">
+        FetchX uses its in-process yt-dlp Rust library. No executable or Python runtime is required.
+      </p>
 
       <DiagnosticDisplay result={diagnostic} />
 
@@ -298,7 +268,7 @@ function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProp
           onClick={() => void test()}
           disabled={busy || testBusy}
         >
-          {testBusy ? "Testing…" : "Test configuration"}
+          {testBusy ? "Checking…" : "Check native engine"}
         </button>
         <button
           className="button button-primary"
@@ -373,145 +343,6 @@ function RuntimeStatusBadge({ status }: { status: EngineInstanceStatus | null })
 
 function isResourceProfile(value: string): value is ResourceProfile {
   return ["unlimited", "normal", "limited", "night", "custom"].includes(value);
-}
-
-function HelperInstallPanel({
-  onConfigChanged,
-}: {
-  onConfigChanged: (config: EngineConfigDto) => void;
-}) {
-  const [helpers, setHelpers] = useState<HelperStatus[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [progress, setProgress] = useState<Partial<Record<ManagedHelperId, HelperInstallProgress>>>({});
-  const [errors, setErrors] = useState<Partial<Record<ManagedHelperId, string>>>({});
-
-  const refresh = useCallback(async () => {
-    try {
-      setHelpers(await getHelperStatus());
-    } catch (cause) {
-      setErrors((current) => ({ ...current, yt_dlp: errorMessage(cause) }));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-    let unlisten: (() => void) | undefined;
-    void listen<HelperInstallProgress>("helper-install-progress", (event) => {
-      const update = event.payload;
-      setProgress((current) => ({ ...current, [update.helper]: update }));
-      if (update.phase === "completed" || update.phase === "failed" || update.phase === "cancelled") {
-        if (update.message) {
-          setErrors((current) => ({ ...current, [update.helper]: update.message ?? undefined }));
-        }
-        if (update.phase === "completed") {
-          setErrors((current) => ({ ...current, [update.helper]: undefined }));
-          void refresh();
-        }
-      }
-    }).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, [refresh]);
-
-  const install = async (helper: ManagedHelperId) => {
-    setErrors((current) => ({ ...current, [helper]: undefined }));
-    try {
-      await installHelper(helper);
-      onConfigChanged(await getEngineConfig());
-      await refresh();
-    } catch (cause) {
-      setErrors((current) => ({ ...current, [helper]: errorMessage(cause) }));
-      await refresh();
-    }
-  };
-
-  const cancel = async (helper: ManagedHelperId) => {
-    try {
-      await cancelHelperInstall(helper);
-    } catch (cause) {
-      setErrors((current) => ({ ...current, [helper]: errorMessage(cause) }));
-    }
-  };
-
-  const items: Array<{ id: ManagedHelperId; name: string }> = [
-    { id: "yt_dlp", name: "yt-dlp" },
-  ];
-
-  return (
-    <section className="settings-section" aria-labelledby="helper-manager-heading">
-      <div className="settings-section-header">
-        <h3 id="helper-manager-heading" className="settings-section-title">Optional helper manager</h3>
-      </div>
-      <p className="settings-hint">
-        Optional tools are installed only when you choose Install. FetchX downloads from fixed HTTPS sources,
-        verifies the published SHA-256 checksum, and stores executables in its per-user application data folder.
-        Engine changes take effect after restarting FetchX.
-      </p>
-      {loading ? (
-        <div className="settings-loading" role="status">Checking installed helpers…</div>
-      ) : (
-        <div className="helper-manager-list">
-          {items.map(({ id, name }) => {
-            const status = helpers.find((helper) => helper.helper === id);
-            const current = progress[id];
-            const busy = current !== undefined
-              && ["downloading", "verifying", "installing"].includes(current.phase);
-            const packageBusy = busy;
-            return (
-              <div className="helper-manager-item" key={id}>
-                <div className="helper-manager-details">
-                  <strong>{name}</strong>
-                  <span className={status?.available ? "helper-manager-available" : "helper-manager-missing"}>
-                    {status?.available ? `Installed · ${status.version}` : status?.installed ? "Installed · validation failed" : "Not installed"}
-                  </span>
-                  {status?.executable_path && (
-                    <span className="helper-manager-path" title={status.executable_path}>
-                      {status.executable_path}
-                    </span>
-                  )}
-                  {status?.architecture && <span className="settings-hint">Architecture: {status.architecture}</span>}
-                  {!status?.available && status?.validation && (
-                    <span className="settings-hint">{status.validation}</span>
-                  )}
-                  {current && busy && (
-                    <span className="settings-hint" role="status" aria-live="polite">
-                      {current.phase === "downloading" && current.total_bytes
-                        ? `Downloading… ${Math.round(current.received_bytes * 100 / current.total_bytes)}%`
-                        : `${current.phase[0].toUpperCase()}${current.phase.slice(1)}…`}
-                    </span>
-                  )}
-                  {errors[id] && <span className="helper-manager-error" role="alert">{errors[id]}</span>}
-                </div>
-                <div className="helper-manager-actions">
-                  <button
-                    className="button button-secondary"
-                    disabled={!status?.install_supported || packageBusy}
-                    onClick={() => void install(id)}
-                  >
-                    {packageBusy ? "Working…" : status?.installed ? "Reinstall / Update" : "Install"}
-                  </button>
-                  {packageBusy && current?.phase !== "installing" && (
-                    <button
-                      className="button button-secondary"
-                      onClick={() => void cancel(id)}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      <p className="settings-hint">
-        yt-dlp uses its upstream release artifacts. Media processing uses FetchX's native Rust implementation.
-      </p>
-    </section>
-  );
 }
 
 function policyForProfile(
@@ -590,7 +421,6 @@ function ResourcePolicySection({
       const updated = await saveEngineConfig({
         yt_dlp: {
           enabled: cfg.yt_dlp.enabled,
-          executable_path: cfg.yt_dlp.executable_path,
         },
         resource_policy: policy,
         weekly_queue_schedule: cfg.weekly_queue_schedule,
@@ -771,7 +601,6 @@ function WeeklyQueueScheduleSection({
       const updated = await saveEngineConfig({
         yt_dlp: {
           enabled: cfg.yt_dlp.enabled,
-          executable_path: cfg.yt_dlp.executable_path,
         },
         resource_policy: cfg.resource_policy,
         weekly_queue_schedule: schedule,
@@ -961,8 +790,6 @@ export function SettingsPage() {
       </div>
 
       <BrowserExtensionSection />
-      <HelperInstallPanel onConfigChanged={setCfg} />
-
       {cfg && (
         <>
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />

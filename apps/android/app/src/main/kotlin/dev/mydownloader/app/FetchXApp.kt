@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 import android.util.Log
-import dev.fetchx.app.media.MediaDownloadPreferences
 import dev.fetchx.app.service.DownloadForegroundService
 import dev.fetchx.bridge.BridgeInitializer
 import dev.fetchx.browser.GeckoRuntimeHolder
@@ -44,21 +43,10 @@ class FetchXApp : Application() {
         Log.i(TAG, "Application.onCreate started")
         // Initialize the Rust bridge. This starts the Tokio runtime and CoreServices.
         // The returned repository is the single source of truth for download data.
-        val ytDlpRuntime = if (MediaDownloadPreferences.requiresCompatibilityRuntime(this)) {
-            try {
-                Log.i(TAG, "Starting compatibility yt-dlp runtime for enabled post-processing options")
-                AndroidYtDlpRuntime.start(this)
-            } catch (it: Throwable) {
-                Log.e(TAG, "Compatibility yt-dlp runtime unavailable: $it", it)
-                null
-            }
-        } else {
-            Log.i(TAG, "Using FetchX's native Rust yt-dlp engine")
-            null
-        }
+        Log.i(TAG, "Using FetchX's native Rust yt-dlp engine")
         Log.i(TAG, "Calling BridgeInitializer.initialize")
         try {
-            BridgeInitializer.initialize(this, ytDlpRuntime)
+            BridgeInitializer.initialize(this, null)
         } catch (it: Throwable) {
             Log.e(TAG, "Bridge initialization failed — app will degrade gracefully: $it", it)
         }

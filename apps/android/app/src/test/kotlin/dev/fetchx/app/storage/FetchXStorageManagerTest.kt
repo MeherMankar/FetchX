@@ -35,7 +35,7 @@ class FetchXStorageManagerTest {
         writeBytes(runtime.resolve("progress"), 29)
         writeBytes(profile.resolve("prefs.js"), 11)
         writeBytes(profile.resolve("cache2/entries/cache"), 19)
-        writeBytes(cache.resolve("chaquopy-cache"), 23)
+        writeBytes(cache.resolve("app-cache"), 23)
         writeBytes(database, 2)
         writeBytes(files.resolve("fetchx.db-wal"), 3)
         writeBytes(files.resolve("fetchx.db-shm"), 4)
