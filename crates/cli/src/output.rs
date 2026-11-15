@@ -4,7 +4,6 @@
 //! Human text and errors always go to stderr.
 
 use serde::Serialize;
-use serde_json::Value;
 
 /// Print a success JSON envelope to stdout.
 pub fn print_json_ok<T: Serialize>(payload: &T) {
@@ -145,14 +144,4 @@ impl Table {
             println!("{line}");
         }
     }
-}
-
-/// Build a JSON Value from a flat list of key-value pairs.
-#[allow(dead_code)]
-pub fn json_obj(pairs: &[(&str, Value)]) -> Value {
-    let mut map = serde_json::Map::new();
-    for (k, v) in pairs {
-        map.insert((*k).to_owned(), v.clone());
-    }
-    Value::Object(map)
 }

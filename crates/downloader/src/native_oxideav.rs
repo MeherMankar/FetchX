@@ -126,9 +126,12 @@ impl NativeOxideavProcessor {
                     params.frame_rate.and_then(|r| {
                         if r.num > 0 && r.den > 0 {
                             u32::try_from(r.num).ok().and_then(|num| {
-                                u32::try_from(r.den).ok().map(|den| {
-                                    crate::ffmpeg::FrameRate { numerator: num, denominator: den }
-                                })
+                                u32::try_from(r.den)
+                                    .ok()
+                                    .map(|den| crate::ffmpeg::FrameRate {
+                                        numerator: num,
+                                        denominator: den,
+                                    })
                             })
                         } else {
                             None
@@ -442,7 +445,10 @@ impl NativeOxideavProcessor {
             .map_err(map_container_error)?;
         let subtitle_container = context
             .containers
-            .probe_input(&mut subtitle_file, input_extension(&subtitle_path).as_deref())
+            .probe_input(
+                &mut subtitle_file,
+                input_extension(&subtitle_path).as_deref(),
+            )
             .map_err(map_container_error)?;
         video_file.seek(SeekFrom::Start(0))?;
         subtitle_file.seek(SeekFrom::Start(0))?;
@@ -452,7 +458,11 @@ impl NativeOxideavProcessor {
             .map_err(map_container_error)?;
         let mut subtitle_demuxer = context
             .containers
-            .open_demuxer(&subtitle_container, Box::new(subtitle_file), &context.codecs)
+            .open_demuxer(
+                &subtitle_container,
+                Box::new(subtitle_file),
+                &context.codecs,
+            )
             .map_err(map_container_error)?;
         if video_demuxer.streams().is_empty() || subtitle_demuxer.streams().is_empty() {
             return Err(NativeOxideavError::UnsupportedInput);
@@ -613,8 +623,7 @@ impl NativeOxideavProcessor {
         }
 
         let start_secs = start.as_secs_f64();
-        let end_secs: Option<f64> =
-            duration.map(|d| start.as_secs_f64() + d.as_secs_f64());
+        let end_secs: Option<f64> = duration.map(|d| start.as_secs_f64() + d.as_secs_f64());
 
         // Seek to start using the first stream's time base
         if !start.is_zero() && !demuxer.streams().is_empty() {
@@ -630,8 +639,8 @@ impl NativeOxideavProcessor {
         let mut index_map = HashMap::with_capacity(demuxer.streams().len());
         let mut streams = Vec::with_capacity(demuxer.streams().len());
         for input_stream in demuxer.streams() {
-            let output_index = u32::try_from(streams.len())
-                .map_err(|_| NativeOxideavError::UnsupportedInput)?;
+            let output_index =
+                u32::try_from(streams.len()).map_err(|_| NativeOxideavError::UnsupportedInput)?;
             index_map.insert(input_stream.index, output_index);
             let mut output_stream = input_stream.clone();
             output_stream.index = output_index;
@@ -941,7 +950,12 @@ mod tests {
 
     use super::*;
 
-    fn make_wav(path: &std::path::Path, channels: u16, sample_rate: u32, samples: usize) -> Result<(), Box<dyn Error>> {
+    fn make_wav(
+        path: &std::path::Path,
+        channels: u16,
+        sample_rate: u32,
+        samples: usize,
+    ) -> Result<(), Box<dyn Error>> {
         let spec = hound::WavSpec {
             channels,
             sample_rate,
@@ -1145,7 +1159,9 @@ mod tests {
 
     #[test]
     fn metadata_write_path_does_not_error_on_wav_remux() -> Result<(), Box<dyn Error>> {
-        use crate::ffmpeg::{FfmpegConfig, FfmpegProcessor, MediaContainer, MediaProcessRequest, MetadataOverride};
+        use crate::ffmpeg::{
+            FfmpegConfig, FfmpegProcessor, MediaContainer, MediaProcessRequest, MetadataOverride,
+        };
         use tokio::sync::watch;
 
         let rt = tokio::runtime::Builder::new_current_thread()

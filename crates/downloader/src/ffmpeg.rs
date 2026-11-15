@@ -124,10 +124,21 @@ pub enum TranscodePreset {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MediaOperation {
-    Remux { container: MediaContainer },
-    Transcode { preset: TranscodePreset },
-    MuxSubtitle { container: MediaContainer, subtitle: PathBuf },
-    Trim { container: MediaContainer, start: Duration, end: Option<Duration> },
+    Remux {
+        container: MediaContainer,
+    },
+    Transcode {
+        preset: TranscodePreset,
+    },
+    MuxSubtitle {
+        container: MediaContainer,
+        subtitle: PathBuf,
+    },
+    Trim {
+        container: MediaContainer,
+        start: Duration,
+        end: Option<Duration>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -750,7 +761,11 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
-        if let MediaOperation::MuxSubtitle { container, subtitle } = request.operation.clone() {
+        if let MediaOperation::MuxSubtitle {
+            container,
+            subtitle,
+        } = request.operation.clone()
+        {
             let native_input = input.clone();
             let native_output = destination.clone();
             let output_container = container.oxideav_muxer();
@@ -785,7 +800,12 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
-        if let MediaOperation::Trim { container, start, end } = request.operation.clone() {
+        if let MediaOperation::Trim {
+            container,
+            start,
+            end,
+        } = request.operation.clone()
+        {
             let native_input = input.clone();
             let native_output = destination.clone();
             let output_container = container.oxideav_muxer();
@@ -977,7 +997,11 @@ impl MediaProcessRequest {
         Self {
             input: input.into(),
             output: output.into(),
-            operation: MediaOperation::Trim { container, start, end },
+            operation: MediaOperation::Trim {
+                container,
+                start,
+                end,
+            },
             metadata: None,
         }
     }

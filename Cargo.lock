@@ -2039,7 +2039,6 @@ dependencies = [
  "fetchx-media-extractor",
  "fetchx-models",
  "fetchx-storage",
- "ffmpreg",
  "hex",
  "hound",
  "librqbit",
@@ -2245,15 +2244,6 @@ checksum = "a1f686ab92a9fb0eaf188f6c6c87b89490baa6fdb0db4544ba4dc47f7942489f"
 dependencies = [
  "rand_core 0.10.1",
  "subtle",
-]
-
-[[package]]
-name = "ffmpreg"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e36378dec1f7d49d04a95bf169fa4a593a364ef12cc05b85525d3c6ff0a2818"
-dependencies = [
- "clap",
 ]
 
 [[package]]
@@ -4834,15 +4824,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-amv"
-version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb30e8fa45f87702a7f430d3b8e7f2c6f07407ce9cfbcd11ca1aac4301dd851a"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-ape"
 version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5004,38 +4985,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-g729"
-version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "184f6c0aa20845b46e05d4d5a06222889945f86989ff226e8a5da30ba63f9c4b"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-gsm"
 version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "847b37f4fe75e9be0cc0e0e8ae5b916ef237157b6022fbeea774119ae2c123f4"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-h261"
-version = "0.0.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b681d9fc5539330914b3ae72989c781f1e886e42667bac4e3cd24ceb242b1b2b"
-dependencies = [
- "oxideav-core",
- "oxideav-pixfmt",
-]
-
-[[package]]
-name = "oxideav-h263"
-version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfd668342020a198294e4bb01da443adf3d928de1de540fb30a738dd8a05431c"
 dependencies = [
  "oxideav-core",
 ]
@@ -5136,7 +5089,6 @@ dependencies = [
  "oxideav-ac3",
  "oxideav-ac4",
  "oxideav-adpcm",
- "oxideav-amv",
  "oxideav-ape",
  "oxideav-ass",
  "oxideav-audio-filter",
@@ -5154,10 +5106,7 @@ dependencies = [
  "oxideav-g722",
  "oxideav-g7231",
  "oxideav-g728",
- "oxideav-g729",
  "oxideav-gsm",
- "oxideav-h261",
- "oxideav-h263",
  "oxideav-h264",
  "oxideav-h265",
  "oxideav-h266",
@@ -5174,7 +5123,6 @@ dependencies = [
  "oxideav-mp3",
  "oxideav-mp4",
  "oxideav-mpeg12video",
- "oxideav-mpeg4video",
  "oxideav-mpegts",
  "oxideav-msmpeg4",
  "oxideav-musepack",
@@ -5188,12 +5136,10 @@ dependencies = [
  "oxideav-speex",
  "oxideav-sub-image",
  "oxideav-subtitle",
- "oxideav-svq",
  "oxideav-theora",
  "oxideav-tta",
  "oxideav-utvideo",
  "oxideav-vorbis",
- "oxideav-vp6",
  "oxideav-vp8",
  "oxideav-vp9",
  "oxideav-wma",
@@ -5280,15 +5226,6 @@ name = "oxideav-mpeg12video"
 version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "200b1423600b8346ea96c2c2b7ee2a5a04094763dd64e92b943627288af60580"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
-name = "oxideav-mpeg4video"
-version = "0.1.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b672ba9f59c64f88b75e4d7b415dc11036c27aaa5b89eaa8f0d4fb3c4320321"
 dependencies = [
  "oxideav-core",
 ]
@@ -5466,15 +5403,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxideav-svq"
-version = "0.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b64603b227bf94eb152d6c49f0a2f8bb7fc38d5561a8f40896dcc1bb08b7424a"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-theora"
 version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5518,15 +5446,6 @@ checksum = "5b786a2c716843ab2a4509c03ce7836173384a59831e1c893b5492ac611d872b"
 dependencies = [
  "oxideav-core",
  "oxideav-ogg",
-]
-
-[[package]]
-name = "oxideav-vp6"
-version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e5aace38e11baf3af949afd936c6a0ccbcd564df4ef3278a44f08efccd080bb"
-dependencies = [
- "oxideav-core",
 ]
 
 [[package]]

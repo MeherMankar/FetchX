@@ -229,34 +229,6 @@ fn resolve(id_str: &str, json: bool) -> Option<(DownloadId, Option<DownloadItem>
     }
 }
 
-/// Overload: also fetch the item.
-#[allow(dead_code)]
-pub async fn resolve_with_item(
-    svc: &CoreServices,
-    id_str: &str,
-    json: bool,
-) -> Option<(DownloadId, DownloadItem)> {
-    use fetchx_storage::DownloadRepository;
-    let id = match super::parse_id(id_str) {
-        Ok(id) => id,
-        Err(_) => {
-            output::print_error(json, "invalid download ID format");
-            return None;
-        }
-    };
-    match svc.repository.get(id).await {
-        Ok(Some(item)) => Some((id, item)),
-        Ok(None) => {
-            output::print_error(json, &format!("download {id} not found"));
-            None
-        }
-        Err(e) => {
-            output::print_error(json, &format!("storage error: {e}"));
-            None
-        }
-    }
-}
-
 fn success(json: bool, id: DownloadId, action: &str) -> ExitCode {
     if json {
         output::print_json_ok(

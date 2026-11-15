@@ -227,21 +227,15 @@ impl MediaProcessingManager {
                 .await;
 
             let request = match container {
-                MediaContainer::Mp3 => MediaProcessRequest::transcode(
-                    &input,
-                    &output,
-                    TranscodePreset::Mp3Audio,
-                ),
-                MediaContainer::Flac => MediaProcessRequest::transcode(
-                    &input,
-                    &output,
-                    TranscodePreset::FlacAudio,
-                ),
-                MediaContainer::Wav => MediaProcessRequest::transcode(
-                    &input,
-                    &output,
-                    TranscodePreset::WavAudio,
-                ),
+                MediaContainer::Mp3 => {
+                    MediaProcessRequest::transcode(&input, &output, TranscodePreset::Mp3Audio)
+                }
+                MediaContainer::Flac => {
+                    MediaProcessRequest::transcode(&input, &output, TranscodePreset::FlacAudio)
+                }
+                MediaContainer::Wav => {
+                    MediaProcessRequest::transcode(&input, &output, TranscodePreset::WavAudio)
+                }
                 _ => MediaProcessRequest::remux(&input, &output, container),
             };
             let result = processor.process(request, cancellation_receiver).await;

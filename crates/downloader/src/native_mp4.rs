@@ -249,7 +249,10 @@ impl NativeMp4Processor {
                         let denominator_raw: u32 = 1000;
                         let g = gcd(numerator_raw, denominator_raw);
                         if g > 0 {
-                            Some(FrameRate { numerator: numerator_raw / g, denominator: denominator_raw / g })
+                            Some(FrameRate {
+                                numerator: numerator_raw / g,
+                                denominator: denominator_raw / g,
+                            })
                         } else {
                             None
                         }
