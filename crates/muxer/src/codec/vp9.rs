@@ -49,7 +49,11 @@ struct Vp9BitReader<'a> {
 
 impl<'a> Vp9BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Self { data, byte_pos: 0, bit_pos: 0 }
+        Self {
+            data,
+            byte_pos: 0,
+            bit_pos: 0,
+        }
     }
 
     fn read_bit(&mut self) -> Option<u8> {
@@ -210,14 +214,20 @@ mod tests {
     fn test_invalid_frame_marker() {
         let invalid_frame = [0x00, 0x00, 0x00];
         assert!(!is_valid_vp9_frame(&invalid_frame));
-        assert!(matches!(is_vp9_keyframe(&invalid_frame), Err(Vp9Error::InvalidFrameMarker)));
+        assert!(matches!(
+            is_vp9_keyframe(&invalid_frame),
+            Err(Vp9Error::InvalidFrameMarker)
+        ));
     }
 
     #[test]
     fn test_frame_too_short() {
         let empty_frame: &[u8] = &[];
         assert!(!is_valid_vp9_frame(empty_frame));
-        assert!(matches!(is_vp9_keyframe(empty_frame), Err(Vp9Error::FrameTooShort)));
+        assert!(matches!(
+            is_vp9_keyframe(empty_frame),
+            Err(Vp9Error::FrameTooShort)
+        ));
     }
 
     #[test]
@@ -246,10 +256,7 @@ mod tests {
 
     #[test]
     fn test_extract_vp9_config_valid() {
-        let keyframe = vec![
-            0x82, 0x49, 0x83, 0x42,
-            0x00, 0x0F, 0xF0, 0x0F, 0xF0,
-        ];
+        let keyframe = vec![0x82, 0x49, 0x83, 0x42, 0x00, 0x0F, 0xF0, 0x0F, 0xF0];
         let config = extract_vp9_config(&keyframe).unwrap();
         assert_eq!(config.width, 256);
         assert_eq!(config.height, 256);

@@ -3,10 +3,10 @@
 mod muxer;
 
 pub mod api;
-pub mod fragmented;
 pub mod codec;
-pub mod validation;
 pub mod dash;
+pub mod fragmented;
+pub mod validation;
 
 #[doc(hidden)]
 pub mod invariant_ppt;

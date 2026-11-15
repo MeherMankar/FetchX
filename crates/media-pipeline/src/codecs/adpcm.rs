@@ -1,17 +1,21 @@
 // Adapted from ffmpreg (Apache-2.0)
 use crate::{
+    Packet, Parameters, Result,
     frame::{Channels, SampleFormat, SampleLayout},
     state::{AudioState, CodecState, State},
     traits::{DecodeOut, Decoder},
-    Packet, Parameters, Result,
 };
 
 pub struct AdpcmDecoder;
 
 impl Decoder for AdpcmDecoder {
     fn create_state(&self, p: &Parameters) -> State {
-        let codec_state =
-            CodecState { extradata: Vec::new(), pts: None, dts: None, last_pts: None };
+        let codec_state = CodecState {
+            extradata: Vec::new(),
+            pts: None,
+            dts: None,
+            last_pts: None,
+        };
         let audio_state = AudioState {
             sample_rate: p.sample_rate.unwrap_or(44100),
             channels: Channels::from_value(p.channels.unwrap_or(2)),

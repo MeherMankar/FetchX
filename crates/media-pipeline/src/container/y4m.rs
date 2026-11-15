@@ -1,8 +1,8 @@
 // Adapted from ffmpreg (Apache-2.0)
 use crate::{
-    traits::{Demuxer, Muxer, Probe},
-    stream::Hint,
     Io, Result,
+    stream::Hint,
+    traits::{Demuxer, Muxer, Probe},
 };
 
 const Y4M_MAGIC: &[u8] = b"YUV4MPEG2";

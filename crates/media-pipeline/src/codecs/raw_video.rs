@@ -1,5 +1,6 @@
 // Adapted from ffmpreg (Apache-2.0)
 use crate::{
+    Packet, Parameters, Result,
     frame::{
         AudioFrame, Channels, Frame, Keyframe, Pixel, PixelFormat, SampleFormat, SampleLayout,
         VideoFrame,
@@ -8,7 +9,6 @@ use crate::{
     stream::{CodecId, StreamId, StreamKind},
     time::{Time, TimeBase},
     traits::{DecodeOut, Decoder, EncodeOut, Encoder},
-    Packet, Parameters, Result,
 };
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,12 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 pub fn audio_state(params: &Parameters) -> State {
-    let codec_state = CodecState { extradata: Vec::new(), pts: None, dts: None, last_pts: None };
+    let codec_state = CodecState {
+        extradata: Vec::new(),
+        pts: None,
+        dts: None,
+        last_pts: None,
+    };
     State::Audio(AudioState {
         sample_rate: params.sample_rate.unwrap_or(48_000),
         channels: Channels::from_count(params.channels.unwrap_or(2)),
@@ -31,8 +36,16 @@ pub fn audio_state(params: &Parameters) -> State {
 }
 
 pub fn video_state(params: &Parameters) -> State {
-    let codec_state = CodecState { extradata: Vec::new(), pts: None, dts: None, last_pts: None };
-    let pixel = Pixel { depth: 8, format: PixelFormat::YUV420 };
+    let codec_state = CodecState {
+        extradata: Vec::new(),
+        pts: None,
+        dts: None,
+        last_pts: None,
+    };
+    let pixel = Pixel {
+        depth: 8,
+        format: PixelFormat::YUV420,
+    };
     State::Video(VideoState {
         width: params.width.unwrap_or(0),
         height: params.height.unwrap_or(0),
@@ -90,12 +103,18 @@ impl Decoder for RawDecoder {
         let frame = match self.kind {
             StreamKind::Audio => {
                 let (sample_rate, channels, format, layout) = match state {
-                    State::Audio(audio) => {
-                        (audio.sample_rate, audio.channels, audio.format, audio.layout)
-                    }
-                    State::Video(_) => {
-                        (48_000, Channels::Stereo, SampleFormat::S16, SampleLayout::Interleaved)
-                    }
+                    State::Audio(audio) => (
+                        audio.sample_rate,
+                        audio.channels,
+                        audio.format,
+                        audio.layout,
+                    ),
+                    State::Video(_) => (
+                        48_000,
+                        Channels::Stereo,
+                        SampleFormat::S16,
+                        SampleLayout::Interleaved,
+                    ),
                 };
                 let mut frame =
                     AudioFrame::new(packet.data.clone(), sample_rate, channels, format, layout);
@@ -104,12 +123,15 @@ impl Decoder for RawDecoder {
             }
             _ => {
                 let (width, height, pixel) = match state {
-                    State::Video(video) => {
-                        (video.width, video.height, video.pixel.clone())
-                    }
-                    State::Audio(_) => {
-                        (0, 0, Pixel { depth: 8, format: PixelFormat::YUV420 })
-                    }
+                    State::Video(video) => (video.width, video.height, video.pixel.clone()),
+                    State::Audio(_) => (
+                        0,
+                        0,
+                        Pixel {
+                            depth: 8,
+                            format: PixelFormat::YUV420,
+                        },
+                    ),
                 };
                 Frame::Video(VideoFrame {
                     data: packet.data.clone(),
@@ -122,11 +144,17 @@ impl Decoder for RawDecoder {
             }
         };
 
-        Ok(DecodeOut { value: vec![frame], state: state.clone() })
+        Ok(DecodeOut {
+            value: vec![frame],
+            state: state.clone(),
+        })
     }
 
     fn flush(&self, state: &mut State) -> Result<DecodeOut<State>> {
-        Ok(DecodeOut { value: Vec::new(), state: state.clone() })
+        Ok(DecodeOut {
+            value: Vec::new(),
+            state: state.clone(),
+        })
     }
 }
 
@@ -172,10 +200,16 @@ impl Encoder for RawEncoder {
             },
         };
 
-        Ok(EncodeOut { value: vec![packet], state: state.clone() })
+        Ok(EncodeOut {
+            value: vec![packet],
+            state: state.clone(),
+        })
     }
 
     fn flush(&self, state: &mut State) -> Result<EncodeOut<State>> {
-        Ok(EncodeOut { value: Vec::new(), state: state.clone() })
+        Ok(EncodeOut {
+            value: Vec::new(),
+            state: state.clone(),
+        })
     }
 }

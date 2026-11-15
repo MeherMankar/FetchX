@@ -4,11 +4,11 @@ use std::io::{self, Write};
 
 use crate::api::{AacProfile, AudioCodec, Metadata, VideoCodec};
 use crate::assert_invariant;
-use crate::codec::av1::{extract_av1_config, Av1Config};
-use crate::codec::h264::{annexb_to_avcc, default_avc_config, extract_avc_config, AvcConfig};
-use crate::codec::h265::{extract_hevc_config, hevc_annexb_to_hvcc, HevcConfig};
-use crate::codec::opus::{is_valid_opus_packet, OpusConfig, OPUS_SAMPLE_RATE};
-use crate::codec::vp9::{extract_vp9_config, Vp9Config};
+use crate::codec::av1::{Av1Config, extract_av1_config};
+use crate::codec::h264::{AvcConfig, annexb_to_avcc, default_avc_config, extract_avc_config};
+use crate::codec::h265::{HevcConfig, extract_hevc_config, hevc_annexb_to_hvcc};
+use crate::codec::opus::{OPUS_SAMPLE_RATE, OpusConfig, is_valid_opus_packet};
+use crate::codec::vp9::{Vp9Config, extract_vp9_config};
 
 const MOVIE_TIMESCALE: u32 = 1000;
 /// Track/media timebase used for converting `pts` seconds into MP4 sample deltas.
@@ -333,8 +333,6 @@ impl fmt::Display for AdtsValidationError {
 }
 
 impl AdtsValidationError {
-
-
     /// Check if this error is critical (prevents muxing).
     pub fn is_critical(&self) -> bool {
         matches!(self.severity, ErrorSeverity::Error)
@@ -1389,12 +1387,25 @@ fn adts_to_raw(frame: &[u8]) -> Result<&[u8], AdtsValidationError> {
             kind: AdtsErrorKind::InvalidHeaderLength,
             severity: ErrorSeverity::Error,
             byte_offset: 1,
-            expected: Some(format!("≥{} bytes (protection_absent={})", header_len, protection_absent)),
+            expected: Some(format!(
+                "≥{} bytes (protection_absent={})",
+                header_len, protection_absent
+            )),
             found: Some(format!("{} bytes", frame.len())),
             hex_dump: Some(create_hex_dump(0, frame.len())),
-            suggestion: Some(format!("Frame is too short for {} header. Check if CRC protection is present and adjust header length calculation.", if protection_absent { "unprotected" } else { "protected" })),
+            suggestion: Some(format!(
+                "Frame is too short for {} header. Check if CRC protection is present and adjust header length calculation.",
+                if protection_absent {
+                    "unprotected"
+                } else {
+                    "protected"
+                }
+            )),
             code_example: None,
-            technical_details: Some(format!("Header length: 7 bytes (no CRC) or 9 bytes (with CRC). protection_absent bit: {}", protection_absent)),
+            technical_details: Some(format!(
+                "Header length: 7 bytes (no CRC) or 9 bytes (with CRC). protection_absent bit: {}",
+                protection_absent
+            )),
             related_errors: Vec::new(),
         });
     }
@@ -3171,7 +3182,7 @@ mod tests {
         assert_eq!(box_data[8..12], [0, 0, 0, 0]); // version/flags = 0
         assert_eq!(box_data[12..16], [0, 0, 0, 0]); // sample_size = 0 (variable)
         assert_eq!(box_data[16..20], [0, 0, 0, 3]); // sample_count = 3
-                                                    // Individual sizes
+        // Individual sizes
         assert_eq!(box_data[20..24], [0, 0, 0x04, 0x00]); // size[0] = 1024
         assert_eq!(box_data[24..28], [0, 0, 0x04, 0x00]); // size[1] = 1024
         assert_eq!(box_data[28..32], [0, 0, 0x04, 0x00]); // size[2] = 1024

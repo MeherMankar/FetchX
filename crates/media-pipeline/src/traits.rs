@@ -1,13 +1,12 @@
 // Adapted from ffmpreg (Apache-2.0)
 use crate::{
+    Io, Result,
     frame::Frame,
     metadata::Metadata,
     packet::Packet,
+    state::State,
     stream::{Hint, Parameters, Stream, StreamSet},
     time::Time,
-    Result,
-    Io,
-    state::State,
 };
 
 pub struct StepOutput<O, S> {

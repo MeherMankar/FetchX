@@ -41,14 +41,20 @@ impl Time {
         if self.base != other.base {
             return None;
         }
-        self.ticks.checked_add(other.ticks).map(|ticks| Self { ticks, base: self.base })
+        self.ticks.checked_add(other.ticks).map(|ticks| Self {
+            ticks,
+            base: self.base,
+        })
     }
 
     pub fn checked_sub(self, other: Time) -> Option<Self> {
         if self.base != other.base {
             return None;
         }
-        self.ticks.checked_sub(other.ticks).map(|ticks| Self { ticks, base: self.base })
+        self.ticks.checked_sub(other.ticks).map(|ticks| Self {
+            ticks,
+            base: self.base,
+        })
     }
 
     pub fn unpack(&self) -> (u64, u64, u64, u64) {

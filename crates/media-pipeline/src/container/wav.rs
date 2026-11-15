@@ -5,11 +5,11 @@
 // ---------------------------------------------------------------------------
 
 use crate::{
+    Io, Message, Packet, Result,
     metadata::{Metadata, RawValue},
     stream::{CodecId, Hint, Stream, StreamId, StreamSet},
     time::Time,
     traits::{Demuxer, Muxer, Probe},
-    Io, Message, Packet, Result,
 };
 
 pub struct WavDemuxer {
@@ -50,8 +50,7 @@ impl WavDemuxer {
             offset += 8;
 
             let chunk_id = &chunk_header[0..4];
-            let chunk_size =
-                u32::from_le_bytes(chunk_header[4..8].try_into().unwrap()) as u64;
+            let chunk_size = u32::from_le_bytes(chunk_header[4..8].try_into().unwrap()) as u64;
             let padded_size = chunk_size + (chunk_size & 1);
 
             if chunk_id == b"fmt " {
@@ -70,8 +69,7 @@ impl WavDemuxer {
                 let fmt_block_align = u16::from_le_bytes(fmt[12..14].try_into().unwrap());
                 let fmt_bits_per_sample = u16::from_le_bytes(fmt[14..16].try_into().unwrap());
 
-                let resolved_codec =
-                    resolve_codec_id(format_tag, fmt_bits_per_sample, &fmt)?;
+                let resolved_codec = resolve_codec_id(format_tag, fmt_bits_per_sample, &fmt)?;
 
                 if fmt_channels == 0 {
                     return Err(Message::Container("invalid wav channel count"));
@@ -176,8 +174,7 @@ fn parse_list_chunk(list: &[u8], metadata: &mut Metadata) {
     let mut offset = 4usize;
     while offset + 8 <= list.len() {
         let id = &list[offset..offset + 4];
-        let size =
-            u32::from_le_bytes(list[offset + 4..offset + 8].try_into().unwrap()) as usize;
+        let size = u32::from_le_bytes(list[offset + 4..offset + 8].try_into().unwrap()) as usize;
         offset += 8;
 
         if offset + size > list.len() {
@@ -242,7 +239,13 @@ impl Demuxer for WavDemuxer {
         data.truncate(n);
         self.remaining -= n as u64;
 
-        Ok(Some(Packet { stream_id: StreamId(0), data, pts: None, dts: None, duration: None }))
+        Ok(Some(Packet {
+            stream_id: StreamId(0),
+            data,
+            pts: None,
+            dts: None,
+            duration: None,
+        }))
     }
 
     fn streams(&self) -> &StreamSet {
@@ -324,8 +327,11 @@ fn skip_exact(io: &mut dyn Io, mut size: u64) -> Result<()> {
 }
 
 fn resolve_codec_id(format_tag: u16, bits_per_sample: u16, fmt: &[u8]) -> Result<CodecId> {
-    let resolved_tag =
-        if format_tag == 0xFFFE { resolve_extensible_subformat(fmt)? } else { format_tag };
+    let resolved_tag = if format_tag == 0xFFFE {
+        resolve_extensible_subformat(fmt)?
+    } else {
+        format_tag
+    };
 
     match resolved_tag {
         1 => match bits_per_sample {

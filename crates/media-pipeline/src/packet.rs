@@ -13,6 +13,12 @@ pub struct Packet {
 
 impl Packet {
     pub fn new(stream_id: StreamId, data: Vec<u8>) -> Self {
-        Self { stream_id, data, pts: None, dts: None, duration: None }
+        Self {
+            stream_id,
+            data,
+            pts: None,
+            dts: None,
+            duration: None,
+        }
     }
 }

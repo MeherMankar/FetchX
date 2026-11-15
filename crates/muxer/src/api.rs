@@ -9,7 +9,7 @@
 use crate::codec::av1::is_av1_keyframe;
 use crate::codec::vp9::is_vp9_keyframe;
 use crate::fragmented::{FragmentAudioConfig, FragmentConfig, FragmentedError, FragmentedMuxer};
-use crate::muxer::mp4::{Mp4AudioTrack, Mp4VideoTrack, Mp4Writer, Mp4WriterError, MEDIA_TIMESCALE};
+use crate::muxer::mp4::{MEDIA_TIMESCALE, Mp4AudioTrack, Mp4VideoTrack, Mp4Writer, Mp4WriterError};
 use std::fmt;
 use std::io::Write;
 
@@ -794,99 +794,187 @@ impl fmt::Display for MuxerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MuxerError::MissingTrackConfig => {
-                write!(f, "missing track configuration: call .video() and/or .audio() on MuxerBuilder before .build()")
+                write!(
+                    f,
+                    "missing track configuration: call .video() and/or .audio() on MuxerBuilder before .build()"
+                )
             }
             #[allow(deprecated)]
             MuxerError::MissingVideoConfig => {
-                write!(f, "missing track configuration: call .video() and/or .audio() on MuxerBuilder before .build()")
+                write!(
+                    f,
+                    "missing track configuration: call .video() and/or .audio() on MuxerBuilder before .build()"
+                )
             }
             MuxerError::VideoNotConfigured => {
-                write!(f, "video track not configured: call .video() on MuxerBuilder to enable video")
+                write!(
+                    f,
+                    "video track not configured: call .video() on MuxerBuilder to enable video"
+                )
             }
             MuxerError::Io(err) => write!(f, "IO error: {}", err),
             MuxerError::AlreadyFinished => {
-                write!(f, "muxer already finished: cannot write frames after calling finish()")
+                write!(
+                    f,
+                    "muxer already finished: cannot write frames after calling finish()"
+                )
             }
             MuxerError::NegativeVideoPts { pts, frame_index } => {
-                write!(f, "video frame {} has negative PTS ({:.3}s): timestamps must be >= 0.0", 
-                       frame_index, pts)
+                write!(
+                    f,
+                    "video frame {} has negative PTS ({:.3}s): timestamps must be >= 0.0",
+                    frame_index, pts
+                )
             }
             MuxerError::InvalidVideoPts { pts, frame_index } => {
-                write!(f, "video frame {} has invalid PTS ({:.3}s): timestamps must be finite (not NaN or Inf)", 
-                       frame_index, pts)
+                write!(
+                    f,
+                    "video frame {} has invalid PTS ({:.3}s): timestamps must be finite (not NaN or Inf)",
+                    frame_index, pts
+                )
             }
             MuxerError::NegativeVideoDts { dts, frame_index } => {
-                write!(f, "video frame {} has negative DTS ({:.3}s): decode timestamps must be >= 0.0", 
-                       frame_index, dts)
+                write!(
+                    f,
+                    "video frame {} has negative DTS ({:.3}s): decode timestamps must be >= 0.0",
+                    frame_index, dts
+                )
             }
             MuxerError::InvalidVideoDts { dts, frame_index } => {
-                write!(f, "video frame {} has invalid DTS ({:.3}s): decode timestamps must be finite (not NaN or Inf)", 
-                       frame_index, dts)
+                write!(
+                    f,
+                    "video frame {} has invalid DTS ({:.3}s): decode timestamps must be finite (not NaN or Inf)",
+                    frame_index, dts
+                )
             }
             MuxerError::NegativeAudioPts { pts, frame_index } => {
-                write!(f, "audio frame {} has negative PTS ({:.3}s): timestamps must be >= 0.0",
-                       frame_index, pts)
+                write!(
+                    f,
+                    "audio frame {} has negative PTS ({:.3}s): timestamps must be >= 0.0",
+                    frame_index, pts
+                )
             }
             MuxerError::InvalidAudioPts { pts, frame_index } => {
-                write!(f, "audio frame {} has invalid PTS ({:.3}s): timestamps must be finite (not NaN or Inf)",
-                       frame_index, pts)
+                write!(
+                    f,
+                    "audio frame {} has invalid PTS ({:.3}s): timestamps must be finite (not NaN or Inf)",
+                    frame_index, pts
+                )
             }
             MuxerError::AudioNotConfigured => {
-                write!(f, "audio track not configured: call .audio() on MuxerBuilder to enable audio")
+                write!(
+                    f,
+                    "audio track not configured: call .audio() on MuxerBuilder to enable audio"
+                )
             }
             MuxerError::EmptyAudioFrame { frame_index } => {
-                write!(f, "audio frame {} is empty: ADTS frames must contain data", frame_index)
+                write!(
+                    f,
+                    "audio frame {} is empty: ADTS frames must contain data",
+                    frame_index
+                )
             }
             MuxerError::EmptyVideoFrame { frame_index } => {
-                write!(f, "video frame {} is empty: video samples must contain NAL units", frame_index)
+                write!(
+                    f,
+                    "video frame {} is empty: video samples must contain NAL units",
+                    frame_index
+                )
             }
-            MuxerError::NonIncreasingVideoPts { prev_pts, curr_pts, frame_index } => {
-                write!(f, "video frame {} has PTS {:.3}s which is not greater than previous PTS {:.3}s: \
+            MuxerError::NonIncreasingVideoPts {
+                prev_pts,
+                curr_pts,
+                frame_index,
+            } => {
+                write!(
+                    f,
+                    "video frame {} has PTS {:.3}s which is not greater than previous PTS {:.3}s: \
                           video timestamps must strictly increase. For B-frames, use write_video_with_dts()",
-                       frame_index, curr_pts, prev_pts)
+                    frame_index, curr_pts, prev_pts
+                )
             }
-            MuxerError::DecreasingAudioPts { prev_pts, curr_pts, frame_index } => {
-                write!(f, "audio frame {} has PTS {:.3}s which is less than previous PTS {:.3}s: \
+            MuxerError::DecreasingAudioPts {
+                prev_pts,
+                curr_pts,
+                frame_index,
+            } => {
+                write!(
+                    f,
+                    "audio frame {} has PTS {:.3}s which is less than previous PTS {:.3}s: \
                           audio timestamps must not decrease",
-                       frame_index, curr_pts, prev_pts)
+                    frame_index, curr_pts, prev_pts
+                )
             }
-            MuxerError::AudioBeforeFirstVideo { audio_pts, first_video_pts } => {
-                match first_video_pts {
-                    Some(v) => write!(f, "audio PTS {:.3}s arrives before first video PTS {:.3}s: \
+            MuxerError::AudioBeforeFirstVideo {
+                audio_pts,
+                first_video_pts,
+            } => match first_video_pts {
+                Some(v) => write!(
+                    f,
+                    "audio PTS {:.3}s arrives before first video PTS {:.3}s: \
                                          write video frames first, or ensure audio PTS >= video PTS",
-                                      audio_pts, v),
-                    None => write!(f, "audio frame arrived before any video frame: \
-                                       write at least one video frame before writing audio"),
-                }
-            }
+                    audio_pts, v
+                ),
+                None => write!(
+                    f,
+                    "audio frame arrived before any video frame: \
+                                       write at least one video frame before writing audio"
+                ),
+            },
             MuxerError::FirstVideoFrameMustBeKeyframe => {
-                write!(f, "first video frame must be a keyframe (IDR): \
-                          set is_keyframe=true and ensure the frame contains an IDR NAL unit")
+                write!(
+                    f,
+                    "first video frame must be a keyframe (IDR): \
+                          set is_keyframe=true and ensure the frame contains an IDR NAL unit"
+                )
             }
             MuxerError::FirstVideoFrameMissingSpsPps => {
-                write!(f, "first H.264/H.265 keyframe must contain parameter sets: \
+                write!(
+                    f,
+                    "first H.264/H.265 keyframe must contain parameter sets: \
                           for H.264 prepend SPS (NAL type 7) and PPS (NAL type 8); \
-                          for H.265 prepend VPS (type 32), SPS (type 33), and PPS (type 34)")
+                          for H.265 prepend VPS (type 32), SPS (type 33), and PPS (type 34)"
+                )
             }
             MuxerError::FirstAv1FrameMissingSequenceHeader => {
-                write!(f, "first AV1 frame must contain a Sequence Header OBU: \
-                          ensure the first keyframe includes OBU type 1 (SEQUENCE_HEADER)")
+                write!(
+                    f,
+                    "first AV1 frame must contain a Sequence Header OBU: \
+                          ensure the first keyframe includes OBU type 1 (SEQUENCE_HEADER)"
+                )
             }
             MuxerError::FirstVp9FrameMissingSequenceHeader => {
-                write!(f, "first VP9 frame must contain sequence parameters: \
-                          ensure the first keyframe includes VP9 frame header with configuration data")
+                write!(
+                    f,
+                    "first VP9 frame must contain sequence parameters: \
+                          ensure the first keyframe includes VP9 frame header with configuration data"
+                )
             }
             MuxerError::InvalidAdtsDetailed { frame_index, error } => {
-                write!(f, "audio frame {} ADTS validation failed: {}", frame_index, error)
+                write!(
+                    f,
+                    "audio frame {} ADTS validation failed: {}",
+                    frame_index, error
+                )
             }
             MuxerError::InvalidOpusPacket { frame_index } => {
-                write!(f, "audio frame {} is not a valid Opus packet: ensure the frame has valid TOC byte",
-                       frame_index)
+                write!(
+                    f,
+                    "audio frame {} is not a valid Opus packet: ensure the frame has valid TOC byte",
+                    frame_index
+                )
             }
-            MuxerError::NonIncreasingDts { prev_dts, curr_dts, frame_index } => {
-                write!(f, "video frame {} has DTS {:.3}s which is not greater than previous DTS {:.3}s: \
+            MuxerError::NonIncreasingDts {
+                prev_dts,
+                curr_dts,
+                frame_index,
+            } => {
+                write!(
+                    f,
+                    "video frame {} has DTS {:.3}s which is not greater than previous DTS {:.3}s: \
                           DTS (decode timestamps) must strictly increase",
-                       frame_index, curr_dts, prev_dts)
+                    frame_index, curr_dts, prev_dts
+                )
             }
             MuxerError::InvalidDimensions { width, height } => {
                 write!(

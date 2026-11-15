@@ -217,16 +217,34 @@ mod tests {
 
     #[test]
     fn test_opus_frame_duration_from_toc_silk() {
-        assert_eq!(opus_frame_duration_from_toc(0b0000_0000), Some(OpusFrameDuration::Ms10));
-        assert_eq!(opus_frame_duration_from_toc(0b0010_0000), Some(OpusFrameDuration::Ms20));
-        assert_eq!(opus_frame_duration_from_toc(0b0100_0000), Some(OpusFrameDuration::Ms40));
-        assert_eq!(opus_frame_duration_from_toc(0b0110_0000), Some(OpusFrameDuration::Ms60));
+        assert_eq!(
+            opus_frame_duration_from_toc(0b0000_0000),
+            Some(OpusFrameDuration::Ms10)
+        );
+        assert_eq!(
+            opus_frame_duration_from_toc(0b0010_0000),
+            Some(OpusFrameDuration::Ms20)
+        );
+        assert_eq!(
+            opus_frame_duration_from_toc(0b0100_0000),
+            Some(OpusFrameDuration::Ms40)
+        );
+        assert_eq!(
+            opus_frame_duration_from_toc(0b0110_0000),
+            Some(OpusFrameDuration::Ms60)
+        );
     }
 
     #[test]
     fn test_opus_frame_duration_from_toc_celt() {
-        assert_eq!(opus_frame_duration_from_toc(0b1100_0000), Some(OpusFrameDuration::Ms2_5));
-        assert_eq!(opus_frame_duration_from_toc(0b1110_0000), Some(OpusFrameDuration::Ms5));
+        assert_eq!(
+            opus_frame_duration_from_toc(0b1100_0000),
+            Some(OpusFrameDuration::Ms2_5)
+        );
+        assert_eq!(
+            opus_frame_duration_from_toc(0b1110_0000),
+            Some(OpusFrameDuration::Ms5)
+        );
     }
 
     #[test]
@@ -271,7 +289,10 @@ mod tests {
         assert_eq!(opus_packet_samples(&[]), None);
 
         let valid_toc = vec![0xFF];
-        assert_eq!(opus_frame_duration_from_toc(valid_toc[0]), Some(OpusFrameDuration::Ms5));
+        assert_eq!(
+            opus_frame_duration_from_toc(valid_toc[0]),
+            Some(OpusFrameDuration::Ms5)
+        );
         assert_eq!(opus_packet_samples(&valid_toc), None);
 
         let invalid_code3 = vec![0x03, 0x00];

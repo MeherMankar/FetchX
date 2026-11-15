@@ -109,12 +109,18 @@ impl AudioFrame {
         layout: SampleLayout,
     ) -> Self {
         let nb_samples = match layout {
-            SampleLayout::Interleaved => {
-                data.len() / (channels.count() as usize * format.bytes())
-            }
+            SampleLayout::Interleaved => data.len() / (channels.count() as usize * format.bytes()),
             SampleLayout::Planar => data.len() / format.bytes(),
         };
-        Self { data, sample_rate, channels, format, layout, nb_samples, pts: None }
+        Self {
+            data,
+            sample_rate,
+            channels,
+            format,
+            layout,
+            nb_samples,
+            pts: None,
+        }
     }
 
     pub fn frame_size(&self) -> usize {

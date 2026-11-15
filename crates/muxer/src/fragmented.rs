@@ -108,7 +108,7 @@
 
 use crate::api::AudioCodec;
 use crate::codec::opus_packet_samples;
-use crate::muxer::mp4::{build_mp4a_box, build_opus_box, encode_language_code, Mp4AudioTrack};
+use crate::muxer::mp4::{Mp4AudioTrack, build_mp4a_box, build_opus_box, encode_language_code};
 
 /// Errors that can occur during fragmented MP4 muxing.
 #[derive(Debug, Clone, PartialEq)]
@@ -629,7 +629,7 @@ fn build_mvhd_fmp4(timescale: u32, next_track_id: u32) -> Vec<u8> {
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes()); // Rate (1.0)
     payload.extend_from_slice(&0x0100_u16.to_be_bytes()); // Volume (1.0)
     payload.extend_from_slice(&[0u8; 10]); // Reserved
-                                           // Unity matrix (36 bytes)
+    // Unity matrix (36 bytes)
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
     payload.extend_from_slice(&[0u8; 12]);
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
@@ -679,7 +679,7 @@ fn build_tkhd_fmp4(config: &FragmentConfig) -> Vec<u8> {
     payload.extend_from_slice(&0u16.to_be_bytes()); // Alternate group
     payload.extend_from_slice(&0u16.to_be_bytes()); // Volume (0 for video)
     payload.extend_from_slice(&0u16.to_be_bytes()); // Reserved
-                                                    // Unity matrix (36 bytes)
+    // Unity matrix (36 bytes)
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
     payload.extend_from_slice(&[0u8; 12]);
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
@@ -758,7 +758,7 @@ fn build_audio_tkhd_fmp4(track_id: u32) -> Vec<u8> {
     payload.extend_from_slice(&0u16.to_be_bytes()); // Alternate group
     payload.extend_from_slice(&0x0100_u16.to_be_bytes()); // Volume (1.0 for audio)
     payload.extend_from_slice(&0u16.to_be_bytes()); // Reserved
-                                                    // Unity matrix (36 bytes)
+    // Unity matrix (36 bytes)
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
     payload.extend_from_slice(&[0u8; 12]);
     payload.extend_from_slice(&0x0001_0000_u32.to_be_bytes());
@@ -889,7 +889,7 @@ fn build_dinf() -> Vec<u8> {
     let mut dref_payload = Vec::new();
     dref_payload.extend_from_slice(&0u32.to_be_bytes()); // Version + flags
     dref_payload.extend_from_slice(&1u32.to_be_bytes()); // Entry count
-                                                         // url box (self-contained)
+    // url box (self-contained)
     let url_payload = [0x00, 0x00, 0x00, 0x01]; // Flags: self-contained
     let url_box = build_box(b"url ", &url_payload);
     dref_payload.extend_from_slice(&url_box);
