@@ -1858,30 +1858,39 @@ mod tests {
     }
 
     #[test]
-    fn add_media_download_requires_an_available_ytdlp_engine() {
-        let (config, _dir) = make_config();
+    fn add_media_download_uses_native_ytdlp_engine_without_external_runtime() {
+        let (config, dir) = make_config();
         let svc = DownloadService::new(config, None).expect("service creation failed");
-        let result = svc.add_media_download(
-            "https://www.youtube.com/watch?v=example".to_string(),
-            "video.mp4".to_string(),
-            "/tmp/video.mp4".to_string(),
-            DownloadPriorityDto::Normal,
-            None,
-            None,
-        );
-        assert!(matches!(result, Err(MobileApiError::UnavailableEngine(_))));
-        let audio_result = svc.add_media_download(
-            "https://www.youtube.com/watch?v=example".to_string(),
-            "audio.mp3".to_string(),
-            "/tmp/audio.mp3".to_string(),
-            DownloadPriorityDto::Normal,
-            None,
-            Some("mp3".to_owned()),
-        );
-        assert!(matches!(
-            audio_result,
-            Err(MobileApiError::UnavailableEngine(_))
-        ));
+        svc.pause_queue_dispatch().expect("pause queue dispatch");
+
+        let video_id = svc
+            .add_media_download(
+                "https://www.youtube.com/watch?v=example".to_string(),
+                "video.mp4".to_string(),
+                dir.path().join("video.mp4").to_string_lossy().into_owned(),
+                DownloadPriorityDto::Normal,
+                None,
+                None,
+            )
+            .expect("native yt-dlp should accept video downloads without an external runtime");
+        let audio_id = svc
+            .add_media_download(
+                "https://www.youtube.com/watch?v=example".to_string(),
+                "audio.mp3".to_string(),
+                dir.path().join("audio.mp3").to_string_lossy().into_owned(),
+                DownloadPriorityDto::Normal,
+                None,
+                Some("mp3".to_owned()),
+            )
+            .expect("native yt-dlp should accept audio downloads without an external runtime");
+
+        for id in [video_id, audio_id] {
+            let download = svc
+                .get_download(id)
+                .expect("download lookup should succeed")
+                .expect("native yt-dlp download should be persisted");
+            assert_eq!(download.engine, "yt_dlp");
+        }
         svc.shutdown();
     }
 
