@@ -15,6 +15,7 @@ mod native_media;
 mod native_mp4;
 mod native_oxideav;
 mod native_torrent;
+mod native_ytdlp;
 mod retry;
 mod segments;
 mod sftp;
@@ -44,6 +45,7 @@ pub use native_media::{NativeMediaError, NativeMediaProcessor};
 pub use native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor, NativeMp4Track};
 pub use native_oxideav::{NativeOxideavError, NativeOxideavProcessor};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
+pub use native_ytdlp::NativeYtDlpProcessRunner;
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
 pub use ytdlp::{
     YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner,

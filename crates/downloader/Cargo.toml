@@ -54,6 +54,7 @@ oxideav-meta = { version = "=0.0.4", default-features = false, features = [
     # Filters
     "audio-filter",
 ]}
+yt-dlp-rs = { git = "https://github.com/aagedal/yt-dlp-rs.git", rev = "1acb65568c0625ab982d46c7e05d3edb0bf19de0" }
 
 [features]
 phase28-benchmark-local-http = []

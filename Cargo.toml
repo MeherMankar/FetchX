@@ -61,3 +61,7 @@ debug = 0
 
 [profile.test]
 debug = 0
+
+# Bound codegen memory for the yt-dlp Rust extractor on Windows builders.
+[profile.dev.package.yt-dlp-rs]
+codegen-units = 256

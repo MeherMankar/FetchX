@@ -52,6 +52,11 @@ object MediaDownloadPreferences {
         preferences(context).edit().putBoolean(KEY_EMBED_METADATA, enabled).apply()
     }
 
+    fun requiresCompatibilityRuntime(context: Context): Boolean =
+        isSponsorBlockEnabled(context) ||
+            areSubtitlesEnabled(context) ||
+            isMetadataEmbeddingEnabled(context)
+
     fun applyArguments(context: Context, arguments: List<String>): List<String> {
         var delimiter = arguments.indexOf("--")
         if (delimiter < 0) return arguments

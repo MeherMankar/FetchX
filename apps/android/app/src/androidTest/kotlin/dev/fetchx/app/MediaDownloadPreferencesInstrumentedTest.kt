@@ -49,4 +49,44 @@ class MediaDownloadPreferencesInstrumentedTest {
             editor.commit()
         }
     }
+
+    @Test
+    fun compatibilityRuntimeIsRequiredOnlyForLegacyMediaOptions() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val preferences = context.getSharedPreferences(
+            "fetchx_media_download_preferences",
+            android.content.Context.MODE_PRIVATE,
+        )
+        val keys = listOf("sponsorblock", "download_subtitles", "embed_metadata")
+        val previous = keys.associateWith { key ->
+            preferences.contains(key) to preferences.getBoolean(key, false)
+        }
+        try {
+            val editor = preferences.edit()
+            keys.forEach { editor.remove(it) }
+            editor.commit()
+            assertFalse(MediaDownloadPreferences.requiresCompatibilityRuntime(context))
+
+            MediaDownloadPreferences.setSponsorBlockEnabled(context, true)
+            assertTrue(MediaDownloadPreferences.requiresCompatibilityRuntime(context))
+            MediaDownloadPreferences.setSponsorBlockEnabled(context, false)
+
+            MediaDownloadPreferences.setSubtitlesEnabled(context, true)
+            assertTrue(MediaDownloadPreferences.requiresCompatibilityRuntime(context))
+            MediaDownloadPreferences.setSubtitlesEnabled(context, false)
+
+            MediaDownloadPreferences.setMetadataEmbeddingEnabled(context, true)
+            assertTrue(MediaDownloadPreferences.requiresCompatibilityRuntime(context))
+        } finally {
+            val editor = preferences.edit()
+            previous.forEach { (key, value) ->
+                if (value.first) {
+                    editor.putBoolean(key, value.second)
+                } else {
+                    editor.remove(key)
+                }
+            }
+            editor.commit()
+        }
+    }
 }

@@ -32,8 +32,9 @@ and native audio codecs for supported audio conversions. No upstream FFmpeg sour
 library, or executable is bundled or linked. Native processing is bounded, supports
 cancellation but not active pause/resume, caps output at 100 GiB by default
 (configurable up to 1 TiB), and does not own download lifecycle or scheduling. The
-optional yt-dlp engine is configured as an external process adapter and uses fake
-runners in tests; no installed yt-dlp is required for CI.
+yt-dlp now uses the `yt-dlp-rs` Rust library in-process by default, pinned to a Git
+commit and declared directly from its upstream repository. An explicitly configured
+executable remains available as a compatibility override.
 An initial native Rust MP4 path probes MP4 metadata and stream-copies supported H.264/AAC,
 HEVC, VP8, VP9, AV1, Opus, and FLAC tracks, including mixed files with one video and one
 audio track. MP4 VP8/VP9 video-only tracks can also be stream-copied to WebM.
@@ -65,8 +66,8 @@ MP4 container handling also uses the MIT-licensed
 uses [`flacenc`](https://crates.io/crates/flacenc) (Apache-2.0); MP3 encoding uses
 [`audio2mp3-core`](https://crates.io/crates/audio2mp3-core) (MIT OR Apache-2.0); WAV
 parsing uses [`hound`](https://crates.io/crates/hound) (Apache-2.0), WAV output uses
-[`ffmpreg`](https://crates.io/crates/ffmpreg) (Apache-2.0), and audio demuxing/decoding
-uses [`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0). Additional media
+FetchX's native PCM writer, and audio demuxing/decoding uses
+[`symphonia`](https://crates.io/crates/symphonia) (MPL-2.0). Additional media
 container probing and stream-copy remuxing use the MIT-licensed
 [`oxideav-core`](https://crates.io/crates/oxideav-core) and
 [`oxideav-meta`](https://crates.io/crates/oxideav-meta). OxideAV requires Rust 1.95 or newer.
@@ -82,12 +83,13 @@ Rust queue actor persists this ordering through the existing SQLite `queue_order
 field, so the same ordering is used by Android, desktop, CLI, and authenticated remote
 controls and survives restart.
 
-Android's embedded yt-dlp runtime also supports selectable media formats. Adaptive
-video/audio selections first use a FetchX native compatibility shim for supported
-single-input registered-container stream-copy remuxes, H.264/AAC MP4 merges, compatible
-audio-in-MP4 to M4A extraction, and supported audio-to-WAV/MP3/FLAC conversions. Other
-codecs, containers, and audio transcoding fail as unsupported; no upstream FFmpeg
-library or executable is bundled or launched.
+The native yt-dlp engine supports selectable media formats and uses FetchX's native
+processors for supported stream merges and MP3 conversion. Other codecs, containers,
+or post-processing fail explicitly when unsupported. Android starts its legacy
+Chaquopy compatibility runtime only when SponsorBlock, subtitle downloading, or
+metadata embedding is enabled; those settings are read at app startup, so changes
+take effect after restarting the app. No upstream FFmpeg library or executable is
+bundled or launched by the native path.
 
 Resume uses the actual `<destination>.part` length for a single `Range` request and
 appends only after validating a `206` response and its `Content-Range`. A `200`

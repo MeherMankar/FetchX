@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Cursor, Read, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -323,35 +323,60 @@ impl NativeMediaProcessor {
             return Err(NativeMediaError::InvalidOutput);
         }
         let decoded = decode_audio_pcm(input.as_ref(), &is_cancelled)?;
-        let spec = hound::WavSpec {
-            channels: decoded.channels,
-            sample_rate: decoded.sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut encoded = Cursor::new(Vec::new());
+        if decoded.channels == 0
+            || decoded.sample_rate == 0
+            || decoded.samples.len() % usize::from(decoded.channels) != 0
         {
-            let mut writer = hound::WavWriter::new(&mut encoded, spec)
-                .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-            for chunk in decoded.samples.chunks(4096) {
-                if is_cancelled() {
-                    return Err(NativeMediaError::Cancelled);
-                }
-                for sample in chunk {
-                    writer
-                        .write_sample(*sample)
-                        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-                }
-            }
-            writer
-                .finalize()
-                .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
+            return Err(NativeMediaError::UnsupportedInput);
         }
-        let bytes = encoded.into_inner();
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_output_bytes {
+        let data_len = decoded
+            .samples
+            .len()
+            .checked_mul(std::mem::size_of::<i16>())
+            .ok_or(NativeMediaError::OutputTooLarge)?;
+        let data_len_u32 = u32::try_from(data_len).map_err(|_| NativeMediaError::OutputTooLarge)?;
+        let riff_len = data_len_u32
+            .checked_add(36)
+            .ok_or(NativeMediaError::OutputTooLarge)?;
+        let output_len = data_len
+            .checked_add(44)
+            .ok_or(NativeMediaError::OutputTooLarge)?;
+        if u64::try_from(output_len).unwrap_or(u64::MAX) > max_output_bytes {
             return Err(NativeMediaError::OutputTooLarge);
         }
-        publish_bytes(&bytes, output.as_ref(), max_output_bytes, &is_cancelled)
+        let block_align = decoded
+            .channels
+            .checked_mul(2)
+            .ok_or(NativeMediaError::UnsupportedInput)?;
+        let byte_rate = decoded
+            .sample_rate
+            .checked_mul(u32::from(block_align))
+            .ok_or(NativeMediaError::UnsupportedInput)?;
+        let mut encoded = Vec::with_capacity(output_len);
+        encoded.extend_from_slice(b"RIFF");
+        encoded.extend_from_slice(&riff_len.to_le_bytes());
+        encoded.extend_from_slice(b"WAVEfmt ");
+        encoded.extend_from_slice(&16_u32.to_le_bytes());
+        encoded.extend_from_slice(&1_u16.to_le_bytes());
+        encoded.extend_from_slice(&decoded.channels.to_le_bytes());
+        encoded.extend_from_slice(&decoded.sample_rate.to_le_bytes());
+        encoded.extend_from_slice(&byte_rate.to_le_bytes());
+        encoded.extend_from_slice(&block_align.to_le_bytes());
+        encoded.extend_from_slice(&16_u16.to_le_bytes());
+        encoded.extend_from_slice(b"data");
+        encoded.extend_from_slice(&data_len_u32.to_le_bytes());
+        for chunk in decoded.samples.chunks(4096) {
+            if is_cancelled() {
+                return Err(NativeMediaError::Cancelled);
+            }
+            for sample in chunk {
+                encoded.extend_from_slice(&sample.to_le_bytes());
+            }
+        }
+        if encoded.len() != output_len {
+            return Err(NativeMediaError::OutputTooLarge);
+        }
+        publish_bytes(&encoded, output.as_ref(), max_output_bytes, &is_cancelled)
     }
 
     pub fn audio_to_mp3(

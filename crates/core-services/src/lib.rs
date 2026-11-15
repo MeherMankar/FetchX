@@ -36,10 +36,10 @@ use std::{
 
 use fetchx_downloader::{
     DirectHttpEngine, DownloadEngineError, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
-    NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine, SftpEngine,
-    YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine, YtDlpFormat, YtDlpProcessRunner,
-    YtDlpProcessRunnerAdapter, is_dash_url, is_hls_url, remove_http_multi_source_set,
-    save_http_multi_source_set, validate_http_source_url,
+    NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine,
+    NativeYtDlpProcessRunner, SftpEngine, YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine,
+    YtDlpFormat, YtDlpProcessRunner, YtDlpProcessRunnerAdapter, is_dash_url, is_hls_url,
+    remove_http_multi_source_set, save_http_multi_source_set, validate_http_source_url,
 };
 use fetchx_media_extractor::{
     BrightcoveExtractor, CbcExtractor, ExtractOptions as MediaExtractOptions, ExtractionError,
@@ -2695,7 +2695,13 @@ impl EngineRuntime {
         let native_torrent_metadata = torrent_metadata.clone();
         // Clone the runner before moving it into init_ytdlp so we can also
         // pass it to YtDlpProcessRunnerAdapter for the media extraction registry.
-        let ytdlp_runner_for_registry = ytdlp_runner.clone();
+        let ytdlp_runner_for_registry = ytdlp_runner.clone().or_else(|| {
+            config
+                .yt_dlp
+                .executable_path
+                .is_none()
+                .then(|| Arc::new(NativeYtDlpProcessRunner) as Arc<dyn YtDlpProcessRunner>)
+        });
         let (yt_dlp_engine, ytdlp_avail) =
             init_ytdlp(repository.clone(), config, runtime_dir, ytdlp_runner).await;
         let (native_torrent_engine, native_torrent_avail) =
@@ -2767,9 +2773,8 @@ impl EngineRuntime {
 
         // ── Media extraction registry ────────────────────────────────────
         // Build the ExtractorRegistry here in the composition root.
-        // The adapter is built from the resolved executable path: when a runner
-        // is injected (e.g. Android's in-process Chaquopy runner) it delegates
-        // to that runner; otherwise it spawns yt-dlp itself (desktop/CLI).
+        // The adapter delegates to the injected runner. Without an explicit
+        // executable or platform compatibility runtime, that runner is native Rust.
         let media_registry = {
             let mut registry = ExtractorRegistry::new();
             registry.register(Arc::new(YoutubeExtractor));

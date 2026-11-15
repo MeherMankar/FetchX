@@ -297,12 +297,10 @@ impl DownloadService {
         });
         let engine_config = {
             let mut engine_config = fetchx_core_services::EngineConfig::default();
+            engine_config.yt_dlp.enabled = true;
             if let Some(path) = config.yt_dlp_executable_path {
                 engine_config.yt_dlp.enabled = true;
                 engine_config.yt_dlp.executable_path = Some(PathBuf::from(path));
-            }
-            if ytdlp_runner.is_some() {
-                engine_config.yt_dlp.enabled = true;
             }
             engine_config.native_torrent.enabled = true;
             engine_config.native_torrent.listen_port = 0;

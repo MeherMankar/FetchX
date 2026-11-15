@@ -288,7 +288,17 @@ where
     R: DownloadRepository + Clone,
 {
     pub async fn initialize(repository: R, config: YtDlpConfig) -> Result<Self, YtDlpError> {
-        Self::initialize_with_runner(repository, config, Arc::new(TokioYtDlpRunner)).await
+        if config.executable.is_some() {
+            return Self::initialize_with_runner(repository, config, Arc::new(TokioYtDlpRunner))
+                .await;
+        }
+        Self::initialize_with_runner_and_executable(
+            repository,
+            config,
+            "fetchx-native-yt-dlp-rs",
+            Arc::new(crate::NativeYtDlpProcessRunner),
+        )
+        .await
     }
 
     pub async fn initialize_with_runner(
