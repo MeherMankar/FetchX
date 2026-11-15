@@ -19,6 +19,7 @@ use tracing::debug;
 use crate::native_media::{NativeMediaError, NativeMediaProcessor};
 use crate::native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor};
 use crate::native_oxideav::{NativeOxideavError, NativeOxideavProcessor};
+use crate::native_video::{NativeVideoError, NativeVideoProcessor};
 
 const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 6);
 const MAX_PROCESS_TIMEOUT: Duration = Duration::from_secs(60 * 60 * 24);
@@ -139,6 +140,9 @@ pub enum MediaOperation {
         start: Duration,
         end: Option<Duration>,
     },
+    ExtractThumbnail {
+        seek: Option<Duration>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -228,6 +232,8 @@ pub enum FfmpegError {
     NativeMedia(#[from] NativeMediaError),
     #[error("native OxideAV media processing failed: {0}")]
     NativeOxideav(#[from] NativeOxideavError),
+    #[error("native video processing failed: {0}")]
+    NativeVideo(#[from] NativeVideoError),
 }
 
 pub struct FfmpegProcessor {
@@ -841,6 +847,226 @@ impl FfmpegProcessor {
                 Err(error) => return Err(error),
             }
         }
+        // ── H264AacMp4 ──────────────────────────────────────────────────────
+        if matches!(
+            request.operation,
+            MediaOperation::Transcode {
+                preset: TranscodePreset::H264AacMp4
+            }
+        ) {
+            // Fast path: input is already H.264+AAC in MP4 → stream copy.
+            if is_mp4_path(&input) {
+                let native_input = input.clone();
+                let native_output = destination.clone();
+                let max_output_bytes = self.max_output_bytes;
+                match run_native_task(
+                    self.process_timeout,
+                    cancellation.clone(),
+                    move |cancelled, receiver| {
+                        NativeMp4Processor::remux(
+                            &native_input,
+                            &native_output,
+                            max_output_bytes,
+                            || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(info) => {
+                        return Ok(MediaProcessOutput {
+                            destination,
+                            size_bytes: info.size_bytes,
+                        });
+                    }
+                    Err(FfmpegError::NativeMp4(
+                        NativeMp4Error::InvalidInput | NativeMp4Error::UnsupportedCodec,
+                    )) => {
+                        debug!("H264AacMp4: native MP4 remux unsupported, trying audio transcode");
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            // Slow path: re-encode audio to AAC, keep video stream copy via OxideAV.
+            {
+                let native_input = input.clone();
+                let native_output = destination.clone();
+                let max_output_bytes = self.max_output_bytes;
+                match run_native_task(
+                    self.process_timeout,
+                    cancellation.clone(),
+                    move |cancelled, receiver| {
+                        NativeMediaProcessor::audio_to_aac(
+                            &native_input,
+                            &native_output,
+                            128_000,
+                            max_output_bytes,
+                            || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(size_bytes) => {
+                        return Ok(MediaProcessOutput {
+                            destination,
+                            size_bytes,
+                        });
+                    }
+                    Err(FfmpegError::NativeMedia(
+                        NativeMediaError::InvalidInput | NativeMediaError::UnsupportedInput,
+                    )) => {
+                        debug!("H264AacMp4: audio-to-AAC unsupported");
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        // ── HevcAacMp4 ──────────────────────────────────────────────────────
+        if matches!(
+            request.operation,
+            MediaOperation::Transcode {
+                preset: TranscodePreset::HevcAacMp4
+            }
+        ) {
+            // Stream-copy path only (no HEVC software encoder available).
+            if is_mp4_path(&input) {
+                let native_input = input.clone();
+                let native_output = destination.clone();
+                let max_output_bytes = self.max_output_bytes;
+                match run_native_task(
+                    self.process_timeout,
+                    cancellation.clone(),
+                    move |cancelled, receiver| {
+                        NativeMp4Processor::remux(
+                            &native_input,
+                            &native_output,
+                            max_output_bytes,
+                            || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(info) => {
+                        return Ok(MediaProcessOutput {
+                            destination,
+                            size_bytes: info.size_bytes,
+                        });
+                    }
+                    Err(FfmpegError::NativeMp4(
+                        NativeMp4Error::InvalidInput | NativeMp4Error::UnsupportedCodec,
+                    )) => {
+                        debug!("HevcAacMp4: native MP4 remux unsupported");
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        // ── Vp9OpusWebM ─────────────────────────────────────────────────────
+        if matches!(
+            request.operation,
+            MediaOperation::Transcode {
+                preset: TranscodePreset::Vp9OpusWebM
+            }
+        ) {
+            // Stream-copy path: input already in WebM/MKV → remux to WebM.
+            {
+                let native_input = input.clone();
+                let native_output = destination.clone();
+                let max_output_bytes = self.max_output_bytes;
+                match run_native_task(
+                    self.process_timeout,
+                    cancellation.clone(),
+                    move |cancelled, receiver| {
+                        NativeOxideavProcessor::remux(
+                            &native_input,
+                            &native_output,
+                            MediaContainer::WebM.oxideav_muxer(),
+                            max_output_bytes,
+                            || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(size_bytes) => {
+                        return Ok(MediaProcessOutput {
+                            destination,
+                            size_bytes,
+                        });
+                    }
+                    Err(FfmpegError::NativeOxideav(
+                        NativeOxideavError::UnsupportedInput | NativeOxideavError::Container(_),
+                    )) => {
+                        debug!("Vp9OpusWebM: stream-copy unsupported, trying audio transcode");
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            // Audio transcode path: re-encode audio to Opus, remux to WebM.
+            {
+                let native_input = input.clone();
+                let native_output = destination.clone();
+                let max_output_bytes = self.max_output_bytes;
+                match run_native_task(
+                    self.process_timeout,
+                    cancellation.clone(),
+                    move |cancelled, receiver| {
+                        NativeMediaProcessor::audio_to_opus(
+                            &native_input,
+                            &native_output,
+                            128_000,
+                            max_output_bytes,
+                            || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                        )
+                    },
+                )
+                .await
+                {
+                    Ok(size_bytes) => {
+                        return Ok(MediaProcessOutput {
+                            destination,
+                            size_bytes,
+                        });
+                    }
+                    Err(FfmpegError::NativeMedia(
+                        NativeMediaError::InvalidInput | NativeMediaError::UnsupportedInput,
+                    )) => {
+                        debug!("Vp9OpusWebM: audio-to-Opus unsupported");
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+
+        // ── ExtractThumbnail ─────────────────────────────────────────────────
+        if let MediaOperation::ExtractThumbnail { seek } = request.operation {
+            let native_input = input.clone();
+            let native_output = destination.clone();
+            let max_output_bytes = self.max_output_bytes;
+            return run_native_task(
+                self.process_timeout,
+                cancellation.clone(),
+                move |cancelled, receiver| {
+                    NativeVideoProcessor::extract_thumbnail(
+                        &native_input,
+                        &native_output,
+                        seek,
+                        max_output_bytes,
+                        || cancelled.load(Ordering::Relaxed) || *receiver.borrow(),
+                    )
+                },
+            )
+            .await
+            .map(|size_bytes| MediaProcessOutput {
+                destination,
+                size_bytes,
+            });
+        }
+
         if let MediaOperation::Remux { container } = request.operation {
             let native_input = input.clone();
             let native_output = destination.clone();
@@ -1002,6 +1228,19 @@ impl MediaProcessRequest {
                 start,
                 end,
             },
+            metadata: None,
+        }
+    }
+
+    pub fn extract_thumbnail(
+        input: impl Into<PathBuf>,
+        output: impl Into<PathBuf>,
+        seek: Option<Duration>,
+    ) -> Self {
+        Self {
+            input: input.into(),
+            output: output.into(),
+            operation: MediaOperation::ExtractThumbnail { seek },
             metadata: None,
         }
     }

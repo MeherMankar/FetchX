@@ -9,8 +9,14 @@ audio2mp3-core = { version = "0.2.0", features = ["pcm-convert"] }
 base64.workspace = true
 fetchx-core = { path = "../core" }
 fetchx-media-extractor = { path = "../media-extractor" }
+fetchx-media-pipeline = { path = "../media-pipeline" }
 fetchx-models = { path = "../models" }
+fetchx-muxer = { path = "../muxer" }
 fetchx-storage = { path = "../storage" }
+fdk-aac-rs = { version = "0.1.0", default-features = false, features = ["encoder"] }
+opus = "0.4.0"
+openh264 = "0.9.10"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 reqwest.workspace = true
 serde.workspace = true

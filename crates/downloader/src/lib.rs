@@ -15,6 +15,7 @@ mod native_media;
 mod native_mp4;
 mod native_oxideav;
 mod native_torrent;
+mod native_video;
 mod native_ytdlp;
 mod retry;
 mod segments;
@@ -30,8 +31,7 @@ pub use ffmpeg::{
     FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo,
     MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaStream, MediaStreamKind,
     MetadataOverride, TranscodePreset,
-};
-pub use ftp::{FtpEngine, FtpEngineConfig};
+};pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 #[cfg(feature = "phase30-queue-fault-injection")]
 pub use http::inject_next_write_failure;
@@ -45,6 +45,7 @@ pub use native_media::{NativeMediaError, NativeMediaProcessor};
 pub use native_mp4::{NativeMp4Error, NativeMp4Info, NativeMp4Processor, NativeMp4Track};
 pub use native_oxideav::{NativeOxideavError, NativeOxideavProcessor};
 pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
+pub use native_video::{NativeVideoError, NativeVideoProcessor, YuvFrame};
 pub use native_ytdlp::NativeYtDlpProcessRunner;
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
 pub use ytdlp::{

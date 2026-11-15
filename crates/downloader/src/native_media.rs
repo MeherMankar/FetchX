@@ -577,6 +577,142 @@ impl NativeMediaProcessor {
             &is_cancelled,
         )
     }
+
+    /// Encode any supported audio input to AAC-LC ADTS using `fdk-aac-rs`.
+    pub fn audio_to_aac(
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        bitrate_bps: u32,
+        max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeMediaError> {
+        use fdk_aac_rs::encoder::{Aot, Bitrate as AacBitrate, ChannelMode, Encoder as AacEncoder, EncoderError, Transport};
+
+        if max_output_bytes == 0 {
+            return Err(NativeMediaError::InvalidOutput);
+        }
+        let decoded = decode_audio_pcm(input.as_ref(), &is_cancelled)?;
+        if is_cancelled() {
+            return Err(NativeMediaError::Cancelled);
+        }
+
+        let channel_mode = match decoded.channels {
+            1 => ChannelMode::Mono,
+            2 => ChannelMode::Stereo,
+            _ => return Err(NativeMediaError::UnsupportedInput),
+        };
+
+        let mut enc = AacEncoder::builder()
+            .aot(Aot::AacLc)
+            .sample_rate(decoded.sample_rate)
+            .channel_mode(channel_mode)
+            .bitrate(AacBitrate::Cbr(bitrate_bps))
+            .transport(Transport::Adts)
+            .build()
+            .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+
+        let info = enc.info().map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+        let mut out_buf = vec![0u8; info.max_out_buf_bytes() as usize];
+        let mut adts: Vec<u8> = Vec::new();
+        let mut input_slice: &[i16] = &decoded.samples;
+
+        while !input_slice.is_empty() {
+            if is_cancelled() {
+                return Err(NativeMediaError::Cancelled);
+            }
+            let r = enc
+                .encode(input_slice, &mut out_buf)
+                .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+            let out_bytes = r.out_bytes();
+            let in_consumed = r.in_samples();
+            append_bounded(&mut adts, &out_buf[..out_bytes], max_output_bytes)?;
+            input_slice = &input_slice[in_consumed..];
+        }
+
+        // Flush remaining frames.
+        loop {
+            if is_cancelled() {
+                return Err(NativeMediaError::Cancelled);
+            }
+            match enc.flush(&mut out_buf) {
+                Ok(r) => {
+                    append_bounded(&mut adts, &out_buf[..r.out_bytes()], max_output_bytes)?;
+                }
+                Err(EncoderError::EncodeEof) => break,
+                Err(e) => return Err(NativeMediaError::Encoding(e.to_string())),
+            }
+        }
+
+        publish_bytes(&adts, output.as_ref(), max_output_bytes, &is_cancelled)
+    }
+
+    /// Encode any supported audio input to raw Opus packets (length-prefixed, not OGG-wrapped).
+    ///
+    /// Each packet is written as: 4-byte big-endian length followed by the packet bytes.
+    /// Use `fetchx_muxer` to mux this into a WebM/MP4 container.
+    pub fn audio_to_opus(
+        input: impl AsRef<Path>,
+        output: impl AsRef<Path>,
+        bitrate_bps: i32,
+        max_output_bytes: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<u64, NativeMediaError> {
+        if max_output_bytes == 0 {
+            return Err(NativeMediaError::InvalidOutput);
+        }
+        let decoded = decode_audio_pcm(input.as_ref(), &is_cancelled)?;
+        if is_cancelled() {
+            return Err(NativeMediaError::Cancelled);
+        }
+
+        // Opus requires 48 kHz. Reject other sample rates for now.
+        if decoded.sample_rate != 48_000 {
+            return Err(NativeMediaError::UnsupportedInput);
+        }
+
+        let channels = match decoded.channels {
+            1 => opus::Channels::Mono,
+            2 => opus::Channels::Stereo,
+            _ => return Err(NativeMediaError::UnsupportedInput),
+        };
+
+        let mut encoder =
+            opus::Encoder::new(decoded.sample_rate, channels, opus::Application::Audio)
+                .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+        encoder
+            .set_bitrate(opus::Bitrate::Bits(bitrate_bps))
+            .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+
+        // 20 ms frames at 48 kHz = 960 samples per channel.
+        let frame_samples = 960usize;
+        let frame_size = frame_samples * decoded.channels as usize;
+        let mut out_buf = vec![0u8; 4000]; // Max Opus packet size.
+        let mut packets: Vec<u8> = Vec::new();
+
+        for chunk in decoded.samples.chunks(frame_size) {
+            if is_cancelled() {
+                return Err(NativeMediaError::Cancelled);
+            }
+            // Pad the last chunk if needed.
+            let frame: Vec<i16> = if chunk.len() < frame_size {
+                let mut padded = chunk.to_vec();
+                padded.resize(frame_size, 0);
+                padded
+            } else {
+                chunk.to_vec()
+            };
+
+            let encoded_len = encoder
+                .encode(&frame, &mut out_buf)
+                .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+
+            let len_bytes = (encoded_len as u32).to_be_bytes();
+            append_bounded(&mut packets, &len_bytes, max_output_bytes)?;
+            append_bounded(&mut packets, &out_buf[..encoded_len], max_output_bytes)?;
+        }
+
+        publish_bytes(&packets, output.as_ref(), max_output_bytes, &is_cancelled)
+    }
 }
 
 fn symphonia_audio_probe_format(path: &Path) -> Option<&'static str> {
