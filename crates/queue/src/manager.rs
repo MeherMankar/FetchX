@@ -1,4 +1,4 @@
-use std::{
+﻿use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -527,19 +527,20 @@ impl RuntimeResourceManager {
         })
     }
 
-    fn bandwidth_for(&self, engine: EngineKind) -> Result<BandwidthControl, QueueError> {
+    fn bandwidth_for(&self, engine: EngineKind, per_download_override: Option<u64>) -> Result<BandwidthControl, QueueError> {
         let engine_limiter = self.engine_bandwidth.get(&engine).cloned();
         let global_download_share = self
             .policy
             .global_bandwidth_bytes_per_second
             .map(|rate| rate / self.policy.max_active_downloads as u64);
-        let per_download_rate = [
+        let policy_rate = [
             self.policy.per_download_bandwidth_bytes_per_second,
             global_download_share,
         ]
         .into_iter()
         .flatten()
         .min();
+        let per_download_rate = per_download_override.or(policy_rate);
         let effective_external_rate = [
             per_download_rate,
             self.policy.engine_bandwidth_limit(engine),
@@ -856,7 +857,8 @@ where
         };
         let entry = entries.get(&id).ok_or(QueueError::ResourceInvariant)?;
         let priority = entry.item.priority();
-        let bandwidth = resources.bandwidth_for(entry.item.source().engine())?;
+        let per_download_limit = entry.item.source().bandwidth_limit_bps();
+        let bandwidth = resources.bandwidth_for(entry.item.source().engine(), per_download_limit)?;
         match last_priority {
             Some(previous) if *previous == priority => {
                 *consecutive_priority_starts = consecutive_priority_starts.saturating_add(1);
@@ -2920,10 +2922,10 @@ mod tests {
             .engine_bandwidth_limits
             .native_torrent_bytes_per_second = Some(2_000);
         let resources = RuntimeResourceManager::new(&policy)?;
-        let direct_bandwidth = resources.bandwidth_for(EngineKind::DirectHttp)?;
-        let hls_bandwidth = resources.bandwidth_for(EngineKind::Hls)?;
-        let first_torrent_bandwidth = resources.bandwidth_for(EngineKind::NativeTorrent)?;
-        let second_torrent_bandwidth = resources.bandwidth_for(EngineKind::NativeTorrent)?;
+        let direct_bandwidth = resources.bandwidth_for(EngineKind::DirectHttp, None)?;
+        let hls_bandwidth = resources.bandwidth_for(EngineKind::Hls, None)?;
+        let first_torrent_bandwidth = resources.bandwidth_for(EngineKind::NativeTorrent, None)?;
+        let second_torrent_bandwidth = resources.bandwidth_for(EngineKind::NativeTorrent, None)?;
         assert_eq!(
             direct_bandwidth
                 .per_download
@@ -4422,3 +4424,4 @@ mod tests {
         assert_eq!(used_connections(&workers), 3);
     }
 }
+
