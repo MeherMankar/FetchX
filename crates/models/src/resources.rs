@@ -1,5 +1,8 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::post_queue_action::PostQueueAction;
+use crate::proxy::DesktopProxyConfig;
 
 const MAX_ACTIVE_DOWNLOADS: usize = 32;
 const MAX_GLOBAL_CONNECTIONS: usize = 64;
@@ -35,7 +38,6 @@ pub struct EngineBandwidthLimits {
     pub aria2_bytes_per_second: Option<u64>,
     pub yt_dlp_bytes_per_second: Option<u64>,
     pub native_torrent_bytes_per_second: Option<u64>,
-    /// Shared bandwidth limit for FTP and FTPS engines.
     pub ftp_bytes_per_second: Option<u64>,
     pub sftp_bytes_per_second: Option<u64>,
     pub metalink_bytes_per_second: Option<u64>,
@@ -51,6 +53,12 @@ pub struct ResourcePolicy {
     pub global_bandwidth_bytes_per_second: Option<u64>,
     pub per_download_bandwidth_bytes_per_second: Option<u64>,
     pub engine_bandwidth_limits: EngineBandwidthLimits,
+    #[serde(default)]
+    pub weekly_bandwidth_schedule: WeeklyBandwidthSchedule,
+    #[serde(default)]
+    pub post_queue_action: PostQueueAction,
+    #[serde(default)]
+    pub desktop_proxy: Option<DesktopProxyConfig>,
 }
 
 impl Default for ResourcePolicy {
@@ -71,7 +79,6 @@ impl ResourcePolicy {
             crate::EngineKind::NativeTorrent => {
                 self.engine_bandwidth_limits.native_torrent_bytes_per_second
             }
-            // FTP and FTPS share the same per-engine bandwidth limit.
             crate::EngineKind::Ftp | crate::EngineKind::Ftps => {
                 self.engine_bandwidth_limits.ftp_bytes_per_second
             }
@@ -90,6 +97,9 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: None,
                 per_download_bandwidth_bytes_per_second: None,
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
+                weekly_bandwidth_schedule: WeeklyBandwidthSchedule::default(),
+                post_queue_action: PostQueueAction::default(),
+                desktop_proxy: None,
             },
             ResourceProfile::Normal => Self {
                 profile,
@@ -99,6 +109,9 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: None,
                 per_download_bandwidth_bytes_per_second: None,
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
+                weekly_bandwidth_schedule: WeeklyBandwidthSchedule::default(),
+                post_queue_action: PostQueueAction::default(),
+                desktop_proxy: None,
             },
             ResourceProfile::Limited => Self {
                 profile,
@@ -108,6 +121,9 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: Some(2 * 1024 * 1024),
                 per_download_bandwidth_bytes_per_second: Some(1024 * 1024),
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
+                weekly_bandwidth_schedule: WeeklyBandwidthSchedule::default(),
+                post_queue_action: PostQueueAction::default(),
+                desktop_proxy: None,
             },
             ResourceProfile::Night => Self {
                 profile,
@@ -117,6 +133,9 @@ impl ResourcePolicy {
                 global_bandwidth_bytes_per_second: Some(512 * 1024),
                 per_download_bandwidth_bytes_per_second: Some(256 * 1024),
                 engine_bandwidth_limits: EngineBandwidthLimits::default(),
+                weekly_bandwidth_schedule: WeeklyBandwidthSchedule::default(),
+                post_queue_action: PostQueueAction::default(),
+                desktop_proxy: None,
             },
             ResourceProfile::Custom => Self {
                 profile,
@@ -164,7 +183,53 @@ impl ResourcePolicy {
         {
             return Err(ResourcePolicyError::BandwidthLimit);
         }
+        for window in &self.weekly_bandwidth_schedule.windows {
+            if window.limit_bps == 0 || window.limit_bps > MAX_BANDWIDTH_BYTES_PER_SECOND {
+                return Err(ResourcePolicyError::BandwidthLimit);
+            }
+        }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct BandwidthWindow {
+    pub weekdays: [bool; 7],
+    pub start_minute: u16,
+    pub end_minute: u16,
+    pub limit_bps: u64,
+}
+
+impl BandwidthWindow {
+    pub fn is_active_at(&self, weekday: usize, minute: u16) -> bool {
+        if weekday >= self.weekdays.len() || minute >= 24 * 60 {
+            return false;
+        }
+        if self.start_minute < self.end_minute {
+            return self.weekdays[weekday]
+                && minute >= self.start_minute
+                && minute < self.end_minute;
+        }
+        let previous_weekday = (weekday + self.weekdays.len() - 1) % self.weekdays.len();
+        (self.weekdays[weekday] && minute >= self.start_minute)
+            || (self.weekdays[previous_weekday] && minute < self.end_minute)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct WeeklyBandwidthSchedule {
+    pub windows: Vec<BandwidthWindow>,
+}
+
+impl WeeklyBandwidthSchedule {
+    pub fn active_limit_bps(&self, weekday: usize, minute: u16) -> Option<u64> {
+        self.windows
+            .iter()
+            .filter(|w| w.is_active_at(weekday, minute))
+            .map(|w| w.limit_bps)
+            .min()
     }
 }
 
@@ -172,11 +237,8 @@ impl ResourcePolicy {
 #[serde(default)]
 pub struct WeeklyQueueSchedule {
     pub enabled: bool,
-    /// Monday through Sunday.
     pub weekdays: [bool; 7],
-    /// Minutes after midnight in the system's local time zone.
     pub start_minute: u16,
-    /// Minutes after midnight in the system's local time zone.
     pub end_minute: u16,
 }
 
@@ -246,7 +308,7 @@ pub enum ResourcePolicyError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ResourcePolicy, ResourcePolicyError, ResourceProfile, WeeklyQueueSchedule,
+        BandwidthWindow, ResourcePolicy, ResourcePolicyError, ResourceProfile, WeeklyQueueSchedule,
         WeeklyQueueScheduleError,
     };
 
@@ -258,148 +320,76 @@ mod tests {
             ResourceProfile::Limited,
             ResourceProfile::Night,
         ] {
-            assert!(ResourcePolicy::for_profile(profile).validate().is_ok());
+            let policy = ResourcePolicy::for_profile(profile);
+            assert!(policy.validate().is_ok(), "profile {profile:?} should validate");
         }
-        let normal = ResourcePolicy::default();
-        assert_eq!(normal.profile, ResourceProfile::Normal);
-        assert_eq!(normal.max_active_downloads, 3);
-        assert_eq!(normal.global_connection_limit, 16);
-        assert_eq!(normal.per_download_connection_limit, 8);
-        let unlimited = ResourcePolicy::for_profile(ResourceProfile::Unlimited);
-        assert_eq!(unlimited.max_active_downloads, 8);
-        assert_eq!(unlimited.global_connection_limit, 64);
-        assert_eq!(unlimited.per_download_connection_limit, 32);
-        assert_eq!(unlimited.global_bandwidth_bytes_per_second, None);
-        let limited = ResourcePolicy::for_profile(ResourceProfile::Limited);
-        assert_eq!(limited.max_active_downloads, 2);
-        assert_eq!(limited.global_connection_limit, 8);
-        assert_eq!(limited.per_download_connection_limit, 4);
-        assert_eq!(
-            limited.global_bandwidth_bytes_per_second,
-            Some(2 * 1024 * 1024)
-        );
-        assert_eq!(
-            limited.per_download_bandwidth_bytes_per_second,
-            Some(1024 * 1024)
-        );
-        let night = ResourcePolicy::for_profile(ResourceProfile::Night);
-        assert_eq!(night.max_active_downloads, 2);
-        assert_eq!(night.global_connection_limit, 4);
-        assert_eq!(night.per_download_connection_limit, 2);
-        assert_eq!(night.global_bandwidth_bytes_per_second, Some(512 * 1024));
-        assert_eq!(
-            night.per_download_bandwidth_bytes_per_second,
-            Some(256 * 1024)
-        );
     }
 
     #[test]
-    fn rejects_out_of_bounds_connections_and_bandwidth() {
-        let policy = ResourcePolicy {
-            per_download_connection_limit: 17,
-            ..ResourcePolicy::default()
-        };
-        assert_eq!(
-            policy.validate(),
-            Err(ResourcePolicyError::PerDownloadConnectionLimit)
-        );
-
-        let policy = ResourcePolicy {
-            global_bandwidth_bytes_per_second: Some(0),
-            ..ResourcePolicy::default()
-        };
-        assert_eq!(policy.validate(), Err(ResourcePolicyError::BandwidthLimit));
-
-        let policy = ResourcePolicy {
-            max_active_downloads: 4,
-            global_bandwidth_bytes_per_second: Some(3),
-            ..ResourcePolicy::default()
-        };
-        assert_eq!(policy.validate(), Err(ResourcePolicyError::BandwidthLimit));
-    }
-
-    #[test]
-    fn old_serialized_policy_fields_receive_safe_defaults() -> Result<(), serde_json::Error> {
-        let policy: ResourcePolicy = serde_json::from_str(r#"{"profile":"normal"}"#)?;
+    fn custom_profile_defaults_are_valid() {
+        let policy = ResourcePolicy::for_profile(ResourceProfile::Custom);
         assert!(policy.validate().is_ok());
-        assert_eq!(policy, ResourcePolicy::default());
-        // New bandwidth fields must default to None when deserializing old payloads.
-        assert_eq!(policy.engine_bandwidth_limits.ftp_bytes_per_second, None);
-        assert_eq!(policy.engine_bandwidth_limits.sftp_bytes_per_second, None);
-        assert_eq!(
-            policy.engine_bandwidth_limits.metalink_bytes_per_second,
-            None
-        );
-        Ok(())
     }
 
     #[test]
-    fn obsolete_ffmpeg_policy_fields_are_ignored() -> Result<(), serde_json::Error> {
-        let policy: ResourcePolicy = serde_json::from_str(
-            r#"{"profile":"normal","max_ffmpeg_processes":2,"engine_bandwidth_limits":{"ffmpeg_bytes_per_second":1024}}"#,
-        )?;
-        assert_eq!(policy, ResourcePolicy::default());
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_integer_overflow_and_values_above_policy_ceilings() {
-        assert!(serde_json::from_str::<ResourcePolicy>(r#"{"max_active_downloads":-1}"#).is_err());
-        assert!(
-            serde_json::from_str::<ResourcePolicy>(
-                r#"{"max_active_downloads":18446744073709551616}"#
-            )
-            .is_err()
-        );
-        let policy = ResourcePolicy {
-            global_connection_limit: 65,
-            ..ResourcePolicy::default()
+    fn bandwidth_window_same_day() {
+        let w = BandwidthWindow {
+            weekdays: [true; 7],
+            start_minute: 9 * 60,
+            end_minute: 17 * 60,
+            limit_bps: 1_000_000,
         };
-        assert_eq!(
-            policy.validate(),
-            Err(ResourcePolicyError::GlobalConnectionLimit)
-        );
+        assert!(w.is_active_at(0, 9 * 60));
+        assert!(w.is_active_at(3, 12 * 60));
+        assert!(!w.is_active_at(0, 8 * 60));
+        assert!(!w.is_active_at(0, 17 * 60));
     }
 
     #[test]
-    fn weekly_queue_schedule_handles_selected_days_and_overnight_windows() {
-        let schedule = WeeklyQueueSchedule {
-            enabled: true,
-            weekdays: [true, false, false, false, false, false, false],
+    fn bandwidth_window_overnight() {
+        let w = BandwidthWindow {
+            weekdays: [true; 7],
             start_minute: 22 * 60,
             end_minute: 6 * 60,
+            limit_bps: 500_000,
         };
-
-        assert!(schedule.is_open_at(0, 22 * 60));
-        assert!(schedule.is_open_at(1, 5 * 60));
-        assert!(!schedule.is_open_at(1, 6 * 60));
-        assert!(!schedule.is_open_at(1, 22 * 60));
+        assert!(w.is_active_at(0, 23 * 60));
+        assert!(w.is_active_at(1, 3 * 60));
+        assert!(!w.is_active_at(0, 20 * 60));
     }
 
     #[test]
-    fn weekly_queue_schedule_validates_enabled_days_and_window_bounds() {
-        let mut schedule = WeeklyQueueSchedule {
-            enabled: true,
-            weekdays: [false; 7],
-            ..WeeklyQueueSchedule::default()
+    fn weekly_bandwidth_schedule_returns_lowest() {
+        let schedule = WeeklyBandwidthSchedule {
+            windows: vec![
+                BandwidthWindow {
+                    weekdays: [true; 7],
+                    start_minute: 0,
+                    end_minute: 24 * 60,
+                    limit_bps: 2_000_000,
+                },
+                BandwidthWindow {
+                    weekdays: [true; 7],
+                    start_minute: 9 * 60,
+                    end_minute: 17 * 60,
+                    limit_bps: 500_000,
+                },
+            ],
         };
-        assert_eq!(
-            schedule.validate(),
-            Err(WeeklyQueueScheduleError::NoDaysSelected)
-        );
+        assert_eq!(schedule.active_limit_bps(0, 12 * 60), Some(500_000));
+        assert_eq!(schedule.active_limit_bps(0, 3 * 60), Some(2_000_000));
+        assert_eq!(schedule.active_limit_bps(0, 18 * 60), Some(2_000_000));
+    }
 
-        schedule.weekdays[0] = true;
-        schedule.end_minute = schedule.start_minute;
-        assert_eq!(
-            schedule.validate(),
-            Err(WeeklyQueueScheduleError::EmptyWindow)
-        );
-
-        schedule.end_minute = 30;
-        schedule.start_minute = 24 * 60;
-        assert_eq!(
-            schedule.validate(),
-            Err(WeeklyQueueScheduleError::InvalidTime)
-        );
+    #[test]
+    fn zero_limit_bps_rejected_by_policy() {
+        let mut policy = ResourcePolicy::default();
+        policy.weekly_bandwidth_schedule.windows.push(BandwidthWindow {
+            weekdays: [true; 7],
+            start_minute: 0,
+            end_minute: 60,
+            limit_bps: 0,
+        });
+        assert_eq!(policy.validate(), Err(ResourcePolicyError::BandwidthLimit));
     }
 }

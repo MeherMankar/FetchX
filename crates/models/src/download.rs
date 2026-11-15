@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+﻿use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -16,6 +16,8 @@ pub struct DownloadSource {
     yt_dlp_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     yt_dlp_audio_format: Option<YtDlpAudioFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bandwidth_limit_bps: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +86,7 @@ impl DownloadSource {
             engine,
             yt_dlp_format: None,
             yt_dlp_audio_format: None,
+            bandwidth_limit_bps: None,
         })
     }
 
@@ -197,6 +200,12 @@ impl DownloadSource {
     #[must_use]
     pub fn is_torrent_file(&self) -> bool {
         self.url.starts_with("torrent+file:")
+    }
+
+    #[must_use]
+    #[must_use]
+    pub const fn bandwidth_limit_bps(&self) -> Option<u64> {
+        self.bandwidth_limit_bps
     }
 
     #[must_use]
@@ -376,6 +385,8 @@ struct DownloadSourceRepr {
     yt_dlp_format: Option<String>,
     #[serde(default)]
     yt_dlp_audio_format: Option<YtDlpAudioFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bandwidth_limit_bps: Option<u64>,
 }
 
 impl TryFrom<DownloadSourceRepr> for DownloadSource {
@@ -384,9 +395,21 @@ impl TryFrom<DownloadSourceRepr> for DownloadSource {
     fn try_from(value: DownloadSourceRepr) -> Result<Self, Self::Error> {
         let source = Self::new(value.url, value.engine)?;
         match (value.yt_dlp_format, value.yt_dlp_audio_format) {
-            (Some(format_id), None) => source.with_yt_dlp_format(format_id),
-            (None, Some(audio_format)) => source.with_yt_dlp_audio_format(audio_format),
-            (None, None) => Ok(source),
+            (Some(format_id), None) => {
+            let mut source = source.with_yt_dlp_format(format_id)?;
+            source.bandwidth_limit_bps = value.bandwidth_limit_bps;
+            Ok(source)
+        }
+            (None, Some(audio_format)) => {
+            let mut source = source.with_yt_dlp_audio_format(audio_format)?;
+            source.bandwidth_limit_bps = value.bandwidth_limit_bps;
+            Ok(source)
+        }
+            (None, None) => {
+            let mut source = source;
+            source.bandwidth_limit_bps = value.bandwidth_limit_bps;
+            Ok(source)
+        }
             (Some(_), Some(_)) => Err(DownloadSourceError::InvalidYtDlpAudioFormat),
         }
     }
@@ -977,3 +1000,6 @@ mod tests {
         Ok(())
     }
 }
+
+
+
