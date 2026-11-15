@@ -1536,20 +1536,19 @@ mod tests {
         assert!(muxer.flush_segment().is_none());
     }
 
-    #[cfg(feature = "async")]
-    #[tokio::test]
-    async fn async_fragmented_muxer_flushes_segment() {
+    #[test]
+    fn fragmented_muxer_flushes_segment() {
         let config = FragmentConfig::new(1920, 1080, 90000);
-        let mut buf = Vec::new();
-        let mut muxer = AsyncFragmentedMuxer::new(config, &mut buf).unwrap();
+        let mut muxer = FragmentedMuxer::new(config).unwrap();
 
         let sample_data = vec![0u8; 100];
         muxer.write_video(0, 0, &sample_data, true).unwrap();
         muxer.write_video(3000, 3000, &sample_data, false).unwrap();
 
-        let written = muxer.flush_segment().await.unwrap();
-        assert!(written > 0);
-        assert!(!buf.is_empty());
+        let segment = muxer
+            .flush_segment()
+            .expect("queued samples produce a segment");
+        assert!(!segment.is_empty());
     }
 
     #[test]
