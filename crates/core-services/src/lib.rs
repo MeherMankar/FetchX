@@ -5268,7 +5268,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_configuration_and_reports_optional_engine_start_failure()
+    async fn persists_configuration_and_uses_native_ytdlp_despite_legacy_executable_path()
     -> Result<(), Box<dyn std::error::Error>> {
         use super::{Aria2Config, ConfigService, EngineConfig, NativeTorrentConfig, YtDlpConfig};
         use fetchx_storage::Database;
@@ -5300,7 +5300,7 @@ mod tests {
         let services = CoreServices::start(paths).await?;
         assert!(matches!(
             &services.engine_runtime.status.yt_dlp,
-            EngineAvailability::Unavailable { .. }
+            EngineAvailability::Available { version } if version.starts_with("yt-dlp-rs ")
         ));
         let persisted_config = services.config_service.load().await?;
         assert!(persisted_config.yt_dlp.enabled);

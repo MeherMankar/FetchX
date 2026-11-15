@@ -3014,7 +3014,7 @@ mod tests {
                     .position(|argument| argument == "--format")
                     .expect("format option is present")
                     + 1],
-                "bestvideo[ext=webm]/bestvideo[ext=mp4][vcodec^=avc1],bestaudio[ext=webm]/bestaudio[ext=m4a][acodec^=mp4a]"
+                AUTO_FORMAT_SELECTOR
             );
         }
         tokio::fs::remove_dir_all(base).await?;

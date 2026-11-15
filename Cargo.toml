@@ -67,3 +67,8 @@ debug = 0
 # Bound codegen memory for the yt-dlp Rust extractor on Windows builders.
 [profile.dev.package.yt-dlp-rs]
 codegen-units = 256
+
+# Keep release builds of the large native extractor within Windows builder memory limits.
+[profile.release.package.yt-dlp-rs]
+opt-level = 1
+codegen-units = 256

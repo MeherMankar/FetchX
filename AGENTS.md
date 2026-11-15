@@ -297,3 +297,6 @@ Do not remove planned functionality merely because it is not currently reference
 A successful repository debloat is one that reduces unnecessary dependencies, redundant implementations, unneeded assets, build clutter, and maintainability burden while preserving FetchX functionality.
 
 The agent should evaluate success by repository cleanliness, maintainability, and reduced complexity—not by deleting large numbers of lines without functional justification.
+
+
+### Read .\docs\AGENTS.md and must follow it

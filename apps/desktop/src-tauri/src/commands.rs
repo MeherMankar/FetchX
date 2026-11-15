@@ -2574,8 +2574,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_download_unavailable_aria2_is_rejected() -> Result<(), Box<dyn Error>> {
-        // Default EngineConfig has aria2 disabled → unavailable.
+    async fn add_download_rejects_removed_aria2_engine() -> Result<(), Box<dyn Error>> {
         let state = test_state().await?;
         let result = state
             .add(AddDownloadRequest {
@@ -2584,11 +2583,10 @@ mod tests {
                 ..Default::default()
             })
             .await;
-        // Must be Conflict — not silently accepted as DirectHttp.
         assert_eq!(
             result.err().map(|e| e.code),
-            Some(IpcErrorCode::Conflict),
-            "disabled aria2 must be rejected with Conflict"
+            Some(IpcErrorCode::InvalidRequest),
+            "removed aria2 must not be accepted for HTTP sources"
         );
         state.scheduler.shutdown().await?;
         Ok(())

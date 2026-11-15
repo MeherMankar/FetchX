@@ -7,11 +7,11 @@ use std::{
 
 use image::{ImageEncoder, codecs::jpeg::JpegEncoder};
 use openh264::{
+    OpenH264API,
     decoder::Decoder,
     encoder::{BitRate, Encoder, EncoderConfig, FrameRate},
     formats::YUVSource,
     nal_units,
-    OpenH264API,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -278,10 +278,7 @@ mod tests {
     fn encode_h264_produces_output() {
         let dir = tempdir().unwrap();
         let output = dir.path().join("out.h264");
-        let frames = vec![
-            make_yuv_frame(320, 240, 0),
-            make_yuv_frame(320, 240, 33),
-        ];
+        let frames = vec![make_yuv_frame(320, 240, 0), make_yuv_frame(320, 240, 33)];
         let result = NativeVideoProcessor::encode_h264(
             &frames,
             30,
@@ -317,10 +314,7 @@ mod tests {
     fn encode_h264_cancellation() {
         let dir = tempdir().unwrap();
         let output = dir.path().join("out.h264");
-        let frames = vec![
-            make_yuv_frame(320, 240, 0),
-            make_yuv_frame(320, 240, 33),
-        ];
+        let frames = vec![make_yuv_frame(320, 240, 0), make_yuv_frame(320, 240, 33)];
         let result = NativeVideoProcessor::encode_h264(
             &frames,
             30,

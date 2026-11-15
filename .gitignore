@@ -1,57 +1,32 @@
-# Rust build artefacts
 /target/
 /.cargo-local/
-# Standalone builds of the shared remote protocol crate.
 /crates/remote-protocol/target/
-
-# Tauri generated schemas and platform build outputs
 /apps/desktop/src-tauri/gen/
 /apps/desktop/src-tauri/target/
-
-# Desktop UI
 /apps/desktop/ui/node_modules/
 /apps/desktop/ui/dist/
-
-# Temporary workspaces created by native media processing (including legacy names)
 .fetchx-media-*/
 .fetchx-ffmpeg-*/
-
-# Remote web client
 /apps/remote-ui/node_modules/
 /apps/remote-ui/dist/
 !/apps/remote-ui/package.json
 !/apps/remote-ui/package-lock.json
-
-# Browser extension
 /apps/browser/extension/node_modules/
 /apps/browser/extension/dist/
 /apps/browser/extension/dist-chromium/
 /apps/browser/extension/dist-firefox/
-
-# Native host — no generated files to exclude currently
-# (built by Cargo into the workspace /target/ above)
-
-# Android — see apps/android/.gitignore for module-level rules.
-# The Gradle wrapper scripts and jar ARE checked in (needed for CI).
-# The .kotlin/ daemon sessions directory is not.
 /apps/android/.kotlin/
-
-# Agent task artefacts — keep plan/report docs, exclude JSON state files
 /.agents/tasks/**/*.json
 /.agents/
 .agents
-
-# Node.js tooling artefacts created during local validation
 node_modules/
 package-lock.json
 package.json
-
-# Python compiled files
 __pycache__/
 *.py[cod]
 *.pyd
 *.txt
-
 fetchx-release.jks
-
 apps/android/*.log
+.kiro
+.cargo
