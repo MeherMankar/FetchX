@@ -322,8 +322,6 @@ struct BrowserTarget {
     native_host_key: &'static str,
     is_chromium: bool,
     detect_paths: &'static [&'static str],
-    #[allow(dead_code)]
-    detect_reg_keys: &'static [&'static str],
 }
 
 const BROWSER_TARGETS: &[BrowserTarget] = &[
@@ -333,35 +331,30 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: r"Software\Google\Chrome\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Google\\Chrome\\Application\\chrome.exe"],
-        detect_reg_keys: &["Software\\Google\\Chrome"],
     },
     BrowserTarget {
         display_name: "Google Chrome Beta",
         native_host_key: r"Software\Google\Chrome Beta\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Google\\Chrome Beta\\Application\\chrome.exe"],
-        detect_reg_keys: &["Software\\Google\\Chrome Beta"],
     },
     BrowserTarget {
         display_name: "Google Chrome Dev",
         native_host_key: r"Software\Google\Chrome Dev\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Google\\Chrome Dev\\Application\\chrome.exe"],
-        detect_reg_keys: &["Software\\Google\\Chrome Dev"],
     },
     BrowserTarget {
         display_name: "Google Chrome Canary",
         native_host_key: r"Software\Google\Chrome SxS\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Google\\Chrome SxS\\Application\\chrome.exe"],
-        detect_reg_keys: &["Software\\Google\\Chrome SxS"],
     },
     BrowserTarget {
         display_name: "Chromium",
         native_host_key: r"Software\Chromium\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Chromium\\Application\\chrome.exe"],
-        detect_reg_keys: &["Software\\Chromium"],
     },
     // --- Microsoft Edge Family ---
     BrowserTarget {
@@ -369,21 +362,18 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: r"Software\Microsoft\Edge\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge\\Application\\msedge.exe"],
-        detect_reg_keys: &["Software\\Microsoft\\Edge"],
     },
     BrowserTarget {
         display_name: "Microsoft Edge Beta",
         native_host_key: r"Software\Microsoft\Edge Beta\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge Beta\\Application\\msedge.exe"],
-        detect_reg_keys: &["Software\\Microsoft\\Edge Beta"],
     },
     BrowserTarget {
         display_name: "Microsoft Edge Dev",
         native_host_key: r"Software\Microsoft\Edge Dev\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge Dev\\Application\\msedge.exe"],
-        detect_reg_keys: &["Software\\Microsoft\\Edge Dev"],
     },
     BrowserTarget {
         display_name: "Microsoft Edge Canary",
@@ -392,7 +382,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Microsoft\\Edge Canary\\Application\\msedge.exe"],
-        detect_reg_keys: &["Software\\Microsoft\\Edge Canary"],
     },
     // --- Brave Browser Family ---
     BrowserTarget {
@@ -402,7 +391,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["BraveSoftware\\Brave-Browser\\Application\\brave.exe"],
-        detect_reg_keys: &["Software\\BraveSoftware\\Brave-Browser"],
     },
     BrowserTarget {
         display_name: "Brave Browser Beta",
@@ -411,7 +399,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["BraveSoftware\\Brave-Browser-Beta\\Application\\brave.exe"],
-        detect_reg_keys: &["Software\\BraveSoftware\\Brave-Browser-Beta"],
     },
     BrowserTarget {
         display_name: "Brave Browser Nightly",
@@ -420,7 +407,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["BraveSoftware\\Brave-Browser-Nightly\\Application\\brave.exe"],
-        detect_reg_keys: &["Software\\BraveSoftware\\Brave-Browser-Nightly"],
     },
     // --- Vivaldi ---
     BrowserTarget {
@@ -428,7 +414,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: r"Software\Vivaldi\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Vivaldi\\Application\\vivaldi.exe"],
-        detect_reg_keys: &["Software\\Vivaldi"],
     },
     // --- Opera Family ---
     BrowserTarget {
@@ -438,7 +423,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Programs\\Opera\\opera.exe", "Opera\\opera.exe"],
-        detect_reg_keys: &["Software\\Opera Software\\Opera Stable"],
     },
     BrowserTarget {
         display_name: "Opera GX",
@@ -447,7 +431,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Programs\\Opera GX\\opera.exe", "Opera GX\\opera.exe"],
-        detect_reg_keys: &["Software\\Opera Software\\Opera GX Stable"],
     },
     BrowserTarget {
         display_name: "Opera Next",
@@ -456,7 +439,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Programs\\Opera Next\\opera.exe"],
-        detect_reg_keys: &["Software\\Opera Software\\Opera Next"],
     },
     BrowserTarget {
         display_name: "Opera Developer",
@@ -465,7 +447,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Programs\\Opera Developer\\opera.exe"],
-        detect_reg_keys: &["Software\\Opera Software\\Opera Developer"],
     },
     // --- Other Popular Chromium Browsers ---
     BrowserTarget {
@@ -475,7 +456,6 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Arc\\Arc.exe"],
-        detect_reg_keys: &["Software\\The Browser Company\\Arc"],
     },
     BrowserTarget {
         display_name: "Yandex Browser",
@@ -484,14 +464,12 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         },
         is_chromium: true,
         detect_paths: &["Yandex\\YandexBrowser\\Application\\browser.exe"],
-        detect_reg_keys: &["Software\\Yandex\\YandexBrowser"],
     },
     BrowserTarget {
         display_name: "Thorium",
         native_host_key: r"Software\Thorium\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: true,
         detect_paths: &["Thorium\\Application\\thorium.exe"],
-        detect_reg_keys: &["Software\\Thorium"],
     },
     // --- Mozilla Firefox & Gecko Family ---
     BrowserTarget {
@@ -499,31 +477,24 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         native_host_key: r"Software\Mozilla\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: false,
         detect_paths: &["Mozilla Firefox\\firefox.exe"],
-        detect_reg_keys: &[
-            "Software\\Mozilla\\Mozilla Firefox",
-            "Software\\Mozilla\\Firefox",
-        ],
     },
     BrowserTarget {
         display_name: "LibreWolf",
         native_host_key: r"Software\LibreWolf\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: false,
         detect_paths: &["LibreWolf\\librewolf.exe"],
-        detect_reg_keys: &["Software\\LibreWolf"],
     },
     BrowserTarget {
         display_name: "Waterfox",
         native_host_key: r"Software\Waterfox\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: false,
         detect_paths: &["Waterfox\\waterfox.exe"],
-        detect_reg_keys: &["Software\\Waterfox"],
     },
     BrowserTarget {
         display_name: "Floorp",
         native_host_key: r"Software\Floorp\NativeMessagingHosts\com.fetchx.native_host",
         is_chromium: false,
         detect_paths: &["Floorp\\floorp.exe"],
-        detect_reg_keys: &["Software\\Floorp"],
     },
 ];
 

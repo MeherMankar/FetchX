@@ -53,9 +53,6 @@ struct BrowserIpcService {
 pub struct BrowserIpcServer {
     /// Loopback port the server is listening on.
     pub port: u16,
-    /// Per-session token for origin validation (written to the state file).
-    #[allow(dead_code)]
-    pub token: String,
     /// Path of the state file on disk (removed on shutdown).
     state_file: PathBuf,
     /// Handle to the accept loop task.
@@ -103,7 +100,6 @@ impl BrowserIpcServer {
 
         Ok(Self {
             port,
-            token,
             state_file,
             _task: task,
         })

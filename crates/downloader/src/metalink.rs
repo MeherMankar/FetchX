@@ -1762,22 +1762,6 @@ mod tests {
         ManagedDownloadControl, ManagedDownloadEngine,
     };
 
-    /// Run an async test body in a thread with 8 MiB stack to avoid stack
-    /// overflows caused by deeply nested futures in debug builds.
-    #[allow(dead_code)]
-    fn run_large_stack<F, T>(f: F) -> T
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(f)
-            .expect("failed to spawn large-stack thread")
-            .join()
-            .expect("large-stack thread panicked")
-    }
-
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
