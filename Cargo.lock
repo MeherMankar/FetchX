@@ -2092,7 +2092,9 @@ dependencies = [
  "ebml-webm",
  "fetchx-core",
  "fetchx-media-extractor",
+ "fetchx-media-pipeline",
  "fetchx-models",
+ "fetchx-muxer",
  "fetchx-storage",
  "hex",
  "hound",
@@ -2144,6 +2146,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fetchx-media-pipeline"
+version = "0.1.0"
+
+[[package]]
 name = "fetchx-models"
 version = "0.1.0"
 dependencies = [
@@ -2155,6 +2161,10 @@ dependencies = [
  "url",
  "uuid",
 ]
+
+[[package]]
+name = "fetchx-muxer"
+version = "0.1.0"
 
 [[package]]
 name = "fetchx-native-host"
