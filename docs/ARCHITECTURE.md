@@ -283,28 +283,24 @@ dynamically translated into aria2 runtime options.
 Process supervision is tested through an injectable launcher and fake child/RPC server;
 normal CI does not require a system aria2 installation.
 
-The `YtDlpEngine` is an optional per-download process adapter selected by
-`EngineDispatcher`. Initialization resolves and validates an explicitly configured
-executable or searches absolute entries in `PATH`, then checks its version through an
-injectable runner. The adapter builds structured arguments and disables user config,
-plugins, playlists, colors, cache use, and overwrites. It does not pass browser cookies,
-arbitrary user options, or secrets. URLs must be HTTP/HTTPS and cannot contain embedded
-credentials. The engine requests one best-format output and allows yt-dlp to download up
-to sixteen HLS/DASH fragments concurrently. This can improve throughput when the source
-supports parallel fragment requests, but cannot exceed source or network bandwidth limits.
-It reports a fixed one-connection demand to Queue Manager rather than claiming control
-over yt-dlp's internal networking.
+`YtDlpEngine` is an optional engine selected by `EngineDispatcher`. It uses the
+`yt-dlp-rs` library from a pinned upstream Git revision in-process across the Android,
+desktop, and CLI apps. Persisted executable paths are not used by app initialization.
+The native runner validates HTTP/HTTPS URLs without embedded credentials,
+selects formats, downloads with progress and cancellation, and hands supported stream
+merges and MP3 conversion to FetchX's native media processors. Unsupported
+post-processing returns an error instead of invoking FFmpeg. The native runner does
+not use browser cookies or arbitrary user options, and reports a fixed one-connection
+demand to Queue Manager rather than claiming control over its internal networking.
 
 Active yt-dlp work cannot be paused safely: Queue Manager rejects active pause requests.
-Queue shutdown cancels its process, waits for termination, and returns interrupted work
-to `Queued` rather than marking it `Paused`. yt-dlp writes to a per-download workspace
-beside the destination, where cancellation and failures preserve partial data for
-`--continue` on retry. Progress is read from bounded machine-readable output and stored
-with status- and timestamp-conditional repository updates. Completion requires exactly
-one regular output file, published with a no-overwrite hard link; successful workspace
-cleanup follows publication. stdout and stderr are drained concurrently, and stopped
-children are killed and reaped. Runner tests are injected and do not require yt-dlp on
-the test host.
+Queue shutdown cancels native extraction and download work, returning interrupted
+downloads to `Queued` rather than marking them `Paused`. The engine uses a
+per-download workspace beside the destination; progress and status-conditional
+repository updates are shared with the compatibility runner. Completion requires
+exactly one regular final output, published with a no-overwrite hard link. The explicit
+runner interface remains injectable for tests and explicitly managed integrations.
+Runner tests do not require live media sites.
 
 `FfmpegProcessor` is a bounded native media post-processing service in the downloader crate,
 not a `DownloadEngine`: it does not select sources, alter `DownloadItem` lifecycle state,
@@ -315,11 +311,12 @@ native work, while the service does not map CPU work onto the queue's HTTP conne
 budget. The application should own and reuse a single configured processor rather than
 create processors per job.
 
-The processor does not discover, install, or launch FFmpeg/ffprobe executables. Supported
-operations use FetchX's native MP4, OxideAV, and Symphonia implementations; unsupported
-formats and operations return an explicit native-unsupported error. It enforces
-cancellation and output-size bounds, and publishes output without overwriting an
-existing destination. Broad video transcoding and full FFmpeg feature parity are not
+The processor uses FetchX's native Rust MP4, OxideAV, Symphonia, and audio codec paths.
+It does not bundle, link, discover, install, or launch upstream FFmpeg/ffprobe. Android
+uses the native yt-dlp engine; SponsorBlock, subtitle post-processing, and metadata
+embedding are not exposed because they are unsupported by the current native
+integration. The service enforces cancellation and output-size bounds and publishes
+output without overwriting an existing destination. Broad video transcoding is not
 implemented.
 
 The initial desktop application lives in `apps/desktop`. Tauri owns one long-lived

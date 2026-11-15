@@ -5,6 +5,12 @@
 **GeckoView version verified:** `137.0.20250325171416`  
 **Status:** Research complete; NO implementation code added.
 
+> Historical Phase 20M snapshot; implementation details and engine tables below
+> describe the state at the time of research and are no longer current. FetchX now
+> uses native Rust media processors and the in-process `yt-dlp-rs` library. It does
+> not bundle, link, or launch upstream FFmpeg, yt-dlp executables, or a Python
+> compatibility runtime.
+
 ---
 
 ## 1. Executive Summary
@@ -66,7 +72,7 @@ This is a domain model only. No implementation backs it yet.
 | Direct HTTP | `DirectHttpEngine` | `reqwest` with `rustls-tls` |
 | aria2 | `Aria2Engine` + `Aria2Supervisor` | aria2 process via JSON-RPC; process management in Rust |
 | yt-dlp | `YtDlpEngine` | yt-dlp subprocess; output parsed by Rust |
-| FFmpeg | `FfmpegProcessor` | FFmpeg subprocess; used for post-processing / muxing |
+| Native media | `FfmpegProcessor` | FetchX Rust processors; Android has a yt-dlp compatibility executable |
 
 The `DownloadEngine` trait (`crates/downloader/src/engine.rs`) is a single async `download(id, cancellation)` method. There is no proxy configuration in any engine. The `Cargo.toml` workspace dependency for `reqwest` does not currently include the `socks` feature:
 
@@ -487,7 +493,8 @@ The `EngineDispatcher` selects among `DirectHttpEngine`, `Aria2Engine`, and `YtD
 
 `YtDlpEngine` launches `yt-dlp` as a subprocess; yt-dlp supports `--proxy` as a command-line argument for SOCKS5/HTTP proxy.
 
-`FfmpegProcessor` launches FFmpeg as a subprocess; FFmpeg supports an HTTP proxy via the `http_proxy` environment variable but does not natively support SOCKS5.
+Native media post-processing operates on local files and does not make network
+requests; upstream FFmpeg is not bundled or launched.
 
 ### Routing model evaluation
 

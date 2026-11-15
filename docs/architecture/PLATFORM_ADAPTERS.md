@@ -15,7 +15,8 @@ Responsibilities:
 - WorkManager/foreground scheduling if added;
 - connectivity and data-saver policy;
 - app-private database and runtime directories;
-- Android yt-dlp runtime supplied to the Rust engine;
+- Android initializes the native Rust yt-dlp engine in-process without a Python
+  compatibility runtime;
 - native sharing and file URI handling;
 - Kotlin UI and module repository adapters.
 
@@ -84,7 +85,7 @@ Responsibilities:
 - present browser-native UI;
 - Android GeckoView integration where applicable.
 
-Download content validation, naming, queueing, and engine selection remain in Rust. Browser extension and Android browser modules may supply metadata and contexts but must not make transfer decisions.
+Download content validation, naming, queueing, and engine selection remain in Rust. `EngineKind::from_source_url` in `fetchx-models` is the shared source classifier used by platform admission paths; adapters may indicate explicit media-format options but must not duplicate transfer routing. Browser extension and Android browser modules may supply metadata and contexts but must not make transfer decisions.
 
 ## Future adapter rule
 

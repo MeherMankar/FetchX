@@ -68,7 +68,9 @@ the Rust downloader.
   sets Compose content with `AppNavigation`.
 - `AppNavigation` — root `NavHost`, registers all top-level routes.
 - `Screen` — sealed class for all navigation destinations.
-- `FetchXTheme` — Material 3 theme with dynamic colour (API 31+).
+- `FetchXTheme` — shared Material 3 theme across Android routes; the saved accent seed
+  drives primary colors while preserving neutral surfaces and semantic status colors.
+  Wallpaper dynamic color remains the fallback when no seed is supplied (API 31+).
 
 **Depends on:** `:core`, `:downloads`
 **Will depend on (later phases):** `:browser` (20F–20K)
@@ -206,22 +208,24 @@ crates/mobile-api: MobileApi::add_download(...)
 crates/core-services: QueueManager::add(...)
     │
     ▼
-crates/queue: item enqueued, engine dispatcher assigns engine
+crates/queue: item enqueued with the engine selected from its source type
     │
     ▼
-Selected engine (DirectHttp / aria2 / yt-dlp) begins downloading
+Dispatcher runs the matching native engine (HTTP/HLS, yt-dlp, torrent, FTP/FTPS/SFTP, or Metalink)
 ```
 
 ---
 
 ## Video Quality Selection
 
-The browser asks the embedded yt-dlp runtime for available formats before adding a
-media download. The selected format ID is persisted with the queued source. Adaptive
-video-only formats are paired with the best available audio track; Android supplies
-the FetchX native media compatibility shim to yt-dlp for supported merge-required
-selections. Unsupported post-processing fails explicitly; no external FFmpeg
-executable is bundled.
+The browser asks the in-process Rust yt-dlp engine for available formats before adding
+a media download. The selected format ID is persisted with the queued source. Adaptive
+video-only formats are paired with the best available audio track and merged by
+FetchX's native media processors when supported. Android uses the in-process native
+Rust yt-dlp engine without a Python compatibility runtime. SponsorBlock, subtitle
+post-processing, and metadata embedding are not currently exposed because the native
+integration does not support them. Unsupported native post-processing fails
+explicitly, and the native path does not launch FFmpeg.
 
 Format discovery also returns yt-dlp's video title and extractor/platform metadata.
 The Android browser uses these with the selected quality label to name downloads
