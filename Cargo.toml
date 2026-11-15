@@ -18,6 +18,7 @@ members = [
     "apps/desktop/src-tauri",
     "apps/browser/native-host",
     "crates/muxer",
+    "crates/media-pipeline",
 ]
 resolver = "3"
 
