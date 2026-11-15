@@ -373,7 +373,11 @@ pub(crate) async fn prepare_migration(
             ));
         }
     }
-    let checksum_repairs = legacy_migration_checksum_repairs(&database.pool).await?;
+    let checksum_repairs = if status.state == DatabaseSchemaState::EmptyDatabase {
+        Vec::new()
+    } else {
+        legacy_migration_checksum_repairs(&database.pool).await?
+    };
     let Some(database_path) = database.path.as_deref() else {
         repair_legacy_migration_checksums(&database.pool, &checksum_repairs).await?;
         return Ok(None);
