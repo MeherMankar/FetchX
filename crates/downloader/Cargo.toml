@@ -9,7 +9,9 @@ audio2mp3-core = { version = "0.2.0", features = ["pcm-convert"] }
 base64.workspace = true
 fetchx-core = { path = "../core" }
 fetchx-media-extractor = { path = "../media-extractor" }
+fetchx-media-pipeline = { path = "../media-pipeline" }
 fetchx-models = { path = "../models" }
+fetchx-muxer = { path = "../muxer" }
 fetchx-storage = { path = "../storage" }
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 reqwest.workspace = true
