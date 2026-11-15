@@ -13,10 +13,7 @@ use crate::ffmpeg::{MediaInfo, MediaStream, MediaStreamKind};
 use audio2mp3_core::{
     Bitrate, EncoderConfig, Mp3Encoder, PcmConverter, SampleFormat as PcmSampleFormat,
 };
-use ffmpreg::{
-    container::{WavFormat, WavWriter as FfmpregWavWriter},
-    core::{Muxer, Packet, Timebase},
-};
+
 use oxideav_core::{
     AudioFrame, CodecId, CodecParameters, Encoder, Error as OxideavError, Frame, SampleFormat,
     StreamInfo, TimeBase, WriteSeek,
@@ -326,32 +323,25 @@ impl NativeMediaProcessor {
             return Err(NativeMediaError::InvalidOutput);
         }
         let decoded = decode_audio_pcm(input.as_ref(), &is_cancelled)?;
-        let channels =
-            u8::try_from(decoded.channels).map_err(|_| NativeMediaError::UnsupportedInput)?;
-        if decoded.sample_rate == 0 {
-            return Err(NativeMediaError::UnsupportedInput);
-        }
-        let format = WavFormat {
-            channels,
+        let spec = hound::WavSpec {
+            channels: decoded.channels,
             sample_rate: decoded.sample_rate,
-            bit_depth: 16,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
         };
         let mut encoded = Cursor::new(Vec::new());
         {
-            let mut writer = FfmpregWavWriter::new(&mut encoded, format)
+            let mut writer = hound::WavWriter::new(&mut encoded, spec)
                 .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
-            let timebase = Timebase::new(1, decoded.sample_rate);
             for chunk in decoded.samples.chunks(4096) {
                 if is_cancelled() {
                     return Err(NativeMediaError::Cancelled);
                 }
-                let mut packet = Vec::with_capacity(chunk.len() * 2);
                 for sample in chunk {
-                    packet.extend_from_slice(&sample.to_le_bytes());
+                    writer
+                        .write_sample(*sample)
+                        .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
                 }
-                writer
-                    .write_packet(Packet::new(packet, 0, timebase))
-                    .map_err(|error| NativeMediaError::Encoding(error.to_string()))?;
             }
             writer
                 .finalize()

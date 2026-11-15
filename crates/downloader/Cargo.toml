@@ -37,8 +37,23 @@ hound = "=3.5.1"
 symphonia = { version = "=0.6.1", default-features = false, features = ["aac", "adpcm", "aiff", "alac", "caf", "flac", "isomp4", "mkv", "mp1", "mp2", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 oxideav-core = "=0.1.43"
 oxideav-flac = "=0.0.13"
-oxideav-meta = { version = "=0.0.4", default-features = false, features = ["audio", "video", "subtitles"] }
-ffmpreg = "=0.1.2"
+oxideav-meta = { version = "=0.0.4", default-features = false, features = [
+    # Containers for stream-copy mux/demux (no codec decode/encode needed)
+    "mp4", "mkv", "mov", "avi", "ogg", "flv", "mpegts", "riff",
+    # Audio codec passthrough (probe + copy, no full decode)
+    "aac", "mp1", "mp2", "mp3", "opus", "flac", "vorbis", "ac3", "ac4",
+    "adpcm", "basic", "g711", "g722", "g7231", "g728", "gsm", "ilbc",
+    "celt", "ape", "musepack", "wma", "shorten", "speex", "tta",
+    "amiga-mod", "nsf", "s3m", "iff",
+    # Video codec passthrough (probe + copy, no full decode)
+    "h264", "h265", "h266", "vp8", "vp9", "av1",
+    "mpeg12video", "msmpeg4", "huffyuv", "mjpeg",
+    "cinepak", "dirac", "ffv1", "magicyuv", "prores", "theora", "utvideo",
+    # Subtitles
+    "ass", "sub-image", "subtitle",
+    # Filters
+    "audio-filter",
+]}
 
 [features]
 phase28-benchmark-local-http = []
