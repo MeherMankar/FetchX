@@ -17,6 +17,7 @@ members = [
     "crates/android-bridge",
     "apps/desktop/src-tauri",
     "apps/browser/native-host",
+    "crates/muxer",
 ]
 resolver = "3"
 
