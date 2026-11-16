@@ -126,6 +126,14 @@ pub struct CoreServicesConfig {
 /// Owns the live service graph: database, event bus, engines, queue, scheduler.
 ///
 /// Shared service owner used by desktop, Android, CLI, and headless hosts.
+
+/// In-memory session statistics reset on each app start.
+#[derive(Clone, Debug, Default)]
+pub struct SessionStatistics {
+    pub session_downloaded_bytes: u64,
+    pub session_peak_speed_bps: u64,
+}
+
 pub struct CoreServices {
     pub database: Database,
     pub repository: CoreRepository,
@@ -136,6 +144,7 @@ pub struct CoreServices {
     queue: QueueManager,
     pub downloads_dir: PathBuf,
     shutdown_complete: Mutex<bool>,
+    session_stats: std::sync::Arc<std::sync::Mutex<SessionStatistics>>,
 }
 
 /// Parameters for [`CoreServices::create_torrent_metadata_row`].
@@ -627,6 +636,8 @@ impl CoreServices {
             });
         }
 
+        let session_stats = std::sync::Arc::new(std::sync::Mutex::new(SessionStatistics::default()));
+
         Ok(Self {
             database,
             repository,
@@ -637,6 +648,7 @@ impl CoreServices {
             queue,
             downloads_dir: cfg.downloads_dir,
             shutdown_complete: Mutex::new(false),
+            session_stats,
         })
     }
 
@@ -666,6 +678,23 @@ impl CoreServices {
             .resume_dispatch()
             .await
             .map_err(|error| CoreServicesError::Queue(error.to_string()))
+    }
+
+
+    /// Returns a snapshot of in-session download statistics (reset on each start).
+    pub fn session_statistics(&self) -> SessionStatistics {
+        self.session_stats
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Returns completed downloads ordered by most-recently-completed first.
+    pub async fn list_completed(&self, limit: usize) -> Result<Vec<fetchx_models::DownloadItem>, CoreServicesError> {
+        self.repository
+            .list_completed(limit)
+            .await
+            .map_err(|e| CoreServicesError::Database(e.to_string()))
     }
 
     /// Reports whether new queue dispatch is currently held.

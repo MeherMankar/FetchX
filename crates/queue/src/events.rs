@@ -18,6 +18,8 @@ pub enum DownloadEvent {
     Removed { revision: u64, id: DownloadId },
     /// Periodic queue statistics snapshot emitted every ~2 seconds while downloads are active.
     QueueStats { revision: u64, speed_bps: u64, active_count: u32, queued_count: u32, estimated_completion_seconds: Option<u64> },
+    /// Emitted once when the queue transitions from active to idle (zero active downloads).
+    QueueIdle,
 }
 
 impl DownloadEvent {
@@ -28,6 +30,7 @@ impl DownloadEvent {
             | Self::Updated { revision, .. }
             | Self::Removed { revision, .. }
             | Self::QueueStats { revision, .. } => *revision,
+            Self::QueueIdle => 0,
         }
     }
 }
@@ -63,6 +66,10 @@ impl DownloadEventBus {
     /// increment the revision counter — stats are ephemeral and the revision is 0.
     pub fn publish_queue_stats(&self, speed_bps: u64, active_count: u32, queued_count: u32, estimated_completion_seconds: Option<u64>) {
         let _ = self.sender.send(DownloadEvent::QueueStats { revision: 0, speed_bps, active_count, queued_count, estimated_completion_seconds });
+    }
+
+    pub fn publish_queue_idle(&self) {
+        let _ = self.sender.send(DownloadEvent::QueueIdle);
     }
 
     fn publish(&self, event: impl FnOnce(u64) -> DownloadEvent) {
@@ -123,6 +130,10 @@ where
 
     async fn list(&self) -> Result<Vec<DownloadItem>, StorageError> {
         self.inner.list().await
+    }
+
+    async fn list_completed(&self, limit: usize) -> Result<Vec<DownloadItem>, StorageError> {
+        self.inner.list_completed(limit).await
     }
 
     async fn move_to_queue_tail(&self, id: DownloadId) -> Result<(), StorageError> {

@@ -109,6 +109,23 @@ impl DownloadRepository for SqliteDownloadRepository {
         rows.into_iter().map(row_to_item).collect()
     }
 
+    async fn list_completed(&self, limit: usize) -> Result<Vec<DownloadItem>, StorageError> {
+        let limit_i64 = limit.min(10_000) as i64;
+        let rows = sqlx::query(
+            "SELECT id, source_url, engine_kind, yt_dlp_format, yt_dlp_audio_format, filename, destination, status, priority,
+                    downloaded_bytes, total_bytes, speed_bytes_per_second,
+                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message
+             FROM downloads
+             WHERE status = 'completed'
+             ORDER BY updated_at DESC, id DESC
+             LIMIT ?",
+        )
+        .bind(limit_i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_item).collect()
+    }
+
     async fn move_to_queue_tail(&self, id: DownloadId) -> Result<(), StorageError> {
         let result = sqlx::query(
             "UPDATE downloads
