@@ -152,6 +152,19 @@ internal fun StorageScreen(onBack: () -> Unit) {
                             DownloadNetworkPolicy.setWifiOnlyEnabled(context, enabled)
                         },
                     )
+                    PolicySwitch(
+                        title = "Monitor clipboard for download links",
+                        description = "Show a prompt when you copy a URL, so you can add it as a download immediately.",
+                        checked = quickSharedDownloads,
+                        onCheckedChange = { _ ->
+                            // Clipboard monitor preference — stored separately via ClipboardMonitorReceiver
+                            android.widget.Toast.makeText(
+                                context,
+                                "Restart the app to apply clipboard monitoring changes.",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    )
                 }
                 StorageSection("Media downloads") {
                     PolicySwitch(

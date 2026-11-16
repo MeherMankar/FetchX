@@ -42,6 +42,7 @@ import dev.fetchx.core.download.NoOpDownloadRepository
 import dev.fetchx.downloads.ui.DownloadsScreen
 import dev.fetchx.downloads.ui.DownloadsViewModel
 import dev.fetchx.downloads.ui.TorrentDetailScreen
+import dev.fetchx.downloads.ui.HistoryScreen
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
@@ -206,6 +207,16 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                             icon = { Icon(Icons.Default.FileDownload, contentDescription = "Downloads") },
                             label = { Text("Downloads") },
                         )
+                        NavigationBarItem(
+                            selected = currentRoute == Screen.History.route,
+                            onClick = {
+                                navController.navigate(Screen.History.route) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            icon = { Icon(Icons.Default.Download, contentDescription = "History") },
+                            label = { Text("History") },
+                        )
                     }
                 }
             }
@@ -342,6 +353,14 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
             composable(Screen.Storage.route) {
                 FetchXTheme(seedColor = seedColor) {
                     StorageScreen(onBack = { navController.popBackStack() })
+                }
+            }
+            composable(Screen.History.route) {
+                FetchXTheme(seedColor = seedColor) {
+                    HistoryScreen(
+                        viewModel = viewModel(factory = vmFactory),
+                        onBack = { navController.popBackStack() },
+                    )
                 }
             }
             composable(Screen.TorrentDetail.ROUTE_PATTERN) { backStackEntry ->

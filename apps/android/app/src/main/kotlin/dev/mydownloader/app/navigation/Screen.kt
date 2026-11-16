@@ -21,8 +21,8 @@ sealed class Screen(val route: String) {
         }
     }
 
-    // Phase 20I: History/Bookmarks screen
-    // data object History : Screen("history")
+    /** Download history screen. */
+    data object History : Screen("history")
 
     // Phase 20N: Settings screen
     // data object Settings : Screen("settings")
