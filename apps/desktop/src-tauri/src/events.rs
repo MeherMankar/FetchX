@@ -14,3 +14,26 @@ pub struct DownloadUpdatedEvent {
 pub struct DownloadRemovedEvent {
     pub download_id: String,
 }
+
+pub const QUEUE_STATS_UPDATED: &str = "queue_stats_updated";
+pub const QUEUE_IDLE: &str = "queue_idle";
+pub const CLIPBOARD_URLS_DETECTED: &str = "clipboard_urls_detected";
+pub const POST_QUEUE_ACTION: &str = "post_queue_action";
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct QueueStatsEvent {
+    pub speed_bps: u64,
+    pub active_count: u32,
+    pub queued_count: u32,
+    pub estimated_completion_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ClipboardUrlsDetectedEvent {
+    pub urls: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PostQueueActionEvent {
+    pub action: String,
+}

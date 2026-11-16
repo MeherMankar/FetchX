@@ -36,6 +36,8 @@ pub(crate) fn notifications(event: DownloadEvent) -> Vec<EventNotification> {
             EventName::QueueUpdated,
             json!({ "id": id, "revision": revision, "removed": true }),
         )],
+        // Queue stats and idle events are ephemeral; remote server ignores them.
+        DownloadEvent::QueueStats { .. } | DownloadEvent::QueueIdle => vec![],
     }
 }
 

@@ -63,6 +63,14 @@ pub fn spawn_event_bridge(app: tauri::AppHandle, event_bus: &DownloadEventBus) {
 fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
     match event {
         DownloadEvent::Created { item, .. } | DownloadEvent::Updated { item, .. } => {
+            let status = item.status();
+            let fname = item.filename().as_str().to_owned();
+            if status == fetchx_models::DownloadStatus::Completed {
+                emit_notification(app, &format!("Download complete: {fname}"), "");
+            } else if status == fetchx_models::DownloadStatus::Failed {
+                let err = item.error().map(|e| e.message().to_owned()).unwrap_or_default();
+                emit_notification(app, &format!("Download failed: {fname}"), &err);
+            }
             let payload = DownloadUpdatedEvent {
                 download: DownloadDto::from(item),
             };
@@ -78,6 +86,43 @@ fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                 tracing::warn!(%error, event = DOWNLOAD_REMOVED, "could not emit desktop event");
             }
         }
+        DownloadEvent::QueueStats { speed_bps, active_count, queued_count, estimated_completion_seconds, .. } => {
+            let payload = crate::events::QueueStatsEvent { speed_bps, active_count, queued_count, estimated_completion_seconds };
+            if let Err(error) = app.emit(crate::events::QUEUE_STATS_UPDATED, payload) {
+                tracing::warn!(%error, "could not emit queue stats event");
+            }
+            update_tray(app, active_count, speed_bps);
+        }
+        DownloadEvent::QueueIdle => {
+            if let Err(error) = app.emit(crate::events::QUEUE_IDLE, ()) {
+                tracing::warn!(%error, "could not emit queue idle event");
+            }
+            update_tray(app, 0, 0);
+        }
+    }
+}
+
+fn emit_notification(app: &tauri::AppHandle, title: &str, body: &str) {
+    #[derive(Clone, serde::Serialize)]
+    struct NotificationPayload { title: String, body: String }
+    let _ = app.emit("fetchx-notification", NotificationPayload { title: title.to_owned(), body: body.to_owned() });
+}
+
+fn update_tray(app: &tauri::AppHandle, active_count: u32, speed_bps: u64) {
+    if let Some(tray) = app.tray_by_id("fetchx-tray") {
+        let speed_str = if speed_bps > 1024 * 1024 {
+            format!("{:.1} MB/s", speed_bps as f64 / 1_048_576.0)
+        } else if speed_bps > 1024 {
+            format!("{:.0} KB/s", speed_bps as f64 / 1024.0)
+        } else {
+            "0 KB/s".to_owned()
+        };
+        let tooltip = if active_count > 0 {
+            format!("FetchX â {active_count} active Â· {speed_str}")
+        } else {
+            "FetchX â idle".to_owned()
+        };
+        let _ = tray.set_tooltip(Some(&tooltip));
     }
 }
 
@@ -247,6 +292,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("desktop media processing manager was already initialized".into());
             }
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
+
+            // System tray
+            {
+                use tauri::menu::{MenuBuilder, MenuItemBuilder};
+                use tauri::tray::TrayIconBuilder;
+                let menu = MenuBuilder::new(app)
+                    .item(&MenuItemBuilder::with_id("open", "Open FetchX").build(app)?)
+                    .separator()
+                    .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
+                    .build()?;
+                let _tray = TrayIconBuilder::with_id("fetchx-tray")
+                    .tooltip("FetchX â idle")
+                    .menu(&menu)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "open" => { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); } }
+                        "quit" => { app.exit(0); }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                            let app = tray.app_handle();
+                            if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); }
+                        }
+                    })
+                    .build(app)?;
+            }
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
             }
