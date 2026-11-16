@@ -112,6 +112,8 @@ pub struct HttpEngineConfig {
     pub progress_bytes_interval: u64,
     pub progress_time_interval: Duration,
     pub user_agent: String,
+    /// Optional HTTP/SOCKS5 proxy URL (e.g. "http://proxy:8080" or "socks5://host:1080").
+    pub proxy_url: Option<String>,
     /// Maximum number of planned ranges; values outside 2..=64 disable segmentation.
     pub segment_count: usize,
     /// Files smaller than this threshold use the single-stream path.
@@ -209,6 +211,7 @@ impl Default for HttpEngineConfig {
             progress_bytes_interval: 1024 * 1024,
             progress_time_interval: Duration::from_secs(1),
             user_agent: DEFAULT_USER_AGENT.to_owned(),
+            proxy_url: None,
             segment_count: 64,
             minimum_segmented_file_size: 4 * 1024 * 1024,
             adaptive: AdaptiveConfig::default(),
@@ -1541,12 +1544,19 @@ where
             return Err(DownloadEngineError::InvalidUrl);
         }
 
-        Client::builder()
+        let mut builder = Client::builder()
             .user_agent(&self.config.user_agent)
             .connect_timeout(self.config.connect_timeout)
             .read_timeout(self.config.read_timeout)
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        if let Some(proxy_url) = &self.config.proxy_url {
+            if let Ok(proxy) = reqwest::Proxy::all(proxy_url.as_str()) {
+                builder = builder.proxy(proxy);
+            }
+        } else {
+            builder = builder.no_proxy();
+        }
+        builder
             .resolve_to_addrs(host, &addresses)
             .build()
             .map_err(DownloadEngineError::ClientConfiguration)

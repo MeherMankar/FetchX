@@ -604,12 +604,17 @@ impl CoreServices {
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
                 interval.tick().await; // skip first immediate tick
+                let mut last_active_count: u32 = 0;
                 loop {
                     interval.tick().await;
                     match stats_queue.snapshot().await {
                         Ok(snapshot) => {
                             let active_count = u32::try_from(snapshot.active.len()).unwrap_or(u32::MAX);
                             if active_count == 0 {
+                                if last_active_count > 0 {
+                                    stats_bus.publish_queue_idle();
+                                }
+                                last_active_count = 0;
                                 continue;
                             }
                             let queued_count = u32::try_from(snapshot.queued.len()).unwrap_or(u32::MAX);
@@ -629,6 +634,7 @@ impl CoreServices {
                                 None
                             };
                             stats_bus.publish_queue_stats(speed_bps, active_count, queued_count, estimated_completion_seconds);
+                            last_active_count = active_count;
                         }
                         Err(_) => break,
                     }
@@ -687,6 +693,15 @@ impl CoreServices {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    /// Returns the configured post-queue action from the resource policy.
+    pub async fn get_post_queue_action(&self) -> fetchx_models::PostQueueAction {
+        self.config_service
+            .load()
+            .await
+            .map(|cfg: crate::config::EngineConfig| cfg.resource_policy.post_queue_action)
+            .unwrap_or_default()
     }
 
     /// Returns completed downloads ordered by most-recently-completed first.
@@ -2752,13 +2767,28 @@ impl EngineRuntime {
         ytdlp_runner: Option<Arc<dyn YtDlpProcessRunner>>,
         torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
     ) -> Result<Self, CoreServicesError> {
+        // Build proxy_url from desktop_proxy config if set.
+        let proxy_url: Option<String> = config.resource_policy.desktop_proxy
+            .as_ref()
+            .and_then(|proxy| proxy.proxy_url());
+
+        let direct_http_config = {
+            let mut cfg = fetchx_downloader::HttpEngineConfig::default();
+            cfg.proxy_url = proxy_url.clone();
+            cfg
+        };
         let direct_http = Arc::new(
-            DirectHttpEngine::new(repository.clone())
+            DirectHttpEngine::with_config(repository.clone(), direct_http_config)
                 .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
         );
 
+        let hls_config = {
+            let mut cfg = fetchx_downloader::HlsEngineConfig::default();
+            cfg.proxy_url = proxy_url.clone();
+            cfg
+        };
         let hls_engine = Arc::new(
-            HlsEngine::new(repository.clone())
+            HlsEngine::with_config(repository.clone(), hls_config)
                 .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
         );
 

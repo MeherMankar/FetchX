@@ -69,6 +69,8 @@ pub struct HlsEngineConfig {
     pub user_agent: String,
     pub live_timeout_seconds: u64,
     pub extra_headers: Vec<(String, String)>,
+    /// Optional HTTP/SOCKS5 proxy URL.
+    pub proxy_url: Option<String>,
 }
 
 impl Default for HlsEngineConfig {
@@ -80,6 +82,7 @@ impl Default for HlsEngineConfig {
             user_agent: DEFAULT_USER_AGENT.to_owned(),
             live_timeout_seconds: 60,
             extra_headers: Vec::new(),
+            proxy_url: None,
         }
     }
 }
@@ -162,11 +165,16 @@ where
         repository: R,
         config: HlsEngineConfig,
     ) -> Result<Self, DownloadEngineError> {
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .user_agent(&config.user_agent)
             .connect_timeout(config.connect_timeout)
-            .read_timeout(config.read_timeout)
-            .build()
+            .read_timeout(config.read_timeout);
+        if let Some(proxy_url) = &config.proxy_url {
+            if let Ok(proxy) = reqwest::Proxy::all(proxy_url.as_str()) {
+                builder = builder.proxy(proxy);
+            }
+        }
+        let client = builder.build()
             .map_err(DownloadEngineError::ClientConfiguration)?;
         Ok(Self {
             state_machine: DownloadStateMachine::new(repository.clone()),
