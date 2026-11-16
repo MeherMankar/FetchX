@@ -588,6 +588,45 @@ impl CoreServices {
             };
         let queue = scheduler.queue_manager();
 
+        // Spawn periodic queue stats emitter (every 2 seconds while downloads are active).
+        {
+            let stats_queue = queue.clone();
+            let stats_bus = event_bus.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                interval.tick().await; // skip first immediate tick
+                loop {
+                    interval.tick().await;
+                    match stats_queue.snapshot().await {
+                        Ok(snapshot) => {
+                            let active_count = u32::try_from(snapshot.active.len()).unwrap_or(u32::MAX);
+                            if active_count == 0 {
+                                continue;
+                            }
+                            let queued_count = u32::try_from(snapshot.queued.len()).unwrap_or(u32::MAX);
+                            let speed_bps: u64 = snapshot.active.iter()
+                                .filter_map(|d| d.item.progress().speed_bytes_per_second())
+                                .sum();
+                            let estimated_completion_seconds = if speed_bps > 0 {
+                                let remaining: u64 = snapshot.active.iter()
+                                    .filter_map(|d| {
+                                        let total = d.item.progress().total_bytes()?;
+                                        let downloaded = d.item.progress().downloaded_bytes();
+                                        total.checked_sub(downloaded)
+                                    })
+                                    .sum();
+                                Some(remaining / speed_bps)
+                            } else {
+                                None
+                            };
+                            stats_bus.publish_queue_stats(speed_bps, active_count, queued_count, estimated_completion_seconds);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
         Ok(Self {
             database,
             repository,

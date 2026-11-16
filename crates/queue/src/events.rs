@@ -16,6 +16,8 @@ pub enum DownloadEvent {
     Created { revision: u64, item: DownloadItem },
     Updated { revision: u64, item: DownloadItem },
     Removed { revision: u64, id: DownloadId },
+    /// Periodic queue statistics snapshot emitted every ~2 seconds while downloads are active.
+    QueueStats { revision: u64, speed_bps: u64, active_count: u32, queued_count: u32, estimated_completion_seconds: Option<u64> },
 }
 
 impl DownloadEvent {
@@ -24,7 +26,8 @@ impl DownloadEvent {
         match self {
             Self::Created { revision, .. }
             | Self::Updated { revision, .. }
-            | Self::Removed { revision, .. } => *revision,
+            | Self::Removed { revision, .. }
+            | Self::QueueStats { revision, .. } => *revision,
         }
     }
 }
@@ -54,6 +57,12 @@ impl DownloadEventBus {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<DownloadEvent> {
         self.sender.subscribe()
+    }
+
+    /// Publish a queue statistics snapshot. Unlike lifecycle events this does not
+    /// increment the revision counter — stats are ephemeral and the revision is 0.
+    pub fn publish_queue_stats(&self, speed_bps: u64, active_count: u32, queued_count: u32, estimated_completion_seconds: Option<u64>) {
+        let _ = self.sender.send(DownloadEvent::QueueStats { revision: 0, speed_bps, active_count, queued_count, estimated_completion_seconds });
     }
 
     fn publish(&self, event: impl FnOnce(u64) -> DownloadEvent) {
