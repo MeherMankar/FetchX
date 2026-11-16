@@ -26,6 +26,7 @@ export function Sidebar({ active, counts, snapshot, onSelect }: SidebarProps) {
     { section: "completed", label: "Completed", count: counts.completed },
     { section: "failed", label: "Failed", count: counts.failed },
     { section: "cancelled", label: "Cancelled", count: counts.cancelled },
+    { section: "history", label: "History" },
   ];
 
   return (

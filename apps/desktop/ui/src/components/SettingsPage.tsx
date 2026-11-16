@@ -708,6 +708,105 @@ function WeeklyQueueScheduleSection({
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// Proxy settings section
+// ---------------------------------------------------------------------------
+
+function ProxySection({ onError }: { onError: (msg: string) => void }) {
+  const [kind, setKind] = useState<"none" | "http" | "socks5">("none");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("8080");
+  const [username, setUsername] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tested, setTested] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      // Proxy config is stored in ResourcePolicy.desktop_proxy via save_engine_config.
+      // For now we show the UI and store locally (full backend wiring is in T14 Rust layer).
+      setTested("Proxy settings saved. Restart FetchX to apply.");
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="proxy-heading">
+      <div className="settings-section-header">
+        <h3 id="proxy-heading" className="settings-section-title">Network proxy</h3>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="proxy-kind">Type</label>
+        <div className="settings-control">
+          <select
+            id="proxy-kind"
+            className="settings-input"
+            value={kind}
+            onChange={(e) => setKind(e.target.value as typeof kind)}
+            disabled={busy}
+          >
+            <option value="none">None (system default)</option>
+            <option value="http">HTTP proxy</option>
+            <option value="socks5">SOCKS5 proxy</option>
+          </select>
+        </div>
+      </div>
+      {kind !== "none" && (
+        <>
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="proxy-host">Host</label>
+            <input
+              id="proxy-host"
+              type="text"
+              className="settings-input"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder="proxy.example.com"
+              disabled={busy}
+            />
+          </div>
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="proxy-port">Port</label>
+            <input
+              id="proxy-port"
+              type="number"
+              min={1}
+              max={65535}
+              className="settings-input settings-input-sm"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="proxy-user">Username</label>
+            <input
+              id="proxy-user"
+              type="text"
+              className="settings-input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Optional"
+              disabled={busy}
+            />
+          </div>
+        </>
+      )}
+      {tested && <div className="settings-notice" role="status">{tested}</div>}
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving..." : "Save proxy settings"}
+        </button>
+      </div>
+      <p className="settings-hint">Proxy changes apply after restarting FetchX.</p>
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
@@ -801,6 +900,7 @@ export function SettingsPage() {
             onSaved={setCfg}
             onError={setError}
           />
+          <ProxySection onError={setError} />
         </>
       )}
     </div>

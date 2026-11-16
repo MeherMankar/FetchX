@@ -1202,3 +1202,17 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
     display: none;
   }
 }
+
+/* SpeedChart */
+.speed-chart { padding: 0.25rem 1rem 0.5rem; border-top: 1px solid var(--border); }
+.speed-chart-stats { display: flex; align-items: baseline; gap: 0.75rem; margin-bottom: 0.25rem; }
+.speed-chart-speed { font-size: 0.95rem; font-weight: 600; color: var(--accent, #4a9eff); }
+.speed-chart-meta { font-size: 0.75rem; color: var(--text-muted); }
+.speed-chart-canvas { display: block; width: 100%; height: 40px; }
+
+/* Dialog */
+.dialog-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.dialog-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; min-width: 360px; max-width: 480px; width: 100%; }
+.dialog-title { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.5rem; }
+.dialog-subtitle { font-size: 0.875rem; color: var(--text-muted); margin: 0 0 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }

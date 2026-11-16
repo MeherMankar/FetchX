@@ -289,3 +289,23 @@ export interface EngineStatus {
   native_torrent: EngineInstanceStatus;
 }
 
+
+// ---------------------------------------------------------------------------
+// Real-time queue stats (from QueueStats event)
+// ---------------------------------------------------------------------------
+
+export interface QueueStatsEvent {
+  speed_bps: number;
+  active_count: number;
+  queued_count: number;
+  estimated_completion_seconds: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Notification event
+// ---------------------------------------------------------------------------
+
+export interface NotificationEvent {
+  title: string;
+  body: string;
+}

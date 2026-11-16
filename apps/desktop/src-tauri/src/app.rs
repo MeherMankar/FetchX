@@ -279,6 +279,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::register_browser_extensions,
             commands::get_browser_extension_status,
             commands::open_browser_extension_install_page,
+            commands::set_download_bandwidth_limit,
+            commands::list_completed_downloads,
+            commands::clear_download_history,
+            commands::provide_download_credentials,
+            commands::get_post_queue_action,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);

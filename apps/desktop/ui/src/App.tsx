@@ -16,6 +16,11 @@ import { DownloadRow } from "./components/DownloadRow";
 import { EmptyState } from "./components/EmptyState";
 import { Sidebar } from "./components/Sidebar";
 import { SettingsPage } from "./components/SettingsPage";
+import { HistoryScreen } from "./components/HistoryScreen";
+import { SpeedChart } from "./components/SpeedChart";
+import { ConversionDialog } from "./components/ConversionDialog";
+import { listen } from "@tauri-apps/api/event";
+import type { NotificationEvent } from "./api/types";
 import { ToastStack, useToasts } from "./components/Toast";
 import { Toolbar } from "./components/Toolbar";
 import { useDownloads } from "./hooks/useDownloads";
@@ -35,7 +40,8 @@ export type NavSection =
   | "completed"
   | "failed"
   | "cancelled"
-  | "settings";
+  | "settings"
+  | "history";
 
 export type SortKey =
   | "newest"
@@ -130,7 +136,7 @@ function sortDownloads(downloads: Download[], sort: SortKey): Download[] {
 const SECTION_TITLES: Record<NavSection, string> = {
   all: "All Downloads", active: "Active", queued: "Queued", paused: "Paused",
   scheduled: "Scheduled", completed: "Completed", failed: "Failed", cancelled: "Cancelled",
-  settings: "Settings",
+  settings: "Settings", history: "History",
 };
 
 const EMPTY_MESSAGES: Record<NavSection, { title: string; subtitle: string }> = {
@@ -142,6 +148,7 @@ const EMPTY_MESSAGES: Record<NavSection, { title: string; subtitle: string }> = 
   completed: { title: "No completed downloads",    subtitle: "Finished downloads will appear here." },
   failed:    { title: "No failed downloads",       subtitle: "Downloads that encounter errors will appear here." },
   cancelled: { title: "No cancelled downloads",    subtitle: "" },
+  history:   { title: "No history",        subtitle: "Completed downloads appear here." },
   settings:  { title: "",                          subtitle: "" },
 };
 
@@ -195,6 +202,7 @@ export function App() {
   const [confirm, setConfirm] = useState<ConfirmState>(null);
   const [snapshot, setSnapshot] = useState<QueueSnapshot | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [conversionDownload, setConversionDownload] = useState<import("./api/types").Download | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const prevCompletedRef = useRef<Set<string>>(new Set());
   const { toasts, addToast, dismiss: dismissToast } = useToasts();
@@ -214,6 +222,15 @@ export function App() {
       .then((info) => setAppVersion(info.version))
       .catch(() => { /* cosmetic */ });
   }, []);
+
+  // Listen for backend notifications
+  useEffect(() => {
+    let off: (() => void)|undefined;
+    void listen<NotificationEvent>("fetchx-notification", (e) => {
+      addToast(e.payload.title + (e.payload.body ? ": " + e.payload.body : ""), "success");
+    }).then((fn) => { off = fn; });
+    return () => off?.();
+  }, [addToast]);
 
   // -------------------------------------------------------------------------
   // Queue snapshot — refresh on every download event + on a slow background
@@ -625,6 +642,12 @@ export function App() {
               <SettingsPage />
             </div>
           </div>
+        ) : navSection === "history" ? (
+          <div className="content-area">
+            <div className="download-pane">
+              <HistoryScreen />
+            </div>
+          </div>
         ) : (
         <div className={`content-area${selectedDownload ? " content-area--split" : ""}`}>
           <div
@@ -712,6 +735,8 @@ export function App() {
         </div>
         )} {/* end settings ternary */}
 
+        <SpeedChart />
+
         <footer className="app-footer">
           Downloads are stored in your system Downloads folder. Removing an item preserves its files.
           {checkedIds.size === 0 && (
@@ -739,6 +764,14 @@ export function App() {
           danger={true}
           onConfirm={() => void executeConfirm()}
           onCancel={() => setConfirm(null)}
+        />
+      )}
+
+      {conversionDownload && (
+        <ConversionDialog
+          download={conversionDownload}
+          onStarted={() => { setConversionDownload(null); addToast("Conversion started.", "success"); }}
+          onClose={() => setConversionDownload(null)}
         />
       )}
 
