@@ -1216,3 +1216,9 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .dialog-title { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.5rem; }
 .dialog-subtitle { font-size: 0.875rem; color: var(--text-muted); margin: 0 0 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+
+/* Live recording */
+.badge-live { background: #e53935; color: #fff; border-radius: 4px; padding: 1px 5px; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; animation: rec-pulse 1.2s ease-in-out infinite; }
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.progress-track--recording { background: rgba(229,57,53,0.12); display: flex; align-items: center; padding: 0 8px; height: 6px; border-radius: 3px; }
+.progress-recording-label { font-size: 0.65rem; color: #e53935; font-weight: 600; }
