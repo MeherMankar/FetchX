@@ -807,6 +807,85 @@ function ProxySection({ onError }: { onError: (msg: string) => void }) {
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// Bandwidth schedule section (T22)
+// ---------------------------------------------------------------------------
+
+const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+
+function formatMinutes(m: number): string {
+  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+}
+function parseMinutes(val: string): number | null {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(val);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+interface BwWindow { weekdays: boolean[]; start_minute: number; end_minute: number; limit_mbps: string; }
+
+function BandwidthScheduleSection({ cfg, onSaved, onError }: { cfg: EngineConfigDto; onSaved: (u: EngineConfigDto) => void; onError: (m: string) => void; }) {
+  const [windows, setWindows] = useState<BwWindow[]>(
+    (cfg.resource_policy.weekly_bandwidth_schedule?.windows ?? []).map((w) => ({
+      weekdays: w.weekdays,
+      start_minute: w.start_minute,
+      end_minute: w.end_minute,
+      limit_mbps: (w.limit_bps / (1024 * 1024)).toFixed(2),
+    })),
+  );
+  const [busy, setBusy] = useState(false);
+
+  const addWindow = () => setWindows((prev) => [...prev, { weekdays: [true,true,true,true,true,false,false], start_minute: 9*60, end_minute: 17*60, limit_mbps: "1" }]);
+  const removeWindow = (i: number) => setWindows((prev) => prev.filter((_, idx) => idx !== i));
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const bwWindows = windows.map((w) => ({ weekdays: w.weekdays, start_minute: w.start_minute, end_minute: w.end_minute, limit_bps: Math.round(parseFloat(w.limit_mbps) * 1024 * 1024) }));
+      const updated = await saveEngineConfig({ yt_dlp: { enabled: cfg.yt_dlp.enabled }, resource_policy: { ...cfg.resource_policy, weekly_bandwidth_schedule: { windows: bwWindows } }, weekly_queue_schedule: cfg.weekly_queue_schedule });
+      onSaved(updated);
+    } catch (cause) { onError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="bw-sched-heading">
+      <div className="settings-section-header">
+        <h3 id="bw-sched-heading" className="settings-section-title">Bandwidth schedule</h3>
+      </div>
+      <p className="settings-hint">Limit download speed during specific time windows. Overlapping windows apply the lower limit.</p>
+      {windows.map((w, i) => (
+        <div key={i} className="settings-bandwidth-window">
+          <div className="weekday-picker" role="group" aria-label={"Days for window " + (i + 1)}>
+            {WEEKDAY_SHORT.map((label, day) => (
+              <button key={label} type="button"
+                className={"weekday-button" + (w.weekdays[day] ? " weekday-button-active" : "")}
+                aria-pressed={w.weekdays[day]} disabled={busy}
+                onClick={() => setWindows((prev) => prev.map((win, idx) => idx === i ? { ...win, weekdays: win.weekdays.map((v, d) => d === day ? !v : v) } : win))}
+              >{label}</button>
+            ))}
+          </div>
+          <div className="settings-row" style={{ gap: "0.5rem", alignItems: "center" }}>
+            <input type="time" className="settings-input settings-input-sm" value={formatMinutes(w.start_minute)} disabled={busy}
+              onChange={(e) => { const m = parseMinutes(e.target.value); if (m !== null) setWindows((prev) => prev.map((win, idx) => idx === i ? { ...win, start_minute: m } : win)); }} />
+            <span>to</span>
+            <input type="time" className="settings-input settings-input-sm" value={formatMinutes(w.end_minute)} disabled={busy}
+              onChange={(e) => { const m = parseMinutes(e.target.value); if (m !== null) setWindows((prev) => prev.map((win, idx) => idx === i ? { ...win, end_minute: m } : win)); }} />
+            <input type="number" min={0.01} step={0.1} className="settings-input settings-input-sm" value={w.limit_mbps} placeholder="MiB/s" disabled={busy}
+              onChange={(e) => setWindows((prev) => prev.map((win, idx) => idx === i ? { ...win, limit_mbps: e.target.value } : win))}
+              aria-label="Speed limit MiB/s" />
+            <button className="button button-danger" onClick={() => removeWindow(i)} disabled={busy}>Remove</button>
+          </div>
+        </div>
+      ))}
+      <div className="settings-actions">
+        <button className="button button-secondary" onClick={addWindow} disabled={busy}>Add time window</button>
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>{busy ? "Saving..." : "Save schedule"}</button>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
@@ -892,6 +971,7 @@ export function SettingsPage() {
       {cfg && (
         <>
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
+          <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <DirectHttpSection runtimeStatus={runtimeStatus?.direct_http ?? null} />
           <YtDlpSection

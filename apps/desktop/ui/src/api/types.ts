@@ -238,6 +238,7 @@ export interface ResourcePolicyDto {
   global_bandwidth_bytes_per_second: number | null;
   per_download_bandwidth_bytes_per_second: number | null;
   engine_bandwidth_limits: EngineBandwidthLimitsDto;
+  weekly_bandwidth_schedule?: WeeklyBandwidthScheduleDto;
 }
 
 export interface WeeklyQueueScheduleDto {
@@ -308,4 +309,19 @@ export interface QueueStatsEvent {
 export interface NotificationEvent {
   title: string;
   body: string;
+}
+
+// ---------------------------------------------------------------------------
+// Bandwidth schedule (T22)
+// ---------------------------------------------------------------------------
+
+export interface BandwidthWindowDto {
+  weekdays: boolean[];
+  start_minute: number;
+  end_minute: number;
+  limit_bps: number;
+}
+
+export interface WeeklyBandwidthScheduleDto {
+  windows: BandwidthWindowDto[];
 }

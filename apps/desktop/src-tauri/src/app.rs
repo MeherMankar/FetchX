@@ -6,6 +6,7 @@ use tauri::{Emitter, Manager, RunEvent};
 use tracing_subscriber::EnvFilter;
 
 use crate::browser_ipc::BrowserIpcServer;
+use crate::clipboard_monitor::spawn_clipboard_monitor;
 use crate::commands::{self, AppState, DownloadDto};
 use crate::engine_commands;
 use crate::events::{
@@ -323,6 +324,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .build(app)?;
             }
+
+            // Spawn clipboard monitor (polls every 1.5s when enabled).
+            spawn_clipboard_monitor(app.handle().clone());
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
             }

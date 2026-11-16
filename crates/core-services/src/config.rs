@@ -33,6 +33,8 @@ pub struct EngineConfig {
     pub resource_policy: ResourcePolicy,
     #[serde(default)]
     pub weekly_queue_schedule: WeeklyQueueSchedule,
+    #[serde(default)]
+    pub clipboard_monitor_enabled: bool,
 }
 
 impl Default for EngineConfig {
@@ -48,6 +50,7 @@ impl Default for EngineConfig {
             metalink: MetalinkConfig::default(),
             resource_policy: ResourcePolicy::default(),
             weekly_queue_schedule: WeeklyQueueSchedule::default(),
+            clipboard_monitor_enabled: false,
         }
     }
 }
