@@ -9,6 +9,7 @@ mod ffmpeg;
 mod ftp;
 mod hls;
 mod http;
+mod http_auth;
 mod media_extractor_adapter;
 mod metalink;
 mod native_media;
@@ -28,7 +29,7 @@ pub use dispatcher::{EngineDispatcher, is_dash_url};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use ffmpeg::{
-    FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo,
+    FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo, write_metadata,
     MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaStream, MediaStreamKind,
     MetadataOverride, TranscodePreset,
 };pub use ftp::{FtpEngine, FtpEngineConfig};

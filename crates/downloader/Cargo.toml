@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "fetchx-downloader"
 version.workspace = true
 edition.workspace = true
@@ -17,6 +17,7 @@ fdk-aac-rs = { version = "0.1.0", default-features = false, features = ["encoder
 opus = "0.4.0"
 openh264 = "0.9.10"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+id3 = "1"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 reqwest.workspace = true
 serde.workspace = true
@@ -74,3 +75,7 @@ tempfile = "3"
 rand = "0.10"
 rcgen = "0.13.2"
 tokio-rustls.workspace = true
+
+
+
+

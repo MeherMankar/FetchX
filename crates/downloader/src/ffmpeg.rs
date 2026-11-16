@@ -1251,6 +1251,45 @@ impl MediaProcessRequest {
     }
 }
 
+pub fn write_metadata(path: &Path, metadata: &MetadataOverride) -> Result<(), FfmpegError> {
+    if metadata.title.is_none() && metadata.artist.is_none() && metadata.album.is_none()
+        && metadata.year.is_none() && metadata.comment.is_none()
+    {
+        return Ok(());
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "mp3" => write_id3v2_tags(path, metadata),
+        "m4a" | "aac" => {
+            tracing::warn!(path = %path.display(), "iTunes atom metadata write not yet implemented; skipping");
+            Ok(())
+        }
+        other => {
+            tracing::warn!(path = %path.display(), ext = other, "metadata write skipped for unsupported format");
+            Ok(())
+        }
+    }
+}
+
+fn write_id3v2_tags(path: &Path, metadata: &MetadataOverride) -> Result<(), FfmpegError> {
+    use id3::{Tag, TagLike, Version};
+    let mut tag = Tag::read_from_path(path).unwrap_or_default();
+    if let Some(title) = &metadata.title { tag.set_title(title); }
+    if let Some(artist) = &metadata.artist { tag.set_artist(artist); }
+    if let Some(album) = &metadata.album { tag.set_album(album); }
+    if let Some(year) = metadata.year { tag.set_year(year as i32); }
+    if let Some(comment) = &metadata.comment {
+        tag.add_frame(id3::frame::Comment {
+            lang: "eng".to_owned(),
+            description: String::new(),
+            text: comment.clone(),
+        });
+    }
+    tag.write_to_path(path, Version::Id3v24).map_err(|_| FfmpegError::NativeUnsupported)?;
+    Ok(())
+}
+
+
 fn is_mp4_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())

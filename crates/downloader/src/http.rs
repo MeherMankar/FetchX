@@ -35,6 +35,7 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
+use crate::http_auth::{AuthKind, basic_header, digest_header, parse_www_authenticate};
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 use crate::retry::{RetryPolicy, retry_after_delay};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
@@ -1453,6 +1454,43 @@ where
                 }
             }
             let response = request.send().await.map_err(DownloadEngineError::Request)?;
+            // 401 Unauthorized — retry with Basic or Digest auth when credentials are present.
+            if response.status() == StatusCode::UNAUTHORIZED {
+                let www_auth = response
+                    .headers()
+                    .get("www-authenticate")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_www_authenticate);
+                let username = extra_headers.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("x-fetchx-auth-username"))
+                    .map(|(_, v)| v.as_str());
+                let password = extra_headers.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("x-fetchx-auth-password"))
+                    .map(|(_, v)| v.as_str());
+                if let (Some(challenge), Some(user), Some(pass)) = (www_auth, username, password) {
+                    let al2 = redirect_count == 0 && self.allow_loopback_benchmark_target();
+                    let client2 = self.client_for_url(&url, al2).await?;
+                    let mut ar = client2.get(url.clone());
+                    if let Some(start) = range_start {
+                        let end = range_end.map_or_else(String::new, |e| e.to_string());
+                        ar = ar.header(RANGE, format!("bytes={start}-{end}"));
+                        ar = ar.header(reqwest::header::ACCEPT_ENCODING, "identity");
+                        if let Some(validator) = if_range {
+                            ar = ar.header(IF_RANGE, validator);
+                        }
+                    }
+                    let uri = url.path().to_owned();
+                    let auth_val = match challenge.kind {
+                        AuthKind::Basic => basic_header(user, pass),
+                        AuthKind::Digest => digest_header(user, pass, "GET", &uri, &challenge),
+                    };
+                    if let Ok(hv) = reqwest::header::HeaderValue::from_str(&auth_val) {
+                        ar = ar.header(reqwest::header::AUTHORIZATION, hv);
+                    }
+                    let auth_resp = ar.send().await.map_err(DownloadEngineError::Request)?;
+                    return Ok(auth_resp);
+                }
+            }
             if !response.status().is_redirection() {
                 return Ok(response);
             }

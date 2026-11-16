@@ -53,6 +53,8 @@ pub struct YtDlpConfig {
     executable: Option<PathBuf>,
     version_timeout: Duration,
     version_cache_path: Option<PathBuf>,
+    pub download_subtitles: bool,
+    pub subtitle_langs: Vec<String>,
 }
 
 impl Default for YtDlpConfig {
@@ -67,6 +69,8 @@ impl YtDlpConfig {
             executable: None,
             version_timeout: VERSION_TIMEOUT,
             version_cache_path: None,
+            download_subtitles: false,
+            subtitle_langs: Vec::new(),
         }
     }
 
@@ -1283,6 +1287,8 @@ fn build_arguments(
             audio_format.as_str().into(),
         ]);
     }
+    // Note: download_subtitles / subtitle_langs are not yet plumbed into build_args;
+    // they are injected by YtDlpEngine before calling build_args.
     if let Some(rate) = max_download_rate_bytes_per_second {
         arguments.push("--limit-rate".into());
         arguments.push(rate.to_string().into());
