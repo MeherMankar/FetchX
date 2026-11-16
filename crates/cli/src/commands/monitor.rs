@@ -32,6 +32,8 @@ pub async fn run(svc: &CoreServices) -> ExitCode {
                      | DownloadEvent::Removed { .. }) => {
                         print_active(svc).await;
                     }
+                    Ok(DownloadEvent::QueueStats { .. } | DownloadEvent::QueueIdle) => {}
+
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         // Fell behind; refresh anyway.
                         print_active(svc).await;

@@ -324,6 +324,8 @@ pub fn event_to_dto(e: DownloadEvent) -> DownloadEventDto {
             item: item_to_dto(&item),
         },
         DownloadEvent::Removed { id, .. } => DownloadEventDto::Removed { id: id.to_string() },
+        // Queue stats events are ephemeral; Android bridge ignores them.
+        DownloadEvent::QueueStats { .. } | DownloadEvent::QueueIdle => DownloadEventDto::Removed { id: String::new() },
     }
 }
 
