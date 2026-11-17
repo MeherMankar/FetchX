@@ -602,7 +602,7 @@ fun BrowserScreen(
                                         if (uiState.activeTabBlockedRequests > 0) {
                                             Spacer(Modifier.width(6.dp))
                                             Surface(
-                                                shape = RoundedCornerShape(8.dp),
+                                                shape = MaterialTheme.shapes.extraSmall,
                                                 color = MaterialTheme.colorScheme.primaryContainer,
                                                 modifier = Modifier.padding(vertical = 2.dp),
                                             ) {
@@ -2245,7 +2245,7 @@ internal fun BrowserBottomBar(
                         Text(
                             text = if (tabCount > 99) "∞" else tabCount.toString(),
                             style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
+                                fontWeight = FontWeight.Medium,
                                 fontSize = 11.sp,
                             ),
                             color = MaterialTheme.colorScheme.onSurface,
@@ -2365,7 +2365,7 @@ private fun BrowserMenuSheet(
                     Text(
                         "FetchX",
                         style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Medium,
                         ),
                         color = MaterialTheme.colorScheme.onSurface,
                     )
@@ -2959,7 +2959,7 @@ private fun BrowserMenuItemRow(
             }
             if (!badgeText.isNullOrBlank()) {
                 Surface(
-                    shape = RoundedCornerShape(8.dp),
+                    shape = MaterialTheme.shapes.extraSmall,
                     color = badgeColor ?: MaterialTheme.colorScheme.surfaceVariant,
                 ) {
                     Text(
@@ -3157,7 +3157,7 @@ fun SearchEngineIcon(
                     Text(
                         text = "G",
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Medium,
                             fontSize = (size.value * 0.55f).sp,
                             lineHeight = (size.value * 0.55f).sp,
                         ),
@@ -3168,7 +3168,7 @@ fun SearchEngineIcon(
                     Text(
                         text = "b",
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Medium,
                             fontSize = (size.value * 0.58f).sp,
                             lineHeight = (size.value * 0.58f).sp,
                         ),
@@ -3179,7 +3179,7 @@ fun SearchEngineIcon(
                     Text(
                         text = "D",
                         style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.Medium,
                             fontSize = (size.value * 0.55f).sp,
                             lineHeight = (size.value * 0.55f).sp,
                         ),
@@ -4826,7 +4826,7 @@ private fun VideoDownloadBanner(
                 Text(
                     "Video detected",
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                     ),
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
@@ -4855,7 +4855,7 @@ private fun VideoDownloadBanner(
                 Text(
                     "Download",
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Medium,
                     ),
                     color = MaterialTheme.colorScheme.onPrimary,
                     modifier = Modifier
