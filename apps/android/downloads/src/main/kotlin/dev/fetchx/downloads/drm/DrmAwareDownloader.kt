@@ -58,30 +58,53 @@ class DrmAwareDownloader(
         val effectivePsshKey = psshKey ?: segmentUrl
         val effectiveIv = ivHex ?: "00000000000000000000000000000000"
 
-        // Step 3: check DrmKeyStore first (keys may have been pushed from browser)
+        // Step 3: check DrmKeyStore first (keys may have been pushed from browser).
+        // Only attempt software decryption if the stored keys carry actual key bytes (non-blank
+        // second element). MediaDrm-acquired entries store an empty string as a placeholder
+        // because queryKeyStatus does not expose raw key material; for those, the CDM handles
+        // decryption internally and software AES-CTR must not be attempted.
         val cachedKeys = DrmKeyStore.get(effectivePsshKey)
         if (cachedKeys != null && cachedKeys.isNotEmpty()) {
             val kid = kidHex ?: cachedKeys.first().first
-            return@withContext DrmSegmentDecryptor.decryptWithStoredKey(rawBytes, kid, effectiveIv)
+            val entry = DrmKeyStore.findByKid(kid) ?: cachedKeys.firstOrNull { it.first == kid }
+            if (entry != null && entry.second.isNotBlank()) {
+                return@withContext DrmSegmentDecryptor.decrypt(rawBytes, entry.second, effectiveIv)
+            }
+            // Keys present but no raw key bytes — CDM handles decryption; return raw bytes.
+            Log.d(TAG, "Cached keys for $effectivePsshKey have no key bytes (MediaDrm path) — raw bytes for CDM")
+            return@withContext rawBytes
         }
 
-        // Step 4: if a KID is known, search the whole store before going to the network
+        // Step 4: if a KID is known, search the whole store before going to the network.
         if (kidHex != null) {
             val byKid = DrmKeyStore.findByKid(kidHex)
             if (byKid != null) {
-                return@withContext DrmSegmentDecryptor.decrypt(rawBytes, byKid.second, effectiveIv)
+                if (byKid.second.isNotBlank()) {
+                    return@withContext DrmSegmentDecryptor.decrypt(rawBytes, byKid.second, effectiveIv)
+                }
+                // Found by KID but key bytes are placeholder — CDM path; return raw bytes.
+                Log.d(TAG, "KID $kidHex found but key bytes empty (MediaDrm path) — raw bytes for CDM")
+                return@withContext rawBytes
             }
         }
 
-        // Step 5: request keys from license server if psshBytes are available
+        // Step 5: request keys from license server if psshBytes are available.
+        // Keys returned by WidevineManager carry empty key-byte placeholders (the CDM does not
+        // expose raw key material via queryKeyStatus). Store them so future calls can detect the
+        // MediaDrm path, then return the raw bytes for CDM-internal decryption.
         if (psshBytes != null && licenseUrl != null) {
             try {
                 val keys = widevineManager.requestKeys(psshBytes, licenseUrl, extraHeaders)
                 DrmKeyStore.put(effectivePsshKey, keys)
-                val kid = kidHex ?: keys.firstOrNull()?.first
-                if (kid != null) {
+                // Check whether any returned key carries actual bytes (e.g. from a .wvd path).
+                val usableKey = keys.firstOrNull { it.second.isNotBlank() }
+                if (usableKey != null) {
+                    val kid = kidHex ?: usableKey.first
                     return@withContext DrmSegmentDecryptor.decryptWithStoredKey(rawBytes, kid, effectiveIv)
                 }
+                // All keys are MediaDrm placeholders — return raw bytes for CDM.
+                Log.d(TAG, "Keys acquired via MediaDrm for $segmentUrl — returning raw bytes for CDM")
+                return@withContext rawBytes
             } catch (e: WidevineException) {
                 Log.e(TAG, "Key request failed for $segmentUrl: ${e.message}", e)
             }

@@ -31,7 +31,7 @@ class WidevineManager {
 
     companion object {
         /** Widevine UUID: EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED */
-        val WIDEVINE_UUID: UUID = UUID(-0x1210745686293532L, -0x5C37D82322ADE13L)
+        val WIDEVINE_UUID: UUID = UUID(-0x121074568629B532L, -0x5C37D8232AE2DE13L)
 
         /** Returns true when the platform ships a Widevine CDM. */
         fun isWidevineAvailable(): Boolean =
