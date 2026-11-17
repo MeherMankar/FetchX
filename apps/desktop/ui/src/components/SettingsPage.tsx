@@ -9,17 +9,13 @@ import {
   getEngineStatus,
   resetEngineConfig,
   saveEngineConfig,
-  testYtDlpConfig,
 } from "../api/engine";
 import type {
   BrowserExtensionStatus,
-  DiagnosticResult,
   EngineConfigDto,
-  EngineInstanceStatus,
   EngineStatus,
   ResourcePolicyDto,
   ResourceProfile,
-  SaveYtDlpConfigRequest,
   WeeklyQueueScheduleDto,
 } from "../api/types";
 import { errorMessage } from "../lib/format";
@@ -211,201 +207,17 @@ function BrowserExtensionSection() {
     </section>
   );
 }
-function StatusDot({
-  available,
-  label,
-}: {
-  available: boolean | null;
-  label: string;
-}) {
-  const cls =
-    available === null
-      ? "dot-idle"
-      : available
-        ? "dot-ok"
-        : "dot-err";
-  return (
-    <span className={`status-dot ${cls}`} aria-label={label} title={label} />
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Diagnostic display
 // ---------------------------------------------------------------------------
 
-function DiagnosticDisplay({ result }: { result: DiagnosticResult | null }) {
-  if (!result) return null;
-  return (
-    <div
-      className={`diagnostic-box ${result.available ? "diagnostic-ok" : "diagnostic-err"}`}
-      role="status"
-      aria-live="polite"
-    >
-      <StatusDot available={result.available} label={result.available ? "Available" : "Unavailable"} />
-      <div className="diagnostic-text">
-        <span>{result.message}</span>
-        {result.version && (
-          <span className="diagnostic-version">Version: {result.version}</span>
-        )}
-      </div>
-    </div>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// yt-dlp section
-// ---------------------------------------------------------------------------
 
-interface YtDlpSectionProps {
-  cfg: EngineConfigDto;
-  runtimeStatus: EngineInstanceStatus | null;
-  onSaved: (updated: EngineConfigDto) => void;
-  onError: (msg: string) => void;
-}
 
-function YtDlpSection({ cfg, runtimeStatus, onSaved, onError }: YtDlpSectionProps) {
-  const [enabled, setEnabled] = useState(cfg.yt_dlp.enabled);
-  const [busy, setBusy] = useState(false);
-  const [diagnostic, setDiagnostic] = useState<DiagnosticResult | null>(null);
-  const [testBusy, setTestBusy] = useState(false);
-
-  useEffect(() => {
-    setEnabled(cfg.yt_dlp.enabled);
-    setDiagnostic(null);
-  }, [cfg]);
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      const req: SaveYtDlpConfigRequest = {
-        enabled,
-      };
-      const updated = await saveEngineConfig({
-        yt_dlp: req,
-        resource_policy: cfg.resource_policy,
-        weekly_queue_schedule: cfg.weekly_queue_schedule,
-      });
-      onSaved(updated);
-    } catch (cause) {
-      onError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const test = async () => {
-    setTestBusy(true);
-    setDiagnostic(null);
-    try {
-      const result = await testYtDlpConfig();
-      setDiagnostic(result);
-    } catch (cause) {
-      onError(errorMessage(cause));
-    } finally {
-      setTestBusy(false);
-    }
-  };
-
-  return (
-    <section className="settings-section" aria-labelledby="ytdlp-heading">
-      <div className="settings-section-header">
-        <h3 id="ytdlp-heading" className="settings-section-title">Native yt-dlp (Rust)</h3>
-        <RuntimeStatusBadge status={runtimeStatus} />
-      </div>
-
-      <div className="settings-row">
-        <label className="settings-label" htmlFor="ytdlp-enabled">Enabled</label>
-        <div className="settings-control">
-          <input
-            id="ytdlp-enabled"
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            disabled={busy}
-          />
-        </div>
-      </div>
-
-      <p className="settings-hint">
-        FetchX uses its in-process yt-dlp Rust library. No executable or Python runtime is required.
-      </p>
-
-      <DiagnosticDisplay result={diagnostic} />
-
-      <div className="settings-actions">
-        <button
-          className="button button-secondary"
-          onClick={() => void test()}
-          disabled={busy || testBusy}
-        >
-          {testBusy ? "Checking…" : "Check native engine"}
-        </button>
-        <button
-          className="button button-primary"
-          onClick={() => void save()}
-          disabled={busy || testBusy}
-        >
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Direct HTTP section
-// ---------------------------------------------------------------------------
-
-function DirectHttpSection({ runtimeStatus }: { runtimeStatus: EngineInstanceStatus | null }) {
-  return (
-    <section className="settings-section" aria-labelledby="directhttp-heading">
-      <div className="settings-section-header">
-        <h3 id="directhttp-heading" className="settings-section-title">Direct HTTP</h3>
-        <RuntimeStatusBadge status={runtimeStatus ?? { enabled: true, available: true, version: null, error: null }} />
-      </div>
-      <div className="settings-row">
-        <span className="settings-label">Status</span>
-        <div className="settings-control">
-          <span className="settings-builtin-badge">
-            <StatusDot available={true} label="Built-in" />
-            Built-in — always available
-          </span>
-          <p className="settings-hint">
-            Direct HTTP/HTTPS downloads are handled by the built-in engine and
-            cannot be disabled.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Runtime status badge
 // ---------------------------------------------------------------------------
-
-function RuntimeStatusBadge({ status }: { status: EngineInstanceStatus | null }) {
-  if (!status) return null;
-
-  if (!status.enabled) {
-    return <span className="runtime-badge runtime-badge-disabled">Disabled</span>;
-  }
-  if (status.available) {
-    return (
-      <span className="runtime-badge runtime-badge-ok">
-        ● Running{status.version ? ` · ${status.version}` : ""}
-      </span>
-    );
-  }
-  return (
-    <span
-      className="runtime-badge runtime-badge-err"
-      title={status.error ?? undefined}
-    >
-      ● Unavailable
-    </span>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Root SettingsPage
@@ -958,7 +770,7 @@ function BandwidthScheduleSection({ cfg, onSaved, onError }: { cfg: EngineConfig
 
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
-  const [runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
+  const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
@@ -1008,7 +820,7 @@ export function SettingsPage() {
   return (
     <div className="settings-page">
       <div className="settings-header">
-        <h2 className="settings-title">Download Engines</h2>
+        <h2 className="settings-title">Settings</h2>
         <button
           className="button button-secondary"
           onClick={() => void handleReset()}
@@ -1043,13 +855,6 @@ export function SettingsPage() {
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <DirectHttpSection runtimeStatus={runtimeStatus?.direct_http ?? null} />
-          <YtDlpSection
-            cfg={cfg}
-            runtimeStatus={runtimeStatus?.yt_dlp ?? null}
-            onSaved={setCfg}
-            onError={setError}
-          />
           <ProxySection onError={setError} />
         </>
       )}
