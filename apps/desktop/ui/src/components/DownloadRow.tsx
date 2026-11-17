@@ -1,6 +1,20 @@
 import { memo } from "react";
 
 import type { Download, DownloadPriority, DownloadSchedule } from "../api/types";
+
+// Map raw status strings to readable labels for display only
+const STATUS_LABELS: Record<string, string> = {
+  metadata_acquiring: "acquiring",
+  recovering: "recovering",
+  downloading: "downloading",
+  preparing: "preparing",
+  queued: "queued",
+  paused: "paused",
+  completed: "completed",
+  failed: "failed",
+  cancelled: "cancelled",
+  seeding: "seeding",
+};
 import {
   formatBytes,
   formatDatetime,
@@ -104,7 +118,9 @@ export const DownloadRow = memo(function DownloadRow({
       <div className="download-main">
         <div className="download-title">
           <strong title={download.filename}>{download.filename}</strong>
-          <span className={`status status-${download.status}`}>{download.status}</span>
+          <span className={`status status-${download.status}`}>
+            {STATUS_LABELS[download.status] ?? download.status}
+          </span>
           {schedule?.enabled && (
             <span
               className="badge-scheduled"

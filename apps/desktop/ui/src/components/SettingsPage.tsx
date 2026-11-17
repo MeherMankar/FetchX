@@ -170,12 +170,13 @@ function BrowserExtensionSection() {
 
             {status.browsers.filter((browser) => browser.detected).map((browser) => (
               <div className="browser-extension-item" key={browser.browser}>
-                <span className="browser-extension-status-icon" aria-hidden="true">
-                  {browser.native_host_registered ? "\u2713" : "\u25cb"}
-                </span>
+                <span
+                  className={`status-dot ${browser.native_host_registered ? "dot-ok" : "dot-idle"}`}
+                  aria-hidden="true"
+                />
                 <span>{browser.browser}</span>
                 <span className="settings-hint">
-                  {browser.native_host_registered ? "Native host ready" : "Native host not registered"}
+                  {browser.native_host_registered ? "Native host ready" : "Not registered"}
                 </span>
                 {!FIREFOX_FAMILY_NAMES.has(browser.browser) && !browser.native_host_registered ? (
                   <button
@@ -511,19 +512,25 @@ function WeeklyQueueScheduleSection({
         </h3>
       </div>
       <div className="settings-row">
-        <label className="settings-label" htmlFor="weekly-schedule-enabled">
-          Weekly download window
-        </label>
+        <span className="settings-label">Weekly download window</span>
         <div className="settings-control">
-          <input
-            id="weekly-schedule-enabled"
-            type="checkbox"
-            checked={schedule.enabled}
-            disabled={busy}
-            onChange={(event) =>
-              setSchedule((current) => ({ ...current, enabled: event.target.checked }))
-            }
-          />
+          <label className="toggle-switch">
+            <input
+              id="weekly-schedule-enabled"
+              type="checkbox"
+              checked={schedule.enabled}
+              disabled={busy}
+              onChange={(event) =>
+                setSchedule((current) => ({ ...current, enabled: event.target.checked }))
+              }
+            />
+            <span className="toggle-track">
+              <span className="toggle-thumb" />
+            </span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {schedule.enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
           <p className="settings-hint">
             Outside this window, new queued downloads wait. Active downloads continue.
             Times use this computer’s local time.
