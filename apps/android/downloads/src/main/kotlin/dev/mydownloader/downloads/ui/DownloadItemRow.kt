@@ -1,25 +1,29 @@
 package dev.fetchx.downloads.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
@@ -95,592 +99,636 @@ fun DownloadItemRow(
     val legacyAria2Unavailable =
         item.engine.equals("aria2", ignoreCase = true) && item.state !is DownloadState.Completed
 
+    // Left-edge status indicator color
+    val statusBarColor = when (item.state) {
+        is DownloadState.Active, is DownloadState.MetadataAcquiring, is DownloadState.Recovering ->
+            MaterialTheme.colorScheme.primary
+        is DownloadState.Completed, is DownloadState.Seeding, is DownloadState.Stopped ->
+            MaterialTheme.colorScheme.tertiary
+        is DownloadState.Failed ->
+            MaterialTheme.colorScheme.error
+        is DownloadState.Paused, is DownloadState.PublicationPending ->
+            MaterialTheme.colorScheme.secondary
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+
     Card(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Row {
+            // 3dp left-edge status bar
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight(),
             ) {
-                Text(
-                    text = item.fileName,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                DownloadStateBadge(item.state)
+                Surface(
+                    modifier = Modifier.matchParentSize(),
+                    color = statusBarColor,
+                ) {}
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Engine badge + priority badge on the same row
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = item.engine,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                PriorityBadge(priority = item.priority)
-            }
-            if (legacyAria2Unavailable) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Legacy aria2 job cannot resume because the external engine was removed.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                if (canOfferNativeRestart(item)) {
-                    TextButton(
-                        onClick = {
-                            onPrepareAria2NativeRestart()
-                            currentSourceUrl = safeAria2SourceSuggestion(item.url)
-                            newDestination = suggestedNativeRestartDestination.orEmpty()
-                            confirmedDirectFile = false
-                            showNativeRestartDialog = true
-                        },
-                    ) {
-                        Text("Restart with native")
-                    }
-                }
-                if (canOfferNativeTorrentRestart(item)) {
-                    TextButton(
-                        onClick = {
-                            onPrepareAria2NativeRestart()
-                            currentMagnetUri = ""
-                            newTorrentDestination =
-                                suggestedNativeTorrentRestartDestination.orEmpty()
-                            confirmedCurrentMagnet = false
-                            showNativeTorrentRestartDialog = true
-                        },
-                    ) {
-                        Text("Restart torrent with native")
-                    }
-                }
-            }
-            when (val state = item.state) {
-                is DownloadState.Active -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    torrentTelemetry?.let { telemetry ->
-                        TorrentTelemetryDetails(telemetry)
-                    }
-
-                    // Capture nullable properties as locals so the compiler can smart-cast them.
-                    val totalBytes = state.totalBytes
-                    val etaSeconds = state.etaSeconds
-
-                    // Progress bar
-                    val progress = if (totalBytes != null && totalBytes > 0) {
-                        state.downloadedBytes.toFloat() / totalBytes.toFloat()
-                    } else {
-                        0f
-                    }.coerceIn(0f, 1f)
-                    if (totalBytes != null) {
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    } else {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Percentage + size line
-                    val sizeText = if (totalBytes != null && totalBytes > 0) {
-                        "${(progress * 100).toInt()}% \u00b7 ${formatBytes(state.downloadedBytes)} / ${formatBytes(totalBytes)}"
-                    } else {
-                        "${formatBytes(state.downloadedBytes)} downloaded"
-                    }
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     Text(
-                        text = sizeText,
-                        style = MaterialTheme.typography.labelMedium,
+                        text = item.fileName,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    DownloadStateBadge(item.state)
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Engine badge + priority badge on the same row
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = item.engine,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    PriorityBadge(priority = item.priority)
+                }
+                if (legacyAria2Unavailable) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Legacy aria2 job cannot resume because the external engine was removed.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    if (canOfferNativeRestart(item)) {
+                        TextButton(
+                            onClick = {
+                                onPrepareAria2NativeRestart()
+                                currentSourceUrl = safeAria2SourceSuggestion(item.url)
+                                newDestination = suggestedNativeRestartDestination.orEmpty()
+                                confirmedDirectFile = false
+                                showNativeRestartDialog = true
+                            },
+                        ) {
+                            Text("Restart with native")
+                        }
+                    }
+                    if (canOfferNativeTorrentRestart(item)) {
+                        TextButton(
+                            onClick = {
+                                onPrepareAria2NativeRestart()
+                                currentMagnetUri = ""
+                                newTorrentDestination =
+                                    suggestedNativeTorrentRestartDestination.orEmpty()
+                                confirmedCurrentMagnet = false
+                                showNativeTorrentRestartDialog = true
+                            },
+                        ) {
+                            Text("Restart torrent with native")
+                        }
+                    }
+                }
+                when (val state = item.state) {
+                    is DownloadState.Active -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        torrentTelemetry?.let { telemetry ->
+                            TorrentTelemetryDetails(telemetry)
+                        }
 
-                    Spacer(modifier = Modifier.height(2.dp))
+                        // Capture nullable properties as locals so the compiler can smart-cast them.
+                        val totalBytes = state.totalBytes
+                        val etaSeconds = state.etaSeconds
 
-                    // Keep transfer details separate from actions on narrow screens.
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Progress bar
+                        val progress = if (totalBytes != null && totalBytes > 0) {
+                            state.downloadedBytes.toFloat() / totalBytes.toFloat()
+                        } else {
+                            0f
+                        }.coerceIn(0f, 1f)
+                        if (totalBytes != null) {
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Percentage + size line
+                        val sizeText = if (totalBytes != null && totalBytes > 0) {
+                            "${(progress * 100).toInt()}% \u00b7 ${formatBytes(state.downloadedBytes)} / ${formatBytes(totalBytes)}"
+                        } else {
+                            "${formatBytes(state.downloadedBytes)} downloaded"
+                        }
                         Text(
-                            text = formatSpeed(state.speedBytesPerSec),
+                            text = sizeText,
                             style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        if (etaSeconds != null) {
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        // Keep transfer details separate from actions on narrow screens.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = " \u2014 ${formatEta(etaSeconds)}",
+                                text = formatSpeed(state.speedBytesPerSec),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                            if (etaSeconds != null) {
+                                Text(
+                                    text = " \u2014 ${formatEta(etaSeconds)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            if (!item.engine.equals("yt_dlp", ignoreCase = true)) {
+                                TextButton(onClick = onPause, enabled = !legacyAria2Unavailable) { Text("Pause") }
+                            }
+                            TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
+                        }
+                    }
+
+                    is DownloadState.Queued -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(onClick = onMoveUpInQueue, enabled = !legacyAria2Unavailable) { Text("Move up") }
+                            TextButton(onClick = onMoveDownInQueue, enabled = !legacyAria2Unavailable) { Text("Move down") }
+                            TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
+                        }
+                    }
+
+                    is DownloadState.MetadataAcquiring -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        torrentMetadata?.metadata?.let { meta ->
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${meta.name} · ${formatBytes(torrentMetadata.selectedTotalBytes)} selected",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                        if (onOpenDetail != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Tap to select files",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable(onClick = onOpenDetail),
+                            )
+                        }
+                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
+                    }
+
+                    is DownloadState.Recovering -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
+                    }
+
+                    is DownloadState.Seeding -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        torrentTelemetry?.let { telemetry ->
+                            TorrentTelemetryDetails(telemetry)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            if (!item.engine.equals("native_torrent", ignoreCase = true)) {
+                                TextButton(onClick = onPause, enabled = !legacyAria2Unavailable) { Text("Pause") }
+                            }
+                            TextButton(onClick = onStopSeeding, enabled = !legacyAria2Unavailable) { Text("Stop seeding") }
+                            if (!item.engine.equals("native_torrent", ignoreCase = true)) {
+                                TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
+                            }
+                        }
+                    }
+
+                    is DownloadState.Paused -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val progress = state.totalBytes?.takeIf { it > 0L }?.let {
+                            state.downloadedBytes.toFloat() / it.toFloat()
+                        }
+                        if (progress != null) {
+                            LinearProgressIndicator(
+                                progress = { progress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth(),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${formatBytes(state.downloadedBytes)} / ${formatBytes(state.totalBytes!!)}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else if (state.downloadedBytes > 0L) {
+                            Text(
+                                text = "${formatBytes(state.downloadedBytes)} downloaded",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        if (!item.engine.equals("yt_dlp", ignoreCase = true)) {
-                            TextButton(onClick = onPause, enabled = !legacyAria2Unavailable) { Text("Pause") }
-                        }
-                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
-                    }
-                }
-
-                is DownloadState.Queued -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        TextButton(onClick = onMoveUpInQueue, enabled = !legacyAria2Unavailable) { Text("Move up") }
-                        TextButton(onClick = onMoveDownInQueue, enabled = !legacyAria2Unavailable) { Text("Move down") }
-                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
-                    }
-                }
-
-                is DownloadState.MetadataAcquiring -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    torrentMetadata?.metadata?.let { meta ->
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "${meta.name} · ${formatBytes(torrentMetadata.selectedTotalBytes)} selected",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                    }
-                    if (onOpenDetail != null) {
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Tap to select files",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable(onClick = onOpenDetail),
-                        )
-                    }
-                    TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
-                }
-
-                is DownloadState.Recovering -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
-                }
-
-                is DownloadState.Seeding -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    torrentTelemetry?.let { telemetry ->
-                        TorrentTelemetryDetails(telemetry)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        if (!item.engine.equals("native_torrent", ignoreCase = true)) {
-                            TextButton(onClick = onPause, enabled = !legacyAria2Unavailable) { Text("Pause") }
-                        }
-                        TextButton(onClick = onStopSeeding, enabled = !legacyAria2Unavailable) { Text("Stop seeding") }
-                        if (!item.engine.equals("native_torrent", ignoreCase = true)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(onClick = onResume, enabled = !legacyAria2Unavailable) { Text("Resume") }
                             TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                         }
                     }
-                }
 
-                is DownloadState.Paused -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val progress = state.totalBytes?.takeIf { it > 0L }?.let {
-                        state.downloadedBytes.toFloat() / it.toFloat()
-                    }
-                    if (progress != null) {
-                        LinearProgressIndicator(
-                            progress = { progress.coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                    is DownloadState.PublicationPending -> {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "${formatBytes(state.downloadedBytes)} / ${formatBytes(state.totalBytes!!)}",
+                            text = "Local download ready; public copy pending",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.tertiary,
                         )
-                    } else if (state.downloadedBytes > 0L) {
                         Text(
-                            text = "${formatBytes(state.downloadedBytes)} downloaded",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        TextButton(onClick = onResume, enabled = !legacyAria2Unavailable) { Text("Resume") }
-                        TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
-                    }
-                }
-
-                is DownloadState.PublicationPending -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Local download ready; public copy pending",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                    Text(
-                        text = state.destinationPath,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        TextButton(onClick = onRetry, enabled = !legacyAria2Unavailable) { Text("Retry") }
-                        TextButton(onClick = onRemove) { Text("Remove") }
-                    }
-                }
-
-                is DownloadState.Completed -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Show destination file name as a hint.
-                    val destFileName = item.fileName.ifBlank { null }
-                    if (destFileName != null) {
-                        Text(
-                            text = destFileName,
+                            text = state.destinationPath,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "${formatBytes(state.totalBytes)} downloaded",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        onPlayFile?.let { playAction ->
-                            IconButton(onClick = playAction) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    contentDescription = "Play",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                        TextButton(onClick = onRemove) { Text("Remove") }
-                    }
-                }
-
-                is DownloadState.Failed -> {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = sanitizeFailureReason(state.reason),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        if (state.retryable) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
                             TextButton(onClick = onRetry, enabled = !legacyAria2Unavailable) { Text("Retry") }
+                            TextButton(onClick = onRemove) { Text("Remove") }
                         }
-                        TextButton(onClick = onRemove) { Text("Remove") }
                     }
-                }
 
-                is DownloadState.Cancelled -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                    ) {
-                        TextButton(onClick = onRemove) { Text("Remove") }
-                    }
-                }
+                    is DownloadState.Completed -> {
+                        Spacer(modifier = Modifier.height(4.dp))
 
-                is DownloadState.Stopped -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = onRemove) { Text("Remove") }
-                }
-            }
-            if (showNativeRestartDialog) {
-                AlertDialog(
-                    onDismissRequest = {
-                        if (aria2NativeRestart?.loading != true) showNativeRestartDialog = false
-                    },
-                    title = { Text("Restart as a separate native download") },
-                    text = {
-                        Column {
+                        // Show destination file name as a hint.
+                        val destFileName = item.fileName.ifBlank { null }
+                        if (destFileName != null) {
                             Text(
-                                "The saved URL is only a suggestion. Confirm or enter its current full HTTP(S) URL. " +
-                                    "Choose a new file path inside FetchX's app-specific downloads folder.",
-                                style = MaterialTheme.typography.bodySmall,
+                                text = destFileName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
-                            OutlinedTextField(
-                                value = currentSourceUrl,
-                                onValueChange = { currentSourceUrl = it },
-                                label = { Text("Current HTTP(S) URL") },
-                                singleLine = true,
-                                enabled = aria2NativeRestart?.loading != true &&
-                                    aria2NativeRestart?.newDownloadId == null,
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = confirmedDirectFile,
-                                    onCheckedChange = { confirmedDirectFile = it },
-                                    enabled = aria2NativeRestart?.loading != true &&
-                                        aria2NativeRestart?.newDownloadId == null,
-                                )
-                                Text(
-                                    "I confirm this is a direct file download, not a torrent, Metalink, or media/streaming job.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            OutlinedTextField(
-                                value = newDestination,
-                                onValueChange = { newDestination = it },
-                                label = { Text("New destination path") },
-                                singleLine = true,
-                                enabled = aria2NativeRestart?.loading != true &&
-                                    aria2NativeRestart?.newDownloadId == null,
-                            )
-                            aria2NativeRestart?.error?.let { error ->
-                                Text(error, color = MaterialTheme.colorScheme.error)
-                            }
-                            aria2NativeRestart?.newDownloadId?.let { newId ->
-                                Text(
-                                    "Created separate native download $newId. The aria2 job and files are unchanged.",
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            }
+                            Spacer(modifier = Modifier.height(4.dp))
                         }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                onRestartAria2WithNative(
-                                    currentSourceUrl,
-                                    newDestination,
-                                    confirmedDirectFile,
-                                )
-                            },
-                            enabled = aria2NativeRestart?.loading != true &&
-                                aria2NativeRestart?.newDownloadId == null &&
-                                currentSourceUrl.isNotBlank() && newDestination.isNotBlank() &&
-                                confirmedDirectFile,
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "${formatBytes(state.totalBytes)} downloaded",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                if (aria2NativeRestart?.loading == true) "Creating…" else "Create native download"
-                            )
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { showNativeRestartDialog = false },
-                            enabled = aria2NativeRestart?.loading != true,
-                        ) {
-                            Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
-                        }
-                    },
-                )
-            }
-            if (showNativeTorrentRestartDialog) {
-                AlertDialog(
-                    onDismissRequest = {
-                        if (aria2NativeRestart?.loading != true) {
-                            showNativeTorrentRestartDialog = false
-                        }
-                    },
-                    title = { Text("Restart torrent as a separate native download") },
-                    text = {
-                        Column {
-                            Text(
-                                "Provide a current v1 magnet URI or choose a .torrent file. FetchX verifies its info hash against the saved aria2 torrent.",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Row {
-                                TextButton(
-                                    onClick = {
-                                        restartFromTorrentFile = false
-                                        currentTorrentMetadata = null
-                                    },
-                                    enabled = aria2NativeRestart?.loading != true,
-                                ) { Text("Use magnet") }
-                                TextButton(
-                                    onClick = {
-                                        restartFromTorrentFile = true
-                                        currentTorrentMetadata = null
-                                        selectedRestartTorrentFiles = emptySet()
-                                        confirmedRestartTorrentSelection = false
-                                        onChooseAria2TorrentFile { path, metadata ->
-                                            currentTorrentPath = path
-                                            currentTorrentMetadata = metadata
-                                            selectedRestartTorrentFiles = emptySet()
-                                            confirmedRestartTorrentSelection = false
-                                        }
-                                    },
-                                    enabled = aria2NativeRestart?.loading != true &&
-                                        aria2NativeRestart?.newDownloadId == null,
-                                ) { Text("Choose .torrent file") }
-                            }
-                            if (restartFromTorrentFile) {
-                                Text(
-                                    currentTorrentPath.ifBlank { "No .torrent file selected" },
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                                currentTorrentMetadata?.let { metadata ->
-                                    Text(
-                                        "${metadata.name} · ${metadata.infoHash}",
-                                        style = MaterialTheme.typography.bodySmall,
+                            onPlayFile?.let { playAction ->
+                                IconButton(onClick = playAction) {
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        contentDescription = "Play",
+                                        tint = MaterialTheme.colorScheme.primary,
                                     )
-                                    LazyColumn(
-                                        modifier = Modifier.heightIn(max = 240.dp),
-                                    ) {
-                                        items(metadata.files, key = { it.index }) { file ->
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Checkbox(
-                                                    checked = file.index in selectedRestartTorrentFiles,
-                                                    onCheckedChange = { selected ->
-                                                        selectedRestartTorrentFiles =
-                                                            if (selected) {
-                                                                selectedRestartTorrentFiles + file.index
-                                                            } else {
-                                                                selectedRestartTorrentFiles - file.index
-                                                            }
-                                                        confirmedRestartTorrentSelection = false
-                                                    },
-                                                    enabled = aria2NativeRestart?.loading != true &&
-                                                        aria2NativeRestart?.newDownloadId == null,
-                                                )
-                                                Text(
-                                                    "${file.path} (${file.sizeBytes} bytes)",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                )
-                                            }
-                                        }
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Checkbox(
-                                            checked = confirmedRestartTorrentSelection,
-                                            onCheckedChange = { confirmedRestartTorrentSelection = it },
-                                            enabled = selectedRestartTorrentFiles.isNotEmpty() &&
-                                                aria2NativeRestart?.loading != true,
-                                        )
-                                        Text(
-                                            "I reviewed the file list and selected the content to restart.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                        )
-                                    }
                                 }
-                            } else {
+                            }
+                            TextButton(onClick = onRemove) { Text("Remove") }
+                        }
+                    }
+
+                    is DownloadState.Failed -> {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = sanitizeFailureReason(state.reason),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            if (state.retryable) {
+                                TextButton(onClick = onRetry, enabled = !legacyAria2Unavailable) { Text("Retry") }
+                            }
+                            TextButton(onClick = onRemove) { Text("Remove") }
+                        }
+                    }
+
+                    is DownloadState.Cancelled -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                        ) {
+                            TextButton(onClick = onRemove) { Text("Remove") }
+                        }
+                    }
+
+                    is DownloadState.Stopped -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextButton(onClick = onRemove) { Text("Remove") }
+                    }
+                }
+                if (showNativeRestartDialog) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            if (aria2NativeRestart?.loading != true) showNativeRestartDialog = false
+                        },
+                        title = { Text("Restart as a separate native download") },
+                        text = {
+                            Column {
+                                Text(
+                                    "The saved URL is only a suggestion. Confirm or enter its current full HTTP(S) URL. " +
+                                        "Choose a new file path inside FetchX's app-specific downloads folder.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
                                 OutlinedTextField(
-                                    value = currentMagnetUri,
-                                    onValueChange = { currentMagnetUri = it },
-                                    label = { Text("Current v1 magnet URI") },
+                                    value = currentSourceUrl,
+                                    onValueChange = { currentSourceUrl = it },
+                                    label = { Text("Current HTTP(S) URL") },
                                     singleLine = true,
                                     enabled = aria2NativeRestart?.loading != true &&
                                         aria2NativeRestart?.newDownloadId == null,
                                 )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Switch(
+                                        checked = confirmedDirectFile,
+                                        onCheckedChange = { confirmedDirectFile = it },
+                                        enabled = aria2NativeRestart?.loading != true &&
+                                            aria2NativeRestart?.newDownloadId == null,
+                                    )
+                                    Text(
+                                        "I confirm this is a direct file download, not a torrent, Metalink, or media/streaming job.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = newDestination,
+                                    onValueChange = { newDestination = it },
+                                    label = { Text("New destination path") },
+                                    singleLine = true,
+                                    enabled = aria2NativeRestart?.loading != true &&
+                                        aria2NativeRestart?.newDownloadId == null,
+                                )
+                                aria2NativeRestart?.error?.let { error ->
+                                    Text(error, color = MaterialTheme.colorScheme.error)
+                                }
+                                aria2NativeRestart?.newDownloadId?.let { newId ->
+                                    Text(
+                                        "Created separate native download $newId. The aria2 job and files are unchanged.",
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
                             }
-                            OutlinedTextField(
-                                value = newTorrentDestination,
-                                onValueChange = { newTorrentDestination = it },
-                                label = { Text("New destination directory") },
-                                singleLine = true,
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    onRestartAria2WithNative(
+                                        currentSourceUrl,
+                                        newDestination,
+                                        confirmedDirectFile,
+                                    )
+                                },
                                 enabled = aria2NativeRestart?.loading != true &&
-                                    aria2NativeRestart?.newDownloadId == null,
-                            )
-                            Text(
-                                "Choose a new directory inside FetchX's app-specific downloads folder. Existing output and partial data are never reused.",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = confirmedCurrentMagnet,
-                                    onCheckedChange = { confirmedCurrentMagnet = it },
+                                    aria2NativeRestart?.newDownloadId == null &&
+                                    currentSourceUrl.isNotBlank() && newDestination.isNotBlank() &&
+                                    confirmedDirectFile,
+                            ) {
+                                Text(
+                                    if (aria2NativeRestart?.loading == true) "Creating..." else "Create native download"
+                                )
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { showNativeRestartDialog = false },
+                                enabled = aria2NativeRestart?.loading != true,
+                            ) {
+                                Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
+                            }
+                        },
+                    )
+                }
+                if (showNativeTorrentRestartDialog) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            if (aria2NativeRestart?.loading != true) {
+                                showNativeTorrentRestartDialog = false
+                            }
+                        },
+                        title = { Text("Restart torrent as a separate native download") },
+                        text = {
+                            Column {
+                                Text(
+                                    "Provide a current v1 magnet URI or choose a .torrent file. FetchX verifies its info hash against the saved aria2 torrent.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Row {
+                                    TextButton(
+                                        onClick = {
+                                            restartFromTorrentFile = false
+                                            currentTorrentMetadata = null
+                                        },
+                                        enabled = aria2NativeRestart?.loading != true,
+                                    ) { Text("Use magnet") }
+                                    TextButton(
+                                        onClick = {
+                                            restartFromTorrentFile = true
+                                            currentTorrentMetadata = null
+                                            selectedRestartTorrentFiles = emptySet()
+                                            confirmedRestartTorrentSelection = false
+                                            onChooseAria2TorrentFile { path, metadata ->
+                                                currentTorrentPath = path
+                                                currentTorrentMetadata = metadata
+                                                selectedRestartTorrentFiles = emptySet()
+                                                confirmedRestartTorrentSelection = false
+                                            }
+                                        },
+                                        enabled = aria2NativeRestart?.loading != true &&
+                                            aria2NativeRestart?.newDownloadId == null,
+                                    ) { Text("Choose .torrent file") }
+                                }
+                                if (restartFromTorrentFile) {
+                                    Text(
+                                        currentTorrentPath.ifBlank { "No .torrent file selected" },
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    currentTorrentMetadata?.let { metadata ->
+                                        Text(
+                                            "${metadata.name} · ${metadata.infoHash}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        LazyColumn(
+                                            modifier = Modifier.heightIn(max = 240.dp),
+                                        ) {
+                                            items(metadata.files, key = { it.index }) { file ->
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Switch(
+                                                        checked = file.index in selectedRestartTorrentFiles,
+                                                        onCheckedChange = { selected ->
+                                                            selectedRestartTorrentFiles =
+                                                                if (selected) {
+                                                                    selectedRestartTorrentFiles + file.index
+                                                                } else {
+                                                                    selectedRestartTorrentFiles - file.index
+                                                                }
+                                                            confirmedRestartTorrentSelection = false
+                                                        },
+                                                        enabled = aria2NativeRestart?.loading != true &&
+                                                            aria2NativeRestart?.newDownloadId == null,
+                                                    )
+                                                    Text(
+                                                        "${file.path} (${file.sizeBytes} bytes)",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        ) {
+                                            Switch(
+                                                checked = confirmedRestartTorrentSelection,
+                                                onCheckedChange = { confirmedRestartTorrentSelection = it },
+                                                enabled = selectedRestartTorrentFiles.isNotEmpty() &&
+                                                    aria2NativeRestart?.loading != true,
+                                            )
+                                            Text(
+                                                "I reviewed the file list and selected the content to restart.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    OutlinedTextField(
+                                        value = currentMagnetUri,
+                                        onValueChange = { currentMagnetUri = it },
+                                        label = { Text("Current v1 magnet URI") },
+                                        singleLine = true,
+                                        enabled = aria2NativeRestart?.loading != true &&
+                                            aria2NativeRestart?.newDownloadId == null,
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = newTorrentDestination,
+                                    onValueChange = { newTorrentDestination = it },
+                                    label = { Text("New destination directory") },
+                                    singleLine = true,
                                     enabled = aria2NativeRestart?.loading != true &&
                                         aria2NativeRestart?.newDownloadId == null,
                                 )
                                 Text(
-                                    "I confirm this is the current source for the saved torrent and will select files on the new job.",
+                                    "Choose a new directory inside FetchX's app-specific downloads folder. Existing output and partial data are never reused.",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
-                            }
-                            aria2NativeRestart?.error?.let { error ->
-                                Text(error, color = MaterialTheme.colorScheme.error)
-                            }
-                            aria2NativeRestart?.newDownloadId?.let { newId ->
-                                Text(
-                                    "Created separate native torrent $newId. Open it to review the file list and confirm a fresh selection. The aria2 job is unchanged.",
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                if (restartFromTorrentFile) {
-                                    onRestartAria2TorrentFileWithNative(
-                                        currentTorrentPath,
-                                        newTorrentDestination,
-                                        selectedRestartTorrentFiles.sorted(),
-                                        confirmedCurrentMagnet,
-                                        confirmedRestartTorrentSelection,
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Switch(
+                                        checked = confirmedCurrentMagnet,
+                                        onCheckedChange = { confirmedCurrentMagnet = it },
+                                        enabled = aria2NativeRestart?.loading != true &&
+                                            aria2NativeRestart?.newDownloadId == null,
                                     )
-                                } else {
-                                    onRestartAria2TorrentWithNative(
-                                        currentMagnetUri,
-                                        newTorrentDestination,
-                                        confirmedCurrentMagnet,
+                                    Text(
+                                        "I confirm this is the current source for the saved torrent and will select files on the new job.",
+                                        style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
-                            },
-                            enabled = aria2NativeRestart?.loading != true &&
-                                aria2NativeRestart?.newDownloadId == null &&
-                                (if (restartFromTorrentFile) {
-                                    currentTorrentPath.isNotBlank() &&
-                                        currentTorrentMetadata != null &&
-                                        selectedRestartTorrentFiles.isNotEmpty() &&
-                                        confirmedRestartTorrentSelection
-                                } else {
-                                    currentMagnetUri.startsWith("magnet:")
-                                }) &&
-                                newTorrentDestination.isNotBlank() &&
-                                confirmedCurrentMagnet,
-                        ) {
-                            Text(
-                                if (aria2NativeRestart?.loading == true) "Creating…" else "Create native torrent"
-                            )
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { showNativeTorrentRestartDialog = false },
-                            enabled = aria2NativeRestart?.loading != true,
-                        ) {
-                            Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
-                        }
-                    },
-                )
+                                aria2NativeRestart?.error?.let { error ->
+                                    Text(error, color = MaterialTheme.colorScheme.error)
+                                }
+                                aria2NativeRestart?.newDownloadId?.let { newId ->
+                                    Text(
+                                        "Created separate native torrent $newId. Open it to review the file list and confirm a fresh selection. The aria2 job is unchanged.",
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    if (restartFromTorrentFile) {
+                                        onRestartAria2TorrentFileWithNative(
+                                            currentTorrentPath,
+                                            newTorrentDestination,
+                                            selectedRestartTorrentFiles.sorted(),
+                                            confirmedCurrentMagnet,
+                                            confirmedRestartTorrentSelection,
+                                        )
+                                    } else {
+                                        onRestartAria2TorrentWithNative(
+                                            currentMagnetUri,
+                                            newTorrentDestination,
+                                            confirmedCurrentMagnet,
+                                        )
+                                    }
+                                },
+                                enabled = aria2NativeRestart?.loading != true &&
+                                    aria2NativeRestart?.newDownloadId == null &&
+                                    (if (restartFromTorrentFile) {
+                                        currentTorrentPath.isNotBlank() &&
+                                            currentTorrentMetadata != null &&
+                                            selectedRestartTorrentFiles.isNotEmpty() &&
+                                            confirmedRestartTorrentSelection
+                                    } else {
+                                        currentMagnetUri.startsWith("magnet:")
+                                    }) &&
+                                    newTorrentDestination.isNotBlank() &&
+                                    confirmedCurrentMagnet,
+                            ) {
+                                Text(
+                                    if (aria2NativeRestart?.loading == true) "Creating..." else "Create native torrent"
+                                )
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { showNativeTorrentRestartDialog = false },
+                                enabled = aria2NativeRestart?.loading != true,
+                            ) {
+                                Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
+                            }
+                        },
+                    )
+                }
             }
         }
     }
@@ -761,7 +809,7 @@ private fun DownloadStateBadge(state: DownloadState) {
     }
 
     Surface(
-        shape = MaterialTheme.shapes.small,
+        shape = MaterialTheme.shapes.extraSmall,
         color = containerColor,
     ) {
         Text(
@@ -805,7 +853,7 @@ private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {
     )
 }
 
-// ── Priority badge ──────────────────────────────────────────────────────────────
+// -- Priority badge --
 
 @Composable
 private fun PriorityBadge(priority: DownloadPriority) {
@@ -827,12 +875,12 @@ private fun PriorityBadge(priority: DownloadPriority) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
         )
     }
 }
 
-// ── Formatting helpers ──────────────────────────────────────────────────────────
+// -- Formatting helpers --
 
 internal fun formatSpeed(bytesPerSec: Long): String = when {
     bytesPerSec >= 1_048_576 -> String.format("%.1f MB/s", bytesPerSec / 1_048_576.0)

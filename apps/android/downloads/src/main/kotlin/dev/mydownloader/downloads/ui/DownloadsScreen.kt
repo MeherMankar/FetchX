@@ -188,7 +188,10 @@ fun DownloadsScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }) {
+            FloatingActionButton(
+                onClick = { showAddDialog = true },
+                containerColor = MaterialTheme.colorScheme.primary,
+            ) {
                 Icon(Icons.Default.Add, contentDescription = "Add download")
             }
         },

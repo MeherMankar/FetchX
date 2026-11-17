@@ -15,7 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -304,7 +304,7 @@ fun AddDownloadDialog(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                         ) {
-                            Checkbox(
+                            Switch(
                                 checked = file.index in selectedTorrentFiles,
                                 onCheckedChange = { checked ->
                                     selectedTorrentFiles = if (checked) {
