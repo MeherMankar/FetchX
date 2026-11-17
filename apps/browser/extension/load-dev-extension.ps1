@@ -1,13 +1,13 @@
-# FetchX Browser Extension — Developer Mode Loader
+# FetchX Browser Extension - Developer Mode Loader
 #
 # Run this script to find and open the built extension folder so you can
 # load it in Chrome / Edge / Brave / Vivaldi in developer mode.
 #
 # Usage:
-#   .\load-dev-extension.ps1              # Chromium (default)
-#   .\load-dev-extension.ps1 -Firefox     # Firefox (opens dist-firefox)
+#   .\load-dev-extension.ps1           # Chromium (default)
+#   .\load-dev-extension.ps1 -Firefox  # Firefox (opens dist-firefox)
 #
-# Prerequisites: run `npm run build` in this directory first.
+# Prerequisites: run "npm run build" in this directory first.
 
 param([switch]$Firefox)
 
@@ -28,7 +28,7 @@ if (-not (Test-Path $ExtDir)) {
 }
 
 Write-Host ""
-Write-Host "FetchX Extension — $Browser developer mode" -ForegroundColor Cyan
+Write-Host "FetchX Extension - $Browser developer mode" -ForegroundColor Cyan
 Write-Host "Extension folder: $ExtDir" -ForegroundColor Green
 Write-Host ""
 
@@ -45,8 +45,8 @@ if ($Firefox) {
     Write-Host "       Edge:    edge://extensions"
     Write-Host "       Brave:   brave://extensions"
     Write-Host "       Vivaldi: vivaldi://extensions"
-    Write-Host "  2. Enable 'Developer mode' (toggle in the top-right corner)"
-    Write-Host "  3. Click 'Load unpacked'"
+    Write-Host "  2. Enable Developer mode (toggle in the top-right corner)"
+    Write-Host "  3. Click Load unpacked"
     Write-Host "  4. Select this folder:"
     Write-Host "     $ExtDir" -ForegroundColor Green
 }
@@ -57,5 +57,7 @@ Start-Process explorer.exe $ExtDir
 
 Write-Host ""
 Write-Host "After loading, also run the native host setup:" -ForegroundColor Yellow
-Write-Host "  .\apps\browser\native-host\manifest\install-windows.ps1"
+$NativeHostScript = Join-Path (Split-Path -Parent $ScriptDir) "native-host\manifest\install-windows.ps1"
+$NativeHostScript = $NativeHostScript.Replace($ScriptDir + "\", ".\").Replace($ScriptDir, ".")
+Write-Host "  $NativeHostScript"
 Write-Host ""
