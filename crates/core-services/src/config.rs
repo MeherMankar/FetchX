@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use fetchx_models::{ResourcePolicy, WeeklyQueueSchedule, DrmConfig};
+use fetchx_models::{DrmConfig, ResourcePolicy, WeeklyQueueSchedule};
 use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";

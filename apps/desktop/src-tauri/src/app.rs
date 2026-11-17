@@ -70,7 +70,10 @@ fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
             if status == fetchx_models::DownloadStatus::Completed {
                 emit_notification(app, &format!("Download complete: {fname}"), "");
             } else if status == fetchx_models::DownloadStatus::Failed {
-                let err = item.error().map(|e| e.message().to_owned()).unwrap_or_default();
+                let err = item
+                    .error()
+                    .map(|e| e.message().to_owned())
+                    .unwrap_or_default();
                 emit_notification(app, &format!("Download failed: {fname}"), &err);
             }
             let payload = DownloadUpdatedEvent {
@@ -88,8 +91,19 @@ fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                 tracing::warn!(%error, event = DOWNLOAD_REMOVED, "could not emit desktop event");
             }
         }
-        DownloadEvent::QueueStats { speed_bps, active_count, queued_count, estimated_completion_seconds, .. } => {
-            let payload = crate::events::QueueStatsEvent { speed_bps, active_count, queued_count, estimated_completion_seconds };
+        DownloadEvent::QueueStats {
+            speed_bps,
+            active_count,
+            queued_count,
+            estimated_completion_seconds,
+            ..
+        } => {
+            let payload = crate::events::QueueStatsEvent {
+                speed_bps,
+                active_count,
+                queued_count,
+                estimated_completion_seconds,
+            };
             if let Err(error) = app.emit(crate::events::QUEUE_STATS_UPDATED, payload) {
                 tracing::warn!(%error, "could not emit queue stats event");
             }
@@ -106,8 +120,17 @@ fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
 
 fn emit_notification(app: &tauri::AppHandle, title: &str, body: &str) {
     #[derive(Clone, serde::Serialize)]
-    struct NotificationPayload { title: String, body: String }
-    let _ = app.emit("fetchx-notification", NotificationPayload { title: title.to_owned(), body: body.to_owned() });
+    struct NotificationPayload {
+        title: String,
+        body: String,
+    }
+    let _ = app.emit(
+        "fetchx-notification",
+        NotificationPayload {
+            title: title.to_owned(),
+            body: body.to_owned(),
+        },
+    );
 }
 
 fn update_tray(app: &tauri::AppHandle, active_count: u32, speed_bps: u64) {
@@ -317,14 +340,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .tooltip("FetchX â idle")
                     .menu(&menu)
                     .on_menu_event(|app, event| match event.id().as_ref() {
-                        "open" => { if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); } }
-                        "quit" => { app.exit(0); }
+                        "open" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
                         _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {
                         if let tauri::tray::TrayIconEvent::Click { .. } = event {
                             let app = tray.app_handle();
-                            if let Some(w) = app.get_webview_window("main") { let _ = w.show(); let _ = w.set_focus(); }
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
                         }
                     })
                     .build(app)?;

@@ -1,4 +1,4 @@
-﻿use std::{
+use std::{
     cmp::Reverse,
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -527,7 +527,11 @@ impl RuntimeResourceManager {
         })
     }
 
-    fn bandwidth_for(&self, engine: EngineKind, per_download_override: Option<u64>) -> Result<BandwidthControl, QueueError> {
+    fn bandwidth_for(
+        &self,
+        engine: EngineKind,
+        per_download_override: Option<u64>,
+    ) -> Result<BandwidthControl, QueueError> {
         let engine_limiter = self.engine_bandwidth.get(&engine).cloned();
         let global_download_share = self
             .policy
@@ -858,7 +862,8 @@ where
         let entry = entries.get(&id).ok_or(QueueError::ResourceInvariant)?;
         let priority = entry.item.priority();
         let per_download_limit = entry.item.source().bandwidth_limit_bps();
-        let bandwidth = resources.bandwidth_for(entry.item.source().engine(), per_download_limit)?;
+        let bandwidth =
+            resources.bandwidth_for(entry.item.source().engine(), per_download_limit)?;
         match last_priority {
             Some(previous) if *previous == priority => {
                 *consecutive_priority_starts = consecutive_priority_starts.saturating_add(1);
@@ -4424,4 +4429,3 @@ mod tests {
         assert_eq!(used_connections(&workers), 3);
     }
 }
-

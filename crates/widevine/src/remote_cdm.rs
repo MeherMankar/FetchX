@@ -105,7 +105,11 @@ impl RemoteCdm {
         Ok(parsed.data.session_id)
     }
 
-    async fn get_challenge(&self, session_id: &str, pssh: &[u8]) -> Result<Vec<u8>, RemoteCdmError> {
+    async fn get_challenge(
+        &self,
+        session_id: &str,
+        pssh: &[u8],
+    ) -> Result<Vec<u8>, RemoteCdmError> {
         let init_data = BASE64.encode(pssh);
         let body = serde_json::json!({
             "session_id": session_id,

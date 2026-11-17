@@ -35,8 +35,8 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
-use crate::http_auth::{AuthKind, basic_header, digest_header, parse_www_authenticate};
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
+use crate::http_auth::{AuthKind, basic_header, digest_header, parse_www_authenticate};
 use crate::retry::{RetryPolicy, retry_after_delay};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{BandwidthControl, DownloadEngine, DownloadEngineError};
@@ -1464,10 +1464,12 @@ where
                     .get("www-authenticate")
                     .and_then(|v| v.to_str().ok())
                     .and_then(parse_www_authenticate);
-                let username = extra_headers.iter()
+                let username = extra_headers
+                    .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("x-fetchx-auth-username"))
                     .map(|(_, v)| v.as_str());
-                let password = extra_headers.iter()
+                let password = extra_headers
+                    .iter()
                     .find(|(k, _)| k.eq_ignore_ascii_case("x-fetchx-auth-password"))
                     .map(|(_, v)| v.as_str());
                 if let (Some(challenge), Some(user), Some(pass)) = (www_auth, username, password) {

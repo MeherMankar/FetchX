@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::post_queue_action::PostQueueAction;
@@ -321,7 +321,10 @@ mod tests {
             ResourceProfile::Night,
         ] {
             let policy = ResourcePolicy::for_profile(profile);
-            assert!(policy.validate().is_ok(), "profile {profile:?} should validate");
+            assert!(
+                policy.validate().is_ok(),
+                "profile {profile:?} should validate"
+            );
         }
     }
 
@@ -384,12 +387,15 @@ mod tests {
     #[test]
     fn zero_limit_bps_rejected_by_policy() {
         let mut policy = ResourcePolicy::default();
-        policy.weekly_bandwidth_schedule.windows.push(BandwidthWindow {
-            weekdays: [true; 7],
-            start_minute: 0,
-            end_minute: 60,
-            limit_bps: 0,
-        });
+        policy
+            .weekly_bandwidth_schedule
+            .windows
+            .push(BandwidthWindow {
+                weekdays: [true; 7],
+                start_minute: 0,
+                end_minute: 60,
+                limit_bps: 0,
+            });
         assert_eq!(policy.validate(), Err(ResourcePolicyError::BandwidthLimit));
     }
 }

@@ -1,7 +1,6 @@
-﻿//! HTTP Basic and Digest (RFC 7616) authentication helpers.
+//! HTTP Basic and Digest (RFC 7616) authentication helpers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-
 
 /// Parsed fields from a `WWW-Authenticate` header.
 pub struct WwwAuthenticate {
@@ -33,7 +32,10 @@ pub fn basic_header(username: &str, password: &str) -> String {
 /// Parse a `WWW-Authenticate` header value into its fields.
 pub fn parse_www_authenticate(header: &str) -> Option<WwwAuthenticate> {
     let header = header.trim();
-    if let Some(rest) = header.strip_prefix("Basic ").or_else(|| header.strip_prefix("basic ")) {
+    if let Some(rest) = header
+        .strip_prefix("Basic ")
+        .or_else(|| header.strip_prefix("basic "))
+    {
         let realm = extract_param(rest, "realm").unwrap_or_default();
         return Some(WwwAuthenticate {
             kind: AuthKind::Basic,
@@ -44,13 +46,19 @@ pub fn parse_www_authenticate(header: &str) -> Option<WwwAuthenticate> {
             algorithm: DigestAlgorithm::Md5,
         });
     }
-    if let Some(rest) = header.strip_prefix("Digest ").or_else(|| header.strip_prefix("digest ")) {
+    if let Some(rest) = header
+        .strip_prefix("Digest ")
+        .or_else(|| header.strip_prefix("digest "))
+    {
         let realm = extract_param(rest, "realm").unwrap_or_default();
         let nonce = extract_param(rest, "nonce").unwrap_or_default();
         let opaque = extract_param(rest, "opaque");
         let qop_raw = extract_param(rest, "qop");
         let qop = qop_raw.as_deref().and_then(|q| {
-            q.split(',').map(str::trim).find(|s| *s == "auth").map(str::to_owned)
+            q.split(',')
+                .map(str::trim)
+                .find(|s| *s == "auth")
+                .map(str::to_owned)
         });
         let algorithm_str = extract_param(rest, "algorithm")
             .unwrap_or_else(|| "MD5".to_owned())
@@ -93,7 +101,11 @@ pub fn digest_header(
 
     let response = if challenge.qop.as_deref() == Some("auth") {
         hex_md5(
-            format!("{}:{}:{}:{}:{}:{}", ha1, challenge.nonce, nc, cnonce, "auth", ha2).as_bytes(),
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                ha1, challenge.nonce, nc, cnonce, "auth", ha2
+            )
+            .as_bytes(),
         )
     } else {
         hex_md5(format!("{}:{}:{}", ha1, challenge.nonce, ha2).as_bytes())
@@ -109,10 +121,7 @@ pub fn digest_header(
     }
 
     if challenge.qop.is_some() {
-        header.push_str(&format!(
-            r#", qop=auth, nc={}, cnonce="{}""#,
-            nc, cnonce
-        ));
+        header.push_str(&format!(r#", qop=auth, nc={}, cnonce="{}""#, nc, cnonce));
     }
 
     header
@@ -149,9 +158,8 @@ mod tests {
 
     #[test]
     fn parses_digest_challenge() {
-        let parsed = parse_www_authenticate(
-            r#"Digest realm="test", nonce="abc123", qop="auth""#
-        ).unwrap();
+        let parsed =
+            parse_www_authenticate(r#"Digest realm="test", nonce="abc123", qop="auth""#).unwrap();
         assert!(matches!(parsed.kind, AuthKind::Digest));
         assert_eq!(parsed.nonce, "abc123");
         assert_eq!(parsed.qop.as_deref(), Some("auth"));
@@ -162,11 +170,11 @@ mod tests {
         let header = basic_header("user", "pass");
         assert!(header.starts_with("Basic "));
         let decoded = String::from_utf8(
-            BASE64.decode(header.strip_prefix("Basic ").unwrap()).unwrap()
-        ).unwrap();
+            BASE64
+                .decode(header.strip_prefix("Basic ").unwrap())
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(decoded, "user:pass");
     }
 }
-
-
-

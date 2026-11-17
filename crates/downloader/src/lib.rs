@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
 mod adaptive;
-mod drm_router;
 mod bandwidth;
 mod dispatcher;
+mod drm_router;
 mod engine;
 mod error;
 mod ffmpeg;
@@ -26,16 +26,17 @@ mod widevine_provider;
 mod ytdlp;
 
 pub use adaptive::AdaptiveConfig;
-pub use drm_router::{DrmSystem, detect_drm_system};
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::{EngineDispatcher, is_dash_url};
+pub use drm_router::{DrmSystem, detect_drm_system};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use ffmpeg::{
-    FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo, write_metadata,
+    FfmpegConfig, FfmpegError, FfmpegProcessor, FrameRate, MediaContainer, MediaInfo,
     MediaOperation, MediaProcessOutput, MediaProcessRequest, MediaStream, MediaStreamKind,
-    MetadataOverride, TranscodePreset,
-};pub use ftp::{FtpEngine, FtpEngineConfig};
+    MetadataOverride, TranscodePreset, write_metadata,
+};
+pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 #[cfg(feature = "phase30-queue-fault-injection")]
 pub use http::inject_next_write_failure;

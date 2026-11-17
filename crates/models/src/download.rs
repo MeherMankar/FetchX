@@ -1,4 +1,4 @@
-﻿use std::path::PathBuf;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -396,20 +396,20 @@ impl TryFrom<DownloadSourceRepr> for DownloadSource {
         let source = Self::new(value.url, value.engine)?;
         match (value.yt_dlp_format, value.yt_dlp_audio_format) {
             (Some(format_id), None) => {
-            let mut source = source.with_yt_dlp_format(format_id)?;
-            source.bandwidth_limit_bps = value.bandwidth_limit_bps;
-            Ok(source)
-        }
+                let mut source = source.with_yt_dlp_format(format_id)?;
+                source.bandwidth_limit_bps = value.bandwidth_limit_bps;
+                Ok(source)
+            }
             (None, Some(audio_format)) => {
-            let mut source = source.with_yt_dlp_audio_format(audio_format)?;
-            source.bandwidth_limit_bps = value.bandwidth_limit_bps;
-            Ok(source)
-        }
+                let mut source = source.with_yt_dlp_audio_format(audio_format)?;
+                source.bandwidth_limit_bps = value.bandwidth_limit_bps;
+                Ok(source)
+            }
             (None, None) => {
-            let mut source = source;
-            source.bandwidth_limit_bps = value.bandwidth_limit_bps;
-            Ok(source)
-        }
+                let mut source = source;
+                source.bandwidth_limit_bps = value.bandwidth_limit_bps;
+                Ok(source)
+            }
             (Some(_), Some(_)) => Err(DownloadSourceError::InvalidYtDlpAudioFormat),
         }
     }
@@ -1000,6 +1000,3 @@ mod tests {
         Ok(())
     }
 }
-
-
-

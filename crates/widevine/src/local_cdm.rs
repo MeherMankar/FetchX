@@ -159,9 +159,7 @@ fn build_signed_license_request(
 
     // Sign the request with RSA-PSS-SHA1.
     let signing_key = rsa::pss::SigningKey::<sha1::Sha1>::new(private_key);
-    let signature = signing_key
-        .sign_with_rng(&mut rng, &request_bytes)
-        .to_vec();
+    let signature = signing_key.sign_with_rng(&mut rng, &request_bytes).to_vec();
 
     let signed = SignedMessage {
         r#type: Some(MessageType::LicenseRequest as i32),
@@ -219,8 +217,8 @@ fn extract_keys_from_response(
     let session_key = private_key.decrypt(padding, wrapped_key)?;
 
     // Step 6: Derive encryption and MAC keys.
-    let session_keys = derive_session_keys(request_bytes, &session_key)
-        .map_err(|_| LocalCdmError::CmacLength)?;
+    let session_keys =
+        derive_session_keys(request_bytes, &session_key).map_err(|_| LocalCdmError::CmacLength)?;
 
     // Step 7: Verify HMAC-SHA256 response signature.
     let msg_bytes = response
@@ -306,7 +304,10 @@ fn decrypt_aes_128_cbc_pkcs7(
         return Err(LocalCdmError::BadPadding);
     }
     // Verify all padding bytes.
-    let new_len = data.len().checked_sub(pad_len).ok_or(LocalCdmError::BadPadding)?;
+    let new_len = data
+        .len()
+        .checked_sub(pad_len)
+        .ok_or(LocalCdmError::BadPadding)?;
     for &b in &data[new_len..] {
         if b as usize != pad_len {
             return Err(LocalCdmError::BadPadding);
@@ -382,9 +383,8 @@ fn verify_response_signature(
         return Err(LocalCdmError::BadSignature);
     };
 
-    let mut digester =
-        <hmac::Hmac<sha2::Sha256> as KeyInit>::new_from_slice(mac_server_key)
-            .expect("HMAC-SHA256 accepts any key length");
+    let mut digester = <hmac::Hmac<sha2::Sha256> as KeyInit>::new_from_slice(mac_server_key)
+        .expect("HMAC-SHA256 accepts any key length");
     digester.update(msg);
     let expected = digester.finalize().into_bytes();
 

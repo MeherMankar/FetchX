@@ -1,4 +1,4 @@
-﻿//! Native parallel HLS (HTTP Live Streaming) download engine.
+//! Native parallel HLS (HTTP Live Streaming) download engine.
 //!
 //! # How it works
 //!
@@ -174,7 +174,8 @@ where
                 builder = builder.proxy(proxy);
             }
         }
-        let client = builder.build()
+        let client = builder
+            .build()
             .map_err(DownloadEngineError::ClientConfiguration)?;
         Ok(Self {
             state_machine: DownloadStateMachine::new(repository.clone()),
@@ -1303,7 +1304,9 @@ fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEn
         )));
     }
 
-    Ok(PlaylistKind::Media(parse_media_playlist_info(&lines, base_url)?))
+    Ok(PlaylistKind::Media(parse_media_playlist_info(
+        &lines, base_url,
+    )?))
 }
 
 fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
@@ -1337,7 +1340,11 @@ fn parse_media_playlist_info(
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(2);
     let segments = parse_media_playlist(lines, base_url)?;
-    Ok(MediaPlaylistInfo { segments, has_endlist, target_duration_secs })
+    Ok(MediaPlaylistInfo {
+        segments,
+        has_endlist,
+        target_duration_secs,
+    })
 }
 
 fn parse_media_playlist(
@@ -2669,6 +2676,3 @@ seg0.ts
         Ok(())
     }
 }
-
-
-

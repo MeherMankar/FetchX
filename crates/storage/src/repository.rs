@@ -23,7 +23,10 @@ pub trait DownloadRepository: Send + Sync {
     fn list(&self) -> impl Future<Output = Result<Vec<DownloadItem>, StorageError>> + Send;
 
     /// Lists completed downloads ordered by most-recently-completed first.
-    fn list_completed(&self, limit: usize) -> impl Future<Output = Result<Vec<DownloadItem>, StorageError>> + Send;
+    fn list_completed(
+        &self,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<DownloadItem>, StorageError>> + Send;
 
     /// Moves an existing item to the end of the persistent FIFO order.
     fn move_to_queue_tail(

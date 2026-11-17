@@ -79,8 +79,7 @@ pub fn spawn_clipboard_monitor(app: tauri::AppHandle) {
 fn extract_http_urls(text: &str) -> Vec<String> {
     text.split_whitespace()
         .filter(|word| {
-            (word.starts_with("http://") || word.starts_with("https://"))
-                && word.len() <= 8192
+            (word.starts_with("http://") || word.starts_with("https://")) && word.len() <= 8192
         })
         .map(str::to_owned)
         .collect::<std::collections::HashSet<_>>()

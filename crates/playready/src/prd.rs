@@ -58,7 +58,7 @@ impl PrdDevice {
         const HEADER: usize = 4;
         const KEY_LEN: usize = 96;
         const CERT_LEN_OFFSET: usize = HEADER + 3 * KEY_LEN; // 292
-        const MIN_LEN: usize = CERT_LEN_OFFSET + 4;           // 296
+        const MIN_LEN: usize = CERT_LEN_OFFSET + 4; // 296
 
         if bytes.len() < MIN_LEN {
             return Err(PrdError::TooShort);
@@ -121,7 +121,10 @@ mod tests {
     fn prd_magic_check() {
         let mut bad = make_valid_prd(b"cert");
         bad[0] = b'X';
-        assert!(matches!(PrdDevice::from_bytes(&bad), Err(PrdError::InvalidMagic)));
+        assert!(matches!(
+            PrdDevice::from_bytes(&bad),
+            Err(PrdError::InvalidMagic)
+        ));
     }
 
     #[test]

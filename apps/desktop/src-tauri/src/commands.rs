@@ -1911,7 +1911,6 @@ pub async fn open_browser_extension_install_page(
     .map_err(|error| error.to_string())?
 }
 
-
 // ---------------------------------------------------------------------------
 // T3 — Per-download speed limiter
 // ---------------------------------------------------------------------------
@@ -1969,12 +1968,7 @@ pub async fn clear_download_history(state: State<'_, AppState>) -> Result<u64, I
         .map_err(|_| IpcError::internal())?;
     let mut deleted = 0u64;
     for item in completed {
-        if state
-            .repository
-            .delete(item.id())
-            .await
-            .unwrap_or(false)
-        {
+        if state.repository.delete(item.id()).await.unwrap_or(false) {
             deleted += 1;
         }
     }

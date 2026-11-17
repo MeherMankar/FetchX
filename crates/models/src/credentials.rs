@@ -1,4 +1,4 @@
-﻿use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// Key for storing HTTP credentials in the encrypted credential store.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -38,6 +38,10 @@ impl HttpCredentials {
 /// HttpCredentials does NOT implement Serialize/Deserialize by design.
 impl std::fmt::Display for HttpCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HttpCredentials(username={}, password=***)", self.username)
+        write!(
+            f,
+            "HttpCredentials(username={}, password=***)",
+            self.username
+        )
     }
 }

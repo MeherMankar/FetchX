@@ -586,7 +586,9 @@ impl NativeMediaProcessor {
         max_output_bytes: u64,
         is_cancelled: impl Fn() -> bool,
     ) -> Result<u64, NativeMediaError> {
-        use fdk_aac_rs::encoder::{Aot, Bitrate as AacBitrate, ChannelMode, Encoder as AacEncoder, EncoderError, Transport};
+        use fdk_aac_rs::encoder::{
+            Aot, Bitrate as AacBitrate, ChannelMode, Encoder as AacEncoder, EncoderError, Transport,
+        };
 
         if max_output_bytes == 0 {
             return Err(NativeMediaError::InvalidOutput);
@@ -611,7 +613,9 @@ impl NativeMediaProcessor {
             .build()
             .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
 
-        let info = enc.info().map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
+        let info = enc
+            .info()
+            .map_err(|e| NativeMediaError::Encoding(e.to_string()))?;
         let mut out_buf = vec![0u8; info.max_out_buf_bytes() as usize];
         let mut adts: Vec<u8> = Vec::new();
         let mut input_slice: &[i16] = &decoded.samples;

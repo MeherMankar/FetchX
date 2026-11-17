@@ -16,9 +16,16 @@ pub struct DrmConfigDto {
 /// Return the current DRM configuration.
 #[tauri::command]
 pub async fn get_drm_config(state: State<'_, AppState>) -> Result<DrmConfigDto, String> {
-    let config = state.config_service.load().await.map_err(|e| e.to_string())?;
+    let config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(DrmConfigDto {
-        wvd_path: config.drm.wvd_path.map(|p| p.to_string_lossy().into_owned()),
+        wvd_path: config
+            .drm
+            .wvd_path
+            .map(|p| p.to_string_lossy().into_owned()),
         remote_cdm_url: config.drm.remote_cdm_url,
         remote_cdm_device: config.drm.remote_cdm_device,
     })
@@ -30,7 +37,11 @@ pub async fn set_drm_config(
     state: State<'_, AppState>,
     request: DrmConfigDto,
 ) -> Result<DrmConfigDto, String> {
-    let mut config = state.config_service.load().await.map_err(|e| e.to_string())?;
+    let mut config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|e| e.to_string())?;
     config.drm.wvd_path = request
         .wvd_path
         .as_deref()
@@ -57,5 +68,7 @@ pub async fn pick_wvd_file(app: tauri::AppHandle) -> Result<Option<String>, Stri
         .file()
         .add_filter("Widevine Device", &["wvd"])
         .blocking_pick_file();
-    Ok(path.and_then(|p| p.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
+    Ok(path
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned()))
 }

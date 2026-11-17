@@ -609,7 +609,8 @@ impl CoreServices {
                     interval.tick().await;
                     match stats_queue.snapshot().await {
                         Ok(snapshot) => {
-                            let active_count = u32::try_from(snapshot.active.len()).unwrap_or(u32::MAX);
+                            let active_count =
+                                u32::try_from(snapshot.active.len()).unwrap_or(u32::MAX);
                             if active_count == 0 {
                                 if last_active_count > 0 {
                                     stats_bus.publish_queue_idle();
@@ -617,12 +618,17 @@ impl CoreServices {
                                 last_active_count = 0;
                                 continue;
                             }
-                            let queued_count = u32::try_from(snapshot.queued.len()).unwrap_or(u32::MAX);
-                            let speed_bps: u64 = snapshot.active.iter()
+                            let queued_count =
+                                u32::try_from(snapshot.queued.len()).unwrap_or(u32::MAX);
+                            let speed_bps: u64 = snapshot
+                                .active
+                                .iter()
                                 .filter_map(|d| d.item.progress().speed_bytes_per_second())
                                 .sum();
                             let estimated_completion_seconds = if speed_bps > 0 {
-                                let remaining: u64 = snapshot.active.iter()
+                                let remaining: u64 = snapshot
+                                    .active
+                                    .iter()
                                     .filter_map(|d| {
                                         let total = d.item.progress().total_bytes()?;
                                         let downloaded = d.item.progress().downloaded_bytes();
@@ -633,7 +639,12 @@ impl CoreServices {
                             } else {
                                 None
                             };
-                            stats_bus.publish_queue_stats(speed_bps, active_count, queued_count, estimated_completion_seconds);
+                            stats_bus.publish_queue_stats(
+                                speed_bps,
+                                active_count,
+                                queued_count,
+                                estimated_completion_seconds,
+                            );
                             last_active_count = active_count;
                         }
                         Err(_) => break,
@@ -642,7 +653,8 @@ impl CoreServices {
             });
         }
 
-        let session_stats = std::sync::Arc::new(std::sync::Mutex::new(SessionStatistics::default()));
+        let session_stats =
+            std::sync::Arc::new(std::sync::Mutex::new(SessionStatistics::default()));
 
         Ok(Self {
             database,
@@ -686,7 +698,6 @@ impl CoreServices {
             .map_err(|error| CoreServicesError::Queue(error.to_string()))
     }
 
-
     /// Returns a snapshot of in-session download statistics (reset on each start).
     pub fn session_statistics(&self) -> SessionStatistics {
         self.session_stats
@@ -705,7 +716,10 @@ impl CoreServices {
     }
 
     /// Returns completed downloads ordered by most-recently-completed first.
-    pub async fn list_completed(&self, limit: usize) -> Result<Vec<fetchx_models::DownloadItem>, CoreServicesError> {
+    pub async fn list_completed(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<fetchx_models::DownloadItem>, CoreServicesError> {
         self.repository
             .list_completed(limit)
             .await
@@ -2768,7 +2782,9 @@ impl EngineRuntime {
         torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
     ) -> Result<Self, CoreServicesError> {
         // Build proxy_url from desktop_proxy config if set.
-        let proxy_url: Option<String> = config.resource_policy.desktop_proxy
+        let proxy_url: Option<String> = config
+            .resource_policy
+            .desktop_proxy
             .as_ref()
             .and_then(|proxy| proxy.proxy_url());
 

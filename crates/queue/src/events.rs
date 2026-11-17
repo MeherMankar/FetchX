@@ -13,11 +13,26 @@ const EVENT_BUFFER_CAPACITY: usize = 2048;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DownloadEvent {
-    Created { revision: u64, item: DownloadItem },
-    Updated { revision: u64, item: DownloadItem },
-    Removed { revision: u64, id: DownloadId },
+    Created {
+        revision: u64,
+        item: DownloadItem,
+    },
+    Updated {
+        revision: u64,
+        item: DownloadItem,
+    },
+    Removed {
+        revision: u64,
+        id: DownloadId,
+    },
     /// Periodic queue statistics snapshot emitted every ~2 seconds while downloads are active.
-    QueueStats { revision: u64, speed_bps: u64, active_count: u32, queued_count: u32, estimated_completion_seconds: Option<u64> },
+    QueueStats {
+        revision: u64,
+        speed_bps: u64,
+        active_count: u32,
+        queued_count: u32,
+        estimated_completion_seconds: Option<u64>,
+    },
     /// Emitted once when the queue transitions from active to idle (zero active downloads).
     QueueIdle,
 }
@@ -64,8 +79,20 @@ impl DownloadEventBus {
 
     /// Publish a queue statistics snapshot. Unlike lifecycle events this does not
     /// increment the revision counter — stats are ephemeral and the revision is 0.
-    pub fn publish_queue_stats(&self, speed_bps: u64, active_count: u32, queued_count: u32, estimated_completion_seconds: Option<u64>) {
-        let _ = self.sender.send(DownloadEvent::QueueStats { revision: 0, speed_bps, active_count, queued_count, estimated_completion_seconds });
+    pub fn publish_queue_stats(
+        &self,
+        speed_bps: u64,
+        active_count: u32,
+        queued_count: u32,
+        estimated_completion_seconds: Option<u64>,
+    ) {
+        let _ = self.sender.send(DownloadEvent::QueueStats {
+            revision: 0,
+            speed_bps,
+            active_count,
+            queued_count,
+            estimated_completion_seconds,
+        });
     }
 
     pub fn publish_queue_idle(&self) {
