@@ -186,6 +186,61 @@ const WVP2_SCRIPT_CONFIGS = [
   },
 ];
 
+// ────────────────────────────────────────────────────────────
+// Widevine L3 (helloir3) — content script registration
+// ────────────────────────────────────────────────────────────
+
+const WVP2_L3_SCRIPT_CONFIGS = [
+  {
+    id: "WVP2_L3_BRIDGE",
+    matches: ["<all_urls>"],
+    js: ["widevine/l3/content_script.js"],
+    runAt: "document_start" as const,
+    world: "ISOLATED" as chrome.scripting.ExecutionWorld,
+    allFrames: true,
+    matchOriginAsFallback: true,
+    persistAcrossSessions: true,
+  },
+  {
+    id: "WVP2_L3_MAIN",
+    matches: ["<all_urls>"],
+    js: [
+      "widevine/l3/eme_interception.js",
+      "widevine/l3/content_key_decryption.js",
+      "widevine/l3/lib/cryptojs-aes_0.2.0.min.js",
+      "widevine/l3/lib/pbf.3.0.5.min.js",
+    ],
+    runAt: "document_start" as const,
+    world: "MAIN" as chrome.scripting.ExecutionWorld,
+    allFrames: true,
+    matchOriginAsFallback: true,
+    persistAcrossSessions: true,
+  },
+];
+
+let wvp2L3RegistrationPromise: Promise<void> | null = null;
+
+async function wvp2L3RegisterScripts(): Promise<void> {
+  const existing = await chrome.scripting.getRegisteredContentScripts();
+  const existingIds = new Set(existing.map((s) => s.id));
+  const toRegister = WVP2_L3_SCRIPT_CONFIGS.filter((cfg) => !existingIds.has(cfg.id));
+  const toUpdate = WVP2_L3_SCRIPT_CONFIGS.filter((cfg) => existingIds.has(cfg.id));
+  if (toRegister.length) await chrome.scripting.registerContentScripts(toRegister);
+  if (toUpdate.length) await chrome.scripting.updateContentScripts(toUpdate);
+}
+
+function wvp2L3EnsureScriptsRegistered(): Promise<void> {
+  if (wvp2L3RegistrationPromise) return wvp2L3RegistrationPromise;
+  wvp2L3RegistrationPromise = (async () => {
+    try {
+      await wvp2L3RegisterScripts();
+    } finally {
+      wvp2L3RegistrationPromise = null;
+    }
+  })();
+  return wvp2L3RegistrationPromise;
+}
+
 let wvp2RegistrationPromise: Promise<void> | null = null;
 
 async function wvp2GetEnabledState(): Promise<boolean> {
@@ -503,10 +558,12 @@ browserApi.runtime.onInstalled.addListener(() => {
     });
   });
   void wvp2EnsureScriptsRegistered();
+  void wvp2L3EnsureScriptsRegistered();
 });
 
 browserApi.runtime.onStartup.addListener(() => {
   void wvp2EnsureScriptsRegistered();
+  void wvp2L3EnsureScriptsRegistered();
 });
 
 browserApi.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -735,6 +792,31 @@ browserApi.runtime.onMessage.addListener(
           void browserApi.storage.local.set({ [psshData]: entry });
           void submitDrmKeysToFetchX(psshData, entry);
         }
+        sendResponse({ ok: true });
+        return false;
+      }
+
+      case "WVP2_L3_KEYS": {
+        // Widevine L3 (helloir3) content script reports extracted key pairs.
+        const l3Keys = Array.isArray(message.keys)
+          ? (message.keys as Array<{ kid: string; key: string }>)
+          : [];
+        const l3Url = typeof message.url === "string" ? message.url : undefined;
+        void (async () => {
+          for (const { kid, key } of l3Keys) {
+            if (!kid || !key) continue;
+            const storageKey = `l3_keys_${kid}`;
+            const existing = await chrome.storage.local.get(storageKey);
+            if (existing[storageKey]) continue; // deduplicated by kid
+            const entry = { kid, key, url: l3Url, timestamp: Date.now() };
+            await chrome.storage.local.set({ [storageKey]: entry });
+            void submitDrmKeysToFetchX(`l3:${kid}`, {
+              url: l3Url,
+              keys: [{ kid, k: key }],
+              timestamp: entry.timestamp,
+            });
+          }
+        })();
         sendResponse({ ok: true });
         return false;
       }
