@@ -203,7 +203,6 @@ impl DownloadSource {
     }
 
     #[must_use]
-    #[must_use]
     pub const fn bandwidth_limit_bps(&self) -> Option<u64> {
         self.bandwidth_limit_bps
     }

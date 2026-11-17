@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 
 /// Key for storing HTTP credentials in the encrypted credential store.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

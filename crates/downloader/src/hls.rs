@@ -124,7 +124,9 @@ struct SegmentAttemptError {
 /// Parsed media playlist metadata including live-stream detection.
 struct MediaPlaylistInfo {
     segments: Vec<HlsSegment>,
+    #[allow(dead_code)]
     has_endlist: bool,
+    #[allow(dead_code)]
     target_duration_secs: u64,
 }
 
