@@ -17,12 +17,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -74,6 +76,7 @@ fun DownloadsScreen(
     onBrowseWeb: () -> Unit = {},
     onPlayFile: (String) -> Unit = {},
     onOpenTorrentDetail: (String) -> Unit = {},
+    onOpenWidevineSettings: (() -> Unit)? = null,
 ) {
     // Collect all state flows with lifecycle awareness.
     val allDownloads by viewModel.allDownloads.collectAsStateWithLifecycle()
@@ -170,6 +173,11 @@ fun DownloadsScreen(
             TopAppBar(
                 title = { Text("Downloads") },
                 actions = {
+                    if (onOpenWidevineSettings != null) {
+                        IconButton(onClick = onOpenWidevineSettings) {
+                            Icon(Icons.Default.Settings, contentDescription = "Widevine / DRM")
+                        }
+                    }
                     TextButton(
                         onClick = viewModel::toggleQueueDispatch,
                         enabled = uiState.bridgeAvailable,

@@ -21,7 +21,7 @@ fun HistoryScreen(
     onBack: () -> Unit,
 ) {
     val completed by viewModel.completedDownloads.collectAsStateWithLifecycle()
-    val totalBytes = completed.sumOf { it.downloadedBytes }
+    val totalBytes = completed.sumOf { it.totalBytes ?: 0L }
 
     Scaffold(
         topBar = {
@@ -80,7 +80,7 @@ fun HistoryScreen(
                                     maxLines = 1,
                                 )
                                 Text(
-                                    formatHistoryBytes(item.downloadedBytes),
+                                    formatHistoryBytes(item.totalBytes ?: 0L),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

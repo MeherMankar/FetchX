@@ -54,4 +54,5 @@ dependencies {
 
     implementation(project(":bridge"))
     implementation(project(":core"))
+    implementation(project(":downloads"))
 }

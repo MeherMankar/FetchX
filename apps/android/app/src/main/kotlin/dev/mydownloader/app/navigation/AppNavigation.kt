@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tab
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
@@ -43,6 +44,7 @@ import dev.fetchx.downloads.ui.DownloadsScreen
 import dev.fetchx.downloads.ui.DownloadsViewModel
 import dev.fetchx.downloads.ui.TorrentDetailScreen
 import dev.fetchx.downloads.ui.HistoryScreen
+import dev.fetchx.downloads.ui.WidevineSettingsScreen
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
 import kotlinx.coroutines.launch
@@ -214,7 +216,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                                     launchSingleTop = true
                                 }
                             },
-                            icon = { Icon(Icons.Default.Download, contentDescription = "History") },
+                            icon = { Icon(Icons.Default.FileDownload, contentDescription = "History") },
                             label = { Text("History") },
                         )
                     }
@@ -235,6 +237,11 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                         onBrowseWeb = { navigateToBrowser(navController) },
                         onOpenTorrentDetail = { id ->
                             navController.navigate(Screen.TorrentDetail.route(id))
+                        },
+                        onOpenWidevineSettings = {
+                            navController.navigate(Screen.WidevineSettings.route) {
+                                launchSingleTop = true
+                            }
                         },
                         onPlayFile = { path ->
                             val uri = if (path.startsWith("content://")) {
@@ -371,6 +378,11 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                         viewModel = viewModel(factory = vmFactory),
                         onBack = { navController.popBackStack() },
                     )
+                }
+            }
+            composable(Screen.WidevineSettings.route) {
+                FetchXTheme(seedColor = seedColor) {
+                    WidevineSettingsScreen(onBack = { navController.popBackStack() })
                 }
             }
         }

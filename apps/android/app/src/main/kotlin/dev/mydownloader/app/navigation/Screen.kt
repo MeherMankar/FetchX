@@ -24,6 +24,9 @@ sealed class Screen(val route: String) {
     /** Download history screen. */
     data object History : Screen("history")
 
+    /** Widevine / DRM settings screen. */
+    data object WidevineSettings : Screen("widevine_settings")
+
     // Phase 20N: Settings screen
     // data object Settings : Screen("settings")
 }
