@@ -21,6 +21,15 @@ pub struct DrmConfig {
     pub playready_remote_cdm_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playready_remote_cdm_device: Option<String>,
+    /// Path to a `.wvd` Widevine device file for local CDM decryption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wvd_path: Option<std::path::PathBuf>,
+    /// Base URL of a pywidevine-compatible remote CDM server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_cdm_url: Option<String>,
+    /// Device name registered on the remote CDM server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_cdm_device: Option<String>,
 }
 
 impl DrmConfig {

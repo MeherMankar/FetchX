@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use fetchx_models::{ResourcePolicy, WeeklyQueueSchedule};
+use fetchx_models::{ResourcePolicy, WeeklyQueueSchedule, DrmConfig};
 use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
@@ -35,6 +35,8 @@ pub struct EngineConfig {
     pub weekly_queue_schedule: WeeklyQueueSchedule,
     #[serde(default)]
     pub clipboard_monitor_enabled: bool,
+    #[serde(default)]
+    pub drm: DrmConfig,
 }
 
 impl Default for EngineConfig {
@@ -51,6 +53,7 @@ impl Default for EngineConfig {
             resource_policy: ResourcePolicy::default(),
             weekly_queue_schedule: WeeklyQueueSchedule::default(),
             clipboard_monitor_enabled: false,
+            drm: DrmConfig::default(),
         }
     }
 }

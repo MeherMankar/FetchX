@@ -22,6 +22,7 @@ mod native_ytdlp;
 mod retry;
 mod segments;
 mod sftp;
+mod widevine_provider;
 mod ytdlp;
 
 pub use adaptive::AdaptiveConfig;
@@ -51,6 +52,7 @@ pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
 pub use native_video::{NativeVideoError, NativeVideoProcessor, YuvFrame};
 pub use native_ytdlp::NativeYtDlpProcessRunner;
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
+pub use widevine_provider::build_widevine_provider;
 pub use ytdlp::{
     YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner,
     YtDlpProgress, YtDlpRunnerEvent, YtDlpRunnerFuture, parse_format_output,

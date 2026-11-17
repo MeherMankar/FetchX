@@ -14,6 +14,7 @@ fetchx-models = { path = "../models" }
 fetchx-muxer = { path = "../muxer" }
 fetchx-playready = { path = "../playready" }
 fetchx-storage = { path = "../storage" }
+fetchx-widevine = { path = "../widevine" }
 fdk-aac-rs = { version = "0.1.0", default-features = false, features = ["encoder"] }
 opus = "0.4.0"
 openh264 = "0.9.10"

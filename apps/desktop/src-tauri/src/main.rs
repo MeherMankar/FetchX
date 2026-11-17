@@ -6,6 +6,7 @@ mod clipboard_monitor;
 pub mod browser_extension_installer;
 mod browser_ipc;
 mod commands;
+mod drm_commands;
 mod engine_commands;
 mod events;
 mod media_processing;

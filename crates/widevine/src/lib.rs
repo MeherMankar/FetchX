@@ -3,14 +3,19 @@
 //! Provides:
 //! - `.wvd` device file parsing ([`wvd`])
 //! - Remote CDM HTTP client ([`remote_cdm`])
+//! - Pure-Rust local CDM ([`local_cdm`])
 //! - PSSH box extraction from MPD manifests ([`pssh`])
+//! - Widevine protobuf message types ([`proto`])
 
 #![forbid(unsafe_code)]
 
+pub mod local_cdm;
+pub mod proto;
 pub mod pssh;
 pub mod remote_cdm;
 pub mod wvd;
 
+pub use local_cdm::{LocalCdm, LocalCdmError};
 pub use pssh::{PsshBox, extract_pssh_from_mpd};
 pub use remote_cdm::{RemoteCdm, RemoteCdmError};
 pub use wvd::{WvdDevice, WvdError};
