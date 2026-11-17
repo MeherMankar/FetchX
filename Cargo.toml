@@ -19,6 +19,7 @@ members = [
     "apps/browser/native-host",
     "crates/muxer",
     "crates/media-pipeline",
+    "crates/widevine",
 ]
 resolver = "3"
 

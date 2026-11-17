@@ -2034,6 +2034,14 @@ mod tests {
         ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
             std::future::ready(Ok(false))
         }
+
+        fn list_completed(
+            &self,
+            _limit: usize,
+        ) -> impl Future<Output = Result<Vec<DownloadItem>, fetchx_storage::StorageError>> + Send
+        {
+            std::future::ready(Ok(Vec::new()))
+        }
     }
 
     #[test]

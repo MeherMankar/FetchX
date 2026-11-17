@@ -2867,10 +2867,10 @@ mod tests {
         policy.engine_bandwidth_limits.hls_bytes_per_second = Some(1200);
         let resources = RuntimeResourceManager::new(&policy).expect("valid resource policy");
         let native_torrent = resources
-            .bandwidth_for(EngineKind::NativeTorrent)
+            .bandwidth_for(EngineKind::NativeTorrent, None)
             .expect("native torrent limits should be created");
         let yt_dlp = resources
-            .bandwidth_for(EngineKind::YtDlp)
+            .bandwidth_for(EngineKind::YtDlp, None)
             .expect("yt-dlp limits should be created");
         assert_eq!(
             native_torrent.external_download_rate_bytes_per_second,
@@ -2879,14 +2879,14 @@ mod tests {
         assert_eq!(yt_dlp.external_download_rate_bytes_per_second, Some(2000));
         assert_eq!(
             resources
-                .bandwidth_for(EngineKind::Hls)
+                .bandwidth_for(EngineKind::Hls, None)
                 .expect("HLS limits should be created")
                 .external_download_rate_bytes_per_second,
             Some(1200)
         );
         assert_eq!(
             resources
-                .bandwidth_for(EngineKind::DirectHttp)
+                .bandwidth_for(EngineKind::DirectHttp, None)
                 .expect("Direct HTTP limits should be created")
                 .per_download
                 .expect("global share limiter")

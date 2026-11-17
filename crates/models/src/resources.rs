@@ -308,8 +308,8 @@ pub enum ResourcePolicyError {
 #[cfg(test)]
 mod tests {
     use super::{
-        BandwidthWindow, ResourcePolicy, ResourcePolicyError, ResourceProfile, WeeklyQueueSchedule,
-        WeeklyQueueScheduleError,
+        BandwidthWindow, ResourcePolicy, ResourcePolicyError, ResourceProfile,
+        WeeklyBandwidthSchedule, WeeklyQueueSchedule, WeeklyQueueScheduleError,
     };
 
     #[test]
