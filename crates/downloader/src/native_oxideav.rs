@@ -687,10 +687,10 @@ impl NativeOxideavProcessor {
                 if pkt_time < start_secs {
                     continue;
                 }
-                if let Some(end) = end_secs {
-                    if pkt_time > end {
-                        break;
-                    }
+                if let Some(end) = end_secs
+                    && pkt_time > end
+                {
+                    break;
                 }
             }
             match index_map.get(&packet.stream_index) {

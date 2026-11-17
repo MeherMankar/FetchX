@@ -7,17 +7,15 @@ use std::{
     time::Duration,
 };
 
-use fetchx_core_services::CoreServices;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{Emitter, Manager};
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::commands::AppState;
 use crate::events::CLIPBOARD_URLS_DETECTED;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(1500);
-const SETTING_KEY: &str = "clipboard_monitor_enabled";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ClipboardUrlsEvent {

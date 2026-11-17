@@ -309,7 +309,7 @@ pub enum ResourcePolicyError {
 mod tests {
     use super::{
         BandwidthWindow, ResourcePolicy, ResourcePolicyError, ResourceProfile,
-        WeeklyBandwidthSchedule, WeeklyQueueSchedule, WeeklyQueueScheduleError,
+        WeeklyBandwidthSchedule,
     };
 
     #[test]

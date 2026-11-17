@@ -250,8 +250,10 @@ impl NativeMp4Processor {
                         let g = gcd(numerator_raw, denominator_raw);
                         if g > 0 {
                             Some(FrameRate {
-                                numerator: numerator_raw / g,
-                                denominator: denominator_raw / g,
+                                numerator: numerator_raw.checked_div(g).unwrap_or(numerator_raw),
+                                denominator: denominator_raw
+                                    .checked_div(g)
+                                    .unwrap_or(denominator_raw),
                             })
                         } else {
                             None

@@ -42,12 +42,11 @@ pub fn extract_pssh_from_mpd(xml: &str) -> Option<Vec<u8>> {
             };
 
             let b64 = content_region[..end_pos].trim();
-            if !b64.is_empty() {
-                if let Ok(decoded) = BASE64.decode(b64) {
-                    if is_playready_pssh(&decoded) {
-                        return Some(decoded);
-                    }
-                }
+            if !b64.is_empty()
+                && let Ok(decoded) = BASE64.decode(b64)
+                && is_playready_pssh(&decoded)
+            {
+                return Some(decoded);
             }
 
             let consumed = start_tag + content_start + end_pos + close.len();

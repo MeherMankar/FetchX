@@ -1917,15 +1917,15 @@ pub async fn open_browser_extension_install_page(
 
 #[tauri::command]
 pub async fn set_download_bandwidth_limit(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     download_id: String,
     bytes_per_second: Option<u64>,
 ) -> Result<(), IpcError> {
     let id = DownloadId::parse(&download_id).map_err(|_| IpcError::invalid_request())?;
-    if let Some(bps) = bytes_per_second {
-        if bps == 0 || bps > 1_000_000_000_000 {
-            return Err(IpcError::invalid_request());
-        }
+    if let Some(bps) = bytes_per_second
+        && (bps == 0 || bps > 1_000_000_000_000)
+    {
+        return Err(IpcError::invalid_request());
     }
     // Bandwidth limit is stored when the download next starts.
     tracing::info!(download_id = %id, ?bytes_per_second, "bandwidth limit queued");

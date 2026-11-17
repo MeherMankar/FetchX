@@ -126,7 +126,6 @@ pub struct CoreServicesConfig {
 /// Owns the live service graph: database, event bus, engines, queue, scheduler.
 ///
 /// Shared service owner used by desktop, Android, CLI, and headless hosts.
-
 /// In-memory session statistics reset on each app start.
 #[derive(Clone, Debug, Default)]
 pub struct SessionStatistics {
@@ -635,7 +634,7 @@ impl CoreServices {
                                         total.checked_sub(downloaded)
                                     })
                                     .sum();
-                                Some(remaining / speed_bps)
+                                Some(remaining.checked_div(speed_bps).unwrap_or(0))
                             } else {
                                 None
                             };
@@ -2788,20 +2787,18 @@ impl EngineRuntime {
             .as_ref()
             .and_then(|proxy| proxy.proxy_url());
 
-        let direct_http_config = {
-            let mut cfg = fetchx_downloader::HttpEngineConfig::default();
-            cfg.proxy_url = proxy_url.clone();
-            cfg
+        let direct_http_config = fetchx_downloader::HttpEngineConfig {
+            proxy_url: proxy_url.clone(),
+            ..Default::default()
         };
         let direct_http = Arc::new(
             DirectHttpEngine::with_config(repository.clone(), direct_http_config)
                 .map_err(|e| CoreServicesError::Engine(e.to_string()))?,
         );
 
-        let hls_config = {
-            let mut cfg = fetchx_downloader::HlsEngineConfig::default();
-            cfg.proxy_url = proxy_url.clone();
-            cfg
+        let hls_config = fetchx_downloader::HlsEngineConfig {
+            proxy_url: proxy_url.clone(),
+            ..Default::default()
         };
         let hls_engine = Arc::new(
             HlsEngine::with_config(repository.clone(), hls_config)
