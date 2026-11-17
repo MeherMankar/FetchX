@@ -1,4 +1,20 @@
-namespace android_bridge {};
+namespace android_bridge {
+    [Throws=WvdParseError]
+    WvdDeviceDto parse_wvd_bytes(bytes data);
+};
+
+[Error]
+enum WvdParseError {
+    "TooShort",
+    "KeyOverflow",
+    "IdOverflow",
+};
+
+dictionary WvdDeviceDto {
+    u8 device_type;
+    bytes private_key_der;
+    bytes client_id_blob;
+};
 
 [Error]
 enum MobileApiError {

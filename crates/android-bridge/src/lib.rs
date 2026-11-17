@@ -29,6 +29,48 @@ pub trait YtDlpRuntime: Send + Sync {
     fn report_failure(&self, diagnostic_code: String);
 }
 
+// ── WVD parsing free function exposed via UniFFI ──────────────────────────────
+
+/// DTO matching the `WvdDeviceDto` dictionary in the UDL.
+pub struct WvdDeviceDto {
+    pub device_type: u8,
+    pub private_key_der: Vec<u8>,
+    pub client_id_blob: Vec<u8>,
+}
+
+/// Error type matching the `[Error] enum WvdParseError` in the UDL.
+#[derive(Debug, thiserror::Error)]
+pub enum WvdParseError {
+    #[error("WVD file is too short or truncated")]
+    TooShort,
+    #[error("WVD private key section overflows file")]
+    KeyOverflow,
+    #[error("WVD client-id section overflows file")]
+    IdOverflow,
+}
+
+impl From<fetchx_widevine::WvdError> for WvdParseError {
+    fn from(e: fetchx_widevine::WvdError) -> Self {
+        match e {
+            fetchx_widevine::WvdError::TooShort => Self::TooShort,
+            fetchx_widevine::WvdError::KeyOverflow => Self::KeyOverflow,
+            fetchx_widevine::WvdError::IdOverflow => Self::IdOverflow,
+        }
+    }
+}
+
+/// Parse a `.wvd` binary file into its component fields.
+///
+/// Exposed to Android Kotlin code via UniFFI as `parseWvdBytes(data: ByteArray): WvdDeviceDto`.
+pub fn parse_wvd_bytes(data: Vec<u8>) -> Result<WvdDeviceDto, WvdParseError> {
+    let device = fetchx_widevine::wvd::parse_wvd(&data)?;
+    Ok(WvdDeviceDto {
+        device_type: device.device_type,
+        private_key_der: device.private_key_der,
+        client_id_blob: device.client_id_blob,
+    })
+}
+
 // The scaffolding must come after the trait definition above so that the
 // generated glue can reference `DownloadEventListener` in this crate.
 uniffi::include_scaffolding!("android_bridge");
