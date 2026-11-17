@@ -251,13 +251,13 @@ impl TrackSamples {
     }
 
     fn push(&mut self, sample: FragmentSample) -> Result<(), FragmentedError> {
-        if let Some(last) = self.last_dts {
-            if sample.dts < last {
-                return Err(FragmentedError::NonMonotonicDts {
-                    prev_dts: last,
-                    curr_dts: sample.dts,
-                });
-            }
+        if let Some(last) = self.last_dts
+            && sample.dts < last
+        {
+            return Err(FragmentedError::NonMonotonicDts {
+                prev_dts: last,
+                curr_dts: sample.dts,
+            });
         }
         self.last_dts = Some(sample.dts);
         self.samples.push(sample);

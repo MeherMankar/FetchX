@@ -314,10 +314,10 @@ impl fmt::Display for AdtsValidationError {
         }
 
         // Add technical details in verbose mode (alternate format flag)
-        if f.alternate() {
-            if let Some(tech) = &self.technical_details {
-                write!(f, "\n  Technical details: {tech}")?;
-            }
+        if f.alternate()
+            && let Some(tech) = &self.technical_details
+        {
+            write!(f, "\n  Technical details: {tech}")?;
         }
 
         // Show related errors
@@ -1922,11 +1922,11 @@ fn build_stsd_box(video: &Mp4VideoTrack, video_config: &VideoConfig) -> Vec<u8> 
 fn build_stts_box(durations: &[u32]) -> Vec<u8> {
     let mut entries: Vec<(u32, u32)> = Vec::new();
     for &duration in durations {
-        if let Some(last) = entries.last_mut() {
-            if last.1 == duration {
-                last.0 += 1;
-                continue;
-            }
+        if let Some(last) = entries.last_mut()
+            && last.1 == duration
+        {
+            last.0 += 1;
+            continue;
         }
         entries.push((1u32, duration));
     }
@@ -2004,11 +2004,11 @@ fn build_ctts_box(cts_offsets: &[i32]) -> Vec<u8> {
     // Run-length encode the offsets
     let mut entries: Vec<(u32, i32)> = Vec::new();
     for &offset in cts_offsets {
-        if let Some(last) = entries.last_mut() {
-            if last.1 == offset {
-                last.0 += 1;
-                continue;
-            }
+        if let Some(last) = entries.last_mut()
+            && last.1 == offset
+        {
+            last.0 += 1;
+            continue;
         }
         entries.push((1, offset));
     }
@@ -2781,7 +2781,7 @@ fn days_to_ymd(days: u64) -> (u32, u32, u32) {
 }
 
 fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 #[cfg(test)]

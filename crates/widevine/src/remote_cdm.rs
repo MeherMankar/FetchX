@@ -232,7 +232,7 @@ impl RemoteCdm {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, RemoteCdmError> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(RemoteCdmError::HexDecode(format!(
             "odd-length hex string: {s}"
         )));

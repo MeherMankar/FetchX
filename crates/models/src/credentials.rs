@@ -1,4 +1,3 @@
-
 /// Key for storing HTTP credentials in the encrypted credential store.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CredentialKey {

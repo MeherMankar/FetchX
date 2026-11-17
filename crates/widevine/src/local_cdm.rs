@@ -281,7 +281,7 @@ fn decrypt_aes_128_cbc_pkcs7(
 
     // Manual CBC-PKCS7 decrypt to avoid the conflicting-impl issue with cbc::Decryptor.
     let block_size = 16usize;
-    if data.is_empty() || data.len() % block_size != 0 {
+    if data.is_empty() || !data.len().is_multiple_of(block_size) {
         return Err(LocalCdmError::BadPadding);
     }
 

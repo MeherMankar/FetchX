@@ -463,17 +463,16 @@ impl<Writer> MuxerBuilder<Writer> {
             return Err(MuxerError::MissingTrackConfig);
         }
 
-        if let Some(video) = &video_track {
-            if video.width == 0
+        if let Some(video) = &video_track
+            && (video.width == 0
                 || video.height == 0
                 || video.width > u32::from(u16::MAX)
-                || video.height > u32::from(u16::MAX)
-            {
-                return Err(MuxerError::InvalidDimensions {
-                    width: video.width,
-                    height: video.height,
-                });
-            }
+                || video.height > u32::from(u16::MAX))
+        {
+            return Err(MuxerError::InvalidDimensions {
+                width: video.width,
+                height: video.height,
+            });
         }
 
         let mut writer = match &video_track {
@@ -520,32 +519,31 @@ impl<Writer> MuxerBuilder<Writer> {
     /// Returns an error if neither video nor audio configuration is present,
     /// the codec is unsupported, or required codec parameters are missing.
     pub fn new_with_fragment(self) -> Result<FragmentedMuxer, MuxerError> {
-        if let Some((_, width, height, _)) = self.video {
-            if width == 0
+        if let Some((_, width, height, _)) = self.video
+            && (width == 0
                 || height == 0
                 || width > u32::from(u16::MAX)
-                || height > u32::from(u16::MAX)
-            {
-                return Err(MuxerError::InvalidDimensions { width, height });
-            }
+                || height > u32::from(u16::MAX))
+        {
+            return Err(MuxerError::InvalidDimensions { width, height });
         }
 
         // Audio-only fragmented MP4 when no video track is configured.
         let Some((codec, width, height, _framerate)) = self.video else {
-            if let Some((audio_codec, sample_rate, channels)) = self.audio {
-                if audio_codec != AudioCodec::None {
-                    return FragmentedMuxer::new_audio_only(FragmentAudioConfig {
-                        codec: audio_codec,
-                        sample_rate,
-                        channels,
-                    })
-                    .map_err(|e| {
-                        MuxerError::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            e.to_string(),
-                        ))
-                    });
-                }
+            if let Some((audio_codec, sample_rate, channels)) = self.audio
+                && audio_codec != AudioCodec::None
+            {
+                return FragmentedMuxer::new_audio_only(FragmentAudioConfig {
+                    codec: audio_codec,
+                    sample_rate,
+                    channels,
+                })
+                .map_err(|e| {
+                    MuxerError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        e.to_string(),
+                    ))
+                });
             }
             return Err(MuxerError::MissingTrackConfig);
         };
@@ -1041,14 +1039,14 @@ impl<Writer: Write> Muxer<Writer> {
         }
 
         // Validate PTS is strictly increasing
-        if let Some(prev) = self.last_video_pts {
-            if pts <= prev {
-                return Err(MuxerError::NonIncreasingVideoPts {
-                    prev_pts: prev,
-                    curr_pts: pts,
-                    frame_index,
-                });
-            }
+        if let Some(prev) = self.last_video_pts
+            && pts <= prev
+        {
+            return Err(MuxerError::NonIncreasingVideoPts {
+                prev_pts: prev,
+                curr_pts: pts,
+                frame_index,
+            });
         }
 
         let scaled_pts = (pts * MEDIA_TIMESCALE as f64).round();
@@ -1125,14 +1123,14 @@ impl<Writer: Write> Muxer<Writer> {
         // This is valid and expected for B-frame streams.
 
         // Validate DTS is strictly increasing
-        if let Some(prev_dts) = self.last_video_dts {
-            if dts <= prev_dts {
-                return Err(MuxerError::NonIncreasingDts {
-                    prev_dts,
-                    curr_dts: dts,
-                    frame_index,
-                });
-            }
+        if let Some(prev_dts) = self.last_video_dts
+            && dts <= prev_dts
+        {
+            return Err(MuxerError::NonIncreasingDts {
+                prev_dts,
+                curr_dts: dts,
+                frame_index,
+            });
         }
 
         let scaled_pts = (pts * MEDIA_TIMESCALE as f64).round();
@@ -1219,14 +1217,14 @@ impl<Writer: Write> Muxer<Writer> {
         }
 
         // Validate PTS is non-decreasing
-        if let Some(prev) = self.last_audio_pts {
-            if pts < prev {
-                return Err(MuxerError::DecreasingAudioPts {
-                    prev_pts: prev,
-                    curr_pts: pts,
-                    frame_index,
-                });
-            }
+        if let Some(prev) = self.last_audio_pts
+            && pts < prev
+        {
+            return Err(MuxerError::DecreasingAudioPts {
+                prev_pts: prev,
+                curr_pts: pts,
+                frame_index,
+            });
         }
 
         // Validate audio doesn't precede first video. This constraint only

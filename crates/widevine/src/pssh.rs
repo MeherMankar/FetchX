@@ -91,10 +91,10 @@ pub fn extract_pssh_from_mpd(mpd_text: &str) -> Vec<PsshBox> {
 
             let b64 = content_region[..end_pos].trim();
             if !b64.is_empty() {
-                if let Ok(decoded) = BASE64.decode(b64) {
-                    if let Some(pssh) = PsshBox::parse(&decoded) {
-                        results.push(pssh);
-                    }
+                if let Ok(decoded) = BASE64.decode(b64)
+                    && let Some(pssh) = PsshBox::parse(&decoded)
+                {
+                    results.push(pssh);
                 }
             }
 
