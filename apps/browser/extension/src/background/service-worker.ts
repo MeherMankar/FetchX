@@ -8,7 +8,7 @@
  * 4. Download task cache for popup's task list
  */
 
-import type { BrowserErrorCode, BrowserResponse } from "../types/protocol";
+import type { BrowserErrorCode, BrowserResponse, SendDrmKeysRequest } from "../types/protocol";
 import {
   NativeHostError,
   callTargetRpc,
@@ -409,6 +409,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
         wvp2IconTimeoutId = null;
         void wvp2SetIcon("normal");
       }, 60 * 1000);
+
+      // Forward newly captured DRM keys to FetchX
+      for (const [psshData, { oldValue, newValue }] of Object.entries(changes)) {
+        if (oldValue === undefined && typeof newValue === "object" && newValue !== null
+          && ("keys" in newValue || "type" in newValue)) {
+          void submitDrmKeysToFetchX(psshData, newValue as WvpStoredEntry);
+        }
+      }
     }
   } else if (areaName === "sync") {
     void wvp2EnsureScriptsRegistered();
@@ -715,6 +723,22 @@ browserApi.runtime.onMessage.addListener(
         sendResponse(false); // version check handled separately
         return false;
 
+      case "report_drm_keys": {
+        // Content script / page reports extracted DRM keys; store and forward to FetchX.
+        const psshData = typeof message.pssh_data === "string" ? message.pssh_data : "";
+        if (psshData) {
+          const entry: WvpStoredEntry = {
+            url: typeof message.url === "string" ? message.url : undefined,
+            keys: Array.isArray(message.keys) ? message.keys as WvpStoredEntry["keys"] : [],
+            timestamp: typeof message.timestamp === "number" ? message.timestamp : Date.now(),
+          };
+          void browserApi.storage.local.set({ [psshData]: entry });
+          void submitDrmKeysToFetchX(psshData, entry);
+        }
+        sendResponse({ ok: true });
+        return false;
+      }
+
       case "OPEN_PICKER_WVD":
         wvp2OpenPicker("widevine/picker/wvd/filePicker.html", false);
         break;
@@ -964,6 +988,55 @@ function isBrowserTarget(value: unknown): value is BrowserTarget {
       || (target.kind === "remote"
         && typeof target.endpoint === "string"
         && typeof target.credential_id === "string"));
+}
+
+// ────────────────────────────────────────────────────────────
+// WidevineProxy2 — DRM key forwarding to FetchX
+// ────────────────────────────────────────────────────────────
+
+/** Shape of entries WVP2 stores in chrome.storage.local keyed by PSSH/URL identifier. */
+interface WvpStoredEntry {
+  url?: string;
+  type?: string;
+  keys?: Array<string | { kid: string; k: string }>;
+  timestamp?: number;
+}
+
+async function submitDrmKeysToFetchX(psshData: string, entry: WvpStoredEntry): Promise<void> {
+  let target: BrowserTarget;
+  try {
+    target = await getSelectedTarget();
+  } catch {
+    return;
+  }
+
+  const keys = (entry.keys ?? []).map((k) =>
+    typeof k === "string"
+      ? { kid: k.split(":")[0] ?? "", k: k.split(":")[1] ?? "" }
+      : { kid: k.kid, k: k.k },
+  );
+
+  const request: SendDrmKeysRequest = {
+    version: PROTOCOL_VERSION,
+    type: "send_drm_keys",
+    pssh_data: psshData,
+    keys,
+    url: entry.url,
+    timestamp: entry.timestamp,
+  };
+
+  const rpcRequest: RpcRequest = {
+    jsonrpc: "2.0",
+    id: crypto.randomUUID(),
+    method: "drm.storeKeys",
+    params: request as unknown as Record<string, unknown>,
+  };
+
+  try {
+    await callTargetRpc(toRpcTarget(target), rpcRequest);
+  } catch {
+    // Best-effort: key forwarding failures are non-fatal
+  }
 }
 
 // ────────────────────────────────────────────────────────────

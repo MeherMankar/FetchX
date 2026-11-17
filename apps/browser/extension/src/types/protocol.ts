@@ -57,12 +57,27 @@ export interface DeleteCredentialRequest {
   endpoint: string;
 }
 
+export interface DrmKeyDto {
+  kid: string;
+  k: string;
+}
+
+export interface SendDrmKeysRequest {
+  version: typeof PROTOCOL_VERSION;
+  type: "send_drm_keys";
+  pssh_data: string;
+  keys: DrmKeyDto[];
+  url?: string;
+  timestamp?: number;
+}
+
 export type BrowserRequest =
   | AddDownloadRequest
   | PingRequest
   | BrowserRpcRequest
   | StoreCredentialRequest
-  | DeleteCredentialRequest;
+  | DeleteCredentialRequest
+  | SendDrmKeysRequest;
 
 // ---------------------------------------------------------------------------
 // Responses
@@ -126,11 +141,19 @@ export interface ErrResponse {
   version: number;
 }
 
+export interface DrmKeysReceivedOkResponse {
+  ok: true;
+  stored: boolean;
+  request_id?: string;
+  version: number;
+}
+
 export type BrowserResponse =
   | AddDownloadOkResponse
   | PongOkResponse
   | RpcOkResponse
   | CredentialStoredOkResponse
+  | DrmKeysReceivedOkResponse
   | ErrResponse;
 
 // ---------------------------------------------------------------------------
