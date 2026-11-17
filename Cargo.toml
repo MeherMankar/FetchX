@@ -20,6 +20,7 @@ members = [
     "crates/muxer",
     "crates/media-pipeline",
     "crates/widevine",
+    "crates/playready",
 ]
 resolver = "3"
 

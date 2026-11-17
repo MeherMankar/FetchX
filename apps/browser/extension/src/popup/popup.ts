@@ -847,12 +847,27 @@ function renderDrmKeys(entries: WvpKeyEntry[]) {
     const keyRows = keys.slice(0, 4).map((k) =>
       `<div class="drm-key-pair">${esc(k)}</div>`,
     ).join("");
+    const label = drmTypeLabel(entry);
     return `<div class="drm-key-item">
-      ${entry.type ? `<span class="drm-key-type">${esc(entry.type)}</span>` : ""}
+      ${label ? `<span class="drm-key-type">${esc(label)}</span>` : ""}
       <div class="drm-key-url" title="${esc(entry.url ?? "")}">${esc(entry.url ?? "(unknown page)")}</div>
       <div class="drm-key-pairs">${keyRows}</div>
     </div>`;
   }).join("");
+}
+
+function drmTypeLabel(entry: WvpKeyEntry): string {
+  const sid = (entry as Record<string, unknown>).systemId;
+  const t = entry.type ?? "";
+  if (typeof sid === "string") {
+    const norm = sid.replace(/-/g, "").toLowerCase();
+    if (norm === "edef8ba979d64acea3c827dcd51d21ed") return "Widevine";
+    if (norm === "9a04f07998404286ab92e65be0885f95") return "PlayReady";
+  }
+  if (t.toLowerCase() === "widevine") return "Widevine";
+  if (t.toLowerCase() === "playready") return "PlayReady";
+  if (t) return "DRM";
+  return "";
 }
 
 async function loadDrmKeys() {

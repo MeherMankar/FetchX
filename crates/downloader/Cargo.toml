@@ -12,6 +12,7 @@ fetchx-media-extractor = { path = "../media-extractor" }
 fetchx-media-pipeline = { path = "../media-pipeline" }
 fetchx-models = { path = "../models" }
 fetchx-muxer = { path = "../muxer" }
+fetchx-playready = { path = "../playready" }
 fetchx-storage = { path = "../storage" }
 fdk-aac-rs = { version = "0.1.0", default-features = false, features = ["encoder"] }
 opus = "0.4.0"

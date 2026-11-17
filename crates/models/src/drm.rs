@@ -15,6 +15,12 @@ pub struct DrmConfig {
     pub keys: Vec<DrmKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_server_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playready_prd_path: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playready_remote_cdm_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playready_remote_cdm_device: Option<String>,
 }
 
 impl DrmConfig {
@@ -45,6 +51,7 @@ mod tests {
                 k: "00112233445566778899aabbccddeeff".to_owned(),
             }],
             license_server_url: None,
+            ..Default::default()
         };
         assert!(config.find_key("aabbccdd").is_some());
         assert!(config.find_key("AABBCCDD").is_some());
@@ -61,6 +68,7 @@ mod tests {
                 k: "bb".to_owned(),
             }],
             license_server_url: None,
+            ..Default::default()
         };
         assert!(!nonempty.is_empty());
     }
@@ -73,6 +81,7 @@ mod tests {
                 k: "cafebabe".to_owned(),
             }],
             license_server_url: Some("https://license.example.com".to_owned()),
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let restored: DrmConfig = serde_json::from_str(&json).unwrap();
@@ -84,6 +93,7 @@ mod tests {
         let config = DrmConfig {
             keys: vec![],
             license_server_url: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("license_server_url"));

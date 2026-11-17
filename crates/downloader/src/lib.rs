@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod adaptive;
+mod drm_router;
 mod bandwidth;
 mod dispatcher;
 mod engine;
@@ -24,6 +25,7 @@ mod sftp;
 mod ytdlp;
 
 pub use adaptive::AdaptiveConfig;
+pub use drm_router::{DrmSystem, detect_drm_system};
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::{EngineDispatcher, is_dash_url};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
