@@ -604,7 +604,15 @@ where
             speed_bytes_per_second: None,
             estimated_remaining_seconds: Some(0),
         };
-        if audio_format.is_none() && output_size < item.progress().downloaded_bytes() {
+        // When yt-dlp downloads video and audio as separate streams and merges
+        // them, `downloaded_bytes` reflects the combined transfer size of both
+        // input streams. The merged output is legitimately smaller than that
+        // sum. Only flag a regression for single-stream downloads where the
+        // output file should be at least as large as what was transferred.
+        // Two-stream cases: explicit audio_format selected, or auto-selection
+        // (yt_dlp_format is None) which uses the split video+audio selector.
+        let is_two_stream = audio_format.is_some() || item.source().yt_dlp_format().is_none();
+        if !is_two_stream && output_size < item.progress().downloaded_bytes() {
             self.runner.report_diagnostic_details(format!(
                 "final output smaller than reported progress; process_exit_code={:?}; output_size_bytes={output_size}; reported_downloaded_bytes={}; reported_total_bytes={:?}; automatic_selection={}",
                 exit.code,
@@ -1720,14 +1728,24 @@ async fn merge_output_candidates(
         .streams
         .iter()
         .any(|stream| stream.kind == MediaStreamKind::Audio);
+    // Pick video/audio files. yt-dlp sometimes writes a stub audio track into
+    // the video file (e.g. silence or empty stream), so "has video AND has
+    // audio" can still be a video-only file in practice. Prefer the unambiguous
+    // cases first; fall back to treating a video+audio file as the video track
+    // when the other file is purely audio (and vice-versa).
     let (video, audio, video_info, audio_info) = match (
         first_has_video,
         first_has_audio,
         second_has_video,
         second_has_audio,
     ) {
+        // Unambiguous: each file has exactly one kind of stream.
         (true, false, false, true) => (&outputs[0], &outputs[1], &first_info, &second_info),
         (false, true, true, false) => (&outputs[1], &outputs[0], &second_info, &first_info),
+        // First file has video (possibly with stub audio), second is audio-only.
+        (true, _, false, true) => (&outputs[0], &outputs[1], &first_info, &second_info),
+        // Second file has video (possibly with stub audio), first is audio-only.
+        (false, true, true, _) => (&outputs[1], &outputs[0], &second_info, &first_info),
         _ => return Err(YtDlpError::UnmergedOutput.into()),
     };
 
