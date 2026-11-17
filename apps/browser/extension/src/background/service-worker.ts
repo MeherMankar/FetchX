@@ -194,7 +194,13 @@ const WVP2_L3_SCRIPT_CONFIGS = [
   {
     id: "WVP2_L3_BRIDGE",
     matches: ["<all_urls>"],
-    js: ["widevine/l3/content_script.js"],
+    // l3_bridge.js is the MV3 ISOLATED-world relay that listens for
+    // window.postMessage events from l3_main_relay.js and forwards keys to
+    // the background via chrome.runtime.sendMessage.  content_script.js is
+    // kept verbatim in the tree for reference but is NOT registered: it uses
+    // chrome.extension.getURL (removed in MV3) and references a non-existent
+    // protobuf file, so it cannot be used as an ISOLATED bridge in MV3.
+    js: ["widevine/l3/l3_bridge.js"],
     runAt: "document_start" as const,
     world: "ISOLATED" as chrome.scripting.ExecutionWorld,
     allFrames: true,
@@ -205,10 +211,14 @@ const WVP2_L3_SCRIPT_CONFIGS = [
     id: "WVP2_L3_MAIN",
     matches: ["<all_urls>"],
     js: [
-      "widevine/l3/eme_interception.js",
-      "widevine/l3/content_key_decryption.js",
       "widevine/l3/lib/cryptojs-aes_0.2.0.min.js",
       "widevine/l3/lib/pbf.3.0.5.min.js",
+      "widevine/l3/content_key_decryption.js",
+      "widevine/l3/eme_interception.js",
+      // l3_main_relay.js wraps console.log to intercept the key-found line
+      // produced by WidevineCrypto.decryptContentKey and dispatches a
+      // window.postMessage so l3_bridge.js can relay it to the background.
+      "widevine/l3/l3_main_relay.js",
     ],
     runAt: "document_start" as const,
     world: "MAIN" as chrome.scripting.ExecutionWorld,
