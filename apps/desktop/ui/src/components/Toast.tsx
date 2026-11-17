@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface ToastMessage {
   id: number;
@@ -59,16 +59,22 @@ function ToastItem({ toast, onDismiss }: { toast: ToastMessage; onDismiss: (id: 
 /** Hook to manage toast state. Returns toasts array + an `addToast` function. */
 export function useToasts() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  const nextId = { current: 0 };
+  const nextId = useRef(0);
 
-  const addToast = (text: string, kind: ToastMessage["kind"] = "info") => {
+  const addToast = useCallback((text: string, kind: ToastMessage["kind"] = "info") => {
     const id = ++nextId.current;
-    setToasts((current) => [...current, { id, text, kind }]);
-  };
+    setToasts((current) => {
+      // Deduplicate: skip if the most-recent toast has the same text.
+      if (current.length > 0 && current[current.length - 1].text === text) return current;
+      // Cap at 5 toasts: drop the oldest when already at the limit.
+      const capped = current.length >= 5 ? current.slice(1) : current;
+      return [...capped, { id, text, kind }];
+    });
+  }, []);
 
-  const dismiss = (id: number) => {
+  const dismiss = useCallback((id: number) => {
     setToasts((current) => current.filter((t) => t.id !== id));
-  };
+  }, []);
 
   return { toasts, addToast, dismiss };
 }

@@ -413,7 +413,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .download-title strong {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 13px; font-weight: 500;
+  font-size: 13px; font-weight: 500; flex: 1; min-width: 0;
 }
 
 .download-url {
@@ -438,17 +438,18 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .download-meta {
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: nowrap; gap: 8px;
   margin-top: 6px; color: var(--text-3); font-size: 11px;
 }
 
 .download-speed { display: flex; gap: 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.download-eta   { color: var(--text-2); }
+.download-eta   { color: var(--text-2); white-space: nowrap; }
 .download-error { margin-top: 8px; color: var(--red); font-size: 12px; }
 .download-time  { color: var(--text-3); font-size: 11px; white-space: nowrap; }
 
 .download-actions {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
-  gap: 4px; flex-shrink: 0;
+  gap: 4px; flex-shrink: 0; max-width: 220px;
 }
 
 /* ============================================================
@@ -746,6 +747,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .toast-stack {
   position: fixed; bottom: 20px; right: 20px; z-index: 200;
   display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+  max-width: 380px; width: max-content;
 }
 
 .toast {

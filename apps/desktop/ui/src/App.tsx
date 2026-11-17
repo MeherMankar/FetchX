@@ -206,6 +206,7 @@ export function App() {
   const [conversionDownload, setConversionDownload] = useState<import("./api/types").Download | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const prevCompletedRef = useRef<Set<string>>(new Set());
+  const lastNotificationRef = useRef('');
   const { toasts, addToast, dismiss: dismissToast } = useToasts();
 
   const {
@@ -228,7 +229,11 @@ export function App() {
   useEffect(() => {
     let off: (() => void)|undefined;
     void listen<NotificationEvent>("fetchx-notification", (e) => {
-      addToast(e.payload.title + (e.payload.body ? ": " + e.payload.body : ""), "success");
+      const text = e.payload.title + (e.payload.body ? ": " + e.payload.body : "");
+      if (text !== lastNotificationRef.current) {
+        lastNotificationRef.current = text;
+        addToast(text, "success");
+      }
     }).then((fn) => { off = fn; });
     return () => off?.();
   }, [addToast]);
