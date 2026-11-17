@@ -10,12 +10,15 @@
     "tabs",
     "downloads",
     "storage",
+    "unlimitedStorage",
     "notifications",
     "cookies",
-    "webRequest"
+    "webRequest",
+    "clipboardWrite",
+    "scripting"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "*://*/*"
   ],
   "background": {
     "service_worker": "dist/background.js",

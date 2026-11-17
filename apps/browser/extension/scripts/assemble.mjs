@@ -36,6 +36,9 @@ cpSync(join(root, "icons"), join(outDir, "icons"), { recursive: true });
 // popup.html
 copyFileSync(join(root, "popup.html"), join(outDir, "popup.html"));
 
+// widevine static assets (pre-built bundles, UI pages, images, pickers)
+cpSync(join(root, "src", "widevine"), join(outDir, "widevine"), { recursive: true });
+
 // manifest
 const manifestSrc = target === "firefox"
   ? join(root, "manifest-firefox", "manifest.json")

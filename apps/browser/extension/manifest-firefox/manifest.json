@@ -15,10 +15,13 @@
     "tabs",
     "downloads",
     "storage",
+    "unlimitedStorage",
     "notifications",
     "<all_urls>",
+    "*://*/*",
     "cookies",
-    "webRequest"
+    "webRequest",
+    "clipboardWrite"
   ],
   "background": {
     "scripts": [

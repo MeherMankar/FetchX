@@ -160,6 +160,316 @@ browserApi.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ────────────────────────────────────────────────────────────
+// WidevineProxy2 — content script registration
+// ────────────────────────────────────────────────────────────
+
+const WVP2_SCRIPT_CONFIGS = [
+  {
+    id: "WVP2_ISOLATED",
+    matches: ["<all_urls>"],
+    js: ["widevine/library/isolated/bundle.min.js"],
+    runAt: "document_start" as const,
+    world: "ISOLATED" as chrome.scripting.ExecutionWorld,
+    allFrames: true,
+    matchOriginAsFallback: true,
+    persistAcrossSessions: true,
+  },
+  {
+    id: "WVP2_MAIN",
+    matches: ["<all_urls>"],
+    js: ["widevine/library/main/bundle.min.js"],
+    runAt: "document_start" as const,
+    world: "MAIN" as chrome.scripting.ExecutionWorld,
+    allFrames: true,
+    matchOriginAsFallback: true,
+    persistAcrossSessions: true,
+  },
+];
+
+let wvp2RegistrationPromise: Promise<void> | null = null;
+
+async function wvp2GetEnabledState(): Promise<boolean> {
+  try {
+    const result = await chrome.storage.sync.get(["enabled", "selected"]);
+    return !!(result.enabled ?? true) && !!result.selected;
+  } catch {
+    return false;
+  }
+}
+
+async function wvp2RegisterScripts(): Promise<void> {
+  const existing = await chrome.scripting.getRegisteredContentScripts();
+  const existingIds = new Set(existing.map((s) => s.id));
+  const toRegister = WVP2_SCRIPT_CONFIGS.filter((cfg) => !existingIds.has(cfg.id));
+  const toUpdate = WVP2_SCRIPT_CONFIGS.filter((cfg) => existingIds.has(cfg.id));
+  if (toRegister.length) await chrome.scripting.registerContentScripts(toRegister);
+  if (toUpdate.length) await chrome.scripting.updateContentScripts(toUpdate);
+}
+
+async function wvp2UnregisterScripts(): Promise<void> {
+  const existing = await chrome.scripting.getRegisteredContentScripts();
+  const existingIds = new Set(existing.map((s) => s.id));
+  const ids = WVP2_SCRIPT_CONFIGS.map((cfg) => cfg.id).filter((id) => existingIds.has(id));
+  if (ids.length) await chrome.scripting.unregisterContentScripts({ ids });
+}
+
+function wvp2EnsureScriptsRegistered(): Promise<void> {
+  if (wvp2RegistrationPromise) return wvp2RegistrationPromise;
+  wvp2RegistrationPromise = (async () => {
+    try {
+      const enabled = await wvp2GetEnabledState();
+      if (enabled) {
+        await wvp2RegisterScripts();
+      } else {
+        await wvp2UnregisterScripts();
+      }
+    } finally {
+      wvp2RegistrationPromise = null;
+    }
+  })();
+  return wvp2RegistrationPromise;
+}
+
+// ────────────────────────────────────────────────────────────
+// WidevineProxy2 — remote CDM session management
+// ────────────────────────────────────────────────────────────
+
+interface RemoteCdmDevice {
+  host: string;
+  secret: string;
+  device_name: string;
+}
+
+interface RemoteKey {
+  k: string;
+  kid: string;
+}
+
+class RemoteCdm {
+  sessionId: string;
+  host: string;
+  secret: string;
+  deviceName: string;
+
+  constructor(sessionId: string, host: string, secret: string, deviceName: string) {
+    this.sessionId = sessionId;
+    this.host = host;
+    this.secret = secret;
+    this.deviceName = deviceName;
+  }
+
+  static async open(host: string, secret: string, deviceName: string): Promise<RemoteCdm> {
+    const trimmedHost = host.replace(/\/+$/, "");
+    const resp = await fetch(`${trimmedHost}/${deviceName}/open`, {
+      method: "GET",
+      headers: { "X-Secret-Key": secret },
+    });
+    if (resp.status !== 200) throw new Error("Remote CDM API (open) response code does not indicate success");
+    const json = await resp.json() as { data: { session_id: string } };
+    return new RemoteCdm(json.data.session_id, trimmedHost, secret, deviceName);
+  }
+
+  async setServiceCertificate(certificateB64: string): Promise<void> {
+    const resp = await fetch(`${this.host}/${this.deviceName}/set_service_certificate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Secret-Key": this.secret },
+      body: JSON.stringify({ session_id: this.sessionId, certificate: certificateB64 }),
+    });
+    if (resp.status !== 200) throw new Error("Remote CDM API (set_service_certificate) response code does not indicate success");
+  }
+
+  async getLicenseChallenge(initDataB64: string, privacyMode: boolean): Promise<string> {
+    const resp = await fetch(`${this.host}/${this.deviceName}/get_license_challenge/STREAMING`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Secret-Key": this.secret },
+      body: JSON.stringify({ session_id: this.sessionId, init_data: initDataB64, privacy_mode: privacyMode }),
+    });
+    if (resp.status !== 200) throw new Error("Remote CDM API (get_license_challenge) response code does not indicate success");
+    const json = await resp.json() as { data: { challenge_b64: string } };
+    return json.data.challenge_b64;
+  }
+
+  async parseLicense(licenseB64: string): Promise<RemoteKey[]> {
+    const parseResp = await fetch(`${this.host}/${this.deviceName}/parse_license`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Secret-Key": this.secret },
+      body: JSON.stringify({ session_id: this.sessionId, license_message: licenseB64 }),
+    });
+    if (parseResp.status !== 200) throw new Error("Remote CDM API (parse_license) response code does not indicate success");
+    const keysResp = await fetch(`${this.host}/${this.deviceName}/get_keys/CONTENT`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Secret-Key": this.secret },
+      body: JSON.stringify({ session_id: this.sessionId }),
+    });
+    if (keysResp.status !== 200) throw new Error("Remote CDM API (get_keys) response code does not indicate success");
+    const keysJson = await keysResp.json() as { data: { keys: Array<{ key: string; key_id: string }> } };
+    await fetch(`${this.host}/${this.deviceName}/close/${this.sessionId}`, {
+      method: "GET",
+      headers: { "X-Secret-Key": this.secret },
+    });
+    return keysJson.data.keys.map(({ key, key_id }) => ({ k: key, kid: key_id }));
+  }
+}
+
+const remoteCdmSessions = new Map<string, RemoteCdm>();
+
+async function getRemoteDevice(): Promise<RemoteCdmDevice> {
+  const result = await chrome.storage.sync.get(["selected_remote_cdm"]);
+  const selectedRemoteCdm = result.selected_remote_cdm as string | undefined;
+  if (!selectedRemoteCdm) throw new Error("No remote CDM selected");
+  const deviceObj = await chrome.storage.sync.get([selectedRemoteCdm]);
+  const device = deviceObj[selectedRemoteCdm] as RemoteCdmDevice | undefined;
+  if (!device) throw new Error(`Selected remote CDM "${selectedRemoteCdm}" not found in storage`);
+  return device;
+}
+
+function getRemoteCdmSession(sessionId: string): RemoteCdm {
+  const cdm = remoteCdmSessions.get(sessionId);
+  if (!cdm) throw new Error(`Unknown remote CDM session "${sessionId}"`);
+  return cdm;
+}
+
+type RemotePayload = Record<string, unknown>;
+
+async function handleRemoteMessage(type: string, payload: RemotePayload): Promise<unknown> {
+  switch (type) {
+    case "REMOTE_OPEN": {
+      const device = await getRemoteDevice();
+      const cdm = await RemoteCdm.open(device.host, device.secret, device.device_name);
+      remoteCdmSessions.set(cdm.sessionId, cdm);
+      return cdm.sessionId;
+    }
+    case "REMOTE_SET_SERVICE_CERTIFICATE": {
+      const cdm = getRemoteCdmSession(payload.sessionId as string);
+      await cdm.setServiceCertificate(payload.certificate as string);
+      return true;
+    }
+    case "REMOTE_GET_CHALLENGE": {
+      const cdm = getRemoteCdmSession(payload.sessionId as string);
+      return cdm.getLicenseChallenge(payload.initData as string, payload.privacyMode as boolean);
+    }
+    case "REMOTE_PARSE": {
+      const cdm = getRemoteCdmSession(payload.sessionId as string);
+      try {
+        return await cdm.parseLicense(payload.license as string);
+      } finally {
+        remoteCdmSessions.delete(payload.sessionId as string);
+      }
+    }
+    default:
+      throw new Error(`Unknown remote message type "${type}"`);
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// WidevineProxy2 — icon state helpers
+// ────────────────────────────────────────────────────────────
+
+let wvp2IconTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+async function wvp2SetIcon(type: "red" | "normal"): Promise<void> {
+  try {
+    const p = type === "red" ? "-red" : "";
+    await chrome.action.setIcon({
+      path: {
+        16: `widevine/images/icon-16${p}.png`,
+        32: `widevine/images/icon-32${p}.png`,
+        64: `widevine/images/icon-64${p}.png`,
+        128: `widevine/images/icon-128${p}.png`,
+      },
+    });
+  } catch { /* cosmetic */ }
+}
+
+// ────────────────────────────────────────────────────────────
+// WidevineProxy2 — picker helper
+// ────────────────────────────────────────────────────────────
+
+function wvp2OpenPicker(path: string, mobile: boolean): void {
+  if (mobile) {
+    void chrome.tabs.create({ url: chrome.runtime.getURL(path) });
+  } else {
+    void chrome.windows.create({ url: path, type: "popup", width: 320, height: 180 });
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+// WidevineProxy2 — storage change watcher
+// ────────────────────────────────────────────────────────────
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local") {
+    const added = Object.values(changes).some(
+      ({ oldValue, newValue }) => oldValue === undefined && newValue !== undefined,
+    );
+    if (added) {
+      void wvp2SetIcon("red");
+      if (wvp2IconTimeoutId) clearTimeout(wvp2IconTimeoutId);
+      wvp2IconTimeoutId = setTimeout(() => {
+        wvp2IconTimeoutId = null;
+        void wvp2SetIcon("normal");
+      }, 60 * 1000);
+    }
+  } else if (areaName === "sync") {
+    void wvp2EnsureScriptsRegistered();
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// WidevineProxy2 — webRequest manifest header relay
+// ────────────────────────────────────────────────────────────
+
+if (webRequestApi) {
+  const webRequestFull = webRequestApi as unknown as {
+    onBeforeSendHeaders?: {
+      addListener: (
+        cb: (details: { tabId: number; method: string; url: string; requestHeaders: Array<{ name: string; value: string }> }) => void,
+        filter: object,
+        extra: string[],
+      ) => void;
+    };
+  };
+  webRequestFull.onBeforeSendHeaders?.addListener(
+    async (details) => {
+      if (details.tabId === -1) return;
+      if (details.method !== "GET") return;
+      const headers = (details.requestHeaders ?? [])
+        .filter(
+          (item) =>
+            !item.name.startsWith("sec-ch-ua") &&
+            !item.name.startsWith("Sec-Fetch") &&
+            !item.name.startsWith("Accept-") &&
+            !item.name.startsWith("Host") &&
+            item.name !== "Connection",
+        )
+        .reduce<Record<string, string>>((acc, item) => {
+          acc[item.name] = item.value;
+          return acc;
+        }, {});
+      try {
+        await chrome.tabs.sendMessage(details.tabId, {
+          type: "MANIFEST_HEADERS",
+          payload: { url: details.url, headers },
+        });
+      } catch {
+        // tab may not have the content script injected; ignore
+      }
+    },
+    { urls: ["<all_urls>"] },
+    ["requestHeaders", "extraHeaders"],
+  );
+}
+
+chrome.runtime.onSuspend.addListener(() => {
+  void wvp2SetIcon("normal");
+});
+
+// Bootstrap WVP2 script registration after service worker becomes active
+setTimeout(() => {
+  void wvp2EnsureScriptsRegistered();
+}, 1000);
+
+// ────────────────────────────────────────────────────────────
 // Context menus
 // ────────────────────────────────────────────────────────────
 
@@ -184,6 +494,11 @@ browserApi.runtime.onInstalled.addListener(() => {
       contexts: ["page"],
     });
   });
+  void wvp2EnsureScriptsRegistered();
+});
+
+browserApi.runtime.onStartup.addListener(() => {
+  void wvp2EnsureScriptsRegistered();
 });
 
 browserApi.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -394,6 +709,32 @@ browserApi.runtime.onMessage.addListener(
         }
         sendResponse({ ok: true });
         return false;
+
+      // ── WidevineProxy2 messages ──────────────────────────────
+      case "IS_OUTDATED":
+        sendResponse(false); // version check handled separately
+        return false;
+
+      case "OPEN_PICKER_WVD":
+        wvp2OpenPicker("widevine/picker/wvd/filePicker.html", false);
+        break;
+      case "OPEN_PICKER_WVD_MOBILE":
+        wvp2OpenPicker("widevine/picker/wvd/filePicker.html", true);
+        break;
+      case "OPEN_PICKER_REMOTE":
+        wvp2OpenPicker("widevine/picker/remote/filePicker.html", false);
+        break;
+      case "OPEN_PICKER_REMOTE_MOBILE":
+        wvp2OpenPicker("widevine/picker/remote/filePicker.html", true);
+        break;
+    }
+
+    // Handle REMOTE_* messages for WidevineProxy2 Remote CDM
+    if (typeof message.type === "string" && message.type.startsWith("REMOTE_")) {
+      void handleRemoteMessage(message.type, (message.payload ?? {}) as RemotePayload)
+        .then((data) => sendResponse({ data }))
+        .catch((error: unknown) => sendResponse({ error: error instanceof Error ? error.message : String(error) }));
+      return true;
     }
 
     sendResponse(null);
