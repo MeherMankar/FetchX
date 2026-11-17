@@ -57,5 +57,5 @@ pub async fn pick_wvd_file(app: tauri::AppHandle) -> Result<Option<String>, Stri
         .file()
         .add_filter("Widevine Device", &["wvd"])
         .blocking_pick_file();
-    Ok(path.map(|p| p.to_string_lossy().into_owned()))
+    Ok(path.and_then(|p| p.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
 }
