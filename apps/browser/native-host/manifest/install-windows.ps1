@@ -21,9 +21,13 @@ $ManifestPath = "$ManifestDir\$HostName.json"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..\..\..\..")).Path
 
-$HostBinaryRelease = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
-$HostBinaryDebug   = Join-Path $RepoRoot "target\debug\fetchx-native-host.exe"
-$HostBinary = if (Test-Path $HostBinaryRelease) { $HostBinaryRelease } else { $HostBinaryDebug }
+$HostBinaryRelease   = Join-Path $RepoRoot "target\release\fetchx-native-host.exe"
+$HostBinaryDebug     = Join-Path $RepoRoot "target\debug\fetchx-native-host.exe"
+# Tauri NSIS installs resources to %LOCALAPPDATA%\FetchX\engines\ by default.
+$HostBinaryInstalled = "$env:LOCALAPPDATA\FetchX\engines\fetchx-native-host.exe"
+$HostBinary = if (Test-Path $HostBinaryInstalled) { $HostBinaryInstalled }
+              elseif (Test-Path $HostBinaryRelease) { $HostBinaryRelease }
+              else { $HostBinaryDebug }
 
 $BrowserKeys = @(
     "Google\Chrome",

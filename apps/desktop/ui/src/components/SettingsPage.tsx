@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getBrowserExtensionStatus,
+  launchBrowserWithExtension,
   openBrowserExtensionInstallPage,
 } from "../api/browserExtensions";
 import {
@@ -27,9 +28,17 @@ import { errorMessage } from "../lib/format";
 // Status indicator
 // ---------------------------------------------------------------------------
 
+const FIREFOX_FAMILY_NAMES = new Set([
+  "Mozilla Firefox",
+  "LibreWolf",
+  "Waterfox",
+  "Floorp",
+]);
+
 function BrowserExtensionSection() {
   const [status, setStatus] = useState<BrowserExtensionStatus | null>(null);
   const [busyBrowser, setBusyBrowser] = useState<string | null>(null);
+  const [busyAll, setBusyAll] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +60,7 @@ function BrowserExtensionSection() {
     setMessage(null);
     try {
       await openBrowserExtensionInstallPage(browser);
-      setMessage(`Opened ${browser}. Follow the local-install steps below to add FetchX.`);
+      setMessage("Opened " + browser + ". Follow the local-install steps below to add FetchX.");
       await refresh();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -59,6 +68,43 @@ function BrowserExtensionSection() {
       setBusyBrowser(null);
     }
   };
+
+  const installBrowser = async (browser: string) => {
+    setBusyBrowser(browser);
+    setMessage(null);
+    try {
+      await launchBrowserWithExtension(browser);
+      setMessage("Launched " + browser + " with the FetchX extension loaded.");
+      await refresh();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusyBrowser(null);
+    }
+  };
+
+  const installAll = async () => {
+    if (!status) return;
+    setBusyAll(true);
+    setMessage(null);
+    const detected = status.browsers.filter((b) => b.detected);
+    for (const b of detected) {
+      try {
+        if (FIREFOX_FAMILY_NAMES.has(b.browser)) {
+          await openBrowserExtensionInstallPage(b.browser);
+        } else {
+          await launchBrowserWithExtension(b.browser);
+        }
+      } catch {
+        // Continue with remaining browsers even if one fails.
+      }
+    }
+    await refresh();
+    setBusyAll(false);
+    setMessage("Extension installation launched for all detected browsers.");
+  };
+
+  const isBusy = busyBrowser !== null || busyAll;
 
   return (
     <section className="settings-section" aria-labelledby="browser-extension-heading">
@@ -70,8 +116,8 @@ function BrowserExtensionSection() {
 
       <p className="settings-hint">
         FetchX is not yet published in the browser stores, so browsers cannot
-        automatically install the extension. Open a browser below and load the
-        local extension once.
+        automatically install the extension. Use the buttons below to load the
+        extension locally.
       </p>
 
       {error && <div className="error-banner" role="alert">{error}</div>}
@@ -84,7 +130,7 @@ function BrowserExtensionSection() {
             <div className="settings-control">
               <span>
                 {status.native_host_binary_path
-                  ? `Available: ${status.native_host_binary_path}`
+                  ? "Available: " + status.native_host_binary_path
                   : "Not found. Browser downloads will not reach FetchX until the native host is installed."}
               </span>
             </div>
@@ -96,7 +142,7 @@ function BrowserExtensionSection() {
               <code className="settings-path">{status.chromium_extension_path}</code>
               <span className="settings-hint">
                 In Chrome, Edge, or another Chromium browser, enable Developer mode
-                and choose “Load unpacked”, then select this folder.
+                and choose "Load unpacked", then select this folder.
               </span>
             </div>
           </div>
@@ -106,7 +152,7 @@ function BrowserExtensionSection() {
             <div className="settings-control">
               <code className="settings-path">{status.firefox_extension_path}</code>
               <span className="settings-hint">
-                In Firefox, choose “Load Temporary Add-on” and select this folder’s
+                In Firefox, choose "Load Temporary Add-on" and select this folder's
                 manifest.json. Temporary add-ons are removed when Firefox exits;
                 permanent installation requires a signed add-on.
               </span>
@@ -114,19 +160,44 @@ function BrowserExtensionSection() {
           </div>
 
           <div className="browser-extension-list">
+            {status.browsers.some((b) => b.detected) && (
+              <div className="browser-extension-install-all">
+                <button
+                  className="button button-primary"
+                  onClick={() => void installAll()}
+                  disabled={isBusy}
+                >
+                  {busyAll ? "Installing..." : "Install in all detected browsers"}
+                </button>
+              </div>
+            )}
+
             {status.browsers.filter((browser) => browser.detected).map((browser) => (
               <div className="browser-extension-item" key={browser.browser}>
+                <span className="browser-extension-status-icon" aria-hidden="true">
+                  {browser.native_host_registered ? "\u2713" : "\u25cb"}
+                </span>
                 <span>{browser.browser}</span>
                 <span className="settings-hint">
                   {browser.native_host_registered ? "Native host ready" : "Native host not registered"}
                 </span>
-                <button
-                  className="button button-secondary"
-                  onClick={() => void openInstallPage(browser.browser)}
-                  disabled={busyBrowser !== null}
-                >
-                  {busyBrowser === browser.browser ? "Opening…" : "Open install page"}
-                </button>
+                {!FIREFOX_FAMILY_NAMES.has(browser.browser) && !browser.native_host_registered ? (
+                  <button
+                    className="button button-secondary"
+                    onClick={() => void installBrowser(browser.browser)}
+                    disabled={isBusy}
+                  >
+                    {busyBrowser === browser.browser ? "Launching..." : "Install"}
+                  </button>
+                ) : (
+                  <button
+                    className="button button-secondary"
+                    onClick={() => void openInstallPage(browser.browser)}
+                    disabled={isBusy}
+                  >
+                    {busyBrowser === browser.browser ? "Opening..." : "Open install page"}
+                  </button>
+                )}
               </div>
             ))}
             {status.browsers.every((browser) => !browser.detected) && (
@@ -140,7 +211,6 @@ function BrowserExtensionSection() {
     </section>
   );
 }
-
 function StatusDot({
   available,
   label,

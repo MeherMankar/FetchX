@@ -1911,6 +1911,30 @@ pub async fn open_browser_extension_install_page(
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn launch_browser_with_extension(app: AppHandle, browser: String) -> Result<(), String> {
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| crate::app::fallback_app_data_dir());
+    let bundled_engines_dir = app
+        .path()
+        .resource_dir()
+        .map(|path| path.join("engines"))
+        .unwrap_or_else(|_| crate::app::fallback_bundled_engines_dir(&app_data_dir));
+
+    tokio::task::spawn_blocking(move || {
+        crate::browser_extension_installer::launch_browser_with_extension(
+            &browser,
+            &app_data_dir,
+            &bundled_engines_dir,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ---------------------------------------------------------------------------
 // T3 — Per-download speed limiter
 // ---------------------------------------------------------------------------

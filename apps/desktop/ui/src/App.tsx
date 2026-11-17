@@ -10,6 +10,7 @@ import {
 import type { Download, DownloadPriority, QueueSnapshot } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
 import { BulkActionBar } from "./components/BulkActionBar";
+import { BrowserExtensionSetupModal } from "./components/BrowserExtensionSetupModal";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DetailPanel } from "./components/DetailPanel";
 import { DownloadRow } from "./components/DownloadRow";
@@ -583,6 +584,7 @@ export function App() {
 
   return (
     <div className="app-layout">
+      <BrowserExtensionSetupModal />
       <Sidebar
         active={navSection}
         counts={counts}

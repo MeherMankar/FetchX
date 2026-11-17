@@ -308,6 +308,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::register_browser_extensions,
             commands::get_browser_extension_status,
             commands::open_browser_extension_install_page,
+            commands::launch_browser_with_extension,
             commands::set_download_bandwidth_limit,
             commands::list_completed_downloads,
             commands::clear_download_history,

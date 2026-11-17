@@ -892,6 +892,59 @@ pub fn ensure_registered(
     Ok(summary)
 }
 
+/// Launches the given browser with the Chromium extension pre-loaded (via `--load-extension`),
+/// or opens the Firefox extension install page for Gecko-family browsers.
+///
+/// For Chromium browsers, `ensure_registered` is called first so the native host manifest is
+/// written before the browser starts. The process is spawned detached and non-blocking.
+pub fn launch_browser_with_extension(
+    browser_name: &str,
+    app_data_dir: &Path,
+    bundled_engines_dir: &Path,
+) -> Result<(), String> {
+    let summary = ensure_registered(app_data_dir, bundled_engines_dir)?;
+
+    let target = BROWSER_TARGETS
+        .iter()
+        .find(|t| t.display_name == browser_name)
+        .ok_or_else(|| format!("Unsupported browser: {browser_name}"))?;
+
+    if !target.is_chromium {
+        return open_browser_extension_page(browser_name);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+
+        let executable = browser_executable(target)
+            .ok_or_else(|| format!("Could not find the {browser_name} executable."))?;
+
+        let chromium_extension_dir = &summary.chromium_extension_dir;
+
+        let mut command = std::process::Command::new(executable);
+        command
+            .arg(format!("--load-extension={chromium_extension_dir}"))
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+
+        command
+            .spawn()
+            .map_err(|e| format!("Could not launch {browser_name}: {e}"))?;
+
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = summary;
+        Err("Guided browser extension launch is currently supported on Windows.".to_owned())
+    }
+}
+
 /// Queries current status of browser extensions and registry keys.
 pub fn get_extension_status(
     app_data_dir: &Path,
