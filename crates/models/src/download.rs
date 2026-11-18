@@ -161,6 +161,36 @@ impl DownloadSource {
         }
     }
 
+    /// Returns a copy of this source with a different URL, validating that the
+    /// new URL is non-empty, is not a torrent/magnet URI, and that the scheme is
+    /// consistent with the existing engine.
+    pub fn with_new_url(&self, url: impl Into<String>) -> Result<Self, DownloadSourceError> {
+        let url = url.into();
+        if url.trim().is_empty() {
+            return Err(DownloadSourceError::EmptyUrl);
+        }
+        if url.starts_with("magnet:") || url.starts_with("torrent+file:") {
+            return Err(DownloadSourceError::InvalidMagnetUri);
+        }
+        // Scheme-engine consistency for FTP/FTPS/SFTP.
+        if url.starts_with("ftp://") && self.engine != EngineKind::Ftp {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        if url.starts_with("ftps://") && self.engine != EngineKind::Ftps {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        if url.starts_with("sftp://") && self.engine != EngineKind::Sftp {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        Ok(Self {
+            url,
+            engine: self.engine,
+            yt_dlp_format: self.yt_dlp_format.clone(),
+            yt_dlp_audio_format: self.yt_dlp_audio_format,
+            bandwidth_limit_bps: self.bandwidth_limit_bps,
+        })
+    }
+
     fn is_valid_yt_dlp_format_id(format_id: &str) -> bool {
         !format_id.is_empty()
             && format_id

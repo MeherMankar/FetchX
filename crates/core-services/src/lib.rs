@@ -2728,6 +2728,16 @@ impl CoreServices {
 
     // ── Shutdown ──────────────────────────────────────────────────────────
 
+    /// Updates the source URL of a non-active download and re-queues it if it
+    /// was in a terminal state (Failed/Cancelled).
+    pub async fn update_download_url(
+        &self,
+        id: DownloadId,
+        new_url: String,
+    ) -> Result<DownloadItem, fetchx_queue::QueueError> {
+        self.queue().update_url(id, new_url).await
+    }
+
     /// Gracefully shuts down all services. Repeated and concurrent calls are safe.
     ///
     /// Order: scheduler/queue → optional engines. Storage closes when the service graph drops.

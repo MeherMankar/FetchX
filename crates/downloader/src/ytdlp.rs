@@ -2046,6 +2046,14 @@ mod tests {
             std::future::ready(Ok(false))
         }
 
+        fn update_source_url(
+            &self,
+            _id: DownloadId,
+            _new_url: &str,
+        ) -> impl Future<Output = Result<bool, fetchx_storage::StorageError>> + Send {
+            std::future::ready(Ok(false))
+        }
+
         fn delete(
             &self,
             _id: DownloadId,

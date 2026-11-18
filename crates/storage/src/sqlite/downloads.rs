@@ -332,6 +332,25 @@ impl DownloadRepository for SqliteDownloadRepository {
         conditional_update(&self.pool, item, expected_status, Some(expected_updated_at)).await
     }
 
+    async fn update_source_url(
+        &self,
+        id: DownloadId,
+        new_url: &str,
+    ) -> Result<bool, StorageError> {
+        let now = fetchx_models::Timestamp::now()
+            .map_err(|error| StorageError::invalid_data("updated_at", error.to_string()))?;
+        let updated_at = to_sqlite_integer("updated_at", now.as_unix_millis())?;
+        let result = sqlx::query(
+            "UPDATE downloads SET source_url = ?1, updated_at = ?2 WHERE id = ?3",
+        )
+        .bind(new_url)
+        .bind(updated_at)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn delete(&self, id: DownloadId) -> Result<bool, StorageError> {
         let result = sqlx::query("DELETE FROM downloads WHERE id = ?")
             .bind(id.to_string())

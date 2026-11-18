@@ -242,6 +242,24 @@ where
         Ok(updated)
     }
 
+    async fn update_source_url(
+        &self,
+        id: DownloadId,
+        new_url: &str,
+    ) -> Result<bool, StorageError> {
+        let updated = self.inner.update_source_url(id, new_url).await?;
+        if updated {
+            match self.inner.get(id).await {
+                Ok(Some(item)) => self.publish_updated(item),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, download_id = %id, "could not read updated download for event")
+                }
+            }
+        }
+        Ok(updated)
+    }
+
     async fn delete(&self, id: DownloadId) -> Result<bool, StorageError> {
         let deleted = self.inner.delete(id).await?;
         if deleted {

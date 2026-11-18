@@ -354,6 +354,17 @@ impl QueueManager {
         Ok(())
     }
 
+    /// Updates the source URL of a non-active download and re-queues it if it
+    /// was in a terminal state (Failed/Cancelled).
+    pub async fn update_url(
+        &self,
+        id: DownloadId,
+        new_url: String,
+    ) -> Result<DownloadItem, QueueError> {
+        self.request(|reply| Command::UpdateUrl { id, new_url, reply })
+            .await
+    }
+
     pub async fn cancel(&self, id: DownloadId) -> Result<(), QueueError> {
         self.request(|reply| Command::Cancel { id, reply }).await?;
         global_diagnostics().record(
@@ -619,6 +630,11 @@ enum Command {
     Retry {
         id: DownloadId,
         reply: oneshot::Sender<Result<(), QueueError>>,
+    },
+    UpdateUrl {
+        id: DownloadId,
+        new_url: String,
+        reply: oneshot::Sender<Result<DownloadItem, QueueError>>,
     },
     Cancel {
         id: DownloadId,
@@ -1313,6 +1329,78 @@ where
                     },
                 );
                 Ok(())
+            }
+            .await;
+            let _ = reply.send(result);
+        }
+        Command::UpdateUrl {
+            id,
+            new_url,
+            reply,
+        } => {
+            let result = async {
+                if active.contains_key(&id) {
+                    return Err(QueueError::InvalidStatus {
+                        id,
+                        action: "update_url",
+                        status: DownloadStatus::Downloading,
+                    });
+                }
+                let item = repository
+                    .get(id)
+                    .await?
+                    .ok_or(StateMachineError::NotFound(id))?;
+                if matches!(
+                    item.source().engine(),
+                    EngineKind::Aria2 | EngineKind::NativeTorrent
+                ) {
+                    return Err(QueueError::Engine(
+                        DownloadEngineError::LegacyAria2Unavailable,
+                    ));
+                }
+                // Validate the new URL against the existing source (checks scheme/engine consistency).
+                item.source()
+                    .with_new_url(&new_url)
+                    .map_err(|_| QueueError::InvalidStatus {
+                        id,
+                        action: "update_url",
+                        status: item.status(),
+                    })?;
+                match item.status() {
+                    DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                        if !entries.contains_key(&id) {
+                            return Err(QueueError::DownloadNotFound(id));
+                        }
+                        let sequence = *next_sequence;
+                        let next = next_sequence
+                            .checked_add(1)
+                            .ok_or(QueueError::ResourceInvariant)?;
+                        repository.update_source_url(id, &new_url).await?;
+                        repository.move_to_queue_tail(id).await?;
+                        let queued =
+                            state_machine.transition(id, DownloadStatus::Queued).await?;
+                        *next_sequence = next;
+                        deferred.remove(&id);
+                        entries.insert(id, Entry { item: queued.clone(), sequence });
+                        Ok(queued)
+                    }
+                    DownloadStatus::Paused | DownloadStatus::Queued => {
+                        repository.update_source_url(id, &new_url).await?;
+                        let updated = repository
+                            .get(id)
+                            .await?
+                            .ok_or(StateMachineError::NotFound(id))?;
+                        if let Some(entry) = entries.get_mut(&id) {
+                            entry.item = updated.clone();
+                        }
+                        Ok(updated)
+                    }
+                    status => Err(QueueError::InvalidStatus {
+                        id,
+                        action: "update_url",
+                        status,
+                    }),
+                }
             }
             .await;
             let _ = reply.send(result);

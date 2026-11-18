@@ -93,6 +93,13 @@ pub trait DownloadRepository: Send + Sync {
         expected_updated_at: Timestamp,
     ) -> impl Future<Output = Result<bool, StorageError>> + Send;
 
+    /// Updates only the download URL, returning `true` if the row was found and updated.
+    fn update_source_url(
+        &self,
+        id: DownloadId,
+        new_url: &str,
+    ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+
     /// Deletes an item and returns whether a row was removed.
     fn delete(&self, id: DownloadId) -> impl Future<Output = Result<bool, StorageError>> + Send;
 }
