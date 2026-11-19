@@ -91,6 +91,7 @@ interface DetailPanelProps {
   onClearSchedule: (id: string) => Promise<void>;
   onError: (message: string) => void;
   onStopSeeding: (id: string) => Promise<void>;
+  onUpdateUrl: (id: string, newUrl: string) => void;
 }
 
 export function DetailPanel({
@@ -108,6 +109,7 @@ export function DetailPanel({
   onClearSchedule,
   onError,
   onStopSeeding,
+  onUpdateUrl,
 }: DetailPanelProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
@@ -143,6 +145,9 @@ export function DetailPanel({
   const [torrentMetadata, setTorrentMetadata] = useState<TorrentDownloadMetadata | null>(null);
   const [torrentMetadataError, setTorrentMetadataError] = useState<string | null>(null);
 
+  const [urlEditing, setUrlEditing] = useState(false);
+  const [urlDraft, setUrlDraft] = useState('');
+
   useEffect(() => {
     setRestartOpen(false);
     setRestartError(null);
@@ -150,8 +155,8 @@ export function DetailPanel({
     setTorrentRestartOpen(false);
     setTorrentRestartError(null);
     setRestartedTorrentDownloadId(null);
+    setUrlEditing(false);
   }, [download.id]);
-
   useEffect(() => {
     setTorrentTelemetry(null);
     setTorrentTelemetryError(null);
@@ -209,8 +214,7 @@ export function DetailPanel({
     && download.url.startsWith("magnet:")
     && download.status === "metadata_acquiring"
     && torrentMetadata?.metadata !== null;
-  const canRestartAria2 = isAria2
-    && isHttpSource(download.url)
+  const canRestartAria2 = isAria2    && isHttpSource(download.url)
     && !isMediaHttpSource(download.url)
     && download.status !== "completed"
     && download.status !== "stopped"
@@ -220,6 +224,13 @@ export function DetailPanel({
     && download.status !== "completed"
     && download.status !== "seeding"
     && download.status !== "stopped";
+
+  const canUpdateUrl = !isAria2 && (
+    download.status === "failed" ||
+    download.status === "cancelled" ||
+    download.status === "paused" ||
+    download.status === "queued"
+  );
 
   const startNativeRestart = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1003,6 +1014,48 @@ export function DetailPanel({
             >
               Cancel
             </button>
+          )}
+          {canUpdateUrl && !urlEditing && (
+            <button
+              className="button button-secondary"
+              disabled={busy}
+              onClick={() => { setUrlDraft(download.url); setUrlEditing(true); }}
+            >
+              Update URL
+            </button>
+          )}
+          {canUpdateUrl && urlEditing && (
+            <div className="url-refresh-row">
+              <input
+                className="url-refresh-input"
+                type="text"
+                value={urlDraft}
+                placeholder="Paste new URL"
+                onChange={(e) => setUrlDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    onUpdateUrl(download.id, urlDraft);
+                    setUrlEditing(false);
+                  } else if (e.key === "Escape") {
+                    setUrlEditing(false);
+                  }
+                }}
+                // eslint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+              />
+              <button
+                className="button button-secondary"
+                onClick={() => { onUpdateUrl(download.id, urlDraft); setUrlEditing(false); }}
+              >
+                Confirm
+              </button>
+              <button
+                className="button button-secondary"
+                onClick={() => setUrlEditing(false)}
+              >
+                Cancel
+              </button>
+            </div>
           )}
           <button
             className="button button-danger"

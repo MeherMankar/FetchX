@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 
 import type { Download, DownloadPriority, DownloadSchedule } from "../api/types";
 
@@ -53,6 +53,7 @@ interface DownloadRowProps {
   onClearSchedule: (id: string) => Promise<void>;
   onError: (message: string) => void;
   onEnsureSchedule: (download: Download) => void;
+  onUpdateUrl: (id: string, newUrl: string) => void;
 }
 
 export const DownloadRow = memo(function DownloadRow({
@@ -74,10 +75,25 @@ export const DownloadRow = memo(function DownloadRow({
   onClearSchedule,
   onError,
   onEnsureSchedule,
+  onUpdateUrl,
 }: DownloadRowProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
   const isLegacyAria2 = download.engine === "aria2";
+
+  const [urlEditing, setUrlEditing] = useState(false);
+  const [urlDraft, setUrlDraft] = useState('');
+
+  useEffect(() => {
+    setUrlEditing(false);
+  }, [download.id]);
+
+  const canUpdateUrl = !isLegacyAria2 && (
+    download.status === "failed" ||
+    download.status === "cancelled" ||
+    download.status === "paused" ||
+    download.status === "queued"
+  );
 
   // Trigger lazy schedule fetch for schedulable downloads.
   onEnsureSchedule(download);
@@ -172,6 +188,45 @@ export const DownloadRow = memo(function DownloadRow({
           </p>
         )}
 
+        {canUpdateUrl && urlEditing && (
+          // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
+          <div
+            className="url-refresh-row"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <input
+              className="url-refresh-input"
+              type="text"
+              value={urlDraft}
+              placeholder="Paste new URL"
+              onChange={(e) => setUrlDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  onUpdateUrl(download.id, urlDraft);
+                  setUrlEditing(false);
+                } else if (e.key === "Escape") {
+                  setUrlEditing(false);
+                }
+              }}
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+            />
+            <button
+              className="button button-secondary"
+              onClick={() => { onUpdateUrl(download.id, urlDraft); setUrlEditing(false); }}
+            >
+              Confirm
+            </button>
+            <button
+              className="button button-secondary"
+              onClick={() => setUrlEditing(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         {!isLegacyAria2 && canSchedule(download.status) && (
           // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
           <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
@@ -235,6 +290,16 @@ export const DownloadRow = memo(function DownloadRow({
               <option value="high">High</option>
             </select>
           </>
+        )}
+        {canUpdateUrl && !urlEditing && (
+          <button
+            className="button button-secondary"
+            disabled={busy}
+            onClick={() => { setUrlDraft(download.url); setUrlEditing(true); }}
+            aria-label={`Update URL for ${download.filename}`}
+          >
+            Update URL
+          </button>
         )}
         {!isLegacyAria2 && canPause(download.status) && (
           <button

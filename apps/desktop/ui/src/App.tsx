@@ -6,6 +6,7 @@ import {
   pauseQueueDispatch,
   resumeQueueDispatch,
   stopTorrentSeeding,
+  updateDownloadUrl,
 } from "./api/downloads";
 import type { Download, DownloadPriority, QueueSnapshot } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
@@ -378,6 +379,12 @@ export function App() {
     }
   }, [load, refreshSnapshot]);
 
+  const handleUpdateUrl = useCallback((id: string, newUrl: string) => {
+    updateDownloadUrl(id, newUrl).catch((cause: unknown) => {
+      setGlobalError(cause instanceof Error ? cause.message : String(cause));
+    });
+  }, []);
+
   // -------------------------------------------------------------------------
   // Bulk actions
   // -------------------------------------------------------------------------
@@ -715,6 +722,7 @@ export function App() {
                     onClearSchedule={handleClearSchedule}
                     onError={handleError}
                     onEnsureSchedule={ensureScheduleFetched}
+                    onUpdateUrl={handleUpdateUrl}
                   />
                 ))}
               </div>
@@ -737,6 +745,7 @@ export function App() {
               onClearSchedule={handleClearSchedule}
               onError={handleError}
               onStopSeeding={handleStopSeeding}
+              onUpdateUrl={handleUpdateUrl}
             />
           )}
         </div>

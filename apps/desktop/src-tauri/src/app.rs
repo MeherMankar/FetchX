@@ -282,6 +282,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::remove_download_schedule,
             commands::get_download_schedule,
             commands::retry_download,
+            commands::update_download_url,
             commands::get_queue_snapshot,
             commands::pause_queue_dispatch,
             commands::resume_queue_dispatch,

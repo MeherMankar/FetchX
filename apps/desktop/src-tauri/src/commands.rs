@@ -1426,6 +1426,30 @@ pub async fn retry_download(
     Ok(download)
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_download_url(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    download_id: String,
+    new_url: String,
+) -> Result<DownloadDto, IpcError> {
+    let id = parse_download_id(&download_id)?;
+    let validated_url = validate_source_url(&new_url)?;
+    let core = state.core_services.as_ref().ok_or_else(IpcError::internal)?;
+    core.update_download_url(id, validated_url)
+        .await
+        .map_err(IpcError::from_queue)?;
+    let download = state.get(id).await?;
+    emit_event(
+        &app,
+        DOWNLOAD_UPDATED,
+        &DownloadUpdatedEvent {
+            download: download.clone(),
+        },
+    );
+    Ok(download)
+}
+
 #[tauri::command]
 pub async fn get_queue_snapshot(state: State<'_, AppState>) -> Result<QueueSnapshotDto, IpcError> {
     state.snapshot().await

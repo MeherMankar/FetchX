@@ -1319,3 +1319,28 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ── URL refresh inline editor ──────────────────────── */
+.url-refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.url-refresh-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.url-refresh-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}

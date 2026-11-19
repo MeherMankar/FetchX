@@ -240,6 +240,10 @@ export function retryDownload(downloadId: string): Promise<Download> {
   return invoke<Download>("retry_download", { download_id: downloadId });
 }
 
+export function updateDownloadUrl(id: string, newUrl: string): Promise<Download> {
+  return invoke<Download>('update_download_url', { download_id: id, new_url: newUrl });
+}
+
 export function getQueueSnapshot(): Promise<QueueSnapshot> {
   return invoke<QueueSnapshot>("get_queue_snapshot");
 }
