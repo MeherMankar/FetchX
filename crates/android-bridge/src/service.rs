@@ -1131,6 +1131,21 @@ impl DownloadService {
         })
     }
 
+    pub fn update_download_url(&self, id: String, new_url: String) -> Result<(), MobileApiError> {
+        let download_id = DownloadId::parse(&id)
+            .map_err(|_| MobileApiError::Validation(format!("invalid download ID: {id}")))?;
+        // Validate new_url is a well-formed HTTP(S) URL
+        let validated_url = validate_http_source_url(&new_url)
+            .map_err(|_| MobileApiError::Validation("invalid HTTP(S) download URL".to_owned()))?;
+        self.with_inner(|inner| {
+            inner
+                .runtime
+                .block_on(inner.core.update_download_url(download_id, validated_url))
+                .map(|_| ())
+                .map_err(MobileApiError::from)
+        })
+    }
+
     // ── Stop seeding ──────────────────────────────────────────────────────
 
     pub fn stop_torrent_seeding(&self, id: String) -> Result<(), MobileApiError> {

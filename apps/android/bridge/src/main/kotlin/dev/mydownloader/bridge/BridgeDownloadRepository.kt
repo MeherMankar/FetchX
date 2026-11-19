@@ -562,6 +562,11 @@ class BridgeDownloadRepository(
             }
         }
 
+    override suspend fun updateDownloadUrl(downloadId: String, newUrl: String) =
+        withContext(Dispatchers.IO) {
+            service.updateDownloadUrl(downloadId, newUrl)
+        }
+
     override suspend fun setPriority(downloadId: String, priority: DownloadPriority) =
         withContext(Dispatchers.IO) {
             service.setPriority(downloadId, mapPriorityToDto(priority))

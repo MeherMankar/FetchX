@@ -195,6 +195,11 @@ interface DownloadRepository {
     /** Retry a failed download. */
     suspend fun retryDownload(downloadId: String): String
 
+    /** Update the source URL of a download (e.g. when the original link has expired). */
+    suspend fun updateDownloadUrl(downloadId: String, newUrl: String) {
+        throw UnsupportedOperationException("URL update is not supported by this repository")
+    }
+
     /** Set the queue priority of a download. */
     suspend fun setPriority(downloadId: String, priority: DownloadPriority)
 

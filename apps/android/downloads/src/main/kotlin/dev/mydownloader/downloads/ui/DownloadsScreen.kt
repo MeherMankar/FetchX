@@ -390,6 +390,7 @@ fun DownloadsScreen(
                                 viewModel.selectTorrentFiles(item.id, indexes)
                             },
                             onStopSeeding = { viewModel.stopTorrentSeeding(item.id) },
+                            onUpdateUrl = { id, newUrl -> viewModel.updateDownloadUrl(id, newUrl) },
                             onPlayFile = if ((item.state is dev.fetchx.core.download.DownloadState.Completed ||
                                 item.state is dev.fetchx.core.download.DownloadState.Stopped) &&
                                 isVideoFile(item.fileName)) {

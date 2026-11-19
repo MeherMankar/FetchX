@@ -379,6 +379,9 @@ interface DownloadService {
     string retry_download(string id);
 
     [Throws=MobileApiError]
+    void update_download_url(string id, string new_url);
+
+    [Throws=MobileApiError]
     void set_priority(string id, DownloadPriorityDto priority);
 
     [Throws=MobileApiError]

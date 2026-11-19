@@ -77,6 +77,7 @@ fun DownloadItemRow(
     onStopSeeding: () -> Unit = {},
     onPlayFile: (() -> Unit)? = null,
     onOpenDetail: (() -> Unit)? = null,
+    onUpdateUrl: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var showNativeRestartDialog by remember(item.id) { mutableStateOf(false) }
@@ -98,6 +99,8 @@ fun DownloadItemRow(
     var confirmedRestartTorrentSelection by remember(item.id) { mutableStateOf(false) }
     val legacyAria2Unavailable =
         item.engine.equals("aria2", ignoreCase = true) && item.state !is DownloadState.Completed
+    var showUpdateUrlDialog by remember(item.id) { mutableStateOf(false) }
+    var urlDraft by remember(item.id) { mutableStateOf("") }
 
     // Left-edge status indicator color
     val statusBarColor = when (item.state) {
@@ -275,6 +278,12 @@ fun DownloadItemRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
+                            if (onUpdateUrl != null && !item.engine.equals("aria2", ignoreCase = true)) {
+                                TextButton(onClick = {
+                                    urlDraft = item.url
+                                    showUpdateUrlDialog = true
+                                }) { Text("Update URL") }
+                            }
                             TextButton(onClick = onMoveUpInQueue, enabled = !legacyAria2Unavailable) { Text("Move up") }
                             TextButton(onClick = onMoveDownInQueue, enabled = !legacyAria2Unavailable) { Text("Move down") }
                             TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
@@ -355,6 +364,12 @@ fun DownloadItemRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
+                            if (onUpdateUrl != null && !item.engine.equals("aria2", ignoreCase = true)) {
+                                TextButton(onClick = {
+                                    urlDraft = item.url
+                                    showUpdateUrlDialog = true
+                                }) { Text("Update URL") }
+                            }
                             TextButton(onClick = onResume, enabled = !legacyAria2Unavailable) { Text("Resume") }
                             TextButton(onClick = onCancel, enabled = !legacyAria2Unavailable) { Text("Cancel") }
                         }
@@ -440,6 +455,12 @@ fun DownloadItemRow(
                             if (state.retryable) {
                                 TextButton(onClick = onRetry, enabled = !legacyAria2Unavailable) { Text("Retry") }
                             }
+                            if (onUpdateUrl != null && !item.engine.equals("aria2", ignoreCase = true)) {
+                                TextButton(onClick = {
+                                    urlDraft = item.url
+                                    showUpdateUrlDialog = true
+                                }) { Text("Update URL") }
+                            }
                             TextButton(onClick = onRemove) { Text("Remove") }
                         }
                     }
@@ -450,6 +471,12 @@ fun DownloadItemRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End,
                         ) {
+                            if (onUpdateUrl != null && !item.engine.equals("aria2", ignoreCase = true)) {
+                                TextButton(onClick = {
+                                    urlDraft = item.url
+                                    showUpdateUrlDialog = true
+                                }) { Text("Update URL") }
+                            }
                             TextButton(onClick = onRemove) { Text("Remove") }
                         }
                     }
@@ -725,6 +752,37 @@ fun DownloadItemRow(
                                 enabled = aria2NativeRestart?.loading != true,
                             ) {
                                 Text(if (aria2NativeRestart?.newDownloadId != null) "Done" else "Cancel")
+                            }
+                        },
+                    )
+                }
+                if (showUpdateUrlDialog && onUpdateUrl != null) {
+                    AlertDialog(
+                        onDismissRequest = { showUpdateUrlDialog = false },
+                        title = { Text("Update download URL") },
+                        text = {
+                            OutlinedTextField(
+                                value = urlDraft,
+                                onValueChange = { urlDraft = it },
+                                label = { Text("New URL") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    onUpdateUrl(item.id, urlDraft)
+                                    showUpdateUrlDialog = false
+                                },
+                                enabled = urlDraft.isNotBlank(),
+                            ) {
+                                Text("Update")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showUpdateUrlDialog = false }) {
+                                Text("Cancel")
                             }
                         },
                     )

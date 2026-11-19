@@ -351,6 +351,10 @@ class DownloadsViewModel(
         performAction("retry") { repository.retryDownload(downloadId) }
     }
 
+    fun updateDownloadUrl(id: String, newUrl: String) {
+        performAction("update URL") { repository.updateDownloadUrl(id, newUrl) }
+    }
+
     fun setPriority(downloadId: String, priority: DownloadPriority) {
         performAction("update priority") { repository.setPriority(downloadId, priority) }
     }
