@@ -242,11 +242,7 @@ where
         Ok(updated)
     }
 
-    async fn update_source_url(
-        &self,
-        id: DownloadId,
-        new_url: &str,
-    ) -> Result<bool, StorageError> {
+    async fn update_source_url(&self, id: DownloadId, new_url: &str) -> Result<bool, StorageError> {
         let updated = self.inner.update_source_url(id, new_url).await?;
         if updated {
             match self.inner.get(id).await {

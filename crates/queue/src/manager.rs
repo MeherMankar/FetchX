@@ -1333,11 +1333,7 @@ where
             .await;
             let _ = reply.send(result);
         }
-        Command::UpdateUrl {
-            id,
-            new_url,
-            reply,
-        } => {
+        Command::UpdateUrl { id, new_url, reply } => {
             let result = async {
                 if active.contains_key(&id) {
                     return Err(QueueError::InvalidStatus {
@@ -1377,11 +1373,16 @@ where
                             .ok_or(QueueError::ResourceInvariant)?;
                         repository.update_source_url(id, &new_url).await?;
                         repository.move_to_queue_tail(id).await?;
-                        let queued =
-                            state_machine.transition(id, DownloadStatus::Queued).await?;
+                        let queued = state_machine.transition(id, DownloadStatus::Queued).await?;
                         *next_sequence = next;
                         deferred.remove(&id);
-                        entries.insert(id, Entry { item: queued.clone(), sequence });
+                        entries.insert(
+                            id,
+                            Entry {
+                                item: queued.clone(),
+                                sequence,
+                            },
+                        );
                         Ok(queued)
                     }
                     DownloadStatus::Paused | DownloadStatus::Queued => {

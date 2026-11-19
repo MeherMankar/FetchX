@@ -1435,7 +1435,10 @@ pub async fn update_download_url(
 ) -> Result<DownloadDto, IpcError> {
     let id = parse_download_id(&download_id)?;
     let validated_url = validate_source_url(&new_url)?;
-    let core = state.core_services.as_ref().ok_or_else(IpcError::internal)?;
+    let core = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
     core.update_download_url(id, validated_url)
         .await
         .map_err(IpcError::from_queue)?;
