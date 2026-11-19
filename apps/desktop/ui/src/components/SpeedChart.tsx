@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { QueueStatsEvent } from "../api/types";
 import { formatSpeed } from "../lib/format";
@@ -6,9 +6,11 @@ import { formatSpeed } from "../lib/format";
 const HISTORY_SIZE = 60;
 
 function formatEtaShort(seconds: number): string {
-  if (seconds < 60) return seconds + "s";
-  if (seconds < 3600) return Math.round(seconds / 60) + "m";
-  return Math.round(seconds / 3600) + "h";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 export function SpeedChart() {
@@ -18,9 +20,12 @@ export function SpeedChart() {
   const [queuedCount, setQueuedCount] = useState(0);
   const [eta, setEta] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let off: (() => void) | undefined;
+    let offStats: (() => void) | undefined;
+    let offIdle: (() => void) | undefined;
+
     void listen<QueueStatsEvent>("queue_stats_updated", (event) => {
       const { speed_bps, active_count, queued_count, estimated_completion_seconds } = event.payload;
       setCurrentSpeed(speed_bps);
@@ -31,51 +36,137 @@ export function SpeedChart() {
         const next = [...prev, speed_bps];
         return next.length > HISTORY_SIZE ? next.slice(next.length - HISTORY_SIZE) : next;
       });
-    }).then((fn) => { off = fn; });
+    }).then((fn) => { offStats = fn; });
+
     void listen("queue_idle", () => {
-      setCurrentSpeed(0); setActiveCount(0); setQueuedCount(0); setEta(null);
-    });
-    return () => off?.();
+      setCurrentSpeed(0);
+      setActiveCount(0);
+      setQueuedCount(0);
+      setEta(null);
+      // Keep history visible for a moment then fade to zero
+      setHistory((prev) => (prev.length > 0 ? [...prev, 0] : prev));
+    }).then((fn) => { offIdle = fn; });
+
+    return () => {
+      offStats?.();
+      offIdle?.();
+    };
   }, []);
 
-  useEffect(() => {
+  const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas || history.length < 2) return;
+    const container = containerRef.current;
+    if (!canvas || !container || history.length < 2) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const { width, height } = canvas;
-    ctx.clearRect(0, 0, width, height);
+
+    // Keep canvas pixel dimensions in sync with container width
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = container.clientWidth;
+    const cssHeight = 44;
+    if (canvas.width !== Math.round(cssWidth * dpr) || canvas.height !== Math.round(cssHeight * dpr)) {
+      canvas.width = Math.round(cssWidth * dpr);
+      canvas.height = Math.round(cssHeight * dpr);
+      ctx.scale(dpr, dpr);
+    }
+    const w = cssWidth;
+    const h = cssHeight;
+
+    ctx.clearRect(0, 0, w, h);
+
     const max = Math.max(...history, 1);
-    const step = width / (HISTORY_SIZE - 1);
+    const pad = 4;
+    const step = w / (HISTORY_SIZE - 1);
+
+    // Smooth curve using quadratic bezier
     ctx.beginPath();
-    ctx.strokeStyle = "var(--accent, #4a9eff)";
-    ctx.lineWidth = 1.5;
     history.forEach((val, i) => {
       const x = i * step;
-      const y = height - (val / max) * (height - 4) - 2;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const y = h - pad - (val / max) * (h - pad * 2);
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        const prevX = (i - 1) * step;
+        const prevY = h - pad - (history[i - 1] / max) * (h - pad * 2);
+        const cpX = (prevX + x) / 2;
+        ctx.quadraticCurveTo(prevX, prevY, cpX, (prevY + y) / 2);
+        // Final segment
+        if (i === history.length - 1) ctx.lineTo(x, y);
+      }
     });
-    ctx.stroke();
-    ctx.lineTo((history.length - 1) * step, height);
-    ctx.lineTo(0, height);
+
+    // Gradient fill
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, "rgba(126,200,227,0.18)");
+    gradient.addColorStop(1, "rgba(126,200,227,0.02)");
+
+    // Close path for fill
+    const lastX = (history.length - 1) * step;
+    ctx.lineTo(lastX, h);
+    ctx.lineTo(0, h);
     ctx.closePath();
-    ctx.fillStyle = "rgba(74,158,255,0.12)";
+    ctx.fillStyle = gradient;
     ctx.fill();
+
+    // Draw the line on top, clean
+    ctx.beginPath();
+    history.forEach((val, i) => {
+      const x = i * step;
+      const y = h - pad - (val / max) * (h - pad * 2);
+      if (i === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        const prevX = (i - 1) * step;
+        const prevY = h - pad - (history[i - 1] / max) * (h - pad * 2);
+        const cpX = (prevX + x) / 2;
+        ctx.quadraticCurveTo(prevX, prevY, cpX, (prevY + y) / 2);
+        if (i === history.length - 1) ctx.lineTo(x, y);
+      }
+    });
+    ctx.strokeStyle = "rgba(126,200,227,0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.stroke();
   }, [history]);
 
-  if (activeCount === 0 && history.length === 0) return null;
+  // Redraw when history changes
+  useEffect(() => {
+    draw();
+  }, [draw]);
+
+  // Redraw on resize
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [draw]);
+
+  if (activeCount === 0 && history.every((v) => v === 0)) return null;
+
+  const showQueued = queuedCount > 0;
+  const showEta = eta !== null && eta > 0;
 
   return (
-    <div className="speed-chart" aria-label="Queue speed chart">
+    <div className="speed-chart" ref={containerRef} aria-label="Queue speed chart">
       <div className="speed-chart-stats">
         <span className="speed-chart-speed">{formatSpeed(currentSpeed)}</span>
         <span className="speed-chart-meta">
-          {activeCount > 0 && <span>{activeCount} active</span>}
-          {queuedCount > 0 && <span> {queuedCount} queued</span>}
-          {eta !== null && eta > 0 && <span> ETA {formatEtaShort(eta)}</span>}
+          {activeCount > 0 && (
+            <span>{activeCount} {activeCount === 1 ? "active" : "active"}</span>
+          )}
+          {showQueued && <span> · {queuedCount} queued</span>}
+          {showEta && <span> · ETA {formatEtaShort(eta!)}</span>}
         </span>
       </div>
-      <canvas ref={canvasRef} className="speed-chart-canvas" width={280} height={40} aria-hidden="true" />
+      <canvas
+        ref={canvasRef}
+        className="speed-chart-canvas"
+        aria-hidden="true"
+        style={{ width: "100%", height: "44px", display: "block" }}
+      />
     </div>
   );
 }
