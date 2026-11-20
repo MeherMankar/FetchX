@@ -574,7 +574,16 @@ impl NativeMp4Processor {
         }
         let _temporary_guard = TemporaryOutput(temporary.clone());
         if video_track.duration() != audio_track.duration() {
-            return Err(NativeMp4Error::UnsupportedTiming);
+            // Allow up to 10 seconds of duration mismatch — yt-dlp video and
+            // audio streams routinely differ by a few hundred milliseconds due
+            // to codec framing and container rounding. Strict equality rejects
+            // nearly all real-world adaptive-stream downloads.
+            let video_ms = video_track.duration().as_millis();
+            let audio_ms = audio_track.duration().as_millis();
+            let diff_ms = video_ms.abs_diff(audio_ms);
+            if diff_ms > 10_000 {
+                return Err(NativeMp4Error::UnsupportedTiming);
+            }
         }
         let configs = vec![track_config(video_track)?, track_config(audio_track)?];
         let selected = [
