@@ -27,6 +27,7 @@ pub struct EngineConfigDto {
     pub yt_dlp: YtDlpConfigDto,
     pub resource_policy: ResourcePolicy,
     pub weekly_queue_schedule: WeeklyQueueSchedule,
+    pub os_notifications_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -50,6 +51,7 @@ impl From<&EngineConfig> for EngineConfigDto {
             },
             resource_policy: config.resource_policy.clone(),
             weekly_queue_schedule: config.weekly_queue_schedule.clone(),
+            os_notifications_enabled: config.os_notifications_enabled,
         }
     }
 }

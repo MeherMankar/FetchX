@@ -29,3 +29,11 @@ export function getEngineStatus(): Promise<EngineStatus> {
   return invoke<EngineStatus>("get_engine_status");
 }
 
+export function setNotificationConfig(
+  osNotificationsEnabled: boolean,
+): Promise<void> {
+  return invoke<void>("set_notification_config", {
+    osNotificationsEnabled,
+  });
+}
+

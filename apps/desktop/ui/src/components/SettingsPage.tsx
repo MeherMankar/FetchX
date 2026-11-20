@@ -9,6 +9,7 @@ import {
   getEngineStatus,
   resetEngineConfig,
   saveEngineConfig,
+  setNotificationConfig,
 } from "../api/engine";
 import type {
   BrowserExtensionStatus,
@@ -23,6 +24,73 @@ import { errorMessage } from "../lib/format";
 // ---------------------------------------------------------------------------
 // Status indicator
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// OS notifications section
+// ---------------------------------------------------------------------------
+
+function NotificationsSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [enabled, setEnabled] = useState(cfg.os_notifications_enabled);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setEnabled(cfg.os_notifications_enabled), [cfg.os_notifications_enabled]);
+
+  const save = async (next: boolean) => {
+    setEnabled(next);
+    setBusy(true);
+    try {
+      await setNotificationConfig(next);
+      onSaved({ ...cfg, os_notifications_enabled: next });
+    } catch (cause) {
+      setEnabled(!next);
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="notifications-heading">
+      <div className="settings-section-header">
+        <h3 id="notifications-heading" className="settings-section-title">
+          Notifications
+        </h3>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">OS notifications</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(event) => void save(event.target.checked)}
+            />
+            <span className="toggle-track">
+              <span className="toggle-thumb" />
+            </span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+          <p className="settings-hint">
+            Show a system notification when a download completes or fails.
+            Completed downloads include a "Show file" button that opens the
+            containing folder.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 const FIREFOX_FAMILY_NAMES = new Set([
   "Mozilla Firefox",
@@ -859,6 +927,7 @@ export function SettingsPage() {
       <BrowserExtensionSection />
       {cfg && (
         <>
+          <NotificationsSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />

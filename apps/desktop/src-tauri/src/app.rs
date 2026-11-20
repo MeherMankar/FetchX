@@ -10,9 +10,10 @@ static NOTIFICATION_ID_COUNTER: std::sync::atomic::AtomicI32 = std::sync::atomic
 
 use crate::browser_ipc::BrowserIpcServer;
 use crate::clipboard_monitor::spawn_clipboard_monitor;
-use crate::commands::AppState;
+use crate::commands::{self, AppState};
 use crate::drm_commands;
 use crate::engine_commands;
+use crate::events::DownloadUpdatedEvent;
 use crate::media_processing::{self, MediaProcessingManager};
 
 const SHUTDOWN_RUNNING: u8 = 0;
@@ -69,7 +70,7 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
             let fname = item.filename().as_str().to_owned();
 
             let os_notifications_enabled = app
-                .state::<crate::commands::AppState>()
+                .state::<AppState>()
                 .config_service
                 .load()
                 .await
@@ -124,7 +125,7 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                 }
             }
             let payload = DownloadUpdatedEvent {
-                download: crate::commands::DownloadDto::from(item),
+                download: commands::DownloadDto::from(item),
             };
             if let Err(error) = app.emit(crate::events::DOWNLOAD_UPDATED, payload) {
                 tracing::warn!(%error, event = crate::events::DOWNLOAD_UPDATED, "could not emit desktop event");
@@ -381,7 +382,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Register the OS notification action type for completed downloads.
             {
                 use tauri_plugin_notification::{Action, ActionType};
-                let show_action = Action::builder("show_file").title("Show file").build();
+                let show_action = Action::builder("show_file", "Show file").build();
                 let action_type = ActionType::builder("fetchx_download_complete")
                     .actions(vec![show_action])
                     .build();

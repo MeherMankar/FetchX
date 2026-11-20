@@ -220,6 +220,7 @@ export interface EngineConfigDto {
   yt_dlp: YtDlpConfigDto;
   resource_policy: ResourcePolicyDto;
   weekly_queue_schedule: WeeklyQueueScheduleDto;
+  os_notifications_enabled: boolean;
 }
 
 export type ResourceProfile = "unlimited" | "normal" | "limited" | "night" | "custom";
