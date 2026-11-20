@@ -4,6 +4,7 @@ import type {
   DiagnosticResult,
   EngineConfigDto,
   EngineStatus,
+  PostDownloadActionDto,
   SaveEngineConfigRequest,
 } from "./types";
 
@@ -35,5 +36,15 @@ export function setNotificationConfig(
   return invoke<void>("set_notification_config", {
     osNotificationsEnabled,
   });
+}
+
+export function getPostDownloadAction(): Promise<PostDownloadActionDto> {
+  return invoke<PostDownloadActionDto>("get_post_download_action");
+}
+
+export function setPostDownloadAction(
+  action: PostDownloadActionDto,
+): Promise<void> {
+  return invoke<void>("set_post_download_action", { action });
 }
 

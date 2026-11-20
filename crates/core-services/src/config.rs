@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use fetchx_models::{DrmConfig, ResourcePolicy, WeeklyQueueSchedule};
+use fetchx_models::{DrmConfig, PostDownloadAction, ResourcePolicy, WeeklyQueueSchedule};
 use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
@@ -42,6 +42,8 @@ pub struct EngineConfig {
     #[serde(default = "default_true")]
     pub os_notifications_enabled: bool,
     #[serde(default)]
+    pub default_post_download_action: PostDownloadAction,
+    #[serde(default)]
     pub drm: DrmConfig,
 }
 
@@ -60,6 +62,7 @@ impl Default for EngineConfig {
             weekly_queue_schedule: WeeklyQueueSchedule::default(),
             clipboard_monitor_enabled: false,
             os_notifications_enabled: true,
+            default_post_download_action: PostDownloadAction::default(),
             drm: DrmConfig::default(),
         }
     }

@@ -326,3 +326,19 @@ export interface BandwidthWindowDto {
 export interface WeeklyBandwidthScheduleDto {
   windows: BandwidthWindowDto[];
 }
+
+// ---------------------------------------------------------------------------
+// Post-download action (feature2)
+// ---------------------------------------------------------------------------
+
+export type PostDownloadActionKind =
+  | "nothing"
+  | "open_file"
+  | "open_folder"
+  | "run_command";
+
+export interface PostDownloadActionDto {
+  kind: PostDownloadActionKind;
+  /** Present only when kind is "run_command". */
+  command?: string;
+}

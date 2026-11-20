@@ -7,14 +7,18 @@ import {
 import {
   getEngineConfig,
   getEngineStatus,
+  getPostDownloadAction,
   resetEngineConfig,
   saveEngineConfig,
   setNotificationConfig,
+  setPostDownloadAction,
 } from "../api/engine";
 import type {
   BrowserExtensionStatus,
   EngineConfigDto,
   EngineStatus,
+  PostDownloadActionDto,
+  PostDownloadActionKind,
   ResourcePolicyDto,
   ResourceProfile,
   WeeklyQueueScheduleDto,
@@ -843,6 +847,130 @@ function BandwidthScheduleSection({ cfg, onSaved, onError }: { cfg: EngineConfig
   );
 }
 
+// ---------------------------------------------------------------------------
+// After-download action section
+// ---------------------------------------------------------------------------
+
+const ACTION_LABELS: Record<PostDownloadActionKind, string> = {
+  nothing: "Do nothing",
+  open_file: "Open file",
+  open_folder: "Open containing folder",
+  run_command: "Run command",
+};
+
+function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
+  const [action, setAction] = useState<PostDownloadActionDto>({ kind: "nothing" });
+  const [commandText, setCommandText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    getPostDownloadAction()
+      .then((dto) => {
+        setAction(dto);
+        if (dto.kind === "run_command") {
+          setCommandText(dto.command ?? "");
+        }
+      })
+      .catch((cause) => onError(errorMessage(cause)));
+  }, [onError]);
+
+  const save = async () => {
+    setBusy(true);
+    setSaved(false);
+    try {
+      const payload: PostDownloadActionDto =
+        action.kind === "run_command"
+          ? { kind: "run_command", command: commandText }
+          : { kind: action.kind };
+      await setPostDownloadAction(payload);
+      setAction(payload);
+      setSaved(true);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="after-download-heading">
+      <div className="settings-section-header">
+        <h3 id="after-download-heading" className="settings-section-title">
+          After download
+        </h3>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="after-download-action">
+          Action
+        </label>
+        <div className="settings-control">
+          <select
+            id="after-download-action"
+            className="settings-input"
+            value={action.kind}
+            disabled={busy}
+            onChange={(event) => {
+              const kind = event.target.value as PostDownloadActionKind;
+              setAction({ kind });
+              setSaved(false);
+            }}
+          >
+            {(Object.keys(ACTION_LABELS) as PostDownloadActionKind[]).map((k) => (
+              <option key={k} value={k}>
+                {ACTION_LABELS[k]}
+              </option>
+            ))}
+          </select>
+          <p className="settings-hint">
+            Runs automatically each time a download completes.
+          </p>
+        </div>
+      </div>
+      {action.kind === "run_command" && (
+        <div className="settings-row">
+          <label className="settings-label" htmlFor="after-download-command">
+            Command
+          </label>
+          <div className="settings-control">
+            <input
+              id="after-download-command"
+              type="text"
+              className="settings-input"
+              value={commandText}
+              disabled={busy}
+              placeholder={'e.g. notify-send "Done: %FETCHX_FILE%"'}
+              onChange={(event) => {
+                setCommandText(event.target.value);
+                setSaved(false);
+              }}
+            />
+            <p className="settings-hint">
+              The environment variable <code>FETCHX_FILE</code> is set to the
+              downloaded file path. On Windows use <code>%FETCHX_FILE%</code>,
+              on macOS/Linux use <code>$FETCHX_FILE</code>.
+            </p>
+          </div>
+        </div>
+      )}
+      {saved && (
+        <div className="settings-notice" role="status">
+          After-download action saved.
+        </div>
+      )}
+      <div className="settings-actions">
+        <button
+          className="button button-primary"
+          onClick={() => void save()}
+          disabled={busy || (action.kind === "run_command" && commandText.trim() === "")}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
@@ -931,6 +1059,7 @@ export function SettingsPage() {
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
+          <AfterDownloadSection onError={setError} />
           <ProxySection onError={setError} />
         </>
       )}

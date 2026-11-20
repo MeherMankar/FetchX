@@ -2072,6 +2072,98 @@ pub async fn get_post_queue_action(state: State<'_, AppState>) -> Result<String,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Post-download action
+// ---------------------------------------------------------------------------
+
+/// Simple string-based DTO for the post-download action setting.
+///
+/// The `kind` field mirrors the serde tag of `PostDownloadAction`:
+/// `"nothing"`, `"open_file"`, `"open_folder"`, or `"run_command"`.
+/// When `kind` is `"run_command"` the `command` field holds the shell string.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PostDownloadActionDto {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl From<fetchx_models::PostDownloadAction> for PostDownloadActionDto {
+    fn from(action: fetchx_models::PostDownloadAction) -> Self {
+        match action {
+            fetchx_models::PostDownloadAction::Nothing => Self {
+                kind: "nothing".to_owned(),
+                command: None,
+            },
+            fetchx_models::PostDownloadAction::OpenFile => Self {
+                kind: "open_file".to_owned(),
+                command: None,
+            },
+            fetchx_models::PostDownloadAction::OpenFolder => Self {
+                kind: "open_folder".to_owned(),
+                command: None,
+            },
+            fetchx_models::PostDownloadAction::RunCommand { command } => Self {
+                kind: "run_command".to_owned(),
+                command: Some(command),
+            },
+        }
+    }
+}
+
+impl TryFrom<PostDownloadActionDto> for fetchx_models::PostDownloadAction {
+    type Error = IpcError;
+
+    fn try_from(dto: PostDownloadActionDto) -> Result<Self, Self::Error> {
+        match dto.kind.as_str() {
+            "nothing" => Ok(Self::Nothing),
+            "open_file" => Ok(Self::OpenFile),
+            "open_folder" => Ok(Self::OpenFolder),
+            "run_command" => {
+                let command = dto.command.unwrap_or_default();
+                if command.is_empty() {
+                    return Err(IpcError::invalid_request());
+                }
+                Ok(Self::RunCommand { command })
+            }
+            _ => Err(IpcError::invalid_request()),
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_post_download_action(
+    state: State<'_, AppState>,
+) -> Result<PostDownloadActionDto, IpcError> {
+    let config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(PostDownloadActionDto::from(
+        config.default_post_download_action,
+    ))
+}
+
+#[tauri::command]
+pub async fn set_post_download_action(
+    state: State<'_, AppState>,
+    action: PostDownloadActionDto,
+) -> Result<(), IpcError> {
+    let model = fetchx_models::PostDownloadAction::try_from(action)?;
+    let mut config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    config.default_post_download_action = model;
+    state
+        .config_service
+        .save(&config)
+        .await
+        .map_err(|_| IpcError::internal())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};

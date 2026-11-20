@@ -69,13 +69,15 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
             let status = item.status();
             let fname = item.filename().as_str().to_owned();
 
-            let os_notifications_enabled = app
-                .state::<AppState>()
-                .config_service
-                .load()
-                .await
+            let config = app.state::<AppState>().config_service.load().await.ok();
+            let os_notifications_enabled = config
+                .as_ref()
                 .map(|c| c.os_notifications_enabled)
                 .unwrap_or(true);
+            let post_download_action = config
+                .as_ref()
+                .map(|c| c.default_post_download_action.clone())
+                .unwrap_or_default();
 
             if status == fetchx_models::DownloadStatus::Completed {
                 emit_notification(app, &format!("Download complete: {fname}"), "");
@@ -98,6 +100,37 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                     if let Some(dir) = parent_dir {
                         if let Some(state) = app.try_state::<crate::PendingNotificationPaths>() {
                             state.insert(notif_id, dir);
+                        }
+                    }
+                }
+                // Execute the configured post-download action.
+                let dest = item.destination().to_owned();
+                match post_download_action {
+                    fetchx_models::PostDownloadAction::Nothing => {}
+                    fetchx_models::PostDownloadAction::OpenFile => {
+                        if let Err(error) = open::that(&dest) {
+                            tracing::warn!(%error, path = %dest.display(), "post-download: could not open file");
+                        }
+                    }
+                    fetchx_models::PostDownloadAction::OpenFolder => {
+                        let folder = dest.parent().unwrap_or(&dest);
+                        if let Err(error) = open::that(folder) {
+                            tracing::warn!(%error, path = %folder.display(), "post-download: could not open folder");
+                        }
+                    }
+                    fetchx_models::PostDownloadAction::RunCommand { command } => {
+                        #[cfg(windows)]
+                        let spawn_result = tokio::process::Command::new("cmd")
+                            .args(["/C", &command])
+                            .env("FETCHX_FILE", &dest)
+                            .spawn();
+                        #[cfg(not(windows))]
+                        let spawn_result = tokio::process::Command::new("sh")
+                            .args(["-c", &command])
+                            .env("FETCHX_FILE", &dest)
+                            .spawn();
+                        if let Err(error) = spawn_result {
+                            tracing::warn!(%error, %command, "post-download: could not spawn command");
                         }
                     }
                 }
@@ -365,6 +398,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::clear_download_history,
             commands::provide_download_credentials,
             commands::get_post_queue_action,
+            commands::get_post_download_action,
+            commands::set_post_download_action,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);
