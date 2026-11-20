@@ -7,6 +7,9 @@
     "build": "tsc --noEmit && npm run build:chromium && npm run build:firefox",
     "build:chromium": "vite build && vite build --config vite.popup.config.ts && node scripts/assemble.mjs chromium",
     "build:firefox": "vite build && vite build --config vite.popup.config.ts && node scripts/assemble.mjs firefox",
+    "package": "node scripts/package.mjs chromium && node scripts/package.mjs firefox",
+    "package:chromium": "node scripts/package.mjs chromium",
+    "package:firefox": "node scripts/package.mjs firefox",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "dev": "vite build --watch"
