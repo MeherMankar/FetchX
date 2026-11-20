@@ -6,9 +6,13 @@
  *
  * Copies the built `dist/` files, icons, popup.html, and the
  * correct manifest.json into `dist-chromium/` or `dist-firefox/`.
+ *
+ * NOTE: The src/widevine/ directory is intentionally excluded from the
+ * assembled package. DRM-extraction code cannot be shipped to browser
+ * stores. The source files are kept in the repository for reference only.
  */
 
-import { cpSync, mkdirSync, copyFileSync, rmSync, existsSync } from "fs";
+import { cpSync, mkdirSync, copyFileSync, rmSync, existsSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -27,17 +31,26 @@ const outDir = join(root, `dist-${target}`);
 if (existsSync(outDir)) rmSync(outDir, { recursive: true });
 mkdirSync(outDir, { recursive: true });
 
-// dist/ JS + CSS
-cpSync(join(root, "dist"), join(outDir, "dist"), { recursive: true });
+// dist/ JS + CSS — copy everything except the widevine/ subdirectory
+const distSrc = join(root, "dist");
+const distDest = join(outDir, "dist");
+mkdirSync(distDest, { recursive: true });
+for (const entry of readdirSync(distSrc)) {
+  if (entry === "widevine") continue; // exclude widevine assets
+  const src = join(distSrc, entry);
+  const dest = join(distDest, entry);
+  if (statSync(src).isDirectory()) {
+    cpSync(src, dest, { recursive: true });
+  } else {
+    copyFileSync(src, dest);
+  }
+}
 
 // icons
 cpSync(join(root, "icons"), join(outDir, "icons"), { recursive: true });
 
 // popup.html
 copyFileSync(join(root, "popup.html"), join(outDir, "popup.html"));
-
-// widevine static assets (pre-built bundles, UI pages, images, pickers)
-cpSync(join(root, "src", "widevine"), join(outDir, "widevine"), { recursive: true });
 
 // manifest
 const manifestSrc = target === "firefox"

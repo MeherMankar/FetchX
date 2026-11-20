@@ -31,7 +31,6 @@
         <button class="tab-btn tab-active" data-tab="add"       role="tab" aria-selected="true">Add</button>
         <button class="tab-btn"            data-tab="tasks"     role="tab" aria-selected="false">Tasks</button>
         <button class="tab-btn"            data-tab="resources" role="tab" aria-selected="false">Resources</button>
-        <button class="tab-btn"            data-tab="drm"       role="tab" aria-selected="false">DRM</button>
       </nav>
 
       <!-- ── TAB: Add ──────────────────────────────────────────── -->
@@ -119,26 +118,6 @@
           <button id="download-selected-btn" class="btn-primary btn-primary-sm" disabled>
             <span>Download selected</span>
           </button>
-        </div>
-      </div>
-
-      <!-- ── TAB: DRM Keys ─────────────────────────────────────── -->
-      <div id="tab-drm" class="tab-panel hidden">
-        <div class="section-toolbar">
-          <span class="section-label">DRM Keys</span>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <span id="drm-status-badge" class="status-chip status-checking" style="font-size:11px;padding:3px 7px;">
-              <span class="status-dot"></span>
-              <span id="drm-status-text">Idle</span>
-            </span>
-            <button id="drm-history-btn" class="btn-text">History</button>
-          </div>
-        </div>
-        <div id="drm-key-list" class="drm-key-list">
-          <div class="empty-state"><p>No keys captured yet</p></div>
-        </div>
-        <div class="drm-footer">
-          <button id="drm-clear-btn" class="btn-secondary" type="button">Clear keys</button>
         </div>
       </div>
 

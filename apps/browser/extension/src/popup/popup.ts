@@ -76,7 +76,6 @@ document.querySelectorAll<HTMLButtonElement>(".tab-btn").forEach((btn) => {
     const panel = document.getElementById(`tab-${btn.dataset.tab}`);
     panel?.classList.remove("hidden");
     if (btn.dataset.tab === "tasks") void loadTasks();
-    if (btn.dataset.tab === "drm") void loadDrmKeys();
   });
 });
 
@@ -951,111 +950,6 @@ async function init() {
   } catch {
     setStatus("disconnected", "Could not load FetchX target settings.");
   }
-  initDrmTab();
-}
-
-// ──DRM Keys tab ──────────────────────────────────────────────────────────
-
-interface WvpKeyEntry {
-  url?: string;
-  type?: string;
-  keys?: Array<string | { kid: string; k: string }>;
-  timestamp?: number;
-}
-
-const drmStatusBadge  = q<HTMLElement>("#drm-status-badge");
-const drmStatusText   = q<HTMLElement>("#drm-status-text");
-const drmKeyList      = q<HTMLElement>("#drm-key-list");
-const drmHistoryBtn   = q<HTMLButtonElement>("#drm-history-btn");
-const drmClearBtn     = q<HTMLButtonElement>("#drm-clear-btn");
-
-function setDrmStatus(state: "checking" | "connected" | "disconnected", label: string) {
-  drmStatusBadge.className = `status-chip status-${state}`;
-  drmStatusBadge.style.cssText = "font-size:11px;padding:3px 7px;";
-  drmStatusText.textContent = label;
-}
-
-function renderDrmKeys(entries: WvpKeyEntry[]) {
-  if (!entries.length) {
-    drmKeyList.innerHTML = `<div class="empty-state"><p>No keys captured yet</p></div>`;
-    setDrmStatus("disconnected", "No keys");
-    return;
-  }
-  setDrmStatus("connected", `${entries.length} entr${entries.length === 1 ? "y" : "ies"}`);
-  drmKeyList.innerHTML = entries.slice(0, 20).map((entry) => {
-    const keys = (entry.keys ?? []).map((k) =>
-      typeof k === "string" ? k : `${k.kid}:${k.k}`,
-    );
-    const keyRows = keys.slice(0, 4).map((k) =>
-      `<div class="drm-key-pair">${esc(k)}</div>`,
-    ).join("");
-    const label = drmTypeLabel(entry);
-    return `<div class="drm-key-item">
-      ${label ? `<span class="drm-key-type">${esc(label)}</span>` : ""}
-      <div class="drm-key-url" title="${esc(entry.url ?? "")}">${esc(entry.url ?? "(unknown page)")}</div>
-      <div class="drm-key-pairs">${keyRows}</div>
-    </div>`;
-  }).join("");
-}
-
-function drmTypeLabel(entry: WvpKeyEntry): string {
-  const sid = (entry as Record<string, unknown>).systemId;
-  const t = entry.type ?? "";
-  if (typeof sid === "string") {
-    const norm = sid.replace(/-/g, "").toLowerCase();
-    if (norm === "edef8ba979d64acea3c827dcd51d21ed") return "Widevine";
-    if (norm === "9a04f07998404286ab92e65be0885f95") return "PlayReady";
-  }
-  if (t.toLowerCase() === "widevine") return "Widevine";
-  if (t.toLowerCase() === "playready") return "PlayReady";
-  if (t) return "DRM";
-  return "";
-}
-
-async function loadDrmKeys() {
-  setDrmStatus("checking", "Loading…");
-  try {
-    const all = await browserApi.storage.local.get(null);
-    const entries = Object.values(all)
-      .filter((v): v is WvpKeyEntry =>
-        typeof v === "object" && v !== null && ("keys" in v || "type" in v),
-      )
-      .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-    renderDrmKeys(entries);
-  } catch {
-    setDrmStatus("disconnected", "Error");
-    drmKeyList.innerHTML = `<div class="empty-state"><p>Could not load keys</p></div>`;
-  }
-}
-
-function initDrmTab() {
-  drmHistoryBtn.addEventListener("click", () => {
-    const url = chrome.runtime.getURL("widevine/ui/history.html");
-    void browserApi.tabs.create({ url });
-    window.close();
-  });
-
-  drmClearBtn.addEventListener("click", () => {
-    void (async () => {
-      const all = await browserApi.storage.local.get(null);
-      const keysToRemove = Object.keys(all).filter((k) => {
-        const v = all[k];
-        return typeof v === "object" && v !== null && ("keys" in v || "type" in v);
-      });
-      if (keysToRemove.length) await browserApi.storage.local.remove(keysToRemove);
-      await loadDrmKeys();
-    })();
-  });
-
-  // Listen for new keys arriving while popup is open
-  chrome.storage.onChanged.addListener((_changes, areaName) => {
-    if (areaName === "local") {
-      const drmTab = document.querySelector<HTMLButtonElement>('[data-tab="drm"]');
-      if (drmTab && drmTab.classList.contains("tab-active")) {
-        void loadDrmKeys();
-      }
-    }
-  });
 }
 
 void init();

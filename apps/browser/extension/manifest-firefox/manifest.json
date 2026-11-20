@@ -2,11 +2,15 @@
   "manifest_version": 2,
   "name": "FetchX",
   "version": "0.2.0",
-  "description": "Capture links, intercept downloads, scan page resources — send everything to FetchX.",
+  "description": "Capture links, intercept downloads, and scan page resources — send everything to FetchX.",
   "browser_specific_settings": {
     "gecko": {
       "id": "FetchX@FetchX.app",
-      "strict_min_version": "115.0"
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": [],
+        "optional": []
+      }
     }
   },
   "permissions": [
@@ -17,7 +21,6 @@
     "storage",
     "unlimitedStorage",
     "notifications",
-    "<all_urls>",
     "*://*/*",
     "cookies",
     "webRequest",
