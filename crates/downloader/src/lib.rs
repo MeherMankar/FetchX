@@ -4,6 +4,7 @@ mod adaptive;
 mod bandwidth;
 mod dispatcher;
 mod drm_router;
+mod drm_session;
 mod engine;
 mod error;
 mod ffmpeg;

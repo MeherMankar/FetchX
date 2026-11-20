@@ -2435,6 +2435,7 @@ dependencies = [
  "fetchx-core",
  "fetchx-media-extractor",
  "fetchx-models",
+ "fetchx-playready",
  "fetchx-storage",
  "fetchx-widevine",
  "hex",

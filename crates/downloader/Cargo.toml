@@ -11,6 +11,7 @@ fetchx-core = { path = "../core" }
 fetchx-media-extractor = { path = "../media-extractor" }
 fetchx-models = { path = "../models" }
 fetchx-storage = { path = "../storage" }
+fetchx-playready = { path = "../playready" }
 fetchx-widevine = { path = "../widevine" }
 fdk-aac-rs = { version = "0.1.0", default-features = false, features = ["encoder"] }
 opus = "0.4.0"

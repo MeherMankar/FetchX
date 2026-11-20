@@ -1,4 +1,4 @@
-//! Platform-independent service bootstrap for FetchX.
+﻿//! Platform-independent service bootstrap for FetchX.
 //!
 //! The Tauri desktop application, Android bridge, CLI, and future headless
 //! server share the same database, repository, engine runtime, queue, and scheduler.
@@ -2808,6 +2808,18 @@ impl EngineRuntime {
 
         let hls_config = fetchx_downloader::HlsEngineConfig {
             proxy_url: proxy_url.clone(),
+            drm_config: {
+                let drm = &config.drm;
+                if drm.wvd_path.is_some()
+                    || drm.remote_cdm_url.is_some()
+                    || drm.playready_remote_cdm_url.is_some()
+                    || !drm.keys.is_empty()
+                {
+                    Some(drm.clone())
+                } else {
+                    None
+                }
+            },
             ..Default::default()
         };
         let hls_engine = Arc::new(

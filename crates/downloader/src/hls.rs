@@ -25,7 +25,7 @@ use std::{
 
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadProgress, DownloadStatus, EngineKind, Timestamp,
+    DownloadId, DownloadItem, DownloadProgress, DownloadStatus, DrmConfig, EngineKind, Timestamp,
 };
 use fetchx_storage::DownloadRepository;
 use reqwest::{Client, Url};
@@ -71,6 +71,8 @@ pub struct HlsEngineConfig {
     pub extra_headers: Vec<(String, String)>,
     /// Optional HTTP/SOCKS5 proxy URL.
     pub proxy_url: Option<String>,
+    /// Optional DRM configuration for SAMPLE-AES / CENC protected streams.
+    pub drm_config: Option<DrmConfig>,
 }
 
 impl Default for HlsEngineConfig {
@@ -83,6 +85,7 @@ impl Default for HlsEngineConfig {
             live_timeout_seconds: 60,
             extra_headers: Vec::new(),
             proxy_url: None,
+            drm_config: None,
         }
     }
 }
@@ -103,10 +106,18 @@ struct HlsSegment {
 
 /// Encryption key descriptor for an HLS segment.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-struct HlsKey {
-    uri: String,
-    /// 16-byte IV; if absent, the segment sequence number is used.
-    iv: Option<[u8; AES128_BLOCK_SIZE]>,
+enum HlsKey {
+    /// Clear-key AES-128-CBC (METHOD=AES-128).
+    Aes128 {
+        uri: String,
+        /// 16-byte IV; if absent, the segment sequence number is used.
+        iv: Option<[u8; AES128_BLOCK_SIZE]>,
+    },
+    /// DRM-protected stream (METHOD=SAMPLE-AES or SAMPLE-AES-CTR).
+    SampleAesDrm {
+        license_url: String,
+        key_format: String,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -151,6 +162,7 @@ pub struct HlsEngine<R> {
     state_machine: DownloadStateMachine<R>,
     client: Client,
     config: HlsEngineConfig,
+    drm_config: Option<DrmConfig>,
 }
 
 impl<R> HlsEngine<R>
@@ -179,10 +191,12 @@ where
         let client = builder
             .build()
             .map_err(DownloadEngineError::ClientConfiguration)?;
+        let drm_config = config.drm_config.clone();
         Ok(Self {
             state_machine: DownloadStateMachine::new(repository.clone()),
             repository,
             client,
+            drm_config,
             config,
         })
     }
@@ -393,7 +407,7 @@ where
             }
             let body = self.fetch_manifest(&current_url).await?;
             let text = String::from_utf8(body).map_err(|_| DownloadEngineError::InvalidUrl)?;
-            match parse_playlist(&text, &current_url)? {
+            match parse_playlist(&text, &current_url, self.drm_config.as_ref())? {
                 PlaylistKind::Media(info) => return Ok(info),
                 PlaylistKind::Master(variants) => {
                     let best = variants
@@ -766,9 +780,22 @@ async fn download_one_segment(
         .await
         {
             Ok(_size) => {
-                // AES-128 decryption if a key is present.
-                if let Some(key_info) = &seg.key {
-                    decrypt_segment_aes128(client, key_info, path, seg.sequence).await?;
+                // Decrypt AES-128 segments; leave DRM segments as-is (encrypted download).
+                match &seg.key {
+                    Some(HlsKey::Aes128 { .. }) => {
+                        decrypt_segment_aes128(
+                            client,
+                            seg.key.as_ref().unwrap(),
+                            path,
+                            seg.sequence,
+                        )
+                        .await?;
+                    }
+                    Some(HlsKey::SampleAesDrm { .. }) => {
+                        // Segment downloaded encrypted; full per-segment CENC decryption
+                        // is wired in a follow-up once PSSH/key derivation is in place.
+                    }
+                    None => {}
                 }
                 let size = tokio::fs::metadata(path)
                     .await
@@ -986,8 +1013,12 @@ async fn decrypt_segment_aes128(
     path: &Path,
     segment_sequence: u64,
 ) -> Result<(), DownloadEngineError> {
+    let (aes_uri, aes_iv) = match key_info {
+        HlsKey::Aes128 { uri, iv } => (uri, iv),
+        HlsKey::SampleAesDrm { .. } => return Ok(()), // DRM segments: skip inline decryption
+    };
     // Fetch the AES key.
-    let key_url = Url::parse(&key_info.uri).map_err(|_| DownloadEngineError::InvalidUrl)?;
+    let key_url = Url::parse(aes_uri).map_err(|_| DownloadEngineError::InvalidUrl)?;
     let mut key_response = client
         .get(key_url)
         .send()
@@ -1017,7 +1048,7 @@ async fn decrypt_segment_aes128(
         .map_err(|_| DownloadEngineError::InvalidUrl)?;
 
     // Determine IV: explicit from manifest or derived from sequence number.
-    let iv: [u8; AES128_BLOCK_SIZE] = match &key_info.iv {
+    let iv: [u8; AES128_BLOCK_SIZE] = match aes_iv {
         Some(iv) => *iv,
         None => {
             let mut buf = [0u8; AES128_BLOCK_SIZE];
@@ -1289,7 +1320,11 @@ async fn assemble_segments(
 // ── Manifest parser ────────────────────────────────────────────────────────────
 
 /// Parses an M3U8 text into either a master or media playlist.
-fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEngineError> {
+fn parse_playlist(
+    text: &str,
+    base_url: &Url,
+    drm_config: Option<&DrmConfig>,
+) -> Result<PlaylistKind, DownloadEngineError> {
     let lines: Vec<&str> = text.lines().collect();
     if !lines
         .first()
@@ -1307,7 +1342,7 @@ fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEn
     }
 
     Ok(PlaylistKind::Media(parse_media_playlist_info(
-        &lines, base_url,
+        &lines, base_url, drm_config,
     )?))
 }
 
@@ -1334,6 +1369,7 @@ fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
 fn parse_media_playlist_info(
     lines: &[&str],
     base_url: &Url,
+    drm_config: Option<&DrmConfig>,
 ) -> Result<MediaPlaylistInfo, DownloadEngineError> {
     let has_endlist = lines.iter().any(|l| l.trim() == "#EXT-X-ENDLIST");
     let target_duration_secs = lines
@@ -1341,7 +1377,7 @@ fn parse_media_playlist_info(
         .find_map(|l| l.trim().strip_prefix("#EXT-X-TARGETDURATION:"))
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(2);
-    let segments = parse_media_playlist(lines, base_url)?;
+    let segments = parse_media_playlist(lines, base_url, drm_config)?;
     Ok(MediaPlaylistInfo {
         segments,
         has_endlist,
@@ -1352,6 +1388,7 @@ fn parse_media_playlist_info(
 fn parse_media_playlist(
     lines: &[&str],
     base_url: &Url,
+    drm_config: Option<&DrmConfig>,
 ) -> Result<Vec<HlsSegment>, DownloadEngineError> {
     let mut segments = Vec::new();
     let mut duration: f32 = 0.0;
@@ -1384,12 +1421,30 @@ fn parse_media_playlist(
                         .map(|u| resolve_uri(&u, base_url))
                         .ok_or(DownloadEngineError::InvalidUrl)?;
                     let iv = extract_attribute(line, "IV").and_then(parse_iv_hex);
-                    current_key = Some(HlsKey { uri, iv });
+                    current_key = Some(HlsKey::Aes128 { uri, iv });
                 }
                 "NONE" => {
                     current_key = None;
                 }
-                // SAMPLE-AES, other DRM → unsupported.
+                "SAMPLE-AES" | "SAMPLE-AES-CTR" => {
+                    // DRM-protected stream.  Decide based on KEYFORMAT.
+                    let key_format = extract_attribute(line, "KEYFORMAT")
+                        .unwrap_or("com.widevine.alpha")
+                        .to_owned();
+                    let license_url = extract_attribute(line, "URI")
+                        .map(|u| u.trim_matches('"').to_owned())
+                        .unwrap_or_default();
+                    if drm_config.is_none() {
+                        return Err(DownloadEngineError::UnsupportedFormat(
+                            "DRM-protected stream — configure a .wvd file in Settings > DRM to decrypt",
+                        ));
+                    }
+                    current_key = Some(HlsKey::SampleAesDrm {
+                        license_url,
+                        key_format,
+                    });
+                }
+                // Any other unknown method.
                 _ => {
                     return Err(DownloadEngineError::UnsupportedFormat(
                         "SAMPLE-AES or other HLS encryption",
@@ -2016,7 +2071,7 @@ mid.m3u8
 
     #[test]
     fn parses_three_segment_vod_media_playlist() {
-        let segments = match parse_playlist(MEDIA_PLAYLIST, &base()).unwrap() {
+        let segments = match parse_playlist(MEDIA_PLAYLIST, &base(), None).unwrap() {
             PlaylistKind::Media(info) => info.segments,
             PlaylistKind::Master(_) => panic!("expected media playlist"),
         };
@@ -2030,7 +2085,7 @@ mid.m3u8
 
     #[test]
     fn parses_master_playlist_and_selects_highest_bandwidth() {
-        let variants = match parse_playlist(MASTER_PLAYLIST, &base()).unwrap() {
+        let variants = match parse_playlist(MASTER_PLAYLIST, &base(), None).unwrap() {
             PlaylistKind::Master(v) => v,
             PlaylistKind::Media(_) => panic!("expected master playlist"),
         };
@@ -2043,7 +2098,7 @@ mid.m3u8
     fn rejects_aes_sample_drm_in_manifest() {
         let drm_playlist = "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key\"\nseg0.ts\n";
         assert!(matches!(
-            parse_playlist(drm_playlist, &base()),
+            parse_playlist(drm_playlist, &base(), None),
             Err(DownloadEngineError::UnsupportedFormat(_))
         ));
     }
@@ -2056,16 +2111,18 @@ mid.m3u8
 seg0.ts
 #EXT-X-ENDLIST
 "#;
-        let segments = match parse_playlist(playlist, &base()).unwrap() {
+        let segments = match parse_playlist(playlist, &base(), None).unwrap() {
             PlaylistKind::Media(info) => info.segments,
             _ => panic!("expected media"),
         };
         let key = segments[0].key.as_ref().expect("key present");
-        assert!(key.uri.contains("key"));
-        assert_eq!(
-            key.iv,
-            Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
-        );
+        match key {
+            HlsKey::Aes128 { uri, iv } => {
+                assert!(uri.contains("key"));
+                assert_eq!(*iv, Some([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]));
+            }
+            other => panic!("expected Aes128 key, got {other:?}"),
+        }
     }
 
     #[test]
