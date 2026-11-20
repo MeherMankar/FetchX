@@ -15,6 +15,7 @@ import { browserApi, sendRuntimeMessage } from "../shared/browser-api";
 import type { BrowserTarget, ExtensionSettings } from "../background/service-worker";
 import { formatIdForDownload, isVideoOnlyFormat } from "./media-format";
 import type { MediaFormat } from "./media-format";
+import type { InterceptRule } from "../types/rules";
 
 // ──DOM refs ──────────────────────────────────────────────────────────────
 
@@ -571,6 +572,7 @@ async function loadSettings() {
   setMinSize.value = String(s.minSizeMb);
   setNotif.checked = s.showNotifications;
   await loadTargets();
+  await loadRules();
 }
 
 settingsSave.addEventListener("click", () => void saveSettings());
@@ -796,6 +798,146 @@ function showTargetResult(kind: "success" | "error", message: string) {
 
 function esc(s: string): string {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ──Rules ─────────────────────────────────────────────────────────────────
+
+let currentRules: InterceptRule[] = [];
+
+const rulesList = q<HTMLElement>("#rules-list");
+const ruleAddForm = q<HTMLElement>("#rule-add-form");
+const addRuleBtn = q<HTMLButtonElement>("#add-rule-btn");
+const ruleFormCancel = q<HTMLButtonElement>("#rule-form-cancel");
+const ruleFormSave = q<HTMLButtonElement>("#rule-form-save");
+const ruleNameInput = q<HTMLInputElement>("#rule-name");
+const ruleMatchType = q<HTMLSelectElement>("#rule-match-type");
+const ruleMatchValue = q<HTMLInputElement>("#rule-match-value");
+const ruleActionSelect = q<HTMLSelectElement>("#rule-action");
+
+function matchSummary(rule: InterceptRule): string {
+  switch (rule.match.kind) {
+    case "domain": return `Domain: ${rule.match.domain}`;
+    case "url_pattern": return `Pattern: ${rule.match.pattern}`;
+    case "file_extension": return `Ext: .${rule.match.ext}`;
+  }
+}
+
+function renderRules() {
+  rulesList.replaceChildren();
+  if (!currentRules.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.innerHTML = `<p>No rules yet. Add one to override auto-intercept behaviour.</p>`;
+    rulesList.append(empty);
+    return;
+  }
+  for (const rule of currentRules) {
+    const item = document.createElement("div");
+    item.className = "rule-item";
+
+    const info = document.createElement("div");
+    info.className = "rule-item-info";
+
+    const name = document.createElement("span");
+    name.className = "rule-item-name";
+    name.textContent = rule.name;
+
+    const summary = document.createElement("span");
+    summary.className = "rule-item-summary";
+    summary.textContent = `${matchSummary(rule)} · ${rule.action === "always_intercept" ? "Always intercept" : "Never intercept"}`;
+
+    info.append(name, summary);
+
+    const actions = document.createElement("div");
+    actions.className = "rule-item-actions";
+
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggle.className = "toggle";
+    toggle.checked = rule.enabled;
+    toggle.setAttribute("aria-label", `Enable rule ${rule.name}`);
+    toggle.addEventListener("change", () => void toggleRule(rule.id, toggle.checked));
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn-text rule-delete-btn";
+    del.textContent = "Delete";
+    del.setAttribute("aria-label", `Delete rule ${rule.name}`);
+    del.addEventListener("click", () => void deleteRule(rule.id));
+
+    actions.append(toggle, del);
+    item.append(info, actions);
+    rulesList.append(item);
+  }
+}
+
+async function loadRules() {
+  currentRules = await sendRuntimeMessage<InterceptRule[]>({ type: "get_intercept_rules" });
+  if (!Array.isArray(currentRules)) currentRules = [];
+  renderRules();
+}
+
+async function saveRules() {
+  await sendRuntimeMessage<unknown>({ type: "set_intercept_rules", rules: currentRules });
+}
+
+async function toggleRule(id: string, enabled: boolean) {
+  currentRules = currentRules.map((r) => r.id === id ? { ...r, enabled } : r);
+  await saveRules();
+}
+
+async function deleteRule(id: string) {
+  currentRules = currentRules.filter((r) => r.id !== id);
+  await saveRules();
+  renderRules();
+}
+
+addRuleBtn.addEventListener("click", () => {
+  ruleAddForm.classList.remove("hidden");
+  addRuleBtn.classList.add("hidden");
+  ruleNameInput.value = "";
+  ruleMatchType.value = "domain";
+  ruleMatchValue.value = "";
+  ruleActionSelect.value = "never_intercept";
+  ruleNameInput.focus();
+});
+
+ruleFormCancel.addEventListener("click", () => {
+  ruleAddForm.classList.add("hidden");
+  addRuleBtn.classList.remove("hidden");
+});
+
+ruleFormSave.addEventListener("click", () => void saveNewRule());
+
+async function saveNewRule() {
+  const name = ruleNameInput.value.trim();
+  const matchType = ruleMatchType.value as "domain" | "url_pattern" | "file_extension";
+  const matchValue = ruleMatchValue.value.trim();
+  const action = ruleActionSelect.value as "always_intercept" | "never_intercept";
+
+  if (!name || !matchValue) return;
+
+  let match: InterceptRule["match"];
+  if (matchType === "domain") {
+    match = { kind: "domain", domain: matchValue };
+  } else if (matchType === "url_pattern") {
+    match = { kind: "url_pattern", pattern: matchValue };
+  } else {
+    match = { kind: "file_extension", ext: matchValue.replace(/^\.+/, "") };
+  }
+
+  const rule: InterceptRule = {
+    id: crypto.randomUUID(),
+    enabled: true,
+    name,
+    match,
+    action,
+  };
+  currentRules = [...currentRules, rule];
+  await saveRules();
+  renderRules();
+  ruleAddForm.classList.add("hidden");
+  addRuleBtn.classList.remove("hidden");
 }
 
 // ──Boot ──────────────────────────────────────────────────────────────────

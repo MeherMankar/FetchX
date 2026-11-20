@@ -20,12 +20,14 @@ import { PROTOCOL_VERSION } from "../types/protocol";
 import type { RpcRequest, RpcTarget } from "../types/protocol";
 import {
   claimDownloadEvent,
+  evaluateInterceptRules,
   filenameFromBrowserPath,
   handoffBrowserDownload,
   isBlockedDomain,
   submitDownloadWithResolvedFilename,
   type DownloadSubmission,
 } from "./download-interception";
+import type { InterceptRule } from "../types/rules";
 import {
   registerMediaInterception,
   getMediaForTab,
@@ -641,15 +643,34 @@ interface BrowserDownloadItem {
   referrer?: string;
 }
 
-async function interceptBrowserDownload(item: BrowserDownloadItem): Promise<void> {
-    const settings = await getSettings();
-    if (!settings.autoIntercept) return;
+const INTERCEPT_RULES_KEY = "intercept_rules";
 
+async function getInterceptRules(): Promise<InterceptRule[]> {
+  const stored = await browserApi.storage.local.get(INTERCEPT_RULES_KEY);
+  const raw = stored[INTERCEPT_RULES_KEY];
+  return Array.isArray(raw) ? (raw as InterceptRule[]) : [];
+}
+
+async function saveInterceptRules(rules: InterceptRule[]): Promise<void> {
+  await browserApi.storage.local.set({ [INTERCEPT_RULES_KEY]: rules });
+}
+
+async function interceptBrowserDownload(item: BrowserDownloadItem): Promise<void> {
     if (!isHttpUrl(item.url)) return;
     if (hasEmbeddedCredentials(item.url)) return;
 
+    // Evaluate user-defined intercept rules first
+    const rules = await getInterceptRules();
+    const ruleDecision = evaluateInterceptRules(item.url, rules);
+    if (ruleDecision === "never") return;
+
+    const settings = await getSettings();
+
+    // If no rule forces interception, apply the autoIntercept setting
+    if (ruleDecision === null && !settings.autoIntercept) return;
+
     const hostname = new URL(item.url).hostname;
-    if (isBlockedDomain(hostname, settings.blockedDomains)) return;
+    if (ruleDecision === null && isBlockedDomain(hostname, settings.blockedDomains)) return;
 
     // Check size threshold
     const fileSizeBytes = item.fileSize ?? 0;
@@ -749,6 +770,19 @@ browserApi.runtime.onMessage.addListener(
         void handleBatchDownload(urls).then(sendResponse);
         return true;
       }
+
+      case "get_intercept_rules":
+        void getInterceptRules().then(sendResponse);
+        return true;
+
+      case "set_intercept_rules":
+        if (Array.isArray(message.rules)) {
+          void saveInterceptRules(message.rules as InterceptRule[]).then(() =>
+            sendResponse({ ok: true }),
+          );
+          return true;
+        }
+        break;
 
       case "get_tasks":
         sendResponse(taskCache);

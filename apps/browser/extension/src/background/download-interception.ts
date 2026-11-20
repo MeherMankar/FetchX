@@ -187,6 +187,8 @@ export function filenameFromBrowserPath(path: string | undefined): string | unde
     : undefined;
 }
 
+export { evaluateInterceptRules } from "../types/rules";
+
 export function isBlockedDomain(hostname: string, blockedDomains: string[]): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   return blockedDomains.some((entry) => {

@@ -198,6 +198,46 @@
               </div>
             </div>
 
+            <!-- Rules section -->
+            <div class="settings-section">
+              <div class="settings-section-title">Intercept rules</div>
+              <div class="settings-inner">
+                <div id="rules-list" class="rules-list"></div>
+
+                <button id="add-rule-btn" class="btn-secondary" type="button">+ Add rule</button>
+
+                <div id="rule-add-form" class="rule-add-form hidden">
+                  <div class="form-row">
+                    <span class="form-label-sm">Name</span>
+                    <input id="rule-name" type="text" class="field" maxlength="64" autocomplete="off" placeholder="e.g. Block YouTube" />
+                  </div>
+                  <div class="form-row">
+                    <span class="form-label-sm">Match by</span>
+                    <select id="rule-match-type" class="field">
+                      <option value="domain">Domain</option>
+                      <option value="url_pattern">URL pattern</option>
+                      <option value="file_extension">File extension</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <span class="form-label-sm">Value</span>
+                    <input id="rule-match-value" type="text" class="field" autocomplete="off" placeholder="e.g. youtube.com" />
+                  </div>
+                  <div class="form-row">
+                    <span class="form-label-sm">Action</span>
+                    <select id="rule-action" class="field">
+                      <option value="never_intercept">Never intercept</option>
+                      <option value="always_intercept">Always intercept</option>
+                    </select>
+                  </div>
+                  <div class="form-row" style="justify-content:flex-end;gap:6px;">
+                    <button id="rule-form-cancel" class="btn-ghost" type="button">Cancel</button>
+                    <button id="rule-form-save" class="btn-primary btn-primary-sm" type="button">Add rule</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="settings-footer">
               <button id="settings-save-btn" class="btn-primary btn-primary-sm">Save</button>
             </div>

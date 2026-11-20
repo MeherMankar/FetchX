@@ -353,3 +353,24 @@ body {
 .drm-footer { padding-top: 4px; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* INTERCEPT RULES */
+.rules-list { display: flex; flex-direction: column; gap: 6px; }
+
+.rule-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.rule-item-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.rule-item-name { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-item-summary { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-item-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.rule-delete-btn { color: var(--red); }
+.rule-delete-btn:hover { background: var(--red-bg); }
+
+.rule-add-form {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; background: var(--bg-input); border: 1px solid var(--border-mid);
+  border-radius: var(--r-sm); margin-top: 4px;
+}
