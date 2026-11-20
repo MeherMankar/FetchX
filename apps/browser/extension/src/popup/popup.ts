@@ -381,12 +381,22 @@ interface DL {
   speed_bytes_per_second: number | null;
 }
 
+function makeEmptyState(text: string): HTMLDivElement {
+  const div = document.createElement("div");
+  div.className = "empty-state";
+  const p = document.createElement("p");
+  p.textContent = text;
+  div.append(p);
+  return div;
+}
+
 function renderTasks(downloads: DL[]) {
+  taskList.replaceChildren();
   if (!downloads.length) {
-    taskList.innerHTML = `<div class="empty-state"><p>No downloads yet</p></div>`;
+    taskList.append(makeEmptyState("No downloads yet"));
     return;
   }
-  taskList.innerHTML = downloads.map((d) => {
+  for (const d of downloads) {
     const pct = d.percentage_basis_points != null
       ? Math.min(100, Math.max(0, Math.round(d.percentage_basis_points / 100)))
       : null;
@@ -394,31 +404,58 @@ function renderTasks(downloads: DL[]) {
     const statusClass = STATUS_CLASS[d.status] ?? "queued";
     const speed = fmtSpeed(d.speed_bytes_per_second);
     const sizeInfo = [fmtBytes(d.downloaded_bytes), pct != null ? `${pct}%` : ""].filter(Boolean).join(" · ");
-    const progress = pct != null && d.status === "downloading"
-      ? `<progress class="task-progress" value="${pct}" max="100" aria-label="Progress for ${esc(d.filename)}"></progress>` : "";
-    return `<div class="task-item" data-status="${esc(statusClass)}">
-      <div class="task-header">
-        <div class="task-name" title="${esc(d.filename)}">${esc(d.filename)}</div>
-        <span class="task-status task-status-${esc(statusClass)}">${esc(meta)}</span>
-      </div>
-      <div class="task-body">
-        <div class="task-meta">
-          <span>${esc(sizeInfo)}</span>
-          <span>${esc(speed)}</span>
-        </div>
-        ${progress}
-      </div>
-    </div>`;
-  }).join("");
+
+    const item = document.createElement("div");
+    item.className = "task-item";
+    item.dataset.status = statusClass;
+
+    const header = document.createElement("div");
+    header.className = "task-header";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "task-name";
+    nameEl.title = d.filename;
+    nameEl.textContent = d.filename;
+
+    const statusEl = document.createElement("span");
+    statusEl.className = `task-status task-status-${statusClass}`;
+    statusEl.textContent = meta;
+
+    header.append(nameEl, statusEl);
+
+    const body = document.createElement("div");
+    body.className = "task-body";
+
+    const metaEl = document.createElement("div");
+    metaEl.className = "task-meta";
+    const sizeSpan = document.createElement("span");
+    sizeSpan.textContent = sizeInfo;
+    const speedSpan = document.createElement("span");
+    speedSpan.textContent = speed;
+    metaEl.append(sizeSpan, speedSpan);
+    body.append(metaEl);
+
+    if (pct != null && d.status === "downloading") {
+      const prog = document.createElement("progress");
+      prog.className = "task-progress";
+      prog.value = pct;
+      prog.max = 100;
+      prog.setAttribute("aria-label", `Progress for ${d.filename}`);
+      body.append(prog);
+    }
+
+    item.append(header, body);
+    taskList.append(item);
+  }
 }
 
 async function loadTasks() {
-  taskList.innerHTML = `<div class="empty-state"><p>Loading…</p></div>`;
+  taskList.replaceChildren(makeEmptyState("Loading…"));
   try {
     const tasks = await sendRuntimeMessage<DL[]>({ type: "get_tasks" });
     renderTasks(Array.isArray(tasks) ? tasks : []);
   } catch {
-    taskList.innerHTML = `<div class="empty-state"><p>Could not load tasks</p></div>`;
+    taskList.replaceChildren(makeEmptyState("Could not load tasks"));
   }
 }
 
@@ -472,7 +509,10 @@ async function scanPage() {
   } catch {
     scanBtn.querySelector("span:last-child")!.textContent = "Scan this page";
     scanBtn.disabled = false;
-    scanEmpty.innerHTML = `<p>Could not scan this page.<br>Reload the page and try again.</p>`;
+    scanEmpty.replaceChildren();
+    const p = document.createElement("p");
+    p.textContent = "Could not scan this page. Reload the page and try again.";
+    scanEmpty.append(p);
   }
 }
 
@@ -497,32 +537,45 @@ function renderResources() {
     ? currentResources
     : currentResources.filter((r) => r.type === currentFilter);
 
+  resourceList.replaceChildren();
+
   if (!filtered.length) {
-    resourceList.innerHTML = `<div class="empty-state"><p>No ${currentFilter === "all" ? "" : currentFilter + " "}resources found</p></div>`;
+    const label = currentFilter === "all" ? "" : `${currentFilter} `;
+    resourceList.append(makeEmptyState(`No ${label}resources found`));
     updateSelectionUI();
     return;
   }
 
-  resourceList.innerHTML = filtered.map((r) => {
-    const checked = selectedUrls.has(r.url) ? "checked" : "";
-    const sel = selectedUrls.has(r.url) ? " selected" : "";
+  for (const r of filtered) {
     const type = ["video", "audio", "image", "file"].includes(r.type) ? r.type : "file";
-    return `<label class="resource-item${sel}" data-url="${esc(r.url)}">
-      <input type="checkbox" ${checked} data-url="${esc(r.url)}" />
-      <span class="resource-type resource-type-${type}">${type}</span>
-      <span class="resource-name" title="${esc(r.url)}">${esc(r.label)}</span>
-    </label>`;
-  }).join("");
+    const isSelected = selectedUrls.has(r.url);
 
-  resourceList.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
+    const label = document.createElement("label");
+    label.className = `resource-item${isSelected ? " selected" : ""}`;
+    label.dataset.url = r.url;
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = isSelected;
+    cb.dataset.url = r.url;
     cb.addEventListener("change", () => {
-      const url = cb.dataset.url!;
-      cb.checked ? selectedUrls.add(url) : selectedUrls.delete(url);
-      const row = cb.closest(".resource-item");
-      row?.classList.toggle("selected", cb.checked);
+      cb.checked ? selectedUrls.add(r.url) : selectedUrls.delete(r.url);
+      label.classList.toggle("selected", cb.checked);
       updateSelectionUI();
     });
-  });
+
+    const typeSpan = document.createElement("span");
+    typeSpan.className = `resource-type resource-type-${type}`;
+    typeSpan.textContent = type;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "resource-name";
+    nameSpan.title = r.url;
+    nameSpan.textContent = r.label;
+
+    label.append(cb, typeSpan, nameSpan);
+    resourceList.append(label);
+  }
 
   updateSelectionUI();
 }
@@ -795,10 +848,6 @@ function showTargetResult(kind: "success" | "error", message: string) {
 
 // ──Helpers ───────────────────────────────────────────────────────────────
 
-function esc(s: string): string {
-  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-
 // ──Rules ─────────────────────────────────────────────────────────────────
 
 let currentRules: InterceptRule[] = [];
@@ -826,7 +875,9 @@ function renderRules() {
   if (!currentRules.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.innerHTML = `<p>No rules yet. Add one to override auto-intercept behaviour.</p>`;
+    const p = document.createElement("p");
+    p.textContent = "No rules yet. Add one to override auto-intercept behaviour.";
+    empty.append(p);
     rulesList.append(empty);
     return;
   }
