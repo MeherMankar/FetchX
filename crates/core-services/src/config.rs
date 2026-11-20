@@ -13,6 +13,10 @@ const CONFIG_KEY: &str = "engine_config";
 const CURRENT_VERSION: u32 = 1;
 const MAX_CONFIG_BYTES: usize = 65_536;
 
+fn default_true() -> bool {
+    true
+}
+
 // ── Domain model ──────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -35,6 +39,8 @@ pub struct EngineConfig {
     pub weekly_queue_schedule: WeeklyQueueSchedule,
     #[serde(default)]
     pub clipboard_monitor_enabled: bool,
+    #[serde(default = "default_true")]
+    pub os_notifications_enabled: bool,
     #[serde(default)]
     pub drm: DrmConfig,
 }
@@ -53,6 +59,7 @@ impl Default for EngineConfig {
             resource_policy: ResourcePolicy::default(),
             weekly_queue_schedule: WeeklyQueueSchedule::default(),
             clipboard_monitor_enabled: false,
+            os_notifications_enabled: true,
             drm: DrmConfig::default(),
         }
     }

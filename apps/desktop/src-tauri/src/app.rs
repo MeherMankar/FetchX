@@ -3,16 +3,16 @@ use std::sync::{Arc, atomic::Ordering};
 use fetchx_core_services::{CoreServices, CoreServicesConfig};
 use fetchx_queue::{DownloadEvent, DownloadEventBus};
 use tauri::{Emitter, Manager, RunEvent};
+use tauri_plugin_notification::NotificationExt;
 use tracing_subscriber::EnvFilter;
+
+static NOTIFICATION_ID_COUNTER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
 
 use crate::browser_ipc::BrowserIpcServer;
 use crate::clipboard_monitor::spawn_clipboard_monitor;
-use crate::commands::{self, AppState, DownloadDto};
+use crate::commands::AppState;
 use crate::drm_commands;
 use crate::engine_commands;
-use crate::events::{
-    DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
-};
 use crate::media_processing::{self, MediaProcessingManager};
 
 const SHUTDOWN_RUNNING: u8 = 0;
@@ -48,7 +48,7 @@ pub fn spawn_event_bridge(app: tauri::AppHandle, event_bus: &DownloadEventBus) {
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(event) => forward_event(&app, event),
+                Ok(event) => forward_event(&app, event).await,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         skipped = n,
@@ -62,33 +62,80 @@ pub fn spawn_event_bridge(app: tauri::AppHandle, event_bus: &DownloadEventBus) {
     });
 }
 
-fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
+async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
     match event {
         DownloadEvent::Created { item, .. } | DownloadEvent::Updated { item, .. } => {
             let status = item.status();
             let fname = item.filename().as_str().to_owned();
+
+            let os_notifications_enabled = app
+                .state::<crate::commands::AppState>()
+                .config_service
+                .load()
+                .await
+                .map(|c| c.os_notifications_enabled)
+                .unwrap_or(true);
+
             if status == fetchx_models::DownloadStatus::Completed {
                 emit_notification(app, &format!("Download complete: {fname}"), "");
+                if os_notifications_enabled {
+                    let dest = item.destination().to_owned();
+                    let parent_dir = dest.parent().map(|p| p.to_owned());
+                    let notif_id =
+                        NOTIFICATION_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let show_result = app
+                        .notification()
+                        .builder()
+                        .id(notif_id)
+                        .title("Download complete")
+                        .body(fname.clone())
+                        .action_type_id("fetchx_download_complete")
+                        .show();
+                    if let Err(error) = show_result {
+                        tracing::warn!(%error, "could not show OS notification");
+                    }
+                    if let Some(dir) = parent_dir {
+                        if let Some(state) = app.try_state::<crate::PendingNotificationPaths>() {
+                            state.insert(notif_id, dir);
+                        }
+                    }
+                }
             } else if status == fetchx_models::DownloadStatus::Failed {
                 let err = item
                     .error()
                     .map(|e| e.message().to_owned())
                     .unwrap_or_default();
                 emit_notification(app, &format!("Download failed: {fname}"), &err);
+                if os_notifications_enabled {
+                    let body = if err.is_empty() {
+                        fname.clone()
+                    } else {
+                        format!("{fname}: {err}")
+                    };
+                    let show_result = app
+                        .notification()
+                        .builder()
+                        .title("Download failed")
+                        .body(body)
+                        .show();
+                    if let Err(error) = show_result {
+                        tracing::warn!(%error, "could not show OS failure notification");
+                    }
+                }
             }
             let payload = DownloadUpdatedEvent {
-                download: DownloadDto::from(item),
+                download: crate::commands::DownloadDto::from(item),
             };
-            if let Err(error) = app.emit(DOWNLOAD_UPDATED, payload) {
-                tracing::warn!(%error, event = DOWNLOAD_UPDATED, "could not emit desktop event");
+            if let Err(error) = app.emit(crate::events::DOWNLOAD_UPDATED, payload) {
+                tracing::warn!(%error, event = crate::events::DOWNLOAD_UPDATED, "could not emit desktop event");
             }
         }
         DownloadEvent::Removed { id, .. } => {
-            let payload = DownloadRemovedEvent {
+            let payload = crate::events::DownloadRemovedEvent {
                 download_id: id.to_string(),
             };
-            if let Err(error) = app.emit(DOWNLOAD_REMOVED, payload) {
-                tracing::warn!(%error, event = DOWNLOAD_REMOVED, "could not emit desktop event");
+            if let Err(error) = app.emit(crate::events::DOWNLOAD_REMOVED, payload) {
+                tracing::warn!(%error, event = crate::events::DOWNLOAD_REMOVED, "could not emit desktop event");
             }
         }
         DownloadEvent::QueueStats {
@@ -251,6 +298,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::list_downloads,
@@ -303,6 +351,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             engine_commands::reset_engine_config,
             engine_commands::test_ytdlp_config,
             engine_commands::get_engine_status,
+            engine_commands::set_notification_config,
             drm_commands::get_drm_config,
             drm_commands::set_drm_config,
             drm_commands::pick_wvd_file,
@@ -328,6 +377,45 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("desktop media processing manager was already initialized".into());
             }
             spawn_event_bridge(app.handle().clone(), state.repository.event_bus());
+
+            // Register the OS notification action type for completed downloads.
+            {
+                use tauri_plugin_notification::{Action, ActionType};
+                let show_action = Action::builder("show_file").title("Show file").build();
+                let action_type = ActionType::builder("fetchx_download_complete")
+                    .actions(vec![show_action])
+                    .build();
+                if let Err(error) = app
+                    .notification()
+                    .register_action_types(vec![action_type])
+                {
+                    tracing::warn!(%error, "could not register notification action types");
+                }
+
+                // Manage the shared path store before registering the handler.
+                if !app.manage(crate::PendingNotificationPaths::default()) {
+                    return Err("notification path store already initialized".into());
+                }
+
+                let app_handle_for_action = app.handle().clone();
+                if let Err(error) = app.notification().on_action(move |action| {
+                    if action.action_id() == "show_file" {
+                        if let Some(notification) = action.notification() {
+                            let notif_id = notification.id();
+                            let paths = app_handle_for_action
+                                .try_state::<crate::PendingNotificationPaths>();
+                            let dir = paths.and_then(|p| p.get(notif_id));
+                            if let Some(dir) = dir {
+                                if let Err(error) = open::that(&dir) {
+                                    tracing::warn!(%error, path = %dir.display(), "could not open download directory");
+                                }
+                            }
+                        }
+                    }
+                }) {
+                    tracing::warn!(%error, "could not register notification action handler");
+                }
+            }
 
             // System tray
             {

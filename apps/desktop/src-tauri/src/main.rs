@@ -11,6 +11,32 @@ mod engine_commands;
 mod events;
 mod media_processing;
 
+/// Shared state that maps a notification ID to the parent directory of the
+/// completed download. Used by the OS notification action handler to open the
+/// containing folder when the user clicks "Show file".
+#[derive(Default)]
+pub struct PendingNotificationPaths(
+    std::sync::Mutex<std::collections::HashMap<i32, std::path::PathBuf>>,
+);
+
+impl PendingNotificationPaths {
+    pub fn insert(&self, id: i32, path: std::path::PathBuf) {
+        if let Ok(mut map) = self.0.lock() {
+            // Keep map small: evict entries beyond a reasonable cap.
+            if map.len() >= 128 {
+                if let Some(oldest) = map.keys().next().copied() {
+                    map.remove(&oldest);
+                }
+            }
+            map.insert(id, path);
+        }
+    }
+
+    pub fn get(&self, id: i32) -> Option<std::path::PathBuf> {
+        self.0.lock().ok()?.get(&id).cloned()
+    }
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|panic_info| {
         let crash_log = std::env::temp_dir().join("fetchx-crash.log");

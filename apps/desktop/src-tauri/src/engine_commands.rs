@@ -215,6 +215,24 @@ pub async fn get_engine_status(
 }
 
 #[tauri::command]
+pub async fn set_notification_config(
+    state: State<'_, AppState>,
+    os_notifications_enabled: bool,
+) -> Result<(), EngineIpcError> {
+    let mut config = state
+        .config_service
+        .load()
+        .await
+        .map_err(EngineIpcError::from)?;
+    config.os_notifications_enabled = os_notifications_enabled;
+    state
+        .config_service
+        .save(&config)
+        .await
+        .map_err(EngineIpcError::from)
+}
+
+#[tauri::command]
 pub async fn test_ytdlp_config(
     state: State<'_, AppState>,
 ) -> Result<DiagnosticResult, EngineIpcError> {
