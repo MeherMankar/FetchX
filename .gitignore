@@ -30,3 +30,5 @@ fetchx-release.jks
 apps/android/*.log
 .kiro
 .cargo
+# Extension packages
+apps/browser/extension/*.zip
