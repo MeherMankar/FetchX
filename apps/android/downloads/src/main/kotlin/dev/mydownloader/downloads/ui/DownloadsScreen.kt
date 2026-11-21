@@ -1,4 +1,4 @@
-package dev.fetchx.downloads.ui
+﻿package dev.fetchx.downloads.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +17,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -75,8 +74,7 @@ fun DownloadsScreen(
     downloadsDir: String = "",
     onBrowseWeb: () -> Unit = {},
     onPlayFile: (String) -> Unit = {},
-    onOpenTorrentDetail: (String) -> Unit = {},
-    onOpenWidevineSettings: (() -> Unit)? = null,
+    onOpenTorrentDetail: (String) -> Unit = {}
 ) {
     // Collect all state flows with lifecycle awareness.
     val allDownloads by viewModel.allDownloads.collectAsStateWithLifecycle()
@@ -173,11 +171,6 @@ fun DownloadsScreen(
             TopAppBar(
                 title = { Text("Downloads") },
                 actions = {
-                    if (onOpenWidevineSettings != null) {
-                        IconButton(onClick = onOpenWidevineSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = "Widevine / DRM")
-                        }
-                    }
                     TextButton(
                         onClick = viewModel::toggleQueueDispatch,
                         enabled = uiState.bridgeAvailable,

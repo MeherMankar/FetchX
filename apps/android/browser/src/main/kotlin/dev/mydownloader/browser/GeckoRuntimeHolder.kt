@@ -1,11 +1,10 @@
-package dev.fetchx.browser
+﻿package dev.fetchx.browser
 
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import dev.fetchx.bridge.BridgeInitializer
-import dev.fetchx.downloads.drm.DrmKeyStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,8 +22,6 @@ private const val FETCHX_REMOTE_EXTENSION_ID = "fetchx-remote@fetchx.dev"
 private const val FETCHX_RPC_NATIVE_APP = "browser"
 private const val FETCHX_REMOTE_POPUP_PATH = "popup.html"
 private const val MAX_BROWSER_RPC_BYTES = 1_048_576
-private const val WIDEVINE_EXT_ID = "widevine@fetchx.dev"
-private const val WIDEVINE_EXT_URI = "resource://android/assets/widevine_ext/"
 
 /**
  * Process-level singleton for [GeckoRuntime].
@@ -82,7 +79,6 @@ object GeckoRuntimeHolder {
             extensionManagerRuntime = forRuntime
             installVideoInterceptorExtension(forRuntime)
             installFetchxRemoteExtension(forRuntime)
-            installWidevineExtension(forRuntime)
         }
         extensionManager ?: error("Extension manager initialization failed")
     }
@@ -307,91 +303,6 @@ object GeckoRuntimeHolder {
                     .put("code", -32010)
                     .put("message", message),
             )
-            .toString()
-
-    private fun installWidevineExtension(rt: GeckoRuntime) {
-        rt.webExtensionController
-            .ensureBuiltIn(WIDEVINE_EXT_URI, WIDEVINE_EXT_ID)
-            .accept(
-                { extension ->
-                    if (extension == null) {
-                        Log.e(TAG, "ensureBuiltIn returned null Widevine extension")
-                        return@accept
-                    }
-                    Handler(Looper.getMainLooper()).post {
-                        extension.setMessageDelegate(
-                            createWidevineMessageDelegate(),
-                            FETCHX_RPC_NATIVE_APP,
-                        )
-                        Log.i(TAG, "Widevine extension registered")
-                    }
-                },
-                { error ->
-                    Log.e(TAG, "Failed to register Widevine extension", error)
-                },
-            )
-    }
-
-    private fun createWidevineMessageDelegate(): WebExtension.MessageDelegate =
-        object : WebExtension.MessageDelegate {
-            override fun onMessage(
-                nativeApp: String,
-                message: Any,
-                sender: WebExtension.MessageSender,
-            ): org.mozilla.geckoview.GeckoResult<Any>? {
-                val json = message as? JSONObject ?: return null
-                if (json.optString("type") != "report_drm_keys") return null
-                val result = org.mozilla.geckoview.GeckoResult<Any>()
-                browserRpcScope.launch {
-                    try {
-                        // Store keys directly in DrmKeyStore so the downloader can use them
-                        // without waiting for the bridge to be ready.
-                        val psshKey = json.optString("pssh", "").takeIf { it.isNotBlank() }
-                            ?: json.optString("url", "").takeIf { it.isNotBlank() }
-                        if (psshKey != null) {
-                            val keysArray = json.optJSONArray("keys")
-                            if (keysArray != null) {
-                                val keyPairs = mutableListOf<Pair<String, String>>()
-                                for (i in 0 until keysArray.length()) {
-                                    val entry = keysArray.optJSONObject(i) ?: continue
-                                    val kid = entry.optString("key_id", "")
-                                    val key = entry.optString("key", "")
-                                    if (kid.isNotBlank() && key.isNotBlank()) {
-                                        keyPairs.add(kid to key)
-                                    }
-                                }
-                                if (keyPairs.isNotEmpty()) {
-                                    DrmKeyStore.put(psshKey, keyPairs)
-                                    Log.i(TAG, "Stored ${keyPairs.size} Widevine key(s) for pssh/url key")
-                                }
-                            }
-                        }
-
-                        // Also forward to the bridge RPC for persistence if available.
-                        val repository = BridgeInitializer.repositoryOrNull()
-                        if (repository != null) {
-                            val requestJson = buildWidevineRpcRequest(json)
-                            repository.dispatchBrowserRpc(requestJson)
-                        }
-                        Handler(Looper.getMainLooper()).post { result.complete(null) }
-                    } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (error: Exception) {
-                        Log.e(TAG, "Failed to store Widevine DRM keys", error)
-                        Handler(Looper.getMainLooper()).post { result.complete(null) }
-                    }
-                }
-                return result
-            }
-        }
-
-    private fun buildWidevineRpcRequest(json: JSONObject): String =
-        JSONObject()
-            .put("version", 1)
-            .put("type", "report_drm_keys")
-            .put("url", json.optString("url", ""))
-            .put("pssh", json.opt("pssh"))
-            .put("keys", json.optJSONArray("keys") ?: org.json.JSONArray())
             .toString()
 
     private fun createRuntime(context: Context): GeckoRuntime {

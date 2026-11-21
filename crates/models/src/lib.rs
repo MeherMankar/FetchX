@@ -3,7 +3,6 @@
 mod credentials;
 mod diagnostics;
 mod download;
-mod drm;
 mod duplicate;
 mod engine;
 mod error;
@@ -31,7 +30,6 @@ pub use download::{
     DownloadItem, DownloadItemError, DownloadSource, DownloadSourceError, DownloadStatus, FileName,
     FileNameError, MagnetInfo, YtDlpAudioFormat, parse_magnet_uri,
 };
-pub use drm::{DrmConfig, DrmKey};
 pub use duplicate::DuplicateDownloadMatch;
 pub use engine::EngineKind;
 pub use error::{DownloadError, DownloadErrorCode, DownloadErrorMessageError};

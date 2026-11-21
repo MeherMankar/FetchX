@@ -11,7 +11,6 @@ static NOTIFICATION_ID_COUNTER: std::sync::atomic::AtomicI32 = std::sync::atomic
 use crate::browser_ipc::BrowserIpcServer;
 use crate::clipboard_monitor::spawn_clipboard_monitor;
 use crate::commands::{self, AppState};
-use crate::drm_commands;
 use crate::engine_commands;
 use crate::events::DownloadUpdatedEvent;
 use crate::media_processing::{self, MediaProcessingManager};
@@ -331,7 +330,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .try_init();
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
@@ -386,9 +384,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             engine_commands::test_ytdlp_config,
             engine_commands::get_engine_status,
             engine_commands::set_notification_config,
-            drm_commands::get_drm_config,
-            drm_commands::set_drm_config,
-            drm_commands::pick_wvd_file,
             commands::register_browser_extensions,
             commands::get_browser_extension_status,
             commands::open_browser_extension_install_page,

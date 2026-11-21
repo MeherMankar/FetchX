@@ -3,8 +3,6 @@
 mod adaptive;
 mod bandwidth;
 mod dispatcher;
-mod drm_router;
-mod drm_session;
 mod engine;
 mod error;
 mod ffmpeg;
@@ -23,13 +21,11 @@ mod native_ytdlp;
 mod retry;
 mod segments;
 mod sftp;
-mod widevine_provider;
 mod ytdlp;
 
 pub use adaptive::AdaptiveConfig;
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::{EngineDispatcher, is_dash_url};
-pub use drm_router::{DrmSystem, detect_drm_system};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use ffmpeg::{
@@ -40,26 +36,6 @@ pub use ffmpeg::{
 pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
 
-/// A request sent to the DRM plugin process via plugin-manager.
-#[derive(Clone, Debug)]
-pub struct DrmPluginRequest {
-    pub pssh_b64: String,
-    pub license_url: String,
-    pub drm_system: String,
-}
-
-/// A response from the DRM plugin process.
-#[derive(Clone, Debug)]
-pub struct DrmPluginResponse {
-    pub keys: Vec<DrmKeyPair>,
-}
-
-/// A single decryption key pair from the plugin.
-#[derive(Clone, Debug)]
-pub struct DrmKeyPair {
-    pub kid: String,
-    pub key: String,
-}
 #[cfg(feature = "phase30-queue-fault-injection")]
 pub use http::inject_next_write_failure;
 pub use http::{
@@ -75,7 +51,6 @@ pub use native_torrent::{NativeTorrentConfig, NativeTorrentEngine};
 pub use native_video::{NativeVideoError, NativeVideoProcessor, YuvFrame};
 pub use native_ytdlp::NativeYtDlpProcessRunner;
 pub use sftp::{KnownHostsPolicy, SftpEngine, SftpEngineConfig, SftpKnownHost};
-pub use widevine_provider::build_widevine_provider;
 pub use ytdlp::{
     YtDlpConfig, YtDlpEngine, YtDlpError, YtDlpFormat, YtDlpProcessExit, YtDlpProcessRunner,
     YtDlpProgress, YtDlpRunnerEvent, YtDlpRunnerFuture, parse_format_output,

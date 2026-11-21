@@ -268,12 +268,6 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
             )
         }
 
-        BrowserRequestBody::ReportDrmKeys(_drm_keys) => {
-            // DRM key storage is handled at the native-host level in the full integration.
-            // The desktop IPC layer acknowledges receipt without error.
-            BrowserResponse::drm_keys_ok(None)
-        }
-
         BrowserRequestBody::AddDownload(browser_req) => {
             let request_id = browser_req.request_id.clone();
 

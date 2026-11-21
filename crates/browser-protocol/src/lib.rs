@@ -69,8 +69,6 @@ pub enum BrowserRequestBody {
     StoreCredential(StoreCredentialRequest),
     /// Remove a remote target bearer token from the native host's OS credential store.
     DeleteCredential(DeleteCredentialRequest),
-    /// DRM keys extracted by the browser extension's WidevineProxy2 integration.
-    ReportDrmKeys(DrmKeysMessage),
 }
 
 /// Payload for an `add_download` browser request.
@@ -143,26 +141,6 @@ pub struct DeleteCredentialRequest {
     pub endpoint: String,
 }
 
-/// DRM keys forwarded from the browser extension's WidevineProxy2 integration.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DrmKeysMessage {
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pssh: Option<String>,
-    pub keys: Vec<DrmKey>,
-}
-
-/// A single content key extracted by the browser's Widevine proxy.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DrmKey {
-    /// Hex-encoded key ID.
-    pub key_id: String,
-    /// Hex-encoded content key.
-    pub key: String,
-}
-
 // ============================================================
 // Responses (desktop → browser)
 // ============================================================
@@ -201,7 +179,6 @@ pub enum OkPayload {
     Pong(PongOk),
     Rpc(RpcOk),
     CredentialStored(CredentialStoredOk),
-    DrmKeysReceived(DrmKeysReceivedOk),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -222,11 +199,6 @@ pub struct RpcOk {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CredentialStoredOk {
-    pub stored: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DrmKeysReceivedOk {
     pub stored: bool,
 }
 
@@ -277,8 +249,6 @@ pub enum BrowserErrorCode {
     DownloadRejected,
     /// An unexpected internal error occurred.  Details are not disclosed.
     InternalError,
-    /// DRM keys were received but could not be stored.
-    DrmKeysRejected,
 }
 
 // ============================================================
@@ -329,17 +299,6 @@ impl BrowserResponse {
             body: BrowserResponseBody::Ok(OkResponse {
                 ok: true,
                 payload: OkPayload::CredentialStored(CredentialStoredOk { stored: true }),
-            }),
-        }
-    }
-
-    pub fn drm_keys_ok(request_id: Option<String>) -> Self {
-        Self {
-            version: PROTOCOL_VERSION,
-            request_id,
-            body: BrowserResponseBody::Ok(OkResponse {
-                ok: true,
-                payload: OkPayload::DrmKeysReceived(DrmKeysReceivedOk { stored: true }),
             }),
         }
     }
