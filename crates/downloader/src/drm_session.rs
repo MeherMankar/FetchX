@@ -26,9 +26,11 @@ pub async fn acquire_keys(
         let keys: Vec<ContentKey> = config
             .keys
             .iter()
-            .map(|k| ContentKey {
-                key_id: hex_to_bytes(&k.kid),
-                key: hex_to_bytes(&k.k),
+            .filter_map(|k| {
+                Some(ContentKey {
+                    key_id: hex_to_bytes(&k.kid)?,
+                    key: hex_to_bytes(&k.k)?,
+                })
             })
             .collect();
         return Ok(Some(keys));
@@ -70,9 +72,12 @@ pub async fn acquire_keys(
     }
 }
 
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
     (0..hex.len())
         .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect()
 }
