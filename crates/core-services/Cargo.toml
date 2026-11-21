@@ -13,6 +13,7 @@ fetchx-remote-protocol = { path = "../remote-protocol" }
 fetchx-queue      = { path = "../queue" }
 fetchx-scheduler  = { path = "../scheduler" }
 fetchx-storage    = { path = "../storage" }
+fetchx-plugin-manager = { path = "../plugin-manager" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
