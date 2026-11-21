@@ -32,3 +32,6 @@ apps/android/*.log
 .cargo
 # Extension packages
 apps/browser/extension/*.zip
+
+# Installed plugins (managed separately)
+/plugins/*/

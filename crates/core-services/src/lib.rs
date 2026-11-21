@@ -1,4 +1,4 @@
-﻿//! Platform-independent service bootstrap for FetchX.
+//! Platform-independent service bootstrap for FetchX.
 //!
 //! The Tauri desktop application, Android bridge, CLI, and future headless
 //! server share the same database, repository, engine runtime, queue, and scheduler.
@@ -142,6 +142,8 @@ pub struct CoreServices {
     pub scheduler: Scheduler<CoreRepository>,
     queue: QueueManager,
     pub downloads_dir: PathBuf,
+    /// Optional plugin manager. Set to `Some` after install_from_github or discover.
+    pub plugin_manager: Option<std::sync::Arc<fetchx_plugin_manager::PluginManager>>,
     shutdown_complete: Mutex<bool>,
     session_stats: std::sync::Arc<std::sync::Mutex<SessionStatistics>>,
 }

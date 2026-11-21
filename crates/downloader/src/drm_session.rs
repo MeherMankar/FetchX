@@ -1,4 +1,5 @@
 //! DRM key acquisition routing for HLS and DASH streams.
+// NOTE: Direct DRM integration. For the plugin-based path, see HlsEngineConfig::drm_plugin.
 
 #![allow(dead_code)] // acquire_keys and hex_to_bytes will be called once PSSH wiring is complete
 

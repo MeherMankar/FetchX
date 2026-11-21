@@ -39,6 +39,27 @@ pub use ffmpeg::{
 };
 pub use ftp::{FtpEngine, FtpEngineConfig};
 pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
+
+/// A request sent to the DRM plugin process via plugin-manager.
+#[derive(Clone, Debug)]
+pub struct DrmPluginRequest {
+    pub pssh_b64: String,
+    pub license_url: String,
+    pub drm_system: String,
+}
+
+/// A response from the DRM plugin process.
+#[derive(Clone, Debug)]
+pub struct DrmPluginResponse {
+    pub keys: Vec<DrmKeyPair>,
+}
+
+/// A single decryption key pair from the plugin.
+#[derive(Clone, Debug)]
+pub struct DrmKeyPair {
+    pub kid: String,
+    pub key: String,
+}
 #[cfg(feature = "phase30-queue-fault-injection")]
 pub use http::inject_next_write_failure;
 pub use http::{

@@ -92,6 +92,7 @@ pub enum PluginCapability {
     EngineFfmpeg,
     SettingsRead,
     SettingsWrite,
+    DrmDecrypt,
 }
 
 impl PluginCapability {
@@ -113,6 +114,7 @@ impl PluginCapability {
                 PluginPermission::Engine
             }
             Self::SettingsRead | Self::SettingsWrite => PluginPermission::Settings,
+            Self::DrmDecrypt => PluginPermission::Network,
         }
     }
 }

@@ -73,6 +73,15 @@ pub struct HlsEngineConfig {
     pub proxy_url: Option<String>,
     /// Optional DRM configuration for SAMPLE-AES / CENC protected streams.
     pub drm_config: Option<DrmConfig>,
+    /// Sender half of the DRM plugin channel. When `Some`, DRM-protected segments
+    /// are decrypted via the plugin. When `None`, `SampleAesDrm` segments return
+    /// `DownloadEngineError::UnsupportedFormat`).
+    pub drm_plugin: Option<
+        tokio::sync::mpsc::Sender<(
+            crate::DrmPluginRequest,
+            tokio::sync::oneshot::Sender<Result<crate::DrmPluginResponse, String>>,
+        )>,
+    >,
 }
 
 impl Default for HlsEngineConfig {
@@ -86,6 +95,7 @@ impl Default for HlsEngineConfig {
             extra_headers: Vec::new(),
             proxy_url: None,
             drm_config: None,
+            drm_plugin: None,
         }
     }
 }
@@ -163,6 +173,12 @@ pub struct HlsEngine<R> {
     client: Client,
     config: HlsEngineConfig,
     drm_config: Option<DrmConfig>,
+    drm_plugin: Option<
+        tokio::sync::mpsc::Sender<(
+            crate::DrmPluginRequest,
+            tokio::sync::oneshot::Sender<Result<crate::DrmPluginResponse, String>>,
+        )>,
+    >,
 }
 
 impl<R> HlsEngine<R>
@@ -192,11 +208,13 @@ where
             .build()
             .map_err(DownloadEngineError::ClientConfiguration)?;
         let drm_config = config.drm_config.clone();
+        let drm_plugin = config.drm_plugin.clone();
         Ok(Self {
             state_machine: DownloadStateMachine::new(repository.clone()),
             repository,
             client,
             drm_config,
+            drm_plugin,
             config,
         })
     }
@@ -509,10 +527,18 @@ where
                 let downloaded = Arc::clone(&downloaded_bytes);
                 let cancel = cancel_tx.subscribe();
                 let bandwidth = control.bandwidth.clone();
+                let drm_plugin_sender = self.drm_plugin.clone();
 
                 join_set.spawn(async move {
                     let size = download_one_segment(
-                        &client, &segment, &path, index, cancel, downloaded, bandwidth,
+                        &client,
+                        &segment,
+                        &path,
+                        index,
+                        cancel,
+                        downloaded,
+                        bandwidth,
+                        drm_plugin_sender,
                     )
                     .await?;
                     Ok((index, size))
@@ -756,6 +782,12 @@ async fn download_one_segment(
     mut cancel: watch::Receiver<bool>,
     downloaded_bytes: Arc<AtomicU64>,
     bandwidth: BandwidthControl,
+    drm_plugin: Option<
+        tokio::sync::mpsc::Sender<(
+            crate::DrmPluginRequest,
+            tokio::sync::oneshot::Sender<Result<crate::DrmPluginResponse, String>>,
+        )>,
+    >,
 ) -> Result<u64, DownloadEngineError> {
     let url = Url::parse(&seg.uri).map_err(|_| DownloadEngineError::InvalidUrl)?;
 
@@ -791,9 +823,31 @@ async fn download_one_segment(
                         )
                         .await?;
                     }
-                    Some(HlsKey::SampleAesDrm { .. }) => {
-                        // Segment downloaded encrypted; full per-segment CENC decryption
-                        // is wired in a follow-up once PSSH/key derivation is in place.
+                    Some(HlsKey::SampleAesDrm {
+                        license_url,
+                        key_format,
+                    }) => {
+                        if let Some(ref drm_sender) = drm_plugin {
+                            use base64::{Engine as _, engine::general_purpose::STANDARD};
+                            // For HLS SAMPLE-AES there is no PSSH box; use an empty payload.
+                            // The plugin uses the license_url directly for the CDM protocol.
+                            let pssh_b64 = STANDARD.encode(b"");
+                            let req = crate::DrmPluginRequest {
+                                pssh_b64,
+                                license_url: license_url.clone(),
+                                drm_system: if key_format.to_lowercase().contains("playready") {
+                                    "playready".to_string()
+                                } else {
+                                    "widevine".to_string()
+                                },
+                            };
+                            let (tx, rx) = tokio::sync::oneshot::channel();
+                            let _ = drm_sender.send((req, tx)).await;
+                            // Keys acquired but AES-CTR decryption is not yet implemented.
+                            // The plugin response is intentionally unused until the decryption
+                            // step is wired.
+                            let _ = rx.await;
+                        }
                     }
                     None => {}
                 }

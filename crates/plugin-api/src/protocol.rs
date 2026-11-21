@@ -51,6 +51,8 @@ pub enum HostRequestBody {
     Shutdown,
     /// Request plugin status information.
     Status,
+    /// Request DRM content key acquisition.
+    DecryptRequest(DrmDecryptRequest),
 }
 
 /// Payload of the `Hello` request.
@@ -89,6 +91,7 @@ pub enum PluginResponseBody {
     StatusInfo(StatusInfoResponse),
     /// The plugin encountered an error and cannot continue.
     Error(PluginErrorResponse),
+    DecryptResponse(DrmDecryptResponse),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -120,6 +123,24 @@ pub struct StatusInfoResponse {
 pub struct PluginErrorResponse {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DrmDecryptRequest {
+    pub pssh_b64: String,
+    pub license_url: String,
+    pub drm_system: String, // "widevine" | "playready"
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DrmDecryptResponse {
+    pub keys: Vec<DrmKeyPair>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DrmKeyPair {
+    pub kid: String, // hex
+    pub key: String, // hex
 }
 
 // ============================================================

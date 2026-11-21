@@ -37,7 +37,9 @@ use fetchx_plugin_api::{
     PluginSigningError, PluginTrust, PluginTrustContext, PolicyDenialReason, PolicyEnvironment,
     parse_manifest, parse_plugin_response,
 };
+use reqwest::Client as HttpClient;
 use sha2::{Digest, Sha256};
+use std::io::Cursor;
 use thiserror::Error;
 use tokio::{
     fs,
@@ -1117,6 +1119,142 @@ impl PluginManager {
                 .collect(),
         })
     }
+    /// Downloads and installs a plugin from a GitHub release.
+    ///
+    /// `repo` is a GitHub repo slug, e.g. `MeherMankar/fetchx-drm-plugin`.
+    /// `tag` is an optional release tag; `None` fetches the latest release.
+    /// Returns the plugin ID on success.
+    pub async fn install_from_github(
+        &self,
+        repo: &str,
+        tag: Option<&str>,
+    ) -> Result<String, PluginManagerError> {
+        let http = HttpClient::builder()
+            .user_agent(concat!("fetchx/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+
+        let release_url = match tag {
+            Some(t) => format!("https://api.github.com/repos/{repo}/releases/tags/{t}"),
+            None => format!("https://api.github.com/repos/{repo}/releases/latest"),
+        };
+
+        let release: serde_json::Value = http
+            .get(&release_url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?
+            .error_for_status()
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+
+        let platform_suffix = Self::platform_asset_suffix();
+        let assets = release["assets"].as_array().ok_or_else(|| {
+            PluginManagerError::InstallFailed("no assets in GitHub release".to_string())
+        })?;
+
+        let asset = assets
+            .iter()
+            .find(|a| a["name"].as_str().unwrap_or("").contains(platform_suffix))
+            .ok_or_else(|| {
+                PluginManagerError::InstallFailed(format!(
+                    "no release asset for platform '{platform_suffix}'"
+                ))
+            })?;
+
+        let download_url = asset["browser_download_url"].as_str().ok_or_else(|| {
+            PluginManagerError::InstallFailed("asset has no download URL".to_string())
+        })?;
+
+        let bytes = http
+            .get(download_url)
+            .send()
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?
+            .error_for_status()
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?
+            .bytes()
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+
+        let plugin_dir = {
+            let inner = self.inner.lock().await;
+            inner.plugin_dir.clone()
+        };
+
+        let tmp_dir = plugin_dir.join(format!("_installing_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp_dir)
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+
+        let bytes_clone = bytes.to_vec();
+        let tmp_dir_clone = tmp_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            let cursor = Cursor::new(bytes_clone);
+            let mut archive = zip::ZipArchive::new(cursor)
+                .map_err(|e| PluginManagerError::InstallFailed(format!("zip error: {e}")))?;
+            for i in 0..archive.len() {
+                let mut file = archive.by_index(i).map_err(|e| {
+                    PluginManagerError::InstallFailed(format!("zip entry error: {e}"))
+                })?;
+                let outpath = tmp_dir_clone.join(file.name());
+                if file.name().ends_with('/') {
+                    std::fs::create_dir_all(&outpath)
+                        .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+                } else {
+                    if let Some(parent) = outpath.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+                    }
+                    let mut out = std::fs::File::create(&outpath)
+                        .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+                    std::io::copy(&mut file, &mut out)
+                        .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+                }
+            }
+            Ok::<(), PluginManagerError>(())
+        })
+        .await
+        .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))??;
+
+        let manifest_path = tmp_dir.join("plugin.json");
+        let manifest_bytes = fs::read(&manifest_path)
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+        let manifest = parse_manifest(&manifest_bytes)
+            .map_err(|e| PluginManagerError::InvalidManifest(e.to_string()))?;
+        let plugin_id = manifest.id.clone();
+
+        let final_dir = plugin_dir.join(&plugin_id);
+        if fs::metadata(&final_dir).await.is_ok() {
+            fs::remove_dir_all(&final_dir)
+                .await
+                .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+        }
+        fs::rename(&tmp_dir, &final_dir)
+            .await
+            .map_err(|e| PluginManagerError::InstallFailed(e.to_string()))?;
+
+        let final_manifest_path = final_dir.join("plugin.json");
+        self.register_discovered(manifest, final_manifest_path)
+            .await?;
+
+        info!(plugin_id = %plugin_id, "plugin installed from GitHub");
+        Ok(plugin_id)
+    }
+
+    fn platform_asset_suffix() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "linux"
+        }
+    }
 }
 
 // ============================================================
@@ -1318,6 +1456,8 @@ pub enum PluginManagerError {
     HandshakeFailed(String),
     #[error("I/O error: {0}")]
     Io(#[source] std::io::Error),
+    #[error("plugin installation failed: {0}")]
+    InstallFailed(String),
 }
 
 fn validate_executable_in_artifact(
