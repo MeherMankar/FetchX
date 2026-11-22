@@ -49,6 +49,28 @@ pub struct EngineConfig {
     pub folder_categories: FolderCategoriesConfig,
     #[serde(default)]
     pub native_builtins: NativeBuiltinsConfig,
+    /// Number of automatic retry attempts on failure before giving up.
+    #[serde(default = "default_auto_retry_count")]
+    pub auto_retry_count: u32,
+    /// Delay in seconds before each automatic retry attempt.
+    #[serde(default = "default_auto_retry_delay_seconds")]
+    pub auto_retry_delay_seconds: u64,
+    /// Re-queue downloads that were `Downloading` or `Recovering` when the
+    /// application was last shut down.
+    #[serde(default = "default_true")]
+    pub resume_interrupted_on_start: bool,
+    /// Verify that the downloaded file exists and has the expected size after
+    /// a download completes. Advisory only — does not change download status.
+    #[serde(default = "default_true")]
+    pub health_check_on_complete: bool,
+}
+
+fn default_auto_retry_count() -> u32 {
+    3
+}
+
+fn default_auto_retry_delay_seconds() -> u64 {
+    30
 }
 
 impl Default for EngineConfig {
@@ -69,6 +91,10 @@ impl Default for EngineConfig {
             default_post_download_action: PostDownloadAction::default(),
             folder_categories: FolderCategoriesConfig::default(),
             native_builtins: NativeBuiltinsConfig::default(),
+            auto_retry_count: default_auto_retry_count(),
+            auto_retry_delay_seconds: default_auto_retry_delay_seconds(),
+            resume_interrupted_on_start: true,
+            health_check_on_complete: true,
         }
     }
 }

@@ -162,6 +162,46 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                         }
                     }
                 }
+                // Health check: verify the file exists and has the expected size.
+                let health_check_enabled = config
+                    .as_ref()
+                    .map(|c| c.health_check_on_complete)
+                    .unwrap_or(true);
+                if health_check_enabled {
+                    let dest = item.destination().to_owned();
+                    let total_bytes = item.progress().total_bytes();
+                    match tokio::fs::metadata(&dest).await {
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %dest.display(),
+                                error = %e,
+                                "health-check: completed download file is missing"
+                            );
+                            let _ = app.emit(
+                                "fetchx-notification",
+                                serde_json::json!({
+                                    "title": "Download health warning",
+                                    "body": format!("File not found after download: {}", fname)
+                                }),
+                            );
+                        }
+                        Ok(meta) => {
+                            if let Some(expected) = total_bytes {
+                                let actual = meta.len();
+                                // Warn if size differs by more than 1%.
+                                let diff = actual.abs_diff(expected);
+                                if expected > 0 && diff * 100 / expected > 1 {
+                                    tracing::warn!(
+                                        path = %dest.display(),
+                                        expected_bytes = expected,
+                                        actual_bytes = actual,
+                                        "health-check: completed file size differs from expected"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             } else if status == fetchx_models::DownloadStatus::Failed {
                 let err = item
                     .error()
@@ -183,6 +223,69 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                     if let Err(error) = show_result {
                         tracing::warn!(%error, "could not show OS failure notification");
                     }
+                }
+                // Auto-retry on failure.
+                {
+                    let download_id = item.id();
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app_handle.state::<AppState>();
+                        let config = state.config_service.load().await.ok();
+                        let auto_retry_count =
+                            config.as_ref().map(|c| c.auto_retry_count).unwrap_or(3);
+                        let delay_seconds = config
+                            .as_ref()
+                            .map(|c| c.auto_retry_delay_seconds)
+                            .unwrap_or(30);
+                        if auto_retry_count == 0 {
+                            return;
+                        }
+                        // Check how many times we have already retried by counting
+                        // consecutive failures. We approximate by looking at the
+                        // current error state: if the item is still Failed after a
+                        // brief delay we retry up to auto_retry_count times.
+                        // We use a simple per-process counter stored in the app state
+                        // via the shared retry_counts map.
+                        let count = {
+                            let cs = app_handle.state::<AppState>();
+                            if let Some(ref core) = cs.core_services {
+                                let mut map = core
+                                    .retry_counts
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                let entry = map.entry(download_id).or_insert(0);
+                                *entry += 1;
+                                *entry
+                            } else {
+                                1
+                            }
+                        };
+                        if count > auto_retry_count {
+                            tracing::info!(
+                                download_id = %download_id,
+                                count,
+                                "auto-retry: exhausted retry limit"
+                            );
+                            return;
+                        }
+                        tracing::info!(
+                            download_id = %download_id,
+                            attempt = count,
+                            limit = auto_retry_count,
+                            delay_seconds,
+                            "auto-retry: scheduling retry"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+                        let cs = app_handle.state::<AppState>();
+                        match cs.queue.retry_download(download_id).await {
+                            Ok(()) => {
+                                tracing::info!(download_id = %download_id, attempt = count, "auto-retry: queued");
+                            }
+                            Err(e) => {
+                                tracing::warn!(download_id = %download_id, error = %e, "auto-retry: retry failed");
+                            }
+                        }
+                    });
                 }
             }
             let payload = DownloadUpdatedEvent {
@@ -365,7 +468,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::list_downloads,
             commands::list_runtime_statuses,
             commands::find_duplicate_download,
+            commands::check_duplicate_url,
             commands::extract_download_links,
+            commands::extract_links_from_text,
             commands::suggest_download_filename,
             commands::suggest_download_package_name,
             commands::normalize_download_url,
@@ -396,6 +501,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_queue_snapshot,
             commands::pause_queue_dispatch,
             commands::resume_queue_dispatch,
+            commands::pause_all_downloads,
+            commands::resume_all_downloads,
             commands::get_torrent_metadata,
             commands::get_torrent_download_metadata,
             commands::select_torrent_files,

@@ -423,6 +423,21 @@ impl QueueManager {
             .await
     }
 
+    /// Applies a per-download bandwidth cap in bytes per second.
+    ///
+    /// For active downloads the limit is stored and applied when the worker is
+    /// next dispatched (the live worker cannot be re-configured mid-flight).
+    /// For queued or paused downloads the limit is applied at next dispatch.
+    /// Pass `None` to remove any per-download override.
+    pub async fn set_bandwidth_limit(
+        &self,
+        id: DownloadId,
+        bps: Option<u64>,
+    ) -> Result<(), QueueError> {
+        self.request(|reply| Command::SetBandwidthLimit { id, bps, reply })
+            .await
+    }
+
     pub async fn snapshot(&self) -> Result<QueueSnapshot, QueueError> {
         self.request(|reply| Command::Snapshot { reply }).await
     }
@@ -673,6 +688,11 @@ enum Command {
         pressure: ResourcePressure,
         reply: oneshot::Sender<Result<(), QueueError>>,
     },
+    SetBandwidthLimit {
+        id: DownloadId,
+        bps: Option<u64>,
+        reply: oneshot::Sender<Result<(), QueueError>>,
+    },
     Snapshot {
         reply: oneshot::Sender<Result<QueueSnapshot, QueueError>>,
     },
@@ -713,6 +733,7 @@ where
     let mut stopping = false;
     let mut pressure = ResourcePressure::Normal;
     let mut shutdown_waiters = Vec::<oneshot::Sender<Result<(), QueueError>>>::new();
+    let mut pending_bandwidth_limits = HashMap::<DownloadId, Option<u64>>::new();
 
     loop {
         if !stopping && !manual_dispatch_paused && !schedule_dispatch_paused {
@@ -726,6 +747,7 @@ where
                 &mut task_downloads,
                 &resource_sender,
                 &resources,
+                &pending_bandwidth_limits,
                 pressure,
                 &mut last_priority,
                 &mut consecutive_priority_starts,
@@ -770,6 +792,7 @@ where
                     &mut schedule_dispatch_paused,
                     &mut shutdown_waiters,
                     &mut next_sequence,
+                    &mut pending_bandwidth_limits,
                 ).await?;
                 allocate_resources(
                     &mut active,
@@ -846,6 +869,7 @@ async fn start_eligible<E>(
     task_downloads: &mut HashMap<TaskId, DownloadId>,
     resource_sender: &mpsc::Sender<ResourceDemand>,
     resources: &RuntimeResourceManager,
+    pending_bandwidth_limits: &HashMap<DownloadId, Option<u64>>,
     pressure: ResourcePressure,
     last_priority: &mut Option<DownloadPriority>,
     consecutive_priority_starts: &mut u8,
@@ -877,7 +901,10 @@ where
         };
         let entry = entries.get(&id).ok_or(QueueError::ResourceInvariant)?;
         let priority = entry.item.priority();
-        let per_download_limit = entry.item.source().bandwidth_limit_bps();
+        let per_download_limit = pending_bandwidth_limits
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| entry.item.source().bandwidth_limit_bps());
         let bandwidth =
             resources.bandwidth_for(entry.item.source().engine(), per_download_limit)?;
         match last_priority {
@@ -1068,6 +1095,7 @@ async fn handle_command<R, E>(
     schedule_dispatch_paused: &mut bool,
     shutdown_waiters: &mut Vec<oneshot::Sender<Result<(), QueueError>>>,
     next_sequence: &mut u64,
+    pending_bandwidth_limits: &mut HashMap<DownloadId, Option<u64>>,
 ) -> Result<(), QueueError>
 where
     R: DownloadRepository + Clone,
@@ -1563,6 +1591,23 @@ where
             reply,
         } => {
             *pressure = requested;
+            let _ = reply.send(Ok(()));
+        }
+        Command::SetBandwidthLimit { id, bps, reply } => {
+            // Validate the rate if provided.
+            if let Some(rate) = bps {
+                if rate == 0 {
+                    let _ = reply.send(Err(QueueError::InvalidBandwidthPolicy));
+                    return Ok(());
+                }
+            }
+            // Verify the download exists.
+            if !entries.contains_key(&id) {
+                let _ = reply.send(Err(QueueError::DownloadNotFound(id)));
+                return Ok(());
+            }
+            // Store for the next dispatch (active workers cannot be re-configured live).
+            pending_bandwidth_limits.insert(id, bps);
             let _ = reply.send(Ok(()));
         }
         Command::Snapshot { reply } => {

@@ -31,7 +31,7 @@ pub struct AppState {
     pub(crate) core_services: Option<Arc<CoreServices>>,
     pub(crate) database: Database,
     pub(crate) repository: AppRepository,
-    queue: QueueManager,
+    pub(crate) queue: QueueManager,
     pub(crate) scheduler: Scheduler<AppRepository>,
     downloads_dir: std::path::PathBuf,
     pub(crate) shutdown_state: Arc<AtomicU8>,
@@ -140,6 +140,25 @@ impl AppState {
                 || extension.as_deref() != audio_format.map(YtDlpAudioFormat::extension))
         {
             return Err(IpcError::invalid_request());
+        }
+        // Duplicate-URL check for HTTP(S) downloads (skip for magnet/torrent).
+        if magnet.is_none() && torrent_path.is_none() {
+            if let Some(ref cs) = self.core_services {
+                if let Ok(Some(dup)) = cs.find_duplicate_download(&canonical_url).await {
+                    let msg_string = format!(
+                        "This URL is already in your downloads (status: {:?}, filename: {})",
+                        dup.status(),
+                        dup.filename()
+                    );
+                    // We need a 'static str; leak a small allocation so the
+                    // IpcError<'static> constraint is satisfied.
+                    let msg: &'static str = Box::leak(msg_string.into_boxed_str());
+                    return Err(IpcError {
+                        code: IpcErrorCode::Conflict,
+                        message: msg,
+                    });
+                }
+            }
         }
         // Resolve the requested engine from the source when no override is present.
         let engine_kind = match (
@@ -989,8 +1008,37 @@ pub async fn find_duplicate_download(
     }))
 }
 
+/// Checks whether a URL is already in the downloads list without attempting a
+/// full add. Returns the matching download if one exists, or `None`.
+#[tauri::command]
+pub async fn check_duplicate_url(
+    url: String,
+    state: State<'_, AppState>,
+) -> Result<Option<DuplicateDownloadMatchDto>, IpcError> {
+    let core = state
+        .core_services
+        .as_ref()
+        .ok_or_else(IpcError::internal)?;
+    let duplicate = core
+        .find_duplicate_download(&url)
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(duplicate.map(|item| DuplicateDownloadMatchDto {
+        id: item.id().to_string(),
+        filename: item.filename().to_owned(),
+        status: item.status(),
+        updated_at: item.updated_at().as_unix_millis(),
+    }))
+}
+
 #[tauri::command]
 pub fn extract_download_links(text: String) -> Vec<String> {
+    fetchx_core_services::extract_download_links(&text)
+}
+
+/// Alias for `extract_download_links` used by the Batch Add dialog.
+#[tauri::command]
+pub fn extract_links_from_text(text: String) -> Vec<String> {
     fetchx_core_services::extract_download_links(&text)
 }
 
@@ -1470,6 +1518,37 @@ pub async fn resume_queue_dispatch(
     state: State<'_, AppState>,
 ) -> Result<QueueSnapshotDto, IpcError> {
     state.set_queue_dispatch_paused(false).await
+}
+
+// ---------------------------------------------------------------------------
+// T4 — Pause all / Resume all
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn pause_all_downloads(state: State<'_, AppState>) -> Result<(), IpcError> {
+    let snap = state.queue.snapshot().await.map_err(IpcError::from_queue)?;
+    for active in &snap.active {
+        let id = active.item.id();
+        match state.queue.pause(id).await {
+            Ok(()) => {}
+            Err(QueueError::InvalidStatus { .. }) => {}
+            Err(e) => return Err(IpcError::from_queue(e)),
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn resume_all_downloads(state: State<'_, AppState>) -> Result<(), IpcError> {
+    let snap = state.queue.snapshot().await.map_err(IpcError::from_queue)?;
+    for id in &snap.paused {
+        match state.queue.resume(*id).await {
+            Ok(()) => {}
+            Err(QueueError::InvalidStatus { .. }) => {}
+            Err(e) => return Err(IpcError::from_queue(e)),
+        }
+    }
+    Ok(())
 }
 
 /// Torrent metadata transfer object for the desktop frontend.
@@ -1968,7 +2047,7 @@ pub async fn launch_browser_with_extension(app: AppHandle, browser: String) -> R
 
 #[tauri::command]
 pub async fn set_download_bandwidth_limit(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     download_id: String,
     bytes_per_second: Option<u64>,
 ) -> Result<(), IpcError> {
@@ -1978,9 +2057,11 @@ pub async fn set_download_bandwidth_limit(
     {
         return Err(IpcError::invalid_request());
     }
-    // Bandwidth limit is stored when the download next starts.
-    tracing::info!(download_id = %id, ?bytes_per_second, "bandwidth limit queued");
-    Ok(())
+    state
+        .queue
+        .set_bandwidth_limit(id, bytes_per_second)
+        .await
+        .map_err(IpcError::from_queue)
 }
 
 // ---------------------------------------------------------------------------

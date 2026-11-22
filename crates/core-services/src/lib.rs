@@ -147,6 +147,8 @@ pub struct CoreServices {
     pub plugin_manager: Option<std::sync::Arc<fetchx_plugin_manager::PluginManager>>,
     shutdown_complete: Mutex<bool>,
     session_stats: std::sync::Arc<std::sync::Mutex<SessionStatistics>>,
+    /// Per-download auto-retry attempt counters (reset when the app restarts).
+    pub retry_counts: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<DownloadId, u32>>>,
 }
 
 /// Parameters for [`CoreServices::create_torrent_metadata_row`].
@@ -557,6 +559,41 @@ impl CoreServices {
         .await?;
 
         // Queue + Scheduler
+        // Feature 7 — Resume interrupted downloads on startup.
+        // The queue actor also calls `recover_interrupted` for all non-Aria2 downloads,
+        // so this pass is additive: it logs and respects the config flag.
+        if engine_config.resume_interrupted_on_start {
+            let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
+            let items = repository
+                .list()
+                .await
+                .map_err(|error| CoreServicesError::Database(error.to_string()))?;
+            let mut recovered = 0usize;
+            for item in &items {
+                if item.source().engine() == EngineKind::Aria2 {
+                    continue;
+                }
+                if matches!(
+                    item.status(),
+                    DownloadStatus::Downloading | DownloadStatus::Recovering
+                ) {
+                    match state_machine.recover_interrupted(item.id()).await {
+                        Ok(Some(_)) => recovered += 1,
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(download_id = %item.id(), error = %e, "resume-on-start: could not recover interrupted download");
+                        }
+                    }
+                }
+            }
+            if recovered > 0 {
+                info!(
+                    count = recovered,
+                    "resume-on-start: re-queued interrupted downloads"
+                );
+            }
+        }
+
         let deferred = if cfg.defer_queued_on_start {
             repository
                 .list()
@@ -657,6 +694,8 @@ impl CoreServices {
 
         let session_stats =
             std::sync::Arc::new(std::sync::Mutex::new(SessionStatistics::default()));
+        let retry_counts =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
         Ok(Self {
             database,
@@ -670,6 +709,7 @@ impl CoreServices {
             plugin_manager: None,
             shutdown_complete: Mutex::new(false),
             session_stats,
+            retry_counts,
         })
     }
 
