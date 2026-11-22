@@ -6,6 +6,7 @@ mod download;
 mod duplicate;
 mod engine;
 mod error;
+mod folder_categories;
 mod ids;
 mod post_download;
 mod post_queue_action;
@@ -33,6 +34,7 @@ pub use download::{
 pub use duplicate::DuplicateDownloadMatch;
 pub use engine::EngineKind;
 pub use error::{DownloadError, DownloadErrorCode, DownloadErrorMessageError};
+pub use folder_categories::{CategoryRule, FolderCategoriesConfig};
 pub use ids::{DownloadId, DownloadIdParseError};
 pub use post_download::PostDownloadAction;
 pub use post_queue_action::PostQueueAction;

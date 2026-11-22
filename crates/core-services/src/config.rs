@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use fetchx_models::{PostDownloadAction, ResourcePolicy, WeeklyQueueSchedule};
+use fetchx_models::{
+    FolderCategoriesConfig, PostDownloadAction, ResourcePolicy, WeeklyQueueSchedule,
+};
 use fetchx_storage::SqliteConfigRepository;
 
 const CONFIG_KEY: &str = "engine_config";
@@ -43,6 +45,10 @@ pub struct EngineConfig {
     pub os_notifications_enabled: bool,
     #[serde(default)]
     pub default_post_download_action: PostDownloadAction,
+    #[serde(default)]
+    pub folder_categories: FolderCategoriesConfig,
+    #[serde(default)]
+    pub native_builtins: NativeBuiltinsConfig,
 }
 
 impl Default for EngineConfig {
@@ -61,6 +67,26 @@ impl Default for EngineConfig {
             clipboard_monitor_enabled: false,
             os_notifications_enabled: true,
             default_post_download_action: PostDownloadAction::default(),
+            folder_categories: FolderCategoriesConfig::default(),
+            native_builtins: NativeBuiltinsConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NativeBuiltinsConfig {
+    pub filename_template: String,
+    pub page_scraper_enabled: bool,
+    pub url_resolver_enabled: bool,
+}
+
+impl Default for NativeBuiltinsConfig {
+    fn default() -> Self {
+        Self {
+            filename_template: "{{title}}".to_owned(),
+            page_scraper_enabled: true,
+            url_resolver_enabled: true,
         }
     }
 }
@@ -188,6 +214,8 @@ pub enum ConfigError {
     ResourcePolicy(String),
     #[error("weekly queue schedule is invalid: {0}")]
     WeeklyQueueSchedule(String),
+    #[error("native built-in plugin settings are invalid")]
+    NativeBuiltins,
     #[error("configuration serialisation failed: {0}")]
     Serialization(String),
     #[error("configuration storage failed: {0}")]
@@ -205,6 +233,9 @@ impl EngineConfig {
         self.weekly_queue_schedule
             .validate()
             .map_err(|error| ConfigError::WeeklyQueueSchedule(error.to_string()))?;
+        if self.native_builtins.filename_template.len() > 512 {
+            return Err(ConfigError::NativeBuiltins);
+        }
         Ok(())
     }
 }

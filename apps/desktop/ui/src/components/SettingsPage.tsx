@@ -7,16 +7,21 @@ import {
 import {
   getEngineConfig,
   getEngineStatus,
+  getFolderCategoriesConfig,
   getPostDownloadAction,
   resetEngineConfig,
   saveEngineConfig,
+  setFolderCategoriesConfig,
   setNotificationConfig,
   setPostDownloadAction,
 } from "../api/engine";
 import type {
   BrowserExtensionStatus,
+  CategoryRuleDto,
   EngineConfigDto,
   EngineStatus,
+  FolderCategoriesConfigDto,
+  NativeBuiltinsConfigDto,
   PostDownloadActionDto,
   PostDownloadActionKind,
   ResourcePolicyDto,
@@ -91,6 +96,110 @@ function NotificationsSection({
             containing folder.
           </p>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function NativeBuiltinsSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [settings, setSettings] = useState<NativeBuiltinsConfigDto>(cfg.native_builtins);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setSettings(cfg.native_builtins), [cfg.native_builtins]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+        native_builtins: settings,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateEnabled = (
+    key: "page_scraper_enabled" | "url_resolver_enabled",
+    enabled: boolean,
+  ) => setSettings((current) => ({ ...current, [key]: enabled }));
+
+  return (
+    <section className="settings-section" aria-labelledby="native-builtins-heading">
+      <div className="settings-section-header">
+        <h3 id="native-builtins-heading" className="settings-section-title">
+          Native built-ins
+        </h3>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">URL resolver</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={settings.url_resolver_enabled}
+              disabled={busy}
+              onChange={(event) => updateEnabled("url_resolver_enabled", event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span>{settings.url_resolver_enabled ? "Enabled" : "Disabled"}</span>
+          </label>
+          <p className="settings-hint">Resolve supported media pages, including Wikimedia Commons file pages.</p>
+        </div>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Page scraper</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={settings.page_scraper_enabled}
+              disabled={busy}
+              onChange={(event) => updateEnabled("page_scraper_enabled", event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span>{settings.page_scraper_enabled ? "Enabled" : "Disabled"}</span>
+          </label>
+          <p className="settings-hint">Look for a direct archive or installer link on submitted HTML pages.</p>
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="filename-template">Filename template</label>
+        <div className="settings-control">
+          <input
+            id="filename-template"
+            className="settings-input"
+            value={settings.filename_template}
+            maxLength={512}
+            disabled={busy}
+            onChange={(event) => setSettings((current) => ({
+              ...current,
+              filename_template: event.target.value,
+            }))}
+          />
+          <p className="settings-hint">
+            Supports {"{{title}}"}, {"{{filename}}"}, {"{{extension}}"}, {"{{taskId}}"},
+            {" {{host}}"}, {"{{domain}}"}, and {"{{path}}"}.
+          </p>
+        </div>
+      </div>
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
       </div>
     </section>
   );
@@ -971,8 +1080,188 @@ function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
   );
 }
 
-export function SettingsPage() {
-  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
+// ---------------------------------------------------------------------------
+// Folder categories section
+// ---------------------------------------------------------------------------
+
+const CATEGORY_KEYS: Array<keyof Omit<FolderCategoriesConfigDto, "enabled" | "custom">> = [
+  "compressed",
+  "documents",
+  "music",
+  "programs",
+  "video",
+  "images",
+];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  compressed: "Compressed",
+  documents: "Documents",
+  music: "Music",
+  programs: "Programs",
+  video: "Video",
+  images: "Images",
+};
+
+function FolderCategoriesSection({ onError }: { onError: (msg: string) => void }) {
+  const [cfg, setCfg] = useState<FolderCategoriesConfigDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    getFolderCategoriesConfig()
+      .then(setCfg)
+      .catch((cause) => onError(errorMessage(cause)));
+  }, [onError]);
+
+  const updateRule = (
+    key: keyof Omit<FolderCategoriesConfigDto, "enabled" | "custom">,
+    field: keyof CategoryRuleDto,
+    value: string,
+  ) => {
+    setCfg((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        [key]: { ...current[key], [field]: value },
+      };
+    });
+    setSaved(false);
+  };
+
+  const save = async () => {
+    if (!cfg) return;
+    setBusy(true);
+    setSaved(false);
+    try {
+      await setFolderCategoriesConfig(cfg);
+      setSaved(true);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!cfg) return null;
+
+  return (
+    <section className="settings-section" aria-labelledby="folder-categories-heading">
+      <div className="settings-section-header">
+        <h3 id="folder-categories-heading" className="settings-section-title">
+          Folder categories
+        </h3>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Auto-categorise downloads</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={cfg.enabled}
+              disabled={busy}
+              onChange={(event) => {
+                setCfg((current) => current ? { ...current, enabled: event.target.checked } : current);
+                setSaved(false);
+              }}
+            />
+            <span className="toggle-track">
+              <span className="toggle-thumb" />
+            </span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {cfg.enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+          <p className="settings-hint">
+            Automatically move completed downloads into sub-folders by file type.
+          </p>
+        </div>
+      </div>
+
+      {cfg.enabled && (
+        <>
+          <table className="settings-category-table" style={{ width: "100%", borderCollapse: "collapse", marginBottom: "0.75rem" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, fontSize: "13px" }}>Category</th>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, fontSize: "13px" }}>Folder</th>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600, fontSize: "13px" }}>Extensions (comma-separated)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {CATEGORY_KEYS.map((key) => (
+                <tr key={key}>
+                  <td style={{ padding: "4px 8px", fontSize: "13px", whiteSpace: "nowrap" }}>
+                    {CATEGORY_LABELS[key]}
+                  </td>
+                  <td style={{ padding: "4px 8px" }}>
+                    <input
+                      type="text"
+                      className="settings-input"
+                      value={cfg[key].folder}
+                      disabled={busy}
+                      onChange={(event) => updateRule(key, "folder", event.target.value)}
+                      aria-label={`${CATEGORY_LABELS[key]} folder`}
+                    />
+                  </td>
+                  <td style={{ padding: "4px 8px" }}>
+                    <input
+                      type="text"
+                      className="settings-input"
+                      value={cfg[key].extensions}
+                      disabled={busy}
+                      onChange={(event) => updateRule(key, "extensions", event.target.value)}
+                      aria-label={`${CATEGORY_LABELS[key]} extensions`}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="folder-categories-custom">
+              Custom rules
+            </label>
+            <div className="settings-control">
+              <textarea
+                id="folder-categories-custom"
+                className="settings-input"
+                rows={3}
+                value={cfg.custom}
+                disabled={busy}
+                placeholder="Books=epub,mobi;3D=stl,obj"
+                onChange={(event) => {
+                  setCfg((current) => current ? { ...current, custom: event.target.value } : current);
+                  setSaved(false);
+                }}
+              />
+              <p className="settings-hint">
+                Format: <code>Folder=ext,ext;Folder2=ext</code>. Custom rules override the built-in categories above.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+
+      {saved && (
+        <div className="settings-notice" role="status">
+          Folder categories saved.
+        </div>
+      )}
+      <div className="settings-actions">
+        <button
+          className="button button-primary"
+          onClick={() => void save()}
+          disabled={busy}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1056,10 +1345,12 @@ export function SettingsPage() {
       {cfg && (
         <>
           <NotificationsSection cfg={cfg} onSaved={setCfg} onError={setError} />
+          <NativeBuiltinsSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <AfterDownloadSection onError={setError} />
+          <FolderCategoriesSection onError={setError} />
           <ProxySection onError={setError} />
         </>
       )}

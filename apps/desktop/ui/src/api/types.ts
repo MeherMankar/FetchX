@@ -221,6 +221,13 @@ export interface EngineConfigDto {
   resource_policy: ResourcePolicyDto;
   weekly_queue_schedule: WeeklyQueueScheduleDto;
   os_notifications_enabled: boolean;
+  native_builtins: NativeBuiltinsConfigDto;
+}
+
+export interface NativeBuiltinsConfigDto {
+  filename_template: string;
+  page_scraper_enabled: boolean;
+  url_resolver_enabled: boolean;
 }
 
 export type ResourceProfile = "unlimited" | "normal" | "limited" | "night" | "custom";
@@ -260,6 +267,7 @@ export interface SaveEngineConfigRequest {
   yt_dlp: SaveYtDlpConfigRequest;
   resource_policy: ResourcePolicyDto;
   weekly_queue_schedule: WeeklyQueueScheduleDto;
+  native_builtins?: NativeBuiltinsConfigDto;
 }
 
 export interface DiagnosticResult {
@@ -341,4 +349,24 @@ export interface PostDownloadActionDto {
   kind: PostDownloadActionKind;
   /** Present only when kind is "run_command". */
   command?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Folder categories (folder-categories feature)
+// ---------------------------------------------------------------------------
+
+export interface CategoryRuleDto {
+  folder: string;
+  extensions: string;
+}
+
+export interface FolderCategoriesConfigDto {
+  enabled: boolean;
+  compressed: CategoryRuleDto;
+  documents: CategoryRuleDto;
+  music: CategoryRuleDto;
+  programs: CategoryRuleDto;
+  video: CategoryRuleDto;
+  images: CategoryRuleDto;
+  custom: string;
 }

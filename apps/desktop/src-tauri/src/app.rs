@@ -133,6 +133,35 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                         }
                     }
                 }
+
+                // Automatic folder categorisation
+                let folder_categories = config
+                    .as_ref()
+                    .map(|c| c.folder_categories.clone())
+                    .unwrap_or_default();
+                if folder_categories.enabled {
+                    let src = item.destination().to_owned();
+                    if let Some(dest) = fetchx_core_services::folder_categories::categorise(
+                        &src,
+                        &folder_categories,
+                    ) {
+                        let result = async {
+                            if let Some(parent) = dest.parent() {
+                                tokio::fs::create_dir_all(parent).await?;
+                            }
+                            tokio::fs::rename(&src, &dest).await
+                        }
+                        .await;
+                        match result {
+                            Ok(()) => {
+                                tracing::info!(from = %src.display(), to = %dest.display(), "folder categorisation: moved file")
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, from = %src.display(), to = %dest.display(), "folder categorisation: could not move file")
+                            }
+                        }
+                    }
+                }
             } else if status == fetchx_models::DownloadStatus::Failed {
                 let err = item
                     .error()
@@ -350,6 +379,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::discover_ytdlp_formats,
             media_processing::get_media_process_for_download,
             media_processing::start_media_remux,
+            media_processing::start_media_merge,
             media_processing::cancel_media_process,
             commands::pause_download,
             commands::resume_download,
@@ -395,6 +425,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_post_queue_action,
             commands::get_post_download_action,
             commands::set_post_download_action,
+            commands::get_folder_categories_config,
+            commands::set_folder_categories_config,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);

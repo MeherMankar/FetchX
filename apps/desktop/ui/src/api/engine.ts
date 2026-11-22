@@ -4,6 +4,7 @@ import type {
   DiagnosticResult,
   EngineConfigDto,
   EngineStatus,
+  FolderCategoriesConfigDto,
   PostDownloadActionDto,
   SaveEngineConfigRequest,
 } from "./types";
@@ -46,5 +47,15 @@ export function setPostDownloadAction(
   action: PostDownloadActionDto,
 ): Promise<void> {
   return invoke<void>("set_post_download_action", { action });
+}
+
+export function getFolderCategoriesConfig(): Promise<FolderCategoriesConfigDto> {
+  return invoke<FolderCategoriesConfigDto>("get_folder_categories_config");
+}
+
+export function setFolderCategoriesConfig(
+  config: FolderCategoriesConfigDto,
+): Promise<void> {
+  return invoke<void>("set_folder_categories_config", { config });
 }
 

@@ -85,6 +85,7 @@ pub use engine_status::{
 mod builtin;
 pub mod config;
 mod engine_status;
+pub mod folder_categories;
 pub use builtin::{
     CoreBuiltinError, FilenameTemplateContext, FilenameTemplateDiagnostic, FilenameTemplateResult,
     extract_download_links, find_archive_link, is_duplicate_download_url, match_download_category,
@@ -1418,9 +1419,14 @@ impl CoreServices {
             .iter()
             .map(|item| batch_destination_key(item.destination()))
             .collect();
+        let native_builtins = match self.config_service.load().await {
+            Ok(config) => config.native_builtins,
+            Err(_) => config::NativeBuiltinsConfig::default(),
+        };
         self.enqueue_batch_item(
             request,
             DownloadPriority::Normal,
+            &native_builtins,
             &mut HashSet::new(),
             &mut reserved_destinations,
         )
@@ -1690,6 +1696,20 @@ impl CoreServices {
             return Vec::new();
         }
 
+        let native_builtins = match self.config_service.load().await {
+            Ok(config) => config.native_builtins,
+            Err(error) => {
+                let message = error.to_string();
+                return requests
+                    .into_iter()
+                    .map(|request| BatchDownloadOutcome {
+                        input_url: request.request.url,
+                        result: Err(BatchDownloadError::Queue(message.clone())),
+                    })
+                    .collect();
+            }
+        };
+
         let mut outcomes = Vec::with_capacity(requests.len());
         let mut seen_urls = HashSet::with_capacity(requests.len());
         let mut reserved_destinations = match self.repository.list().await {
@@ -1715,6 +1735,7 @@ impl CoreServices {
                 .enqueue_batch_item(
                     request,
                     priority,
+                    &native_builtins,
                     &mut seen_urls,
                     &mut reserved_destinations,
                 )
@@ -1730,6 +1751,7 @@ impl CoreServices {
         &self,
         admission: BatchAdmissionRequest,
         priority: DownloadPriority,
+        native_builtins: &config::NativeBuiltinsConfig,
         seen_urls: &mut HashSet<String>,
         reserved_destinations: &mut HashSet<String>,
     ) -> Result<DownloadId, BatchDownloadError> {
@@ -1740,9 +1762,10 @@ impl CoreServices {
             expected_sha256,
             require_exact_destination,
         } = admission;
-        let canonical_url =
+        let mut canonical_url =
             validate_http_source_url(&request.url).map_err(|_| BatchDownloadError::InvalidUrl)?;
-        if !seen_urls.insert(normalize_download_url(&canonical_url)) {
+        let original_normalized = normalize_download_url(&canonical_url);
+        if !seen_urls.insert(original_normalized.clone()) {
             return Err(BatchDownloadError::DuplicateUrl);
         }
         if !self.engine_runtime.is_available(request.engine) {
@@ -1758,6 +1781,40 @@ impl CoreServices {
             return Err(BatchDownloadError::InvalidChecksum);
         }
 
+        if request.engine == EngineKind::DirectHttp {
+            if native_builtins.url_resolver_enabled {
+                match self.resolve_core_url(&canonical_url).await {
+                    Ok(Some(resolved)) => match validate_http_source_url(&resolved) {
+                        Ok(resolved) => canonical_url = resolved,
+                        Err(_) => tracing::warn!(
+                            error_code = "BUILTIN_URL_RESOLVER_REJECTED_URL",
+                            "native URL resolver returned an unsafe URL; keeping the submitted URL"
+                        ),
+                    },
+                    Ok(None) => {}
+                    Err(_) => tracing::warn!(
+                        error_code = "BUILTIN_URL_RESOLVER_FAILED",
+                        "native URL resolver failed; keeping the submitted URL"
+                    ),
+                }
+            }
+            if native_builtins.page_scraper_enabled {
+                if let Some(discovered) = self.discover_archive_url(&canonical_url).await {
+                    match validate_http_source_url(&discovered) {
+                        Ok(discovered) => canonical_url = discovered,
+                        Err(_) => tracing::warn!(
+                            error_code = "BUILTIN_PAGE_SCRAPER_REJECTED_URL",
+                            "native page scraper returned an unsafe URL; keeping the submitted URL"
+                        ),
+                    }
+                }
+            }
+            let normalized = normalize_download_url(&canonical_url);
+            if normalized != original_normalized && !seen_urls.insert(normalized) {
+                return Err(BatchDownloadError::DuplicateUrl);
+            }
+        }
+
         let mut source = DownloadSource::new(&canonical_url, request.engine)
             .map_err(|_| BatchDownloadError::InvalidFormat)?;
         source = match (request.format_id, request.audio_format) {
@@ -1768,6 +1825,9 @@ impl CoreServices {
         }
         .map_err(|_| BatchDownloadError::InvalidFormat)?;
 
+        let item_id = DownloadId::new();
+        let created_at =
+            Timestamp::now().map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
         let (destination, filename) = if let Some(destination) = destination {
             if !destination.is_absolute() {
                 return Err(BatchDownloadError::InvalidDestination);
@@ -1797,6 +1857,26 @@ impl CoreServices {
                     .and_then(std::ffi::OsStr::to_str)
                     .ok_or(BatchDownloadError::InvalidFormat)?
                     .to_owned();
+            }
+            if !native_builtins.filename_template.is_empty() {
+                let rendered = render_filename_template(
+                    &native_builtins.filename_template,
+                    &FilenameTemplateContext {
+                        task_id: item_id.to_string(),
+                        file_path: filename.clone(),
+                        source_url: Some(canonical_url.clone()),
+                        requested_at: Some(created_at.as_unix_millis() as i64),
+                        ..FilenameTemplateContext::default()
+                    },
+                );
+                if rendered.valid {
+                    filename = rendered.output;
+                } else {
+                    tracing::warn!(
+                        error_code = "BUILTIN_FILENAME_TEMPLATE_INVALID",
+                        "native filename template is invalid; using the suggested filename"
+                    );
+                }
             }
             let filename =
                 FileName::new(filename).map_err(|_| BatchDownloadError::InvalidFormat)?;
@@ -1831,10 +1911,7 @@ impl CoreServices {
             sidecar.push(".fetchx.sha256");
             PathBuf::from(sidecar)
         });
-        let created_at =
-            Timestamp::now().map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
-        let mut item =
-            DownloadItem::new(DownloadId::new(), source, filename, destination, created_at);
+        let mut item = DownloadItem::new(item_id, source, filename, destination, created_at);
         item.set_priority_at(priority, created_at)
             .map_err(|error| BatchDownloadError::Queue(error.to_string()))?;
         let item_id = item.id();
@@ -1861,11 +1938,18 @@ impl CoreServices {
     /// Applies FetchX's core page discovery. This is equivalent to the built-in
     /// page scraper but runs inside every shared-core host.
     pub async fn discover_archive_url(&self, url: &str) -> Option<String> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(3))
-            .build()
+        const MAX_PAGE_BYTES: usize = 512 * 1024;
+        let client = fetchx_downloader::safe_http_client_for_url(url, Duration::from_secs(3))
+            .await
             .ok()?;
-        let response = client.get(url).send().await.ok()?;
+        let mut response = client.get(url).send().await.ok()?;
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|size| size > MAX_PAGE_BYTES as u64)
+        {
+            return None;
+        }
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -1874,18 +1958,24 @@ impl CoreServices {
         if !content_type.contains("text/html") {
             return None;
         }
-        let html = response.text().await.ok()?;
+        let mut body = Vec::new();
+        loop {
+            let Some(chunk) = response.chunk().await.ok()? else {
+                break;
+            };
+            if body.len().saturating_add(chunk.len()) > MAX_PAGE_BYTES {
+                return None;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let html = String::from_utf8(body).ok()?;
         find_archive_link(&html, url)
     }
 
     /// Resolves the core URL resolver providers. Unknown providers are left
     /// unchanged and return `Ok(None)`.
     pub async fn resolve_core_url(&self, url: &str) -> Result<Option<String>, CoreBuiltinError> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|_| CoreBuiltinError::InvalidResponse)?;
-        builtin::resolve_core_url(&client, url).await
+        builtin::resolve_core_url(url).await
     }
 
     /// Durable torrent metadata repository for aria2 magnet/.torrent downloads.

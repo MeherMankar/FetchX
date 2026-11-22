@@ -2164,6 +2164,107 @@ pub async fn set_post_download_action(
         .map_err(|_| IpcError::internal())
 }
 
+// ---------------------------------------------------------------------------
+// Folder categories
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CategoryRuleDto {
+    pub folder: String,
+    pub extensions: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FolderCategoriesConfigDto {
+    pub enabled: bool,
+    pub compressed: CategoryRuleDto,
+    pub documents: CategoryRuleDto,
+    pub music: CategoryRuleDto,
+    pub programs: CategoryRuleDto,
+    pub video: CategoryRuleDto,
+    pub images: CategoryRuleDto,
+    pub custom: String,
+}
+
+impl From<fetchx_models::CategoryRule> for CategoryRuleDto {
+    fn from(rule: fetchx_models::CategoryRule) -> Self {
+        Self {
+            folder: rule.folder,
+            extensions: rule.extensions,
+        }
+    }
+}
+
+impl From<CategoryRuleDto> for fetchx_models::CategoryRule {
+    fn from(dto: CategoryRuleDto) -> Self {
+        Self {
+            folder: dto.folder,
+            extensions: dto.extensions,
+        }
+    }
+}
+
+impl From<fetchx_models::FolderCategoriesConfig> for FolderCategoriesConfigDto {
+    fn from(cfg: fetchx_models::FolderCategoriesConfig) -> Self {
+        Self {
+            enabled: cfg.enabled,
+            compressed: CategoryRuleDto::from(cfg.compressed),
+            documents: CategoryRuleDto::from(cfg.documents),
+            music: CategoryRuleDto::from(cfg.music),
+            programs: CategoryRuleDto::from(cfg.programs),
+            video: CategoryRuleDto::from(cfg.video),
+            images: CategoryRuleDto::from(cfg.images),
+            custom: cfg.custom,
+        }
+    }
+}
+
+impl From<FolderCategoriesConfigDto> for fetchx_models::FolderCategoriesConfig {
+    fn from(dto: FolderCategoriesConfigDto) -> Self {
+        Self {
+            enabled: dto.enabled,
+            compressed: fetchx_models::CategoryRule::from(dto.compressed),
+            documents: fetchx_models::CategoryRule::from(dto.documents),
+            music: fetchx_models::CategoryRule::from(dto.music),
+            programs: fetchx_models::CategoryRule::from(dto.programs),
+            video: fetchx_models::CategoryRule::from(dto.video),
+            images: fetchx_models::CategoryRule::from(dto.images),
+            custom: dto.custom,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_folder_categories_config(
+    state: State<'_, AppState>,
+) -> Result<FolderCategoriesConfigDto, IpcError> {
+    let config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(FolderCategoriesConfigDto::from(config.folder_categories))
+}
+
+#[tauri::command]
+pub async fn set_folder_categories_config(
+    config: FolderCategoriesConfigDto,
+    state: State<'_, AppState>,
+) -> Result<(), IpcError> {
+    let model = fetchx_models::FolderCategoriesConfig::from(config);
+    let mut engine_config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    engine_config.folder_categories = model;
+    state
+        .config_service
+        .save(&engine_config)
+        .await
+        .map_err(|_| IpcError::internal())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};

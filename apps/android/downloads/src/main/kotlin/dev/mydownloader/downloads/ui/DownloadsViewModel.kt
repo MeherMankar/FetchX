@@ -15,7 +15,10 @@ import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentTelemetry
+import dev.fetchx.downloads.settings.FolderCategoriser
+import dev.fetchx.downloads.settings.FolderCategoriesRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +29,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * UI state for the Downloads screen.
@@ -66,6 +71,7 @@ enum class DownloadSnapshotState {
 class DownloadsViewModel(
     private val repository: DownloadRepository,
     bridgeAvailable: Boolean = true,
+    private val folderCategoriesRepository: FolderCategoriesRepository? = null,
 ) : ViewModel() {
 
     // ── Private UI state ──────────────────────────────────────────────────
@@ -227,6 +233,42 @@ class DownloadsViewModel(
                         _torrentTelemetry.value = snapshots
                         _torrentMetadata.value = metadataSnapshots
                         delay(TORRENT_TELEMETRY_POLL_MILLIS)
+                    }
+                }
+            }
+        }
+
+        // Observe completed downloads and apply folder categorisation when enabled.
+        if (folderCategoriesRepository != null) {
+            var previousCompleted = emptySet<String>()
+            viewModelScope.launch {
+                completedDownloads.collect { completed ->
+                    val nowCompleted = completed
+                        .filter { it.state is DownloadState.Completed }
+                        .map { it.id }
+                        .toSet()
+                    val newlyCompleted = nowCompleted - previousCompleted
+                    previousCompleted = nowCompleted
+                    if (newlyCompleted.isNotEmpty()) {
+                        val config = folderCategoriesRepository.load()
+                        if (config.enabled) {
+                            for (id in newlyCompleted) {
+                                val item = completed.firstOrNull { it.id == id } ?: continue
+                                val destination = item.destinationPath ?: continue
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        val src = File(destination)
+                                        val dest = FolderCategoriser.categorise(src, config)
+                                        if (dest != null) {
+                                            dest.parentFile?.mkdirs()
+                                            src.renameTo(dest)
+                                        }
+                                    }
+                                } catch (_: Exception) {
+                                    // Categorisation failures are non-fatal; never surface to user.
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -633,13 +675,14 @@ class DownloadsViewModel(
     class Factory(
         private val repository: DownloadRepository,
         private val bridgeAvailable: Boolean = true,
+        private val folderCategoriesRepository: FolderCategoriesRepository? = null,
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             require(modelClass.isAssignableFrom(DownloadsViewModel::class.java)) {
                 "Unknown ViewModel class: ${modelClass.name}"
             }
-            return DownloadsViewModel(repository, bridgeAvailable) as T
+            return DownloadsViewModel(repository, bridgeAvailable, folderCategoriesRepository) as T
         }
 
     }
