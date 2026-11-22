@@ -926,7 +926,6 @@ where
         let stored_identity = load_resource_identity(&temporary_path).await?;
         let resume_validator = stored_identity
             .as_ref()
-            .filter(|identity| identity.url == url.as_str())
             .and_then(|identity| identity.validator.clone());
         // Preserve any browser context headers that were stored before this run.
         let stored_headers: Vec<(String, String)> = stored_identity
@@ -988,8 +987,9 @@ where
                 .filter(|validator| !validator.is_empty())
                 .is_some_and(|validator| {
                     stored_identity.as_ref().is_some_and(|identity| {
-                        identity.url == url.as_str()
-                            && identity.validator.as_deref() == Some(validator.as_str())
+                        identity.validator.as_deref() == Some(validator.as_str())
+                            && identity.total_size == Some(total_size)
+                            && identity.segment_count == Some(segment_count)
                     })
                 });
             if !can_resume_segments {
@@ -1108,23 +1108,21 @@ where
         if append && current_validator.as_deref() != resume_validator.as_deref() {
             return Err(DownloadEngineError::RangeMismatch);
         }
-        if !append {
-            save_resource_identity(
-                &temporary_path,
-                &ResourceIdentity {
-                    version: 1,
-                    url: url.to_string(),
-                    validator: current_validator,
-                    finalizing: false,
-                    total_size: None,
-                    segment_count: None,
-                    extra_headers: extra_headers.clone(),
-                    multi_source_sha256: None,
-                    multi_source_urls: Vec::new(),
-                },
-            )
-            .await?;
-        }
+        save_resource_identity(
+            &temporary_path,
+            &ResourceIdentity {
+                version: 1,
+                url: url.to_string(),
+                validator: current_validator,
+                finalizing: false,
+                total_size: None,
+                segment_count: None,
+                extra_headers: extra_headers.clone(),
+                multi_source_sha256: None,
+                multi_source_urls: Vec::new(),
+            },
+        )
+        .await?;
 
         if reset_before_download {
             reset_partial_file(&temporary_path, partial_exists).await?;

@@ -1773,6 +1773,53 @@ async fn resumed_segments_without_a_server_validator_are_restarted() -> Result<(
 }
 
 #[tokio::test]
+async fn refreshed_url_resumes_verified_segment_files() -> Result<(), Box<dyn Error>> {
+    const TOTAL: usize = 256 * 1024;
+    const SEGMENT_SIZE: usize = TOTAL / 4;
+    let body: Vec<u8> = (0..TOTAL).map(|index| (index % 239) as u8).collect();
+    let (old_url, server) =
+        start_segment_server(body.clone(), 4, SegmentServerMode::Valid, 5, false).await?;
+    let refreshed_url = format!("{old_url}?token=refreshed");
+    let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
+    let destination = directory.destination("refreshed-segment-url.bin");
+    let temporary_path = PathBuf::from(format!("{}.part", destination.display()));
+
+    for (index, length) in [(0, SEGMENT_SIZE), (1, SEGMENT_SIZE), (2, SEGMENT_SIZE / 2)] {
+        let start = index * SEGMENT_SIZE;
+        let segment_path = PathBuf::from(format!(
+            "{}.segments-4-{TOTAL}-{index}",
+            temporary_path.display()
+        ));
+        tokio::fs::write(segment_path, &body[start..start + length]).await?;
+    }
+    tokio::fs::write(
+        PathBuf::from(format!("{}.part.meta", destination.display())),
+        serde_json::to_vec(&serde_json::json!({
+            "url": old_url,
+            "validator": "\"test-v1\"",
+            "total_size": TOTAL,
+            "segment_count": 4,
+        }))?,
+    )
+    .await?;
+    let item = make_item(&refreshed_url, &destination)?;
+
+    let completed = run_download(&engine, &database, item).await?;
+    let report = server.await?;
+    let mut ranges = report
+        .requests
+        .iter()
+        .filter_map(|request| range_header(request))
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+
+    assert_eq!(ranges, ["bytes=163840-196607", "bytes=196608-262143",]);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn cancellation_keeps_segment_bytes_and_later_invocation_resumes_them()
 -> Result<(), Box<dyn Error>> {
     const TOTAL: usize = 8 * 1024 * 1024;
@@ -2369,6 +2416,46 @@ async fn changed_etag_prevents_appending_stale_partial_bytes() -> Result<(), Box
     );
     assert_eq!(tokio::fs::read(partial_path).await?, original);
     assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn refreshed_url_resumes_a_partial_with_the_saved_validator() -> Result<(), Box<dyn Error>> {
+    let body: Vec<u8> = (0..100).collect();
+    let refreshed_url_body = body[76..].to_vec();
+    let response = scripted_response(
+        206,
+        &[
+            ("Content-Range", "bytes 76-99/100"),
+            ("ETag", "\"test-v1\""),
+        ],
+        &refreshed_url_body,
+    );
+    let (old_url, server) = start_scripted_server(vec![response]).await?;
+    let refreshed_url = format!("{old_url}?token=refreshed");
+    let (database, engine, directory) = setup_engine(HttpEngineConfig {
+        minimum_segmented_file_size: u64::MAX,
+        ..HttpEngineConfig::default()
+    })
+    .await?;
+    let destination = directory.destination("refreshed-url-resume.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, &body[..76]).await?;
+    write_resume_identity(&destination, &old_url, "\"test-v1\"").await?;
+    let item = make_item(&refreshed_url, &destination)?;
+
+    let completed = run_download(&engine, &database, item).await?;
+    let requests = server.await?;
+
+    assert_eq!(range_header(&requests[0]), Some("bytes=76-"));
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("if-range: \"test-v1\"")
+    );
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.progress().downloaded_bytes(), 100);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
     Ok(())
 }
 
