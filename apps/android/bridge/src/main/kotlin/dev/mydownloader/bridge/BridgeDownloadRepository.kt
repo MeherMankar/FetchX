@@ -821,12 +821,12 @@ internal fun createBatchDownloadRequestDto(
 ): BatchDownloadRequestDto {
     val selectedMedia = item.isMedia || item.formatId != null ||
         item.extension != null || item.audioFormat != null
-    val engine = if (selectedMedia) {
+    val media = selectedMedia || isMediaUrl(item.url)
+    val engine = if (media) {
         BatchDownloadEngineDto.YT_DLP
     } else {
         BatchDownloadEngineDto.DIRECT_HTTP
     }
-    val media = selectedMedia || isMediaUrl(item.url)
     val selectedExtension = item.audioFormat?.lowercase() ?: item.extension
     val audioFormat = when (item.audioFormat?.lowercase()) {
         "mp3" -> BatchDownloadAudioFormatDto.MP3

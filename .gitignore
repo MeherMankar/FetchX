@@ -21,7 +21,9 @@
 .agents
 node_modules/
 package-lock.json
+!/apps/remote-ui/package-lock.json
 package.json
+!/apps/remote-ui/package.json
 __pycache__/
 *.py[cod]
 *.pyd

@@ -36,7 +36,12 @@ pub fn categorise(path: &Path, config: &FolderCategoriesConfig) -> Option<PathBu
     };
 
     // Already in the target folder — nothing to do.
-    if parent == dest_dir {
+    let already_in_folder = if Path::new(folder.as_str()).is_absolute() {
+        parent == dest_dir
+    } else {
+        parent.file_name().and_then(|name| name.to_str()) == Some(folder.as_str())
+    };
+    if already_in_folder {
         return None;
     }
 

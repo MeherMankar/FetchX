@@ -15,7 +15,12 @@ object FolderCategoriser {
         val folder = rules[ext] ?: return null
         val parent = file.parentFile ?: return null
         val destDir = if (File(folder).isAbsolute) File(folder) else File(parent, folder)
-        if (parent.canonicalPath == destDir.canonicalPath) return null
+        val alreadyInFolder = if (File(folder).isAbsolute) {
+            parent.canonicalPath == destDir.canonicalPath
+        } else {
+            parent.name.equals(folder, ignoreCase = true)
+        }
+        if (alreadyInFolder) return null
         return File(destDir, file.name)
     }
 
