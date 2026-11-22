@@ -66,6 +66,66 @@ export function errorMessage(error: unknown): string {
   return "The request could not be completed.";
 }
 
+/** Maps known technical error strings to plain-language equivalents.
+ *  Truncates to 120 characters with an ellipsis when needed.
+ *  Returns the raw string unchanged when no mapping applies. */
+export function friendlyErrorMessage(raw: string): string {
+  type Replacement = string | ((m: string) => string);
+  const MAPPINGS: Array<[string | RegExp, Replacement]> = [
+    [
+      "The HTTP request failed.",
+      "Could not connect to the server. Check your internet connection and try again.",
+    ],
+    [
+      /The HTTP server returned status 4\d\d/,
+      (m: string) => {
+        const match = m.match(/(\d{3})/);
+        const code = match ? match[1] : "";
+        return `The server rejected the request (error ${code}). The URL may be invalid or require login.`;
+      },
+    ],
+    [
+      /The HTTP server returned status 5\d\d/,
+      (m: string) => {
+        const match = m.match(/(\d{3})/);
+        const code = match ? match[1] : "";
+        return `The server returned an error (${code}). Try again in a few minutes.`;
+      },
+    ],
+    [
+      "The built-in media processor failed while merging the video and audio streams.",
+      "The video and audio tracks could not be merged. Try retrying — if it keeps failing, the format may not be supported.",
+    ],
+    [
+      "The built-in media processor could not be initialized.",
+      "Media processing is unavailable. Restart FetchX and try again.",
+    ],
+    [
+      "yt-dlp left separate output files instead of a merged media file",
+      "The download finished but the video and audio could not be combined. Try a different quality or format.",
+    ],
+    [
+      "The SFTP download could not be completed.",
+      "Could not connect via SFTP. Check the address, username, and that the server is reachable.",
+    ],
+    [
+      "The downloaded file failed SHA-256 verification and was not published.",
+      "The downloaded file appears to be corrupted — the checksum did not match. Try downloading again.",
+    ],
+  ];
+
+  for (const [pattern, replacement] of MAPPINGS) {
+    const matches =
+      typeof pattern === "string" ? raw.includes(pattern) : pattern.test(raw);
+    if (matches) {
+      const result = typeof replacement === "function" ? replacement(raw) : replacement;
+      return result.length > 120 ? result.slice(0, 117) + "…" : result;
+    }
+  }
+
+  return raw.length > 120 ? raw.slice(0, 117) + "…" : raw;
+}
+
 /**
  * Returns a relative time string (e.g. "Just now", "3 minutes ago", "2 hours ago").
  * Falls back to an absolute datetime string for events older than 24 hours.

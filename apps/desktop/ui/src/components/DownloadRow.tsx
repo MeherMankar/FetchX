@@ -23,6 +23,7 @@ import {
   formatPercent,
   formatRelativeTime,
   formatSpeed,
+  friendlyErrorMessage,
 } from "../lib/format";
 import {
   canCancel,
@@ -188,7 +189,7 @@ export const DownloadRow = memo(function DownloadRow({
         </div>
 
         {download.error && (
-          <p className="download-error">{download.error.message}</p>
+          <p className="download-error">{friendlyErrorMessage(download.error.message)}</p>
         )}
         {isLegacyAria2 && (
           <p className="download-error">

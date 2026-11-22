@@ -980,6 +980,32 @@ internal fun sanitizeFailureReason(reason: String): String {
         return "Download failed. Please try again."
     }
 
+    // Translate known error strings (matching messages from error.rs) to friendly text.
+    when {
+        lower.contains("the http request failed") ->
+            return "Could not connect to the server. Check your internet connection and try again."
+        lower.contains("the server rejected the request") || Regex("error [45]\\d\\d").containsMatchIn(lower) -> {
+            val code = Regex("(\\d{3})").find(reason)?.value ?: ""
+            return if (lower.contains("4")) {
+                "The server rejected the request${if (code.isNotEmpty()) " (error $code)" else ""}. The URL may be invalid or require login."
+            } else {
+                "The server returned an error${if (code.isNotEmpty()) " ($code)" else ""}. Try again in a few minutes."
+            }
+        }
+        lower.contains("the server returned an error") ->
+            return reason // already friendly — pass through
+        lower.contains("built-in media processor failed") || lower.contains("merging the video and audio") ->
+            return "The video and audio tracks could not be merged. Try retrying — if it keeps failing, the format may not be supported."
+        lower.contains("media processor could not be initialized") || lower.contains("media processing is unavailable") ->
+            return "Media processing is unavailable. Restart FetchX and try again."
+        lower.contains("separate output files") || lower.contains("video and audio could not be combined") ->
+            return "The download finished but the video and audio could not be combined. Try a different quality or format."
+        lower.contains("sftp") ->
+            return "Could not connect via SFTP. Check the address, username, and that the server is reachable."
+        lower.contains("sha-256") || lower.contains("checksum did not match") || lower.contains("sha256 mismatch") ->
+            return "The downloaded file appears to be corrupted — the checksum did not match. Try downloading again."
+    }
+
     // Translate known Rust-level error tokens to friendly text.
     return when {
         lower.contains("network") || lower.contains("connect") || lower.contains("timeout") ->

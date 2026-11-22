@@ -163,11 +163,22 @@ impl DownloadEngineError {
             ),
             Self::Request(_) => (
                 DownloadErrorCode::Engine,
-                "The HTTP request failed.".to_owned(),
+                "Could not connect to the server. Check your internet connection and try again."
+                    .to_owned(),
+            ),
+            Self::HttpStatus(status) if *status >= 400 && *status < 500 => (
+                DownloadErrorCode::Engine,
+                format!(
+                    "The server rejected the request (error {status}). The URL may be invalid or require login."
+                ),
+            ),
+            Self::HttpStatus(status) if *status >= 500 => (
+                DownloadErrorCode::Engine,
+                format!("The server returned an error ({status}). Try again in a few minutes."),
             ),
             Self::HttpStatus(status) => (
                 DownloadErrorCode::Engine,
-                format!("The HTTP server returned status {status}."),
+                format!("The server returned an unexpected response ({status}). Try again."),
             ),
             Self::InvalidContentLength
             | Self::InvalidContentRange
@@ -199,12 +210,12 @@ impl DownloadEngineError {
             ),
             Self::YtDlp(YtDlpError::UnmergedOutput) => (
                 DownloadErrorCode::Engine,
-                "The selected video and audio streams could not be merged by the native media processor."
+                "The download finished but the video and audio could not be combined. Try a different quality or format."
                     .to_owned(),
             ),
             Self::YtDlp(YtDlpError::NativeMergeFailed) => (
                 DownloadErrorCode::Engine,
-                "The built-in media processor failed while merging the video and audio streams."
+                "The video and audio tracks could not be merged. Try retrying — if it keeps failing, the format may not be supported."
                     .to_owned(),
             ),
             Self::YtDlp(YtDlpError::NativePostprocessingUnsupported) => (
@@ -214,11 +225,12 @@ impl DownloadEngineError {
             ),
             Self::YtDlp(YtDlpError::NativeProcessorInitialization) => (
                 DownloadErrorCode::Engine,
-                "The built-in media processor could not be initialized.".to_owned(),
+                "Media processing is unavailable. Restart FetchX and try again.".to_owned(),
             ),
             Self::YtDlp(_) => (
                 DownloadErrorCode::Engine,
-                "The yt-dlp download could not be completed safely.".to_owned(),
+                "The media download could not be completed. Check the URL and try again."
+                    .to_owned(),
             ),
             Self::NativeTorrent(_) => (
                 DownloadErrorCode::Engine,
@@ -236,7 +248,8 @@ impl DownloadEngineError {
             | Self::SftpUnknownHostKey { .. }
             | Self::SftpAuthenticationFailed => (
                 DownloadErrorCode::Engine,
-                "The SFTP download could not be completed.".to_owned(),
+                "Could not connect via SFTP. Check the address, username, and that the server is reachable."
+                    .to_owned(),
             ),
             Self::MetalinkError(_)
             | Self::MetalinkChecksumMismatch { .. }
@@ -246,7 +259,8 @@ impl DownloadEngineError {
             ),
             Self::Sha256Mismatch { .. } => (
                 DownloadErrorCode::Engine,
-                "The downloaded file failed SHA-256 verification and was not published.".to_owned(),
+                "The downloaded file appears to be corrupted — the checksum did not match. Try downloading again."
+                    .to_owned(),
             ),
             Self::Cancelled => (
                 DownloadErrorCode::Internal,

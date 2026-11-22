@@ -938,12 +938,20 @@ impl IpcError {
                 "The external aria2 engine was removed. Use a native restart for supported legacy jobs."
             }
             EngineKind::YtDlp => {
-                "yt-dlp is currently unavailable. Please check Settings → Download Engines."
+                "The media download engine is not available. Check Settings → Download Engines to enable it."
             }
-            EngineKind::NativeTorrent => "The native torrent engine is currently unavailable.",
-            EngineKind::Ftp | EngineKind::Ftps => "The FTP engine is currently unavailable.",
-            EngineKind::Sftp => "The SFTP engine is currently unavailable.",
-            EngineKind::Metalink => "The Metalink engine is currently unavailable.",
+            EngineKind::NativeTorrent => {
+                "The torrent engine is not available. Check Settings → Download Engines to enable it."
+            }
+            EngineKind::Ftp | EngineKind::Ftps => {
+                "The FTP engine is not available. Check Settings → Download Engines to enable it."
+            }
+            EngineKind::Sftp => {
+                "The SFTP engine is not available. Check Settings → Download Engines to enable it."
+            }
+            EngineKind::Metalink => {
+                "The Metalink engine is not available. Check Settings → Download Engines to enable it."
+            }
             EngineKind::DirectHttp | EngineKind::Hls => {
                 // DirectHttp and Hls are always available; this branch should not be reached.
                 "The requested download engine is not available."
