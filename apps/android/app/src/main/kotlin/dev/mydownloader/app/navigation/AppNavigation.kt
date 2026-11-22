@@ -52,6 +52,8 @@ import dev.fetchx.downloads.ui.TorrentDetailScreen
 import dev.fetchx.downloads.ui.HistoryScreen
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.app.storage.StorageScreen
+import dev.fetchx.app.OnboardingScreen
+import dev.fetchx.app.isOnboardingComplete
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +73,11 @@ private const val DEFAULT_BROWSER_THEME_SEED = 0xFF8ECAE6L
 fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null), pendingDownloadId: androidx.compose.runtime.MutableState<String?> = androidx.compose.runtime.mutableStateOf(null)) {
     val navController = rememberNavController()
     val context = LocalContext.current
+
+    // Guard: show onboarding on the very first launch.
+    val startDestination = remember(context) {
+        if (isOnboardingComplete(context)) Screen.Browser.route else Screen.Onboarding.route
+    }
     val browserDataPreferences = remember(context) {
         context.getSharedPreferences(
             BROWSER_DATA_PREFERENCES_FILE,
@@ -247,7 +254,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     Scaffold(
         snackbarHost = { SnackbarHost(clipboardSnackbarHostState) },
         bottomBar = {
-            if (currentRoute != Screen.Browser.route) {
+            if (currentRoute != Screen.Browser.route && currentRoute != Screen.Onboarding.route) {
                 FetchXTheme(seedColor = seedColor) {
                     NavigationBar {
                         NavigationBarItem(
@@ -285,9 +292,19 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     ) { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = Screen.Browser.route,
+            startDestination = startDestination,
             modifier = Modifier.padding(innerPadding),
         ) {
+            composable(Screen.Onboarding.route) {
+                OnboardingScreen(
+                    onFinish = {
+                        navController.navigate(Screen.Downloads.route) {
+                            popUpTo(Screen.Onboarding.route) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    },
+                )
+            }
             composable(Screen.Downloads.route) {
                 FetchXTheme(seedColor = seedColor) {
                     DownloadsScreen(

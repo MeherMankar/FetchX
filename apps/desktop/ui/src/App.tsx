@@ -16,6 +16,7 @@ import { BatchAddDialog } from "./components/BatchAddDialog";
 import { BandwidthLimitDialog } from "./components/BandwidthLimitDialog";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { BrowserExtensionSetupModal } from "./components/BrowserExtensionSetupModal";
+import { OnboardingModal } from "./components/OnboardingModal";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DetailPanel } from "./components/DetailPanel";
 import { DownloadRow } from "./components/DownloadRow";
@@ -756,6 +757,7 @@ export function App() {
 
   return (
     <div className="app-layout">
+      <OnboardingModal openAddDialog={openAddDialog} />
       <BrowserExtensionSetupModal />
       <Sidebar
         active={navSection}

@@ -24,6 +24,9 @@ sealed class Screen(val route: String) {
     /** Download history screen. */
     data object History : Screen("history")
 
+    /** First-launch onboarding wizard. */
+    data object Onboarding : Screen("onboarding")
+
     // Phase 20N: Settings screen
     // data object Settings : Screen("settings")
 }

@@ -1370,3 +1370,155 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-subtle);
 }
+
+/* ============================================================
+   Onboarding wizard
+   ============================================================ */
+
+.onboarding-backdrop {
+  z-index: 150; /* above BrowserExtensionSetupModal (z-index: 100) */
+}
+
+/* Card is wider than the default dialog to give the content room */
+.onboarding-card {
+  width: min(540px, 96vw);
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+}
+
+.onboarding-body {
+  flex: 1;
+  padding: 32px 32px 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Individual step */
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+
+/* Logo */
+.onboarding-logo-wrap {
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.onboarding-logo {
+  width: 56px;
+  height: 56px;
+}
+
+/* Typography */
+.onboarding-headline {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0;
+}
+
+.onboarding-body-text {
+  font-size: 14px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Browser list (step 2) */
+.onboarding-browser-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.onboarding-browser-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.onboarding-browser-name {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.onboarding-no-browsers {
+  font-size: 13px;
+  color: var(--text-3);
+  margin: 0;
+}
+
+/* URL input row (step 3) */
+.onboarding-url-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.onboarding-url-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Footer: dots + nav buttons */
+.onboarding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-light);
+  background: var(--surface-2);
+  flex-shrink: 0;
+}
+
+/* Step dots */
+.onboarding-dots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.onboarding-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  transition: background-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 180ms cubic-bezier(0.22, 1, 0.36, 1),
+              transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.onboarding-dot--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.2);
+}
+
+/* Ghost / skip button */
+.button-ghost {
+  color: var(--text-3);
+  background: transparent;
+  border-color: transparent;
+}
+
+.button-ghost:not(:disabled):hover {
+  color: var(--text-2);
+  background: var(--surface-3);
+}
+
+.onboarding-skip {
+  font-size: 12px;
+}
