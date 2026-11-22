@@ -13,8 +13,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +33,7 @@ import android.content.ActivityNotFoundException
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import androidx.compose.runtime.rememberCoroutineScope
+import dev.fetchx.app.ClipboardMonitor
 import dev.fetchx.app.ui.theme.FetchXTheme
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -115,6 +121,19 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
 
     val coroutineScope = rememberCoroutineScope()
 
+    // ── Clipboard monitor ──────────────────────────────────────────────────
+    val clipboardSnackbarHostState = remember { SnackbarHostState() }
+    val clipboardMonitor = remember(context) { ClipboardMonitor(context) }
+
+    // Start the monitor while the composable is in the composition; stop it when removed.
+    DisposableEffect(clipboardMonitor) {
+        val job = coroutineScope.launch { clipboardMonitor.start() }
+        onDispose {
+            clipboardMonitor.stop()
+            job.cancel()
+        }
+    }
+
     val repo = BridgeInitializer.repositoryOrNull()
     val bridgeAvailable = repo != null
     val repository = repo ?: NoOpDownloadRepository()
@@ -185,7 +204,48 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
         }
     }
 
+    // Collect detected clipboard URLs and show a Snackbar when the URL is not already queued.
+    val clipboardUrl by clipboardMonitor.detectedUrl.collectAsStateWithLifecycle()
+    LaunchedEffect(clipboardUrl) {
+        val url = clipboardUrl ?: return@LaunchedEffect
+        // Only show the prompt when the URL is not already in the download list.
+        val alreadyQueued = downloads.any { it.url.equals(url, ignoreCase = true) }
+        if (!alreadyQueued) {
+            val result = clipboardSnackbarHostState.showSnackbar(
+                message = "URL detected",
+                actionLabel = "Download",
+                duration = SnackbarDuration.Long,
+            )
+            if (result == SnackbarResult.ActionPerformed && bridgeAvailable) {
+                coroutineScope.launch {
+                    try {
+                        val fileName = url.substringAfterLast('/').takeIf { it.isNotBlank() }
+                            ?: "download"
+                        val destination = File(downloadsDir, fileName).absolutePath
+                        repository.addDownload(
+                            url = url,
+                            fileName = fileName,
+                            destinationPath = destination,
+                            priority = DownloadPriority.DEFAULT,
+                        )
+                        navController.navigate(Screen.Downloads.route) { launchSingleTop = true }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (e: Exception) {
+                        Toast.makeText(
+                            context,
+                            e.message ?: "Could not add download",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+            }
+        }
+        clipboardMonitor.consume()
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(clipboardSnackbarHostState) },
         bottomBar = {
             if (currentRoute != Screen.Browser.route) {
                 FetchXTheme(seedColor = seedColor) {
