@@ -153,10 +153,7 @@ impl AppState {
                     // We need a 'static str; leak a small allocation so the
                     // IpcError<'static> constraint is satisfied.
                     let msg: &'static str = Box::leak(msg_string.into_boxed_str());
-                    return Err(IpcError {
-                        code: IpcErrorCode::Conflict,
-                        message: msg,
-                    });
+                    return Err(IpcError::duplicate_url(msg));
                 }
             }
         }
@@ -795,6 +792,7 @@ pub enum IpcErrorCode {
     InvalidRequest,
     NotFound,
     Conflict,
+    DuplicateUrl,
     Internal,
 }
 
@@ -852,6 +850,13 @@ impl IpcError {
         Self {
             code: IpcErrorCode::Conflict,
             message: "The download cannot perform that action in its current state.",
+        }
+    }
+
+    fn duplicate_url(msg: &'static str) -> Self {
+        Self {
+            code: IpcErrorCode::DuplicateUrl,
+            message: msg,
         }
     }
 
