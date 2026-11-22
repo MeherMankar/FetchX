@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 
 import type { Download, DownloadPriority, DownloadSchedule } from "../api/types";
+import { Sparkline } from "./Sparkline";
 
 // Map raw status strings to readable labels for display only
 const STATUS_LABELS: Record<string, string> = {
@@ -55,6 +56,7 @@ interface DownloadRowProps {
   onEnsureSchedule: (download: Download) => void;
   onUpdateUrl: (id: string, newUrl: string) => void;
   onSetBandwidthLimit: (id: string) => void;
+  speedHistory?: number[];
 }
 
 export const DownloadRow = memo(function DownloadRow({
@@ -78,6 +80,7 @@ export const DownloadRow = memo(function DownloadRow({
   onEnsureSchedule,
   onUpdateUrl,
   onSetBandwidthLimit,
+  speedHistory,
 }: DownloadRowProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
@@ -167,6 +170,9 @@ export const DownloadRow = memo(function DownloadRow({
           {isActive(download.status) ? (
             <span className="download-speed">
               <span>{formatSpeed(progress.speed_bytes_per_second)}</span>
+              {speedHistory && speedHistory.length >= 3 && (
+                <Sparkline data={speedHistory} width={80} height={20} />
+              )}
               <span className="download-eta">
                 ETA {formatEta(progress.estimated_remaining_seconds)}
               </span>

@@ -375,3 +375,11 @@ export interface FolderCategoriesConfigDto {
   images: CategoryRuleDto;
   custom: string;
 }
+
+export interface UpdateCheckResult {
+  available: boolean;
+  current_version: string;
+  latest_version: string;
+  release_url: string;
+  release_notes: string;
+}

@@ -2351,6 +2351,43 @@ pub async fn set_folder_categories_config(
         .map_err(|_| IpcError::internal())
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct UpdateCheckResult {
+    pub available: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub release_url: String,
+    pub release_notes: String,
+}
+
+#[tauri::command]
+pub async fn check_for_update() -> Result<UpdateCheckResult, IpcError> {
+    let current = env!("CARGO_PKG_VERSION").to_owned();
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.github.com/repos/MeherMankar/FetchX/releases/latest")
+        .header("User-Agent", format!("FetchX/{}", current))
+        .send()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    let body: serde_json::Value = resp.json().await.map_err(|_| IpcError::internal())?;
+    let tag = body["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_owned();
+    let html_url = body["html_url"].as_str().unwrap_or("").to_owned();
+    let notes = body["body"].as_str().unwrap_or("").to_owned();
+    let available = !tag.is_empty() && tag != current;
+    Ok(UpdateCheckResult {
+        available,
+        current_version: current,
+        latest_version: tag,
+        release_url: html_url,
+        release_notes: notes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};

@@ -342,6 +342,20 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   font-size: 13px; flex-shrink: 0;
 }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--accent-subtle);
+  border-bottom: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+}
+.update-banner span {
+  flex: 1;
+}
+
 .icon-button {
   border: 0; background: transparent; color: inherit;
   font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: var(--radius-xs);
@@ -510,8 +524,9 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   letter-spacing: 0;
 }
 
-.download-speed { display: flex; gap: 8px; white-space: nowrap; }
+.download-speed { display: flex; gap: 8px; white-space: nowrap; align-items: center; }
 .download-eta   { color: var(--text-2); white-space: nowrap; }
+.download-sparkline { display: inline-block; vertical-align: middle; margin-left: 6px; opacity: 0.8; }
 .download-error { margin-top: 6px; color: var(--red); font-size: 12px; }
 .download-time  { color: var(--text-3); white-space: nowrap; }
 

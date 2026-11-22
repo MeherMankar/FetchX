@@ -534,6 +534,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::set_post_download_action,
             commands::get_folder_categories_config,
             commands::set_folder_categories_config,
+            commands::check_for_update,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);
@@ -685,6 +686,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         Err(err) => {
                             tracing::warn!(%err, "browser extension auto-registration failed");
                         }
+                    }
+                });
+            }
+
+            // Spawn a one-shot background update check.
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    match crate::commands::check_for_update().await {
+                        Ok(result) if result.available => {
+                            let _ = app_handle.emit("fetchx-update-available", result);
+                        }
+                        _ => {}
                     }
                 });
             }

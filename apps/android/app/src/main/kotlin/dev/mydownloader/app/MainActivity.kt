@@ -2,6 +2,7 @@ package dev.fetchx.app
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -64,6 +65,20 @@ class MainActivity : ComponentActivity() {
                     pendingIntentUrl = pendingIntentUrl,
                     pendingDownloadId = pendingDownloadId,
                 )
+            }
+        }
+
+        // Check for updates in the background and show a Toast if one is available.
+        MainScope().launch {
+            val result = checkForUpdate(BuildConfig.VERSION_NAME)
+            if (result != null) {
+                runOnUiThread {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Update available: ${result.latestVersion}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }

@@ -10,7 +10,7 @@ import {
   pauseAllDownloads,
   resumeAllDownloads,
 } from "./api/downloads";
-import type { Download, DownloadPriority, QueueSnapshot } from "./api/types";
+import type { Download, DownloadPriority, QueueSnapshot, UpdateCheckResult } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
 import { BatchAddDialog } from "./components/BatchAddDialog";
 import { BandwidthLimitDialog } from "./components/BandwidthLimitDialog";
@@ -217,6 +217,13 @@ export function App() {
   const lastNotificationRef = useRef('');
   const { toasts, addToast, dismiss: dismissToast } = useToasts();
 
+  // Speed history for per-download sparklines
+  const speedHistoryRef = useRef<Map<string, number[]>>(new Map());
+  const [speedHistorySnapshot, setSpeedHistorySnapshot] = useState<Map<string, number[]>>(new Map());
+
+  // Update banner state for in-app update notifications
+  const [updateBanner, setUpdateBanner] = useState<UpdateCheckResult | null>(null);
+
   const {
     downloads, schedules, loading, error, busyId, load,
     ensureScheduleFetched, pause, resume, cancel, remove, retry,
@@ -231,6 +238,15 @@ export function App() {
     void getAppInfo()
       .then((info) => setAppVersion(info.version))
       .catch(() => { /* cosmetic */ });
+  }, []);
+
+  // Listen for the update-available event emitted by the background checker
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    void listen<UpdateCheckResult>("fetchx-update-available", (e) => {
+      setUpdateBanner(e.payload);
+    }).then((fn) => { off = fn; });
+    return () => off?.();
   }, []);
 
   // Listen for backend notifications
@@ -300,6 +316,39 @@ export function App() {
       if (!currentIds.has(id)) prevIds.delete(id);
     }
   }, [downloads, addToast]);
+
+  // -------------------------------------------------------------------------
+  // Per-download speed history for sparklines
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    const map = speedHistoryRef.current;
+    const currentIds = new Set(downloads.map((d) => d.id));
+
+    // Remove entries for downloads that no longer exist
+    for (const id of map.keys()) {
+      if (!currentIds.has(id)) map.delete(id);
+    }
+
+    // Append new speed samples
+    for (const download of downloads) {
+      const speed = download.progress.speed_bytes_per_second;
+      if (speed !== null && speed !== undefined) {
+        const existing = map.get(download.id) ?? [];
+        const updated = [...existing, speed].slice(-30);
+        map.set(download.id, updated);
+      }
+    }
+
+    // Update snapshot so components can read it
+    setSpeedHistorySnapshot(() => {
+      const next = new Map<string, number[]>();
+      for (const [id, arr] of map) {
+        next.set(id, arr);
+      }
+      return next;
+    });
+  }, [downloads]);
 
   // -------------------------------------------------------------------------
   // Clipboard URL banners
@@ -689,6 +738,25 @@ export function App() {
           appVersion={appVersion}
         />
 
+        {updateBanner && (
+          <div className="update-banner" role="alert">
+            <span>FetchX {updateBanner.latest_version} is available</span>
+            <button
+              className="button button-primary"
+              onClick={() => { window.open(updateBanner.release_url, '_blank'); }}
+            >
+              Download
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Dismiss update notification"
+              onClick={() => setUpdateBanner(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         {activeError && (
           <div className="error-banner" role="alert">
             <span>{activeError}</span>
@@ -799,6 +867,7 @@ export function App() {
                       const d = downloads.find((x) => x.id === id);
                       setBandwidthLimitTarget({ id, filename: d?.filename ?? id, currentLimit: d?.bandwidth_limit ?? null });
                     }}
+                    speedHistory={speedHistorySnapshot.get(download.id)}
                   />
                 ))}
               </div>
