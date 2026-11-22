@@ -12,6 +12,7 @@ import {
   inspectTorrentFile,
   scheduleDownload,
   setDownloadPriority,
+  findDuplicateDownload,
 } from "../api/downloads";
 import type { DownloadPriority, YtDlpFormat } from "../api/types";
 import { errorMessage, formatBytes, msToDatetimeLocal } from "../lib/format";
@@ -74,6 +75,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [selectedTorrentFiles, setSelectedTorrentFiles] = useState<number[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [forceAdd, setForceAdd] = useState(false);
   const urlInputRef = useRef<HTMLInputElement>(null);
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
@@ -110,6 +113,19 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     if (isTorrentFile && torrentInspection && selectedTorrentFiles.length === 0) {
       setError("Select at least one torrent file.");
       return;
+    }
+
+    // Duplicate URL check for single HTTP(S) URLs.
+    if (!forceAdd && isHttpUrl(url.trim()) && !url.trim().includes("\n") && !url.trim().includes(" ")) {
+      try {
+        const match = await findDuplicateDownload(url.trim());
+        if (match) {
+          setDuplicateWarning(`This URL is already in your downloads (status: ${match.status})`);
+          return;
+        }
+      } catch {
+        // Non-fatal: proceed if the check fails.
+      }
     }
 
     setBusy(true);
@@ -281,6 +297,19 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
             </div>
           )}
 
+          {duplicateWarning && (
+            <div className="warning-banner" role="alert">
+              {duplicateWarning}
+              <button
+                type="button"
+                onClick={() => { setForceAdd(true); setDuplicateWarning(null); }}
+              >
+                Download anyway
+              </button>
+              <button type="button" onClick={() => setDuplicateWarning(null)}>Dismiss</button>
+            </div>
+          )}
+
           <div className="field">
             <label htmlFor="add-package" className="field-label">
               Package
@@ -320,6 +349,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 setSelectedFormatId("");
                 setTorrentInspection(null);
                 setSelectedTorrentFiles([]);
+                setForceAdd(false);
+                setDuplicateWarning(null);
               }}
               required
               disabled={busy || formatsLoading}

@@ -7,9 +7,13 @@ import {
   resumeQueueDispatch,
   stopTorrentSeeding,
   updateDownloadUrl,
+  pauseAllDownloads,
+  resumeAllDownloads,
 } from "./api/downloads";
 import type { Download, DownloadPriority, QueueSnapshot } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
+import { BatchAddDialog } from "./components/BatchAddDialog";
+import { BandwidthLimitDialog } from "./components/BandwidthLimitDialog";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { BrowserExtensionSetupModal } from "./components/BrowserExtensionSetupModal";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -205,6 +209,9 @@ export function App() {
   const [snapshot, setSnapshot] = useState<QueueSnapshot | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [conversionDownload, setConversionDownload] = useState<import("./api/types").Download | null>(null);
+  const [showBatchDialog, setShowBatchDialog] = useState(false);
+  const [bandwidthLimitTarget, setBandwidthLimitTarget] = useState<{ id: string; filename: string; currentLimit: number | null } | null>(null);
+  const [clipboardBanners, setClipboardBanners] = useState<Array<{ id: string; url: string; filename: string; timeoutId: ReturnType<typeof setTimeout> }>>([]);
   const searchRef = useRef<HTMLInputElement>(null);
   const prevCompletedRef = useRef<Set<string>>(new Set());
   const lastNotificationRef = useRef('');
@@ -295,6 +302,43 @@ export function App() {
   }, [downloads, addToast]);
 
   // -------------------------------------------------------------------------
+  // Clipboard URL banners
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    void listen<{ urls: string[] }>('clipboard_urls_detected', (event) => {
+      const currentUrls = new Set(downloads.map((d) => d.url));
+      setClipboardBanners((prev) => {
+        const existing = new Set(prev.map((b) => b.url));
+        const newBanners: typeof prev = [];
+        for (const url of event.payload.urls) {
+          if (currentUrls.has(url) || existing.has(url)) continue;
+          const filename = (() => {
+            try { return new URL(url).pathname.split('/').pop() || url; } catch { return url; }
+          })();
+          const id = crypto.randomUUID();
+          const timeoutId = setTimeout(() => {
+            setClipboardBanners((b) => b.filter((x) => x.id !== id));
+          }, 15_000);
+          newBanners.push({ id, url, filename, timeoutId });
+        }
+        return newBanners.length > 0 ? [...prev, ...newBanners] : prev;
+      });
+    }).then((fn) => { off = fn; });
+    return () => off?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [downloads]);
+
+  const dismissBanner = useCallback((id: string) => {
+    setClipboardBanners((prev) => {
+      const banner = prev.find((b) => b.id === id);
+      if (banner) clearTimeout(banner.timeoutId);
+      return prev.filter((b) => b.id !== id);
+    });
+  }, []);
+
+  // -------------------------------------------------------------------------
   // Derived state
   // -------------------------------------------------------------------------
 
@@ -308,6 +352,21 @@ export function App() {
 
   const baseCounts = useMemo(() => countStatuses(downloads), [downloads]);
   const counts = useMemo(() => ({ ...baseCounts, scheduled: scheduledIds.size }), [baseCounts, scheduledIds]);
+
+  const activeCount = baseCounts.active;
+  const pausedCount = baseCounts.paused;
+
+  const handlePauseAll = useCallback(() => {
+    void pauseAllDownloads()
+      .then(() => { void load(); refreshSnapshot(); })
+      .catch((cause: unknown) => setGlobalError(errorMessage(cause)));
+  }, [load, refreshSnapshot]);
+
+  const handleResumeAll = useCallback(() => {
+    void resumeAllDownloads()
+      .then(() => { void load(); refreshSnapshot(); })
+      .catch((cause: unknown) => setGlobalError(errorMessage(cause)));
+  }, [load, refreshSnapshot]);
 
   const filtered = useMemo(
     () => filterDownloads(downloads, navSection, search, scheduledIds),
@@ -622,6 +681,11 @@ export function App() {
           dispatchSchedulePaused={snapshot?.schedule_dispatch_paused ?? false}
           onToggleQueueDispatch={() => { void toggleQueueDispatch(); }}
           onAddClick={() => openAddDialog()}
+          onBatchClick={() => setShowBatchDialog(true)}
+          activeCount={activeCount}
+          pausedCount={pausedCount}
+          onPauseAll={handlePauseAll}
+          onResumeAll={handleResumeAll}
           appVersion={appVersion}
         />
 
@@ -676,6 +740,14 @@ export function App() {
               </div>
             )}
 
+            {clipboardBanners.map((banner) => (
+              <div key={banner.id} className="clipboard-banner" role="alert">
+                URL detected in clipboard — {banner.filename}
+                <button onClick={() => { openAddDialog(banner.url); dismissBanner(banner.id); }}>Download</button>
+                <button onClick={() => dismissBanner(banner.id)}>Dismiss</button>
+              </div>
+            ))}
+
             {loading ? (
               <div className="empty-state" role="status">
                 <span>Loading downloads…</span>
@@ -723,6 +795,10 @@ export function App() {
                     onError={handleError}
                     onEnsureSchedule={ensureScheduleFetched}
                     onUpdateUrl={handleUpdateUrl}
+                    onSetBandwidthLimit={(id) => {
+                      const d = downloads.find((x) => x.id === id);
+                      setBandwidthLimitTarget({ id, filename: d?.filename ?? id, currentLimit: d?.bandwidth_limit ?? null });
+                    }}
                   />
                 ))}
               </div>
@@ -769,6 +845,24 @@ export function App() {
           initialUrl={addDialogUrl}
           onAdded={handleAdded}
           onClose={() => { setShowAddDialog(false); setAddDialogUrl(""); }}
+        />
+      )}
+
+      {showBatchDialog && (
+        <BatchAddDialog
+          onComplete={() => { setShowBatchDialog(false); void load(); refreshSnapshot(); }}
+          onClose={() => setShowBatchDialog(false)}
+          onToast={(message, kind) => addToast(message, kind)}
+        />
+      )}
+
+      {bandwidthLimitTarget && (
+        <BandwidthLimitDialog
+          downloadId={bandwidthLimitTarget.id}
+          filename={bandwidthLimitTarget.filename}
+          currentLimit={bandwidthLimitTarget.currentLimit}
+          onSaved={() => { setBandwidthLimitTarget(null); void load(); }}
+          onClose={() => setBandwidthLimitTarget(null)}
         />
       )}
 

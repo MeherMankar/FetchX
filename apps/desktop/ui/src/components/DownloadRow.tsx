@@ -54,6 +54,7 @@ interface DownloadRowProps {
   onError: (message: string) => void;
   onEnsureSchedule: (download: Download) => void;
   onUpdateUrl: (id: string, newUrl: string) => void;
+  onSetBandwidthLimit: (id: string) => void;
 }
 
 export const DownloadRow = memo(function DownloadRow({
@@ -76,6 +77,7 @@ export const DownloadRow = memo(function DownloadRow({
   onError,
   onEnsureSchedule,
   onUpdateUrl,
+  onSetBandwidthLimit,
 }: DownloadRowProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
@@ -339,6 +341,16 @@ export const DownloadRow = memo(function DownloadRow({
             aria-label={`Cancel ${download.filename}`}
           >
             Cancel
+          </button>
+        )}
+        {(download.status === 'downloading' || download.status === 'queued' || download.status === 'paused') && (
+          <button
+            className="button button-icon"
+            title="Set speed limit"
+            onClick={(e) => { e.stopPropagation(); onSetBandwidthLimit(download.id); }}
+            aria-label="Set speed limit"
+          >
+            {download.bandwidth_limit ? formatSpeed(download.bandwidth_limit) : '∞'}
           </button>
         )}
         <button

@@ -15,6 +15,11 @@ interface ToolbarProps {
   dispatchSchedulePaused: boolean;
   onToggleQueueDispatch: () => void;
   onAddClick: () => void;
+  onBatchClick: () => void;
+  activeCount: number;
+  pausedCount: number;
+  onPauseAll: () => void;
+  onResumeAll: () => void;
   appVersion: string | undefined;
 }
 
@@ -31,6 +36,11 @@ export function Toolbar({
   dispatchSchedulePaused,
   onToggleQueueDispatch,
   onAddClick,
+  onBatchClick,
+  activeCount,
+  pausedCount,
+  onPauseAll,
+  onResumeAll,
   appVersion,
 }: ToolbarProps) {
   return (
@@ -87,6 +97,25 @@ export function Toolbar({
           {dispatchManuallyPaused ? "Resume queue" : "Hold queue"}
         </button>
 
+        {activeCount > 0 && (
+          <button
+            className="button button-secondary"
+            onClick={onPauseAll}
+            aria-label="Pause all active downloads"
+          >
+            Pause all
+          </button>
+        )}
+        {pausedCount > 0 && (
+          <button
+            className="button button-secondary"
+            onClick={onResumeAll}
+            aria-label="Resume all paused downloads"
+          >
+            Resume all
+          </button>
+        )}
+
         <button
           className="button button-secondary"
           onClick={onRefresh}
@@ -94,6 +123,14 @@ export function Toolbar({
           title="Refresh"
         >
           Refresh
+        </button>
+
+        <button
+          className="button button-secondary"
+          onClick={onBatchClick}
+          aria-label="Batch add downloads"
+        >
+          Batch add
         </button>
 
         <button

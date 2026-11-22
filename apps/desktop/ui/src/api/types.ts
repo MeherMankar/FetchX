@@ -68,6 +68,7 @@ export interface Download {
   queue_position?: number;
   created_at: number;
   updated_at: number;
+  bandwidth_limit?: number | null;
 }
 
 export interface DownloadRuntimeStatus {
@@ -222,6 +223,8 @@ export interface EngineConfigDto {
   weekly_queue_schedule: WeeklyQueueScheduleDto;
   os_notifications_enabled: boolean;
   native_builtins: NativeBuiltinsConfigDto;
+  auto_retry_count: number;
+  auto_retry_delay_seconds: number;
 }
 
 export interface NativeBuiltinsConfigDto {
@@ -268,6 +271,8 @@ export interface SaveEngineConfigRequest {
   resource_policy: ResourcePolicyDto;
   weekly_queue_schedule: WeeklyQueueScheduleDto;
   native_builtins?: NativeBuiltinsConfigDto;
+  auto_retry_count?: number;
+  auto_retry_delay_seconds?: number;
 }
 
 export interface DiagnosticResult {

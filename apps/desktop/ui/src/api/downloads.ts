@@ -323,6 +323,14 @@ export function stopTorrentSeeding(downloadId: string): Promise<void> {
   return invoke<void>("stop_torrent_seeding", { id: downloadId });
 }
 
+export function pauseAllDownloads(): Promise<void> {
+  return invoke<void>('pause_all_downloads');
+}
+
+export function resumeAllDownloads(): Promise<void> {
+  return invoke<void>('resume_all_downloads');
+}
+
 export async function listenForDownloadChanges(
   onUpdated: (download: Download) => void,
   onRemoved: (downloadId: string) => void,

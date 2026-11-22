@@ -1261,6 +1261,122 @@ function FolderCategoriesSection({ onError }: { onError: (msg: string) => void }
   );
 }
 
+// ---------------------------------------------------------------------------
+// Auto-retry section (Feature 5)
+// ---------------------------------------------------------------------------
+
+function AutoRetrySection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [count, setCount] = useState(cfg.auto_retry_count ?? 0);
+  const [delay, setDelay] = useState(cfg.auto_retry_delay_seconds ?? 60);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setCount(cfg.auto_retry_count ?? 0);
+    setDelay(cfg.auto_retry_delay_seconds ?? 60);
+  }, [cfg.auto_retry_count, cfg.auto_retry_delay_seconds]);
+
+  const enabled = count > 0;
+
+  const save = async (nextCount: number, nextDelay: number) => {
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+        native_builtins: cfg.native_builtins,
+        auto_retry_count: nextCount,
+        auto_retry_delay_seconds: nextDelay,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleEnabled = (next: boolean) => {
+    const nextCount = next ? Math.max(count, 3) : 0;
+    setCount(nextCount);
+    void save(nextCount, delay);
+  };
+
+  const handleSave = () => void save(count, delay);
+
+  return (
+    <section className="settings-section" aria-labelledby="auto-retry-heading">
+      <div className="settings-section-header">
+        <h3 id="auto-retry-heading" className="settings-section-title">Auto-retry</h3>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Auto-retry failed downloads</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(event) => toggleEnabled(event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+        </div>
+      </div>
+      {enabled && (
+        <>
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="auto-retry-count">Max retries</label>
+            <div className="settings-control">
+              <input
+                id="auto-retry-count"
+                type="number"
+                min={1}
+                max={10}
+                className="settings-input settings-input-sm"
+                value={count}
+                disabled={busy}
+                onChange={(event) => setCount(Number(event.target.value))}
+              />
+            </div>
+          </div>
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="auto-retry-delay">Retry delay (seconds)</label>
+            <div className="settings-control">
+              <input
+                id="auto-retry-delay"
+                type="number"
+                min={5}
+                max={300}
+                className="settings-input settings-input-sm"
+                value={delay}
+                disabled={busy}
+                onChange={(event) => setDelay(Number(event.target.value))}
+              />
+            </div>
+          </div>
+          <div className="settings-actions">
+            <button className="button button-primary" onClick={handleSave} disabled={busy}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1349,6 +1465,7 @@ export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
+          <AutoRetrySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <AfterDownloadSection onError={setError} />
           <FolderCategoriesSection onError={setError} />
           <ProxySection onError={setError} />
