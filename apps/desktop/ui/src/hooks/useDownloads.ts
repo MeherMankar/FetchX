@@ -52,6 +52,8 @@ export function useDownloads() {
     let unlisten: (() => void) | undefined;
 
     const initialize = async () => {
+      // Load downloads immediately — don't wait for the event listener setup.
+      void load();
       try {
         const stop = await listenForDownloadChanges(
           (download) => {
@@ -83,7 +85,6 @@ export function useDownloads() {
       } catch (cause) {
         if (!disposed) setError(errorMessage(cause));
       }
-      if (!disposed) await load();
     };
 
     void initialize();
