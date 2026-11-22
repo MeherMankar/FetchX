@@ -82,6 +82,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
   const isTorrent = isMagnet || isTorrentFile;
   const isYtDlpUrl = !isTorrent && isLikelyYtDlpUrl(url);
+  const isMetalink = !isTorrent && /\.(metalink|meta4)$/i.test(url.trim());
 
   useEffect(() => {
     if (packageNameEdited || packageName.trim() || !url.trim()) return;
@@ -204,6 +205,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   package_name: urlsToAdd.length > 1
                     ? packageNameForBatch
                     : packageName.trim() || undefined,
+                  engine_kind: isMetalink ? "metalink" : undefined,
                 });
           admitted = true;
           queuedCount += 1;
@@ -361,8 +363,15 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 ? "Magnet links use FetchX's native BitTorrent engine."
                 : isTorrentFile
                   ? "Local .torrent files use FetchX's native BitTorrent engine."
-                : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
+                  : isMetalink
+                    ? "FetchX will select the fastest mirror automatically."
+                    : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
+            {isMetalink && (
+              <div className="metalink-badge" role="note">
+                Metalink — multi-source download with automatic mirror selection
+              </div>
+            )}
             {isTorrentFile && (
               <div className="field">
                 <button

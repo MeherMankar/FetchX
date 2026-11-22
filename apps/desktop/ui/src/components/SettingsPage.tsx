@@ -9,6 +9,8 @@ import {
   getEngineStatus,
   getFolderCategoriesConfig,
   getPostDownloadAction,
+  exportSettings,
+  importSettings,
   resetEngineConfig,
   saveEngineConfig,
   setFolderCategoriesConfig,
@@ -1377,6 +1379,163 @@ function AutoRetrySection({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Export / Import section
+// ---------------------------------------------------------------------------
+
+function ExportImportSection({
+  onImported,
+  onError,
+}: {
+  onImported: () => void;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState<null | "export" | "import">(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const handleExport = async () => {
+    setBusy("export");
+    setNotice(null);
+    try {
+      await exportSettings();
+      setNotice("Settings exported to the chosen file.");
+    } catch (cause) {
+      const message = errorMessage(cause);
+      if (/cancelled/i.test(message)) {
+        setNotice(message);
+      } else {
+        onError(message);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleImport = async () => {
+    setBusy("import");
+    setNotice(null);
+    try {
+      await importSettings();
+      setNotice("Settings imported. Reloading…");
+      onImported();
+    } catch (cause) {
+      const message = errorMessage(cause);
+      if (/cancelled/i.test(message)) {
+        setNotice(message);
+      } else {
+        onError(message);
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="export-import-heading">
+      <div className="settings-section-header">
+        <h3 id="export-import-heading" className="settings-section-title">
+          Export / Import
+        </h3>
+      </div>
+      <p className="settings-hint">
+        Back up your FetchX settings to a JSON file, or restore them from a
+        previous export. Importing replaces your current settings and reloads
+        this page.
+      </p>
+      {notice && (
+        <div className="settings-notice" role="status">
+          {notice}
+        </div>
+      )}
+      <div className="settings-actions">
+        <button
+          className="button button-secondary"
+          onClick={() => void handleExport()}
+          disabled={busy !== null}
+        >
+          {busy === "export" ? "Exporting…" : "Export settings"}
+        </button>
+        <button
+          className="button button-primary"
+          onClick={() => void handleImport()}
+          disabled={busy !== null}
+        >
+          {busy === "import" ? "Importing…" : "Import settings"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function MetalinkSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [enabled, setEnabled] = useState(cfg.metalink.enabled);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setEnabled(cfg.metalink.enabled), [cfg.metalink.enabled]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+        metalink: { enabled },
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="metalink-heading">
+      <div className="settings-section-header">
+        <h3 id="metalink-heading" className="settings-section-title">
+          Metalink
+        </h3>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Enable Metalink engine</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(event) => setEnabled(event.target.checked)}
+            />
+            <span className="toggle-track">
+              <span className="toggle-thumb" />
+            </span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+          <p className="settings-hint">
+            Download .metalink and .meta4 files using multiple mirrors for maximum speed and reliability.
+          </p>
+        </div>
+      </div>
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1457,11 +1616,13 @@ export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto
         downloads keep their existing runtime settings.
       </div>
 
+      <ExportImportSection onImported={() => void load()} onError={setError} />
       <BrowserExtensionSection />
       {cfg && (
         <>
           <NotificationsSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <NativeBuiltinsSection cfg={cfg} onSaved={setCfg} onError={setError} />
+          <MetalinkSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />

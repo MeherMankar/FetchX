@@ -1,7 +1,7 @@
 //! Tauri commands for native engine configuration and diagnostics.
 
 use crate::commands::AppState;
-use fetchx_core_services::config::NativeBuiltinsConfig;
+use fetchx_core_services::config::{MetalinkConfig, NativeBuiltinsConfig};
 use fetchx_core_services::{ConfigError, EngineAvailability, EngineConfig};
 use fetchx_models::{ResourcePolicy, ResourceProfile, WeeklyQueueSchedule};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,12 @@ pub struct SaveEngineConfigRequest {
     pub weekly_queue_schedule: Option<WeeklyQueueSchedule>,
     #[serde(default)]
     pub native_builtins: Option<NativeBuiltinsConfig>,
+    #[serde(default)]
+    pub metalink: Option<MetalinkConfig>,
+    #[serde(default)]
+    pub auto_retry_count: Option<u32>,
+    #[serde(default)]
+    pub auto_retry_delay_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -24,7 +30,7 @@ pub struct SaveYtDlpConfigRequest {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EngineConfigDto {
     pub direct_http: DirectHttpConfigDto,
     pub yt_dlp: YtDlpConfigDto,
@@ -32,14 +38,17 @@ pub struct EngineConfigDto {
     pub weekly_queue_schedule: WeeklyQueueSchedule,
     pub os_notifications_enabled: bool,
     pub native_builtins: NativeBuiltinsConfig,
+    pub metalink: MetalinkConfig,
+    pub auto_retry_count: u32,
+    pub auto_retry_delay_seconds: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DirectHttpConfigDto {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct YtDlpConfigDto {
     pub enabled: bool,
 }
@@ -57,6 +66,9 @@ impl From<&EngineConfig> for EngineConfigDto {
             weekly_queue_schedule: config.weekly_queue_schedule.clone(),
             os_notifications_enabled: config.os_notifications_enabled,
             native_builtins: config.native_builtins.clone(),
+            metalink: config.metalink.clone(),
+            auto_retry_count: config.auto_retry_count,
+            auto_retry_delay_seconds: config.auto_retry_delay_seconds,
         }
     }
 }
@@ -132,6 +144,15 @@ pub async fn save_engine_config(
     }
     if let Some(native_builtins) = request.native_builtins {
         config.native_builtins = native_builtins;
+    }
+    if let Some(metalink) = request.metalink {
+        config.metalink = metalink;
+    }
+    if let Some(count) = request.auto_retry_count {
+        config.auto_retry_count = count;
+    }
+    if let Some(delay) = request.auto_retry_delay_seconds {
+        config.auto_retry_delay_seconds = delay;
     }
     state
         .config_service

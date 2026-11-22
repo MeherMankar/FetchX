@@ -53,7 +53,7 @@ export interface DownloadError {
   message: string;
 }
 
-export type EngineKind = "direct_http" | "yt_dlp" | "native_torrent";
+export type EngineKind = "direct_http" | "yt_dlp" | "native_torrent" | "metalink";
 
 export interface Download {
   id: string;
@@ -216,6 +216,10 @@ export interface YtDlpConfigDto {
   enabled: boolean;
 }
 
+export interface MetalinkConfigDto {
+  enabled: boolean;
+}
+
 export interface EngineConfigDto {
   direct_http: DirectHttpConfigDto;
   yt_dlp: YtDlpConfigDto;
@@ -223,6 +227,7 @@ export interface EngineConfigDto {
   weekly_queue_schedule: WeeklyQueueScheduleDto;
   os_notifications_enabled: boolean;
   native_builtins: NativeBuiltinsConfigDto;
+  metalink: MetalinkConfigDto;
   auto_retry_count: number;
   auto_retry_delay_seconds: number;
 }
@@ -271,6 +276,7 @@ export interface SaveEngineConfigRequest {
   resource_policy: ResourcePolicyDto;
   weekly_queue_schedule: WeeklyQueueScheduleDto;
   native_builtins?: NativeBuiltinsConfigDto;
+  metalink?: MetalinkConfigDto;
   auto_retry_count?: number;
   auto_retry_delay_seconds?: number;
 }

@@ -26,6 +26,7 @@ import { HistoryScreen } from "./components/HistoryScreen";
 import { SpeedChart } from "./components/SpeedChart";
 import { ConversionDialog } from "./components/ConversionDialog";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { NotificationEvent } from "./api/types";
 import { ToastStack, useToasts } from "./components/Toast";
 import { Toolbar } from "./components/Toolbar";
@@ -587,6 +588,22 @@ export function App() {
     e.preventDefault();
     setIsDragging(false);
 
+    // Dropped files: open the add dialog for .metalink / .meta4 manifests.
+    // OS file drops are delivered via Tauri's onDragDropEvent below (the webview
+    // does not populate dataTransfer.files for them); this covers any
+    // webview-provided file drops.
+    const droppedFiles = e.dataTransfer.files;
+    if (droppedFiles && droppedFiles.length > 0) {
+      for (let i = 0; i < droppedFiles.length; i += 1) {
+        const file = droppedFiles.item(i);
+        if (file && /\.(metalink|meta4)$/i.test(file.name)) {
+          const path = (file as File & { path?: string }).path ?? file.name;
+          openAddDialog(path);
+          return;
+        }
+      }
+    }
+
     // Extract the first valid HTTP/HTTPS URL from the drop data.
     const raw =
       e.dataTransfer.getData("text/uri-list") ||
@@ -604,6 +621,41 @@ export function App() {
     if (firstUrl) {
       openAddDialog(firstUrl);
     }
+  }, [openAddDialog]);
+
+  // -------------------------------------------------------------------------
+  // OS file drag-and-drop (Tauri)
+  // -------------------------------------------------------------------------
+  // Tauri v2 intercepts OS file drops instead of forwarding them to the
+  // webview's HTML5 drag events, so dataTransfer.files is empty for them. We
+  // listen to Tauri's native drag-drop event, which provides absolute paths.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((dragEvent) => {
+        const payload = dragEvent.payload;
+        if (payload.type === "enter") {
+          if (payload.paths.some((path) => /\.(metalink|meta4)$/i.test(path))) {
+            setIsDragging(true);
+          }
+        } else if (payload.type === "drop") {
+          setIsDragging(false);
+          const metalink = payload.paths.find((path) =>
+            /\.(metalink|meta4)$/i.test(path),
+          );
+          if (metalink) {
+            openAddDialog(metalink);
+          }
+        } else if (payload.type === "leave") {
+          setIsDragging(false);
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => {
+      unlisten?.();
+    };
   }, [openAddDialog]);
 
   // -------------------------------------------------------------------------
