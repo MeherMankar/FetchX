@@ -1,6 +1,7 @@
 //! Tauri commands for native engine configuration and diagnostics.
 
 use crate::commands::AppState;
+use fetchx_core_services::config::NativeBuiltinsConfig;
 use fetchx_core_services::{ConfigError, EngineAvailability, EngineConfig};
 use fetchx_models::{ResourcePolicy, ResourceProfile, WeeklyQueueSchedule};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,8 @@ pub struct SaveEngineConfigRequest {
     pub resource_policy: Option<ResourcePolicy>,
     #[serde(default)]
     pub weekly_queue_schedule: Option<WeeklyQueueSchedule>,
+    #[serde(default)]
+    pub native_builtins: Option<NativeBuiltinsConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -28,6 +31,7 @@ pub struct EngineConfigDto {
     pub resource_policy: ResourcePolicy,
     pub weekly_queue_schedule: WeeklyQueueSchedule,
     pub os_notifications_enabled: bool,
+    pub native_builtins: NativeBuiltinsConfig,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -52,6 +56,7 @@ impl From<&EngineConfig> for EngineConfigDto {
             resource_policy: config.resource_policy.clone(),
             weekly_queue_schedule: config.weekly_queue_schedule.clone(),
             os_notifications_enabled: config.os_notifications_enabled,
+            native_builtins: config.native_builtins.clone(),
         }
     }
 }
@@ -124,6 +129,9 @@ pub async fn save_engine_config(
     }
     if let Some(schedule) = request.weekly_queue_schedule {
         config.weekly_queue_schedule = schedule;
+    }
+    if let Some(native_builtins) = request.native_builtins {
+        config.native_builtins = native_builtins;
     }
     state
         .config_service

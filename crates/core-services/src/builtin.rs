@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use reqwest::Client;
 use serde_json::Value;
 use url::Url;
 
@@ -399,10 +398,7 @@ pub fn find_archive_link(html: &str, base_url: &str) -> Option<String> {
 }
 
 /// Resolves Wikimedia Commons `File:` pages to their direct upload URL.
-pub async fn resolve_core_url(
-    client: &Client,
-    url: &str,
-) -> Result<Option<String>, CoreBuiltinError> {
+pub async fn resolve_core_url(url: &str) -> Result<Option<String>, CoreBuiltinError> {
     let parsed = Url::parse(url).map_err(|_| CoreBuiltinError::InvalidResponse)?;
     if !parsed
         .host_str()
@@ -421,6 +417,10 @@ pub async fn resolve_core_url(
     let api = format!(
         "https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo&iiprop=url&titles={encoded_title}"
     );
+    let client =
+        fetchx_downloader::safe_http_client_for_url(&api, std::time::Duration::from_secs(10))
+            .await
+            .map_err(|_| CoreBuiltinError::InvalidResponse)?;
     let response = client
         .get(api)
         .header(reqwest::header::USER_AGENT, "FetchXURLResolver/1.0")
@@ -433,10 +433,29 @@ pub async fn resolve_core_url(
             url: url.to_owned(),
         });
     }
-    let body = response
-        .text()
-        .await
-        .map_err(|_| CoreBuiltinError::InvalidResponse)?;
+    const MAX_API_RESPONSE_BYTES: usize = 1024 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_API_RESPONSE_BYTES as u64)
+    {
+        return Err(CoreBuiltinError::InvalidResponse);
+    }
+    let mut response = response;
+    let mut body = Vec::new();
+    loop {
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|_| CoreBuiltinError::InvalidResponse)?;
+        let Some(chunk) = chunk else {
+            break;
+        };
+        if body.len().saturating_add(chunk.len()) > MAX_API_RESPONSE_BYTES {
+            return Err(CoreBuiltinError::InvalidResponse);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let body = String::from_utf8(body).map_err(|_| CoreBuiltinError::InvalidResponse)?;
     let data: Value = serde_json::from_str(&body).map_err(|_| CoreBuiltinError::InvalidResponse)?;
     let direct = data["query"]["pages"]
         .as_object()

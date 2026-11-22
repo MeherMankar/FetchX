@@ -2706,6 +2706,44 @@ pub fn validate_http_source_url(source: &str) -> Result<String, DownloadEngineEr
     parse_http_url(source).map(|url| url.to_string())
 }
 
+/// Builds an HTTP client pinned to the validated public addresses for `source`.
+///
+/// Redirects are disabled so callers must validate any follow-up URL separately.
+pub async fn safe_http_client_for_url(
+    source: &str,
+    timeout: Duration,
+) -> Result<Client, DownloadEngineError> {
+    let url = parse_http_url(source)?;
+    let host = url.host_str().ok_or(DownloadEngineError::InvalidUrl)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or(DownloadEngineError::InvalidUrl)?;
+    let addresses = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|_| DownloadEngineError::InvalidUrl)?
+            .collect::<Vec<_>>()
+    };
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| is_blocked_target(address.ip(), false))
+    {
+        return Err(DownloadEngineError::InvalidUrl);
+    }
+
+    Client::builder()
+        .no_proxy()
+        .connect_timeout(timeout)
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(host, &addresses)
+        .build()
+        .map_err(DownloadEngineError::ClientConfiguration)
+}
+
 fn same_http_target(response: &Url, requested: &Url) -> bool {
     let mut response = response.clone();
     let mut requested = requested.clone();

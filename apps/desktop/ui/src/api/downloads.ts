@@ -48,6 +48,18 @@ export function startMediaRemux(
   });
 }
 
+export function startMediaMerge(
+  videoDownloadId: string,
+  audioDownloadId: string,
+  container: "mp4" | "mkv",
+): Promise<MediaProcessJob> {
+  return invoke<MediaProcessJob>("start_media_merge", {
+    video_download_id: videoDownloadId,
+    audio_download_id: audioDownloadId,
+    container,
+  });
+}
+
 export function cancelMediaProcess(jobId: string): Promise<boolean> {
   return invoke<boolean>("cancel_media_process", { job_id: jobId });
 }

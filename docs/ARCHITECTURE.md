@@ -319,6 +319,18 @@ integration. The service enforces cancellation and output-size bounds and publis
 output without overwriting an existing destination. Broad video transcoding is not
 implemented.
 
+Desktop media tools can remux one completed download or merge the first video stream
+from one completed media download with the first audio stream from another. The merge
+command validates both stored download records and paths before invoking the shared
+processor; outputs are written beside the video source with a unique, non-overwriting
+name. These are native FetchX capabilities, not a Motrix JavaScript plugin runtime.
+
+The shared core also provides configurable filename templates, bounded archive-link
+discovery from HTML pages, and a Wikimedia Commons file-page resolver for direct HTTP
+admissions. Resolver and scraper requests use the safe HTTP client, enforce response
+limits, and validate discovered URLs before admission. Filename, scraper, and resolver
+settings are persisted in the engine configuration and can be disabled independently.
+
 The initial desktop application lives in `apps/desktop`. Tauri owns one long-lived
 `Database`, shared SQLite download repository, `Scheduler`, and its single
 `QueueManager`; the queue is obtained from the scheduler rather than initialized a

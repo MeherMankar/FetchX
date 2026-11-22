@@ -15,6 +15,7 @@ import {
   setTorrentDirectorySelected,
   setTorrentFileSelected,
   setTorrentSelectionAll,
+  startMediaMerge,
   startMediaRemux,
 } from "../api/downloads";
 import type { Download, DownloadSchedule, MediaProcessJob } from "../api/types";
@@ -78,6 +79,7 @@ function safeSourceSuggestion(url: string): string {
 
 interface DetailPanelProps {
   download: Download;
+  downloads: Download[];
   schedule: DownloadSchedule | null;
   busy: boolean;
   onClose: () => void;
@@ -96,6 +98,7 @@ interface DetailPanelProps {
 
 export function DetailPanel({
   download,
+  downloads,
   schedule,
   busy,
   onClose,
@@ -136,6 +139,8 @@ export function DetailPanel({
   const [torrentRestartLoading, setTorrentRestartLoading] = useState(false);
   const [mediaJob, setMediaJob] = useState<MediaProcessJob | null>(null);
   const [mediaContainer, setMediaContainer] = useState<"mp4" | "mkv" | "webm">("mp4");
+  const [mergeAudioId, setMergeAudioId] = useState("");
+  const [mergeContainer, setMergeContainer] = useState<"mp4" | "mkv">("mp4");
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [torrentRestartError, setTorrentRestartError] = useState<string | null>(null);
@@ -155,6 +160,7 @@ export function DetailPanel({
     setTorrentRestartOpen(false);
     setTorrentRestartError(null);
     setRestartedTorrentDownloadId(null);
+    setMergeAudioId("");
     setUrlEditing(false);
   }, [download.id]);
   useEffect(() => {
@@ -332,19 +338,41 @@ export function DetailPanel({
     }
   };
 
-  const cancelRemux = async () => {
+  const cancelMediaJob = async () => {
     if (!mediaJob) return;
     setMediaError(null);
     try {
       const cancelled = await cancelMediaProcess(mediaJob.job_id);
-      if (!cancelled) setMediaError("This remux job is no longer active.");
+      if (!cancelled) setMediaError("This media process is no longer active.");
     } catch (cause) {
       setMediaError(errorMessage(cause));
     }
   };
 
+  const mergeAudioVideo = async () => {
+    if (!mergeAudioId) return;
+    setMediaLoading(true);
+    setMediaError(null);
+    try {
+      setMediaJob(await startMediaMerge(download.id, mergeAudioId, mergeContainer));
+    } catch (cause) {
+      setMediaError(errorMessage(cause));
+    } finally {
+      setMediaLoading(false);
+    }
+  };
+
   const fileExtension = download.filename.split(".").pop()?.toLowerCase() ?? "";
   const canRemux = download.status === "completed" && REMUXABLE_EXTENSIONS.has(fileExtension);
+  const canMerge = download.status === "completed"
+    && REMUXABLE_EXTENSIONS.has(fileExtension)
+    && fileExtension !== "srt";
+  const mergeCandidates = downloads.filter((candidate) =>
+    candidate.id !== download.id
+    && candidate.status === "completed"
+    && REMUXABLE_EXTENSIONS.has(candidate.filename.split(".").pop()?.toLowerCase() ?? "")
+    && candidate.filename.split(".").pop()?.toLowerCase() !== "srt",
+  );
   const isSubtitleConversion = fileExtension === "srt";
   const mediaJobActive = mediaJob?.status === "preparing" || mediaJob?.status === "processing";
   const mediaProgress = mediaJob?.status === "completed"
@@ -693,28 +721,72 @@ export function DetailPanel({
                     ? isSubtitleConversion ? "Convert again" : "Remux again"
                     : isSubtitleConversion ? "Convert" : "Remux"}
               </button>
-              {mediaJobActive && (
-                <button
-                  className="button button-secondary"
-                  onClick={() => void cancelRemux()}
-                >
-                  {isSubtitleConversion ? "Cancel conversion" : "Cancel remux"}
-                </button>
-              )}
             </div>
+          </section>
+        )}
+
+        {canMerge && (
+          <section className="detail-section" aria-label="Merge audio and video">
+            <p className="detail-section-title">Merge audio and video</p>
+            <p className="field-hint">
+              Combines this file with a second completed media download without re-encoding.
+              Both original files are preserved.
+            </p>
+            <label className="field-label" htmlFor={`merge-audio-${download.id}`}>
+              Audio source
+            </label>
+            <select
+              id={`merge-audio-${download.id}`}
+              className="field-input"
+              value={mergeAudioId}
+              disabled={mediaLoading || mediaJobActive || mergeCandidates.length === 0}
+              onChange={(event) => setMergeAudioId(event.target.value)}
+            >
+              <option value="">Select a completed media download</option>
+              {mergeCandidates.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.filename}
+                </option>
+              ))}
+            </select>
+            <label className="field-label" htmlFor={`merge-container-${download.id}`}>
+              Output container
+            </label>
+            <select
+              id={`merge-container-${download.id}`}
+              className="field-input"
+              value={mergeContainer}
+              disabled={mediaLoading || mediaJobActive}
+              onChange={(event) => setMergeContainer(event.target.value as "mp4" | "mkv")}
+            >
+              <option value="mp4">MP4</option>
+              <option value="mkv">Matroska (MKV)</option>
+            </select>
+            <div className="detail-actions">
+              <button
+                className="button button-primary"
+                disabled={!mergeAudioId || mediaLoading || mediaJobActive}
+                onClick={() => void mergeAudioVideo()}
+              >
+                {mediaLoading ? "Starting…" : "Merge files"}
+              </button>
+            </div>
+            {mergeCandidates.length === 0 && (
+              <p className="field-hint">Complete another media download before merging.</p>
+            )}
+          </section>
+        )}
+
+        {(canRemux || canMerge) && (mediaJob || mediaError) && (
+          <section className="detail-section" aria-label="Media processing status">
+            <p className="detail-section-title">Media process</p>
             {mediaJob && (
               <div role="status" aria-live="polite">
                 <p className="field-hint">
-                  {isSubtitleConversion ? "Conversion" : "Remux"} {mediaJob.status}
-                  {mediaJob.status === "processing" && (
-                    <>
-                      {" · "}
-                      {formatEta(Math.floor(mediaJob.output_time_seconds))}
-                      {mediaJob.duration_seconds !== null
-                        ? ` / ${formatEta(Math.floor(mediaJob.duration_seconds))}`
-                        : ""}
-                    </>
-                  )}
+                  {mediaJob.status}
+                  {mediaJob.status === "processing" && mediaJob.duration_seconds !== null
+                    ? ` · ${formatEta(Math.floor(mediaJob.output_time_seconds))} / ${formatEta(Math.floor(mediaJob.duration_seconds))}`
+                    : ""}
                   {mediaJob.output_size_bytes !== null
                     ? ` · ${formatBytes(mediaJob.output_size_bytes)}`
                     : ""}
@@ -722,7 +794,7 @@ export function DetailPanel({
                 {(mediaJobActive || mediaJob.status === "completed") && (
                   <progress
                     className="progress-track"
-                    aria-label={isSubtitleConversion ? "Conversion progress" : "Remux progress"}
+                    aria-label="Media processing progress"
                     value={mediaProgress}
                     max={100}
                   />
@@ -732,6 +804,14 @@ export function DetailPanel({
                   <p className="detail-error-message">{mediaJob.error}</p>
                 )}
               </div>
+            )}
+            {mediaJobActive && (
+              <button
+                className="button button-secondary"
+                onClick={() => void cancelMediaJob()}
+              >
+                Cancel media process
+              </button>
             )}
             {mediaError && <p className="detail-error-message">{mediaError}</p>}
           </section>

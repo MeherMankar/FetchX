@@ -161,7 +161,7 @@ impl MediaProcessingManager {
             }
         }
 
-        let output = next_output_path(&input, container).await?;
+        let output = next_output_path(&input, container, "remuxed").await?;
         let job_id = Uuid::new_v4().to_string();
         let (cancellation, cancellation_receiver) = watch::channel(false);
         let snapshot = MediaProcessJob {
@@ -278,6 +278,110 @@ impl MediaProcessingManager {
         Ok(snapshot)
     }
 
+    async fn start_merge(
+        &self,
+        app: AppHandle,
+        processor: Arc<FfmpegProcessor>,
+        video_download_id: String,
+        video_input: PathBuf,
+        audio_input: PathBuf,
+        container: MediaContainer,
+    ) -> Result<MediaProcessJob, String> {
+        let _start_guard = self.inner.start_lock.lock().await;
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err("FetchX is shutting down.".to_owned());
+        }
+        {
+            let jobs = self.inner.jobs.lock().await;
+            if jobs.values().any(|entry| entry.snapshot.status.is_active()) {
+                return Err("Another media process is already running.".to_owned());
+            }
+        }
+
+        let output = next_output_path(&video_input, container, "merged").await?;
+        let job_id = Uuid::new_v4().to_string();
+        let (cancellation, cancellation_receiver) = watch::channel(false);
+        let snapshot = MediaProcessJob {
+            job_id: job_id.clone(),
+            download_id: video_download_id.clone(),
+            status: MediaJobStatus::Preparing,
+            output_time_seconds: 0.0,
+            duration_seconds: None,
+            output_path: None,
+            output_size_bytes: None,
+            error: None,
+        };
+        let mut jobs = self.inner.jobs.lock().await;
+        if jobs.len() >= MAX_RETAINED_JOBS {
+            let oldest_job = jobs
+                .iter()
+                .filter(|(_, entry)| !entry.snapshot.status.is_active())
+                .min_by_key(|(_, entry)| entry.started_at)
+                .map(|(download_id, _)| download_id.clone())
+                .ok_or_else(|| "The media processing job limit has been reached.".to_owned())?;
+            jobs.remove(&oldest_job);
+        }
+        jobs.insert(
+            video_download_id.clone(),
+            JobEntry {
+                snapshot: snapshot.clone(),
+                cancellation,
+                started_at: Instant::now(),
+            },
+        );
+        drop(jobs);
+        emit_job(&app, &snapshot);
+
+        let manager = self.clone();
+        tauri::async_runtime::spawn(async move {
+            manager
+                .update_job(&app, &video_download_id, |job| {
+                    job.status = MediaJobStatus::Processing;
+                })
+                .await;
+
+            match processor
+                .merge_audio_video(&video_input, &audio_input, &output, cancellation_receiver)
+                .await
+            {
+                Ok(result) => {
+                    manager
+                        .finish_job(
+                            &app,
+                            &video_download_id,
+                            (
+                                MediaJobStatus::Completed,
+                                Some(result.destination.to_string_lossy().into_owned()),
+                                Some(result.size_bytes),
+                                None,
+                            ),
+                        )
+                        .await;
+                }
+                Err(FfmpegError::Cancelled) => {
+                    manager
+                        .finish_job(
+                            &app,
+                            &video_download_id,
+                            (MediaJobStatus::Cancelled, None, None, None),
+                        )
+                        .await;
+                }
+                Err(error) => {
+                    manager
+                        .finish_job(
+                            &app,
+                            &video_download_id,
+                            (MediaJobStatus::Failed, None, None, Some(error.to_string())),
+                        )
+                        .await;
+                }
+            }
+        });
+
+        Ok(snapshot)
+    }
+
     async fn update_job(
         &self,
         app: &AppHandle,
@@ -342,6 +446,65 @@ pub async fn start_media_remux(
     let processor = manager.processor().await?;
     manager
         .start_remux(app, processor, download_id, input, container)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn start_media_merge(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    manager: State<'_, MediaProcessingManager>,
+    video_download_id: String,
+    audio_download_id: String,
+    container: String,
+) -> Result<MediaProcessJob, String> {
+    let video_id = DownloadId::parse(&video_download_id)
+        .map_err(|_| "The video download identifier is invalid.")?;
+    let audio_id = DownloadId::parse(&audio_download_id)
+        .map_err(|_| "The audio download identifier is invalid.")?;
+    if video_id == audio_id {
+        return Err("Choose two different completed downloads.".to_owned());
+    }
+
+    let video = state
+        .repository
+        .get(video_id)
+        .await
+        .map_err(|error| format!("Could not load the video download: {error}"))?
+        .ok_or_else(|| "The video download was not found.".to_owned())?;
+    let audio = state
+        .repository
+        .get(audio_id)
+        .await
+        .map_err(|error| format!("Could not load the audio download: {error}"))?
+        .ok_or_else(|| "The audio download was not found.".to_owned())?;
+    validate_media_source(video.status(), video.destination())?;
+    validate_media_source(audio.status(), audio.destination())?;
+    if tokio::fs::canonicalize(video.destination())
+        .await
+        .map_err(|error| format!("Could not inspect the video file: {error}"))?
+        == tokio::fs::canonicalize(audio.destination())
+            .await
+            .map_err(|error| format!("Could not inspect the audio file: {error}"))?
+    {
+        return Err("Choose two different media files.".to_owned());
+    }
+
+    let container = match container.as_str() {
+        "mp4" => MediaContainer::Mp4,
+        "mkv" => MediaContainer::Matroska,
+        _ => return Err("Audio/video merge supports MP4 and MKV output.".to_owned()),
+    };
+    let processor = manager.processor().await?;
+    manager
+        .start_merge(
+            app,
+            processor,
+            video_download_id,
+            video.destination().to_path_buf(),
+            audio.destination().to_path_buf(),
+            container,
+        )
         .await
 }
 
@@ -416,6 +579,16 @@ fn is_supported_media_input(input: &Path) -> bool {
     )
 }
 
+fn validate_media_source(status: DownloadStatus, input: &Path) -> Result<(), String> {
+    if status != DownloadStatus::Completed {
+        return Err("Only completed downloads can be processed.".to_owned());
+    }
+    if !is_supported_media_input(input) {
+        return Err("This file type is not supported for media processing.".to_owned());
+    }
+    Ok(())
+}
+
 fn validate_remux_source(status: DownloadStatus, input: &Path) -> Result<(), String> {
     if status != DownloadStatus::Completed {
         return Err("Only completed downloads can be processed.".to_owned());
@@ -426,7 +599,11 @@ fn validate_remux_source(status: DownloadStatus, input: &Path) -> Result<(), Str
     Ok(())
 }
 
-async fn next_output_path(input: &Path, container: MediaContainer) -> Result<PathBuf, String> {
+async fn next_output_path(
+    input: &Path,
+    container: MediaContainer,
+    suffix_label: &str,
+) -> Result<PathBuf, String> {
     let parent = input
         .parent()
         .ok_or_else(|| "The source file has no parent directory.".to_owned())?;
@@ -436,7 +613,7 @@ async fn next_output_path(input: &Path, container: MediaContainer) -> Result<Pat
 
     for suffix in 1..=MAX_OUTPUT_NAME_ATTEMPTS {
         let mut filename = OsString::from(stem);
-        filename.push("-remuxed");
+        filename.push(format!("-{suffix_label}"));
         if suffix > 1 {
             filename.push(format!("-{suffix}"));
         }
@@ -483,11 +660,13 @@ mod tests {
         let input = directory.path().join("archive.video.mkv");
         tokio::fs::write(&input, b"source").await?;
 
-        let first = next_output_path(&input, MediaContainer::Mp4).await?;
+        let first = next_output_path(&input, MediaContainer::Mp4, "remuxed").await?;
         assert_eq!(first, directory.path().join("archive.video-remuxed.mp4"));
         tokio::fs::write(&first, b"existing output").await?;
-        let second = next_output_path(&input, MediaContainer::Mp4).await?;
+        let second = next_output_path(&input, MediaContainer::Mp4, "remuxed").await?;
         assert_eq!(second, directory.path().join("archive.video-remuxed-2.mp4"));
+        let merged = next_output_path(&input, MediaContainer::Mp4, "merged").await?;
+        assert_eq!(merged, directory.path().join("archive.video-merged.mp4"));
         assert_eq!(tokio::fs::read(&input).await?, b"source");
         Ok(())
     }

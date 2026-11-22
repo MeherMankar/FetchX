@@ -732,6 +732,7 @@ export function App() {
           {selectedDownload && (
             <DetailPanel
               download={selectedDownload}
+              downloads={downloads}
               schedule={schedules[selectedDownload.id] ?? null}
               busy={busyId === selectedDownload.id}
               onClose={() => setSelectedId(null)}

@@ -332,6 +332,9 @@ mod tests {
         assert!(!defaults.aria2.enabled);
         assert!(!defaults.yt_dlp.enabled);
         assert!(defaults.native_torrent.enabled);
+        assert_eq!(defaults.native_builtins.filename_template, "{{title}}");
+        assert!(defaults.native_builtins.page_scraper_enabled);
+        assert!(defaults.native_builtins.url_resolver_enabled);
 
         let mut changed = defaults;
         changed.aria2.enabled = true;
@@ -353,6 +356,27 @@ mod tests {
                 .native_torrent
                 .enabled
         );
+    }
+
+    #[test]
+    fn older_engine_config_receives_native_builtin_defaults() {
+        let legacy = r#"{
+            "version": 1,
+            "direct_http": {"enabled": true},
+            "aria2": {
+                "enabled": false,
+                "executable_path": null,
+                "rpc_port": 6800,
+                "rpc_secret": null
+            },
+            "yt_dlp": {"enabled": false, "executable_path": null}
+        }"#;
+
+        let config: super::EngineConfig =
+            serde_json::from_str(legacy).expect("older config should remain readable");
+        assert_eq!(config.native_builtins.filename_template, "{{title}}");
+        assert!(config.native_builtins.page_scraper_enabled);
+        assert!(config.native_builtins.url_resolver_enabled);
     }
 
     #[tokio::test]
