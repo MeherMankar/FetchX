@@ -59,3 +59,11 @@ export function setFolderCategoriesConfig(
   return invoke<void>("set_folder_categories_config", { config });
 }
 
+export function exportSettings(): Promise<void> {
+  return invoke<void>("export_settings");
+}
+
+export function importSettings(): Promise<EngineConfigDto> {
+  return invoke<EngineConfigDto>("import_settings");
+}
+

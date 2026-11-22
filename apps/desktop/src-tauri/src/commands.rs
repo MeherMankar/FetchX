@@ -19,10 +19,13 @@ use fetchx_storage::{Database, DownloadRepository, TorrentMetadataRepository};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use crate::events::{
     DOWNLOAD_REMOVED, DOWNLOAD_UPDATED, DownloadRemovedEvent, DownloadUpdatedEvent,
 };
+
+use crate::engine_commands::EngineConfigDto;
 
 /// The concrete repository type used by the desktop application.
 pub(crate) type AppRepository = CoreRepository;
@@ -878,6 +881,22 @@ impl IpcError {
         Self {
             code: IpcErrorCode::Internal,
             message: "The request could not be completed.",
+        }
+    }
+
+    /// Returned when the user dismisses a settings export/import file dialog.
+    fn settings_cancelled(message: &'static str) -> Self {
+        Self {
+            code: IpcErrorCode::InvalidRequest,
+            message,
+        }
+    }
+
+    /// Returned when an imported settings file is missing, malformed, or unsupported.
+    fn invalid_settings_file() -> Self {
+        Self {
+            code: IpcErrorCode::InvalidRequest,
+            message: "The selected file is not a valid FetchX settings export.",
         }
     }
 
@@ -2386,6 +2405,145 @@ pub async fn check_for_update() -> Result<UpdateCheckResult, IpcError> {
         release_url: html_url,
         release_notes: notes,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Settings export / import
+// ---------------------------------------------------------------------------
+
+/// Envelope written by [`export_settings`] and read by [`import_settings`].
+///
+/// `exported_at` is ignored on import; only `version` and `config` are used.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct SettingsExportEnvelope {
+    version: u32,
+    exported_at: String,
+    config: EngineConfigDto,
+}
+
+/// Opens a native save dialog and writes the current engine configuration to a
+/// `.json` file as `{ "version": 1, "exported_at": "<ISO timestamp>", "config": <EngineConfigDto> }`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn export_settings(app: AppHandle, state: State<'_, AppState>) -> Result<(), IpcError> {
+    let chosen = app
+        .dialog()
+        .file()
+        .add_filter("FetchX settings", &["json"])
+        .set_file_name("fetchx-settings.json")
+        .blocking_save_file();
+    let Some(selected) = chosen else {
+        // The user dismissed the save dialog without choosing a destination.
+        return Err(IpcError::settings_cancelled("Export cancelled."));
+    };
+    let path = file_path_to_pathbuf(selected)?;
+
+    let config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    let envelope = SettingsExportEnvelope {
+        version: 1,
+        exported_at: iso_utc_now(),
+        config: EngineConfigDto::from(&config),
+    };
+    let json = serde_json::to_string_pretty(&envelope).map_err(|_| IpcError::internal())?;
+
+    tokio::fs::write(&path, json)
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(())
+}
+
+/// Opens a native open dialog for `.json` files, reads and parses the file,
+/// validates `version == 1`, applies the imported user-facing settings onto the
+/// current configuration, persists it, and returns the updated `EngineConfigDto`.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn import_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<EngineConfigDto, IpcError> {
+    let chosen = app
+        .dialog()
+        .file()
+        .add_filter("FetchX settings", &["json"])
+        .blocking_pick_file();
+    let Some(selected) = chosen else {
+        // The user dismissed the open dialog without choosing a file.
+        return Err(IpcError::settings_cancelled("Import cancelled."));
+    };
+    let path = file_path_to_pathbuf(selected)?;
+
+    let contents = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|_| IpcError::internal())?;
+    let envelope: SettingsExportEnvelope =
+        serde_json::from_str(&contents).map_err(|_| IpcError::invalid_settings_file())?;
+    if envelope.version != 1 {
+        return Err(IpcError::invalid_settings_file());
+    }
+
+    // The exported `config` is a user-facing subset of the full EngineConfig.
+    // Overlay it onto the current (machine-specific) configuration so platform
+    // settings such as the aria2 executable path or the torrent session
+    // directory are preserved instead of being clobbered with foreign values.
+    let mut config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    let imported = envelope.config;
+    config.direct_http.enabled = imported.direct_http.enabled;
+    config.yt_dlp.enabled = imported.yt_dlp.enabled;
+    config.resource_policy = imported.resource_policy;
+    config.weekly_queue_schedule = imported.weekly_queue_schedule;
+    config.os_notifications_enabled = imported.os_notifications_enabled;
+    config.native_builtins = imported.native_builtins;
+    state
+        .config_service
+        .save(&config)
+        .await
+        .map_err(|_| IpcError::internal())?;
+
+    Ok(EngineConfigDto::from(&config))
+}
+
+fn file_path_to_pathbuf(file_path: FilePath) -> Result<PathBuf, IpcError> {
+    match file_path {
+        FilePath::Path(path) => Ok(path),
+        FilePath::Url(url) => url.to_file_path().map_err(|_| IpcError::internal()),
+    }
+}
+
+/// Formats the current UTC time as an ISO 8601 timestamp (`YYYY-MM-DDTHH:MM:SSZ`).
+fn iso_utc_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = secs % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = secs_of_day / 3600;
+    let minute = (secs_of_day % 3600) / 60;
+    let second = secs_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Converts a count of days since the Unix epoch (1970-01-01) to a proleptic
+/// Gregorian UTC date, using Howard Hinnant's civil-from-days algorithm.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 #[cfg(test)]

@@ -36,9 +36,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Button
+import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.content.Context
+import android.net.Uri
+import org.json.JSONObject
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import dev.fetchx.app.service.DownloadNetworkPolicy
 import dev.fetchx.app.media.MediaDownloadPreferences
 import dev.fetchx.downloads.storage.StorageManager
@@ -76,6 +88,64 @@ internal fun StorageScreen(onBack: () -> Unit) {
     }
     var quickSharedDownloads by remember(context) {
         mutableStateOf(MediaDownloadPreferences.isQuickDownloadEnabled(context))
+    }
+    val scope = rememberCoroutineScope()
+    var backupMessage by remember { mutableStateOf<String?>(null) }
+    var backupError by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                backupError = null
+                backupMessage = null
+                try {
+                    val json = withContext(Dispatchers.IO) { buildSettingsJson(context) }
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { stream ->
+                            stream.write(json.toByteArray(Charsets.UTF_8))
+                        } ?: throw IOException("Could not open the selected file for writing.")
+                    }
+                    backupMessage = "Settings exported."
+                } catch (error: Exception) {
+                    backupError = error.message ?: "Export failed."
+                }
+            }
+        }
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                backupError = null
+                backupMessage = null
+                try {
+                    val text = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            stream.readBytes().toString(Charsets.UTF_8)
+                        } ?: throw IOException("Could not open the selected file for reading.")
+                    }
+                    withContext(Dispatchers.IO) { applySettingsJson(context, text) }
+                    // Reflect the restored preferences in the on-screen state.
+                    wifiOnly = DownloadNetworkPolicy.isWifiOnlyEnabled(context)
+                    unmeteredOnly =
+                        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.UNMETERED_ONLY_KEY)
+                    roamingAllowed =
+                        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.ROAMING_ALLOWED_KEY)
+                    chargingOnly =
+                        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.CHARGING_ONLY_KEY)
+                    batteryControl =
+                        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.BATTERY_CONTROL_KEY)
+                    batteryThreshold = DownloadNetworkPolicy.getBatteryThreshold(context)
+                    smartFolders = downloadStorageManager.isSmartFoldersEnabled()
+                    quickSharedDownloads = MediaDownloadPreferences.isQuickDownloadEnabled(context)
+                    backupMessage = "Settings imported."
+                } catch (error: Exception) {
+                    backupError = error.message ?: "Import failed."
+                }
+            }
+        }
     }
 
     LaunchedEffect(refreshRequest) {
@@ -131,6 +201,37 @@ internal fun StorageScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                StorageSection("Backup & restore") {
+                    Text(
+                        "Export your FetchX transfer, media, and smart-folder settings to a JSON file, or restore them from a previous export.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { exportLauncher.launch("fetchx-settings.json") }) {
+                            Text("Export")
+                        }
+                        Button(
+                            onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) },
+                        ) {
+                            Text("Import")
+                        }
+                    }
+                    backupMessage?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    backupError?.let { message ->
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
                 StorageSection("Download folders") {
                     PolicySwitch(
                         title = "Smart download folders",
@@ -378,4 +479,96 @@ internal fun formatStorageBytes(bytes: Long): String {
         unitIndex++
     } while (value >= 1024.0 && unitIndex < units.lastIndex)
     return "%.1f %s".format(java.util.Locale.ROOT, value, units[unitIndex])
+}
+
+/**
+ * Serialises the current FetchX SharedPreferences (network policy, media, and
+ * smart-folder settings) to a versioned JSON string for export.
+ */
+private fun buildSettingsJson(context: Context): String {
+    val json = JSONObject()
+    json.put("version", 1)
+    json.put("exported_at", isoUtcNow())
+    val network = JSONObject()
+    network.put("wifi_only", DownloadNetworkPolicy.isWifiOnlyEnabled(context))
+    network.put(
+        "unmetered_only",
+        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.UNMETERED_ONLY_KEY),
+    )
+    network.put(
+        "roaming_allowed",
+        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.ROAMING_ALLOWED_KEY),
+    )
+    network.put(
+        "charging_only",
+        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.CHARGING_ONLY_KEY),
+    )
+    network.put(
+        "battery_control",
+        DownloadNetworkPolicy.isEnabled(context, DownloadNetworkPolicy.BATTERY_CONTROL_KEY),
+    )
+    network.put("battery_threshold", DownloadNetworkPolicy.getBatteryThreshold(context))
+    json.put("network_policy", network)
+    val media = JSONObject()
+    media.put("quick_download", MediaDownloadPreferences.isQuickDownloadEnabled(context))
+    json.put("media", media)
+    val storage = JSONObject()
+    storage.put("smart_folders", StorageManager(context).isSmartFoldersEnabled())
+    json.put("storage", storage)
+    return json.toString(2)
+}
+
+/**
+ * Parses an exported settings JSON string and restores the preferences it
+ * contains. Throws [IOException] when the file is malformed or has an
+ * unsupported version.
+ */
+private fun applySettingsJson(context: Context, text: String) {
+    val json = JSONObject(text)
+    val version = json.optInt("version", -1)
+    if (version != 1) {
+        throw IOException("Unsupported settings file version: $version")
+    }
+    json.optJSONObject("network_policy")?.let { network ->
+        DownloadNetworkPolicy.setWifiOnlyEnabled(
+            context,
+            network.optBoolean("wifi_only", DownloadNetworkPolicy.isWifiOnlyEnabled(context)),
+        )
+        DownloadNetworkPolicy.setPolicy(
+            context,
+            DownloadNetworkPolicy.UNMETERED_ONLY_KEY,
+            network.optBoolean("unmetered_only", false),
+        )
+        DownloadNetworkPolicy.setPolicy(
+            context,
+            DownloadNetworkPolicy.ROAMING_ALLOWED_KEY,
+            network.optBoolean("roaming_allowed", false),
+        )
+        DownloadNetworkPolicy.setPolicy(
+            context,
+            DownloadNetworkPolicy.CHARGING_ONLY_KEY,
+            network.optBoolean("charging_only", false),
+        )
+        DownloadNetworkPolicy.setPolicy(
+            context,
+            DownloadNetworkPolicy.BATTERY_CONTROL_KEY,
+            network.optBoolean("battery_control", false),
+        )
+        DownloadNetworkPolicy.setBatteryThreshold(context, network.optInt("battery_threshold", 20))
+    }
+    json.optJSONObject("media")?.let { media ->
+        MediaDownloadPreferences.setQuickDownloadEnabled(
+            context,
+            media.optBoolean("quick_download", true),
+        )
+    }
+    json.optJSONObject("storage")?.let { storage ->
+        StorageManager(context).setSmartFoldersEnabled(storage.optBoolean("smart_folders", false))
+    }
+}
+
+private fun isoUtcNow(): String {
+    val format = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT)
+    format.timeZone = TimeZone.getTimeZone("UTC")
+    return format.format(Date())
 }

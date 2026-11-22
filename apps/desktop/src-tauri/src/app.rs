@@ -463,6 +463,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::list_downloads,
@@ -535,6 +536,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_folder_categories_config,
             commands::set_folder_categories_config,
             commands::check_for_update,
+            commands::export_settings,
+            commands::import_settings,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);
