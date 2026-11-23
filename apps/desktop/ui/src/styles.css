@@ -279,6 +279,19 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   flex-shrink: 0;
 }
 
+.theme-toggle-button { width: 32px; padding: 0; }
+
+.theme-toggle-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* Pass 1: search/sort consistent heights, on 4px grid */
 .search-input {
   height: 32px;
@@ -698,14 +711,13 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .detail-section { padding: 12px 0; border-bottom: 1px solid var(--border-light); }
 .detail-section:last-child { border-bottom: none; }
 
-/* Pass 5: section title is secondary, 11px mono */
+/* Section titles use readable sentence case. */
 .detail-section-title {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--text-3);
-  letter-spacing: 0.01em;
+  color: var(--text-2);
+  letter-spacing: 0;
   margin-bottom: 8px;
-  text-transform: uppercase;
 }
 
 .detail-status-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

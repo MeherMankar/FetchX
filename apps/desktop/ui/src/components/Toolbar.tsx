@@ -146,12 +146,25 @@ export function Toolbar({
         </button>
 
         <button
-          className="button button-secondary"
+          className="button button-secondary theme-toggle-button"
           onClick={onToggleTheme}
           aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
           title={theme === "dark" ? "Light mode" : "Dark mode"}
         >
-          {theme === "dark" ? "☀" : "☾"}
+          <svg
+            className="theme-toggle-icon"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          >
+            {theme === "dark" ? (
+              <>
+                <circle cx="8" cy="8" r="3" />
+                <path d="M8 1.5v1.25M8 13.25v1.25M1.5 8h1.25M13.25 8h1.25M3.4 3.4l.9.9m7.4 7.4.9.9m0-9.2-.9.9m-7.4 7.4-.9.9" />
+              </>
+            ) : (
+              <path d="M13.25 9.5A5.5 5.5 0 0 1 6.5 2.75 5.5 5.5 0 1 0 13.25 9.5Z" />
+            )}
+          </svg>
         </button>
       </div>
 
