@@ -17,7 +17,7 @@ impl CredentialKey {
 }
 
 /// HTTP authentication credentials. The password is never serialized to logs or export files.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HttpCredentials {
     pub username: String,
     pub password: String,
@@ -32,14 +32,26 @@ impl HttpCredentials {
     }
 }
 
-/// Marker type to ensure credentials are never accidentally serialized.
-/// HttpCredentials does NOT implement Serialize/Deserialize by design.
+impl std::fmt::Debug for HttpCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("HttpCredentials(***)")
+    }
+}
+
 impl std::fmt::Display for HttpCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "HttpCredentials(username={}, password=***)",
-            self.username
-        )
+        f.write_str("HttpCredentials(***)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HttpCredentials;
+
+    #[test]
+    fn formatting_never_exposes_credentials() {
+        let credentials = HttpCredentials::new("private-user", "secret-password");
+        assert_eq!(format!("{credentials:?}"), "HttpCredentials(***)");
+        assert_eq!(format!("{credentials}"), "HttpCredentials(***)");
     }
 }

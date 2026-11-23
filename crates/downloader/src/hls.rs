@@ -174,9 +174,9 @@ where
             .user_agent(&config.user_agent)
             .connect_timeout(config.connect_timeout)
             .read_timeout(config.read_timeout);
-        if let Some(proxy_url) = &config.proxy_url
-            && let Ok(proxy) = reqwest::Proxy::all(proxy_url.as_str())
-        {
+        if let Some(proxy_url) = &config.proxy_url {
+            let proxy = reqwest::Proxy::all(proxy_url.as_str())
+                .map_err(DownloadEngineError::ClientConfiguration)?;
             builder = builder.proxy(proxy);
         }
         let client = builder

@@ -11,7 +11,7 @@ use std::{
 
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadProgress, DownloadSource, DownloadStatus, EngineKind,
-    FileName, Timestamp,
+    FileName, HttpCredentials, Timestamp,
 };
 use fetchx_storage::{Database, DownloadRepository};
 use sha2::Digest;
@@ -1255,6 +1255,73 @@ async fn run_download(
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
     Ok(engine.download(id, receiver).await?)
+}
+
+#[tokio::test]
+async fn retries_basic_auth_with_one_shot_credentials() -> Result<(), Box<dyn Error>> {
+    let body = b"authenticated response";
+    let (url, server) = start_scripted_server(vec![
+        scripted_response(401, &[("WWW-Authenticate", "Basic realm=\"fetchx\"")], &[]),
+        scripted_response(200, &[], body),
+    ])
+    .await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig {
+        minimum_segmented_file_size: u64::MAX,
+        ..HttpEngineConfig::default()
+    })
+    .await?;
+    let destination = directory.destination("authenticated.bin");
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    engine.provide_credentials_for_retry(id, HttpCredentials::new("user", "pass"))?;
+
+    let (_sender, receiver) = watch::channel(false);
+    let completed = engine.download(id, receiver).await?;
+    let requests = server.await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(requests.len(), 2);
+    assert!(!requests[0].to_ascii_lowercase().contains("authorization:"));
+    let authorization = requests[1].lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("authorization")
+            .then_some(value.trim())
+    });
+    assert_eq!(authorization, Some("Basic dXNlcjpwYXNz"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_http_proxy_receives_the_download_request() -> Result<(), Box<dyn Error>> {
+    let body = b"proxied response";
+    let (proxy_endpoint, server) =
+        start_scripted_server(vec![scripted_response(200, &[], body)]).await?;
+    let proxy_url = proxy_endpoint
+        .strip_suffix("/file")
+        .ok_or("test proxy endpoint is malformed")?
+        .to_owned();
+    let (database, engine, directory) = setup_engine(HttpEngineConfig {
+        proxy_url: Some(proxy_url),
+        minimum_segmented_file_size: u64::MAX,
+        ..HttpEngineConfig::default()
+    })
+    .await?;
+    let destination = directory.destination("proxied.bin");
+    let item = make_item("http://127.0.0.1:1/proxied.bin", &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+
+    let (_sender, receiver) = watch::channel(false);
+    let completed = engine.download(id, receiver).await?;
+    let requests = server.await?;
+
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET http://127.0.0.1:1/proxied.bin "));
+    Ok(())
 }
 
 #[tokio::test]

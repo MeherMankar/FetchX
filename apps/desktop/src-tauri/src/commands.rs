@@ -7,11 +7,13 @@ use fetchx_core::StateMachineError;
 use fetchx_core_services::{
     BatchDownloadRequest, ConfigService, CoreRepository, CoreServices, EngineRuntime,
 };
-use fetchx_downloader::{DownloadEngineError, YtDlpError, YtDlpFormat, validate_http_source_url};
+use fetchx_downloader::{
+    DownloadEngineError, YtDlpError, YtDlpFormat, is_dash_url, is_hls_url, validate_http_source_url,
+};
 use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
     DownloadErrorCode, DownloadId, DownloadItem, DownloadPriority, DownloadSource, DownloadStatus,
-    EngineKind, FileName, Timestamp, YtDlpAudioFormat, parse_magnet_uri,
+    EngineKind, FileName, HttpCredentials, Timestamp, YtDlpAudioFormat, parse_magnet_uri,
 };
 use fetchx_queue::{QueueError, QueueManager};
 use fetchx_scheduler::{ScheduleError, Scheduler};
@@ -2151,17 +2153,34 @@ pub async fn provide_download_credentials(
     password: String,
 ) -> Result<DownloadDto, IpcError> {
     let id = DownloadId::parse(&download_id).map_err(|_| IpcError::invalid_request())?;
-    if username.is_empty() {
+    if username.trim().is_empty() || username.len() > 4096 || password.len() > 4096 {
         return Err(IpcError::invalid_request());
     }
-    // Retry the download; credentials must be supplied via the URL or context headers.
-    // Full encrypted credential store is a planned enhancement.
-    let _ = (username, password); // validated inputs, reserved for future credential store
-    state
-        .queue
-        .retry_download(id)
+    let item = state
+        .repository
+        .get(id)
         .await
+        .map_err(|_| IpcError::internal())?
+        .ok_or_else(IpcError::not_found)?;
+    if item.source().engine() != EngineKind::DirectHttp
+        || is_hls_url(item.source().url())
+        || is_dash_url(item.source().url())
+    {
+        return Err(IpcError::invalid_request());
+    }
+    state
+        .engine_runtime
+        .dispatcher
+        .provide_http_credentials_for_retry(id, HttpCredentials::new(username, password))
         .map_err(|_| IpcError::internal())?;
+    if state.queue.retry_download(id).await.is_err() {
+        state
+            .engine_runtime
+            .dispatcher
+            .clear_http_credentials_for_retry(id)
+            .map_err(|_| IpcError::internal())?;
+        return Err(IpcError::internal());
+    }
     state
         .repository
         .get(id)

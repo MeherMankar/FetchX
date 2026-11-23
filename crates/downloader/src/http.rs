@@ -1,10 +1,10 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -13,7 +13,8 @@ use std::{
 use fetchx_core::{DownloadStateMachine, StateMachineError};
 use fetchx_models::{
     DiagnosticComponent, DiagnosticEvent, DiagnosticLevel, DownloadId, DownloadItem,
-    DownloadProgress, DownloadStatus, EngineKind, Timestamp, TimestampError, global_diagnostics,
+    DownloadProgress, DownloadStatus, EngineKind, HttpCredentials, Timestamp, TimestampError,
+    global_diagnostics,
 };
 use fetchx_storage::DownloadRepository;
 use reqwest::{
@@ -224,6 +225,20 @@ pub struct DirectHttpEngine<R> {
     repository: R,
     state_machine: DownloadStateMachine<R>,
     config: HttpEngineConfig,
+    retry_credentials: Mutex<HashMap<DownloadId, HttpCredentials>>,
+}
+
+struct RetryCredentialCleanup<'a> {
+    credentials: &'a Mutex<HashMap<DownloadId, HttpCredentials>>,
+    id: DownloadId,
+}
+
+impl Drop for RetryCredentialCleanup<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut credentials) = self.credentials.lock() {
+            credentials.remove(&self.id);
+        }
+    }
 }
 
 impl<R> DirectHttpEngine<R>
@@ -256,7 +271,46 @@ where
             repository,
             state_machine,
             config,
+            retry_credentials: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Supplies credentials for one queued HTTP retry. They remain in memory
+    /// only until that download attempt finishes.
+    pub fn provide_credentials_for_retry(
+        &self,
+        id: DownloadId,
+        credentials: HttpCredentials,
+    ) -> Result<(), DownloadEngineError> {
+        if credentials.username.is_empty()
+            || credentials.username.len() > 4096
+            || credentials.password.len() > 4096
+        {
+            return Err(DownloadEngineError::InvalidConfiguration);
+        }
+        self.retry_credentials
+            .lock()
+            .map_err(|_| DownloadEngineError::InvalidConfiguration)?
+            .insert(id, credentials);
+        Ok(())
+    }
+
+    pub fn clear_credentials_for_retry(&self, id: DownloadId) -> Result<(), DownloadEngineError> {
+        self.retry_credentials
+            .lock()
+            .map_err(|_| DownloadEngineError::InvalidConfiguration)?
+            .remove(&id);
+        Ok(())
+    }
+
+    fn credentials_for_retry(
+        &self,
+        id: DownloadId,
+    ) -> Result<Option<HttpCredentials>, DownloadEngineError> {
+        self.retry_credentials
+            .lock()
+            .map(|credentials| credentials.get(&id).cloned())
+            .map_err(|_| DownloadEngineError::InvalidConfiguration)
     }
 
     /// Runs a queued, paused, failed, or cancelled item, resuming its partial file if possible.
@@ -353,7 +407,14 @@ where
                         return Err(DownloadEngineError::Paused);
                     }
                 }
-                response = self.send_redirect_chain(&url, Some(start), Some(end), None, &[]) => {
+                response = self.send_redirect_chain(
+                    &url,
+                    Some(start),
+                    Some(end),
+                    None,
+                    None,
+                    &[],
+                ) => {
                     break response?;
                 }
             }
@@ -407,6 +468,10 @@ where
         mut control: ManagedDownloadControl,
         already_downloading: bool,
     ) -> Result<DownloadItem, DownloadEngineError> {
+        let _credentials_cleanup = RetryCredentialCleanup {
+            credentials: &self.retry_credentials,
+            id,
+        };
         let current = self
             .repository
             .get(id)
@@ -637,7 +702,14 @@ where
                 parse_http_url_with_private_policy(source, self.allow_loopback_benchmark_target())?;
             let source_headers = context_headers_for_source(&extra_headers, &url, &primary_url);
             let response = loop {
-                let probe = self.send_redirect_chain(&url, Some(0), Some(0), None, &source_headers);
+                let probe = self.send_redirect_chain(
+                    &url,
+                    Some(0),
+                    Some(0),
+                    None,
+                    Some(item.id()),
+                    &source_headers,
+                );
                 tokio::select! {
                     changed = control.cancellation.changed() => {
                         if changed.is_err() || *control.cancellation.borrow_and_update() {
@@ -1278,6 +1350,7 @@ where
                         range_start,
                         None,
                         if_range.as_deref(),
+                        Some(id),
                         extra_headers,
                     )
                     .await
@@ -1420,6 +1493,7 @@ where
         range_start: Option<u64>,
         range_end: Option<u64>,
         if_range: Option<&str>,
+        auth_id: Option<DownloadId>,
         extra_headers: &[(String, String)],
     ) -> Result<Response, DownloadEngineError> {
         let mut url = initial_url.clone();
@@ -1462,15 +1536,13 @@ where
                     .get("www-authenticate")
                     .and_then(|v| v.to_str().ok())
                     .and_then(parse_www_authenticate);
-                let username = extra_headers
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case("x-fetchx-auth-username"))
-                    .map(|(_, v)| v.as_str());
-                let password = extra_headers
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case("x-fetchx-auth-password"))
-                    .map(|(_, v)| v.as_str());
-                if let (Some(challenge), Some(user), Some(pass)) = (www_auth, username, password) {
+                let credentials = match auth_id {
+                    Some(id) if url.origin() == initial_url.origin() => {
+                        self.credentials_for_retry(id)?
+                    }
+                    _ => None,
+                };
+                if let (Some(challenge), Some(credentials)) = (www_auth, credentials) {
                     let al2 = redirect_count == 0 && self.allow_loopback_benchmark_target();
                     let client2 = self.client_for_url(&url, al2).await?;
                     let mut ar = client2.get(url.clone());
@@ -1484,8 +1556,16 @@ where
                     }
                     let uri = url.path().to_owned();
                     let auth_val = match challenge.kind {
-                        AuthKind::Basic => basic_header(user, pass),
-                        AuthKind::Digest => digest_header(user, pass, "GET", &uri, &challenge),
+                        AuthKind::Basic => {
+                            basic_header(&credentials.username, &credentials.password)
+                        }
+                        AuthKind::Digest => digest_header(
+                            &credentials.username,
+                            &credentials.password,
+                            "GET",
+                            &uri,
+                            &challenge,
+                        ),
                     };
                     if let Ok(hv) = reqwest::header::HeaderValue::from_str(&auth_val) {
                         ar = ar.header(reqwest::header::AUTHORIZATION, hv);
@@ -1550,9 +1630,9 @@ where
             .read_timeout(self.config.read_timeout)
             .redirect(reqwest::redirect::Policy::none());
         if let Some(proxy_url) = &self.config.proxy_url {
-            if let Ok(proxy) = reqwest::Proxy::all(proxy_url.as_str()) {
-                builder = builder.proxy(proxy);
-            }
+            let proxy = reqwest::Proxy::all(proxy_url.as_str())
+                .map_err(DownloadEngineError::ClientConfiguration)?;
+            builder = builder.proxy(proxy);
         } else {
             builder = builder.no_proxy();
         }

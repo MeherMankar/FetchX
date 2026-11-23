@@ -20,6 +20,7 @@ import {
 import type {
   BrowserExtensionStatus,
   CategoryRuleDto,
+  DesktopProxyConfigDto,
   EngineConfigDto,
   EngineStatus,
   FolderCategoriesConfigDto,
@@ -429,6 +430,7 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: null,
       per_download_bandwidth_bytes_per_second: null,
       engine_bandwidth_limits: engineLimits,
+      desktop_proxy: current.desktop_proxy,
     },
     normal: {
       profile,
@@ -438,6 +440,7 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: null,
       per_download_bandwidth_bytes_per_second: null,
       engine_bandwidth_limits: engineLimits,
+      desktop_proxy: current.desktop_proxy,
     },
     limited: {
       profile,
@@ -447,6 +450,7 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: 2 * 1024 * 1024,
       per_download_bandwidth_bytes_per_second: 1024 * 1024,
       engine_bandwidth_limits: engineLimits,
+      desktop_proxy: current.desktop_proxy,
     },
     night: {
       profile,
@@ -456,6 +460,7 @@ function policyForProfile(
       global_bandwidth_bytes_per_second: 512 * 1024,
       per_download_bandwidth_bytes_per_second: 256 * 1024,
       engine_bandwidth_limits: engineLimits,
+      desktop_proxy: current.desktop_proxy,
     },
   };
   return profiles[profile] ?? { ...current, profile };
@@ -785,22 +790,62 @@ function WeeklyQueueScheduleSection({
 // Proxy settings section
 // ---------------------------------------------------------------------------
 
-function ProxySection({ onError }: { onError: (msg: string) => void }) {
-  const [kind, setKind] = useState<"none" | "http" | "socks5">("none");
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("8080");
-  const [username, setUsername] = useState("");
+function ProxySection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (msg: string) => void;
+}) {
+  const [kind, setKind] = useState<"none" | DesktopProxyConfigDto["kind"]>(
+    cfg.resource_policy.desktop_proxy?.kind ?? "none",
+  );
+  const [host, setHost] = useState(cfg.resource_policy.desktop_proxy?.host ?? "");
+  const [port, setPort] = useState(String(cfg.resource_policy.desktop_proxy?.port ?? 8080));
   const [busy, setBusy] = useState(false);
-  const [tested, setTested] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  useEffect(() => {
+    const proxy = cfg.resource_policy.desktop_proxy;
+    setKind(proxy?.kind ?? "none");
+    setHost(proxy?.host ?? "");
+    setPort(String(proxy?.port ?? 8080));
+  }, [cfg.resource_policy.desktop_proxy]);
 
   const save = async () => {
+    const parsedPort = Number.parseInt(port, 10);
+    if (
+      kind !== "none"
+      && (!host.trim() || !Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
+    ) {
+      onError("Enter a proxy host and a port from 1 to 65535.");
+      return;
+    }
+
     setBusy(true);
     try {
-      // Proxy config is stored in ResourcePolicy.desktop_proxy via save_engine_config.
-      // For now we show the UI and store locally (full backend wiring is in T14 Rust layer).
-      setTested("Proxy settings saved. Restart FetchX to apply.");
+      const desktopProxy: DesktopProxyConfigDto | null = kind === "none"
+        ? null
+        : {
+          kind,
+          host: host.trim(),
+          port: parsedPort,
+          username: cfg.resource_policy.desktop_proxy?.username ?? null,
+        };
+      const updated = await saveEngineConfig({
+        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        resource_policy: {
+          ...cfg.resource_policy,
+          desktop_proxy: desktopProxy,
+        },
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+      });
+      onSaved(updated);
+      setSaved("Proxy settings saved. Restart FetchX to apply.");
     } catch (cause) {
-      onError(cause instanceof Error ? cause.message : String(cause));
+      onError(errorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -821,8 +866,9 @@ function ProxySection({ onError }: { onError: (msg: string) => void }) {
             onChange={(e) => setKind(e.target.value as typeof kind)}
             disabled={busy}
           >
-            <option value="none">None (system default)</option>
+            <option value="none">No proxy</option>
             <option value="http">HTTP proxy</option>
+            <option value="https">HTTPS proxy</option>
             <option value="socks5">SOCKS5 proxy</option>
           </select>
         </div>
@@ -854,27 +900,18 @@ function ProxySection({ onError }: { onError: (msg: string) => void }) {
               disabled={busy}
             />
           </div>
-          <div className="settings-row">
-            <label className="settings-label" htmlFor="proxy-user">Username</label>
-            <input
-              id="proxy-user"
-              type="text"
-              className="settings-input"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Optional"
-              disabled={busy}
-            />
-          </div>
         </>
       )}
-      {tested && <div className="settings-notice" role="status">{tested}</div>}
+      {saved && <div className="settings-notice" role="status">{saved}</div>}
       <div className="settings-actions">
         <button className="button button-primary" onClick={() => void save()} disabled={busy}>
           {busy ? "Saving..." : "Save proxy settings"}
         </button>
       </div>
-      <p className="settings-hint">Proxy changes apply after restarting FetchX.</p>
+      <p className="settings-hint">
+        Applies to Direct HTTP and HLS downloads after restart. Proxy authentication
+        is not supported yet.
+      </p>
     </section>
   );
 }
@@ -1629,7 +1666,7 @@ export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto
           <AutoRetrySection cfg={cfg} onSaved={setCfg} onError={setError} />
           <AfterDownloadSection onError={setError} />
           <FolderCategoriesSection onError={setError} />
-          <ProxySection onError={setError} />
+          <ProxySection cfg={cfg} onSaved={setCfg} onError={setError} />
         </>
       )}
     </div>

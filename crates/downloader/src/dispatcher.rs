@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fetchx_models::{DownloadId, DownloadItem, EngineKind};
+use fetchx_models::{DownloadId, DownloadItem, EngineKind, HttpCredentials};
 use fetchx_storage::DownloadRepository;
 use reqwest::{Client, Url, header::CONTENT_TYPE};
 use tokio::sync::watch;
@@ -44,6 +44,22 @@ where
                 .build()
                 .expect("default HLS probe client configuration is valid"),
         }
+    }
+
+    pub fn provide_http_credentials_for_retry(
+        &self,
+        id: DownloadId,
+        credentials: HttpCredentials,
+    ) -> Result<(), DownloadEngineError> {
+        self.direct_http
+            .provide_credentials_for_retry(id, credentials)
+    }
+
+    pub fn clear_http_credentials_for_retry(
+        &self,
+        id: DownloadId,
+    ) -> Result<(), DownloadEngineError> {
+        self.direct_http.clear_credentials_for_retry(id)
     }
 
     pub fn with_yt_dlp(mut self, engine: Arc<YtDlpEngine<R>>) -> Self {

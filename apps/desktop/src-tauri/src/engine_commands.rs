@@ -43,6 +43,17 @@ pub struct EngineConfigDto {
     pub auto_retry_delay_seconds: u64,
 }
 
+fn resource_policy_for_save(policy: ResourcePolicy) -> ResourcePolicy {
+    match policy.profile {
+        ResourceProfile::Custom => policy,
+        profile => {
+            let mut defaults = ResourcePolicy::for_profile(profile);
+            defaults.desktop_proxy = policy.desktop_proxy;
+            defaults
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DirectHttpConfigDto {
     pub enabled: bool,
@@ -134,10 +145,13 @@ pub async fn save_engine_config(
     config.yt_dlp.enabled = request.yt_dlp.enabled;
     config.yt_dlp.executable_path = None;
     if let Some(policy) = request.resource_policy {
-        config.resource_policy = match policy.profile {
-            ResourceProfile::Custom => policy,
-            profile => ResourcePolicy::for_profile(profile),
-        };
+        if let Some(proxy) = policy.desktop_proxy.as_ref() {
+            proxy.validate().map_err(|error| EngineIpcError {
+                code: EngineIpcErrorCode::InvalidConfig,
+                message: error.to_owned(),
+            })?;
+        }
+        config.resource_policy = resource_policy_for_save(policy);
     }
     if let Some(schedule) = request.weekly_queue_schedule {
         config.weekly_queue_schedule = schedule;
@@ -294,7 +308,8 @@ pub async fn test_ytdlp_config(
 
 #[cfg(test)]
 mod tests {
-    use super::SaveEngineConfigRequest;
+    use super::{SaveEngineConfigRequest, resource_policy_for_save};
+    use fetchx_models::{DesktopProxyConfig, ProxyKind, ResourcePolicy, ResourceProfile};
 
     #[test]
     fn save_request_rejects_aria2_fields() {
@@ -311,5 +326,23 @@ mod tests {
             "yt_dlp": {"enabled": false}
         }"#;
         assert!(serde_json::from_str::<SaveEngineConfigRequest>(json).is_ok());
+    }
+
+    #[test]
+    fn saving_a_profile_preserves_the_proxy_configuration() {
+        let mut policy = ResourcePolicy::for_profile(ResourceProfile::Normal);
+        policy.desktop_proxy = Some(DesktopProxyConfig {
+            kind: Some(ProxyKind::Http),
+            host: "proxy.example".to_owned(),
+            port: 8080,
+            ..DesktopProxyConfig::default()
+        });
+
+        let saved = resource_policy_for_save(policy);
+        assert_eq!(saved.profile, ResourceProfile::Normal);
+        assert_eq!(
+            saved.desktop_proxy.and_then(|proxy| proxy.proxy_url()),
+            Some("http://proxy.example:8080".to_owned())
+        );
     }
 }

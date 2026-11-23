@@ -246,6 +246,13 @@ export interface EngineBandwidthLimitsDto {
   yt_dlp_bytes_per_second: number | null;
 }
 
+export interface DesktopProxyConfigDto {
+  kind: "http" | "https" | "socks5";
+  host: string;
+  port: number;
+  username: string | null;
+}
+
 export interface ResourcePolicyDto {
   profile: ResourceProfile;
   max_active_downloads: number;
@@ -254,6 +261,7 @@ export interface ResourcePolicyDto {
   global_bandwidth_bytes_per_second: number | null;
   per_download_bandwidth_bytes_per_second: number | null;
   engine_bandwidth_limits: EngineBandwidthLimitsDto;
+  desktop_proxy: DesktopProxyConfigDto | null;
   weekly_bandwidth_schedule?: WeeklyBandwidthScheduleDto;
 }
 

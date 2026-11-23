@@ -149,6 +149,11 @@ URLs without embedded credentials, follows at most ten HTTP(S) redirects without
 HTTPS downgrade, and uses connect/read timeouts. For single-stream transfers, response
 chunks stream into a sibling `.part` file. Progress checkpoints are persisted by
 byte/time thresholds through status- and timestamp-conditional repository updates.
+When an HTTP Basic or Digest challenge is encountered, desktop users can provide
+credentials for one retry; they remain in memory for that attempt and are not written
+to download records or resume sidecars. Desktop proxy settings apply to Direct HTTP
+and HLS engines after restart; authenticated proxies and proxying other engines are not
+currently supported.
 
 Resume metadata is stored beside the partial as `.part.meta`, including the original
 URL and a response validator (a strong ETag when available, otherwise Last-Modified).
