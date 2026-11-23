@@ -51,19 +51,10 @@ impl Default for FolderCategoriesConfig {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct CategoryRule {
     /// Folder name (relative = created inside download dir) or absolute path.
     pub folder: String,
     /// Comma-separated extensions without a leading dot.
     pub extensions: String,
-}
-
-impl Default for CategoryRule {
-    fn default() -> Self {
-        Self {
-            folder: String::new(),
-            extensions: String::new(),
-        }
-    }
 }
