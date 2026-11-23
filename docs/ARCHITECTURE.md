@@ -327,6 +327,11 @@ integration. The service enforces cancellation and output-size bounds and publis
 output without overwriting an existing destination. Broad video transcoding is not
 implemented.
 
+The low-level `media-pipeline` crate currently recognizes Y4M and exposes PCM/ADPCM
+decoder types, but those implementations are not available: factory/decode calls
+return explicit unsupported errors. They must not be treated as supported processing
+formats.
+
 Desktop media tools can remux one completed download or merge the first video stream
 from one completed media download with the first audio stream from another. The merge
 command validates both stored download records and paths before invoking the shared

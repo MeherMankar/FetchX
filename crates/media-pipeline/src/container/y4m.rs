@@ -27,10 +27,45 @@ impl Probe for Y4mProbe {
     }
 
     fn create_demuxer(_io: Box<dyn Io>) -> Result<Box<dyn Demuxer>> {
-        todo!()
+        Err(crate::Message::Container("Y4M demuxing is not implemented"))
     }
 
     fn create_muxer(_io: Box<dyn Io>) -> Result<Box<dyn Muxer>> {
-        todo!()
+        Err(crate::Message::Container("Y4M muxing is not implemented"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Hint, Io, Message, traits::Probe};
+
+    use super::Y4mProbe;
+
+    struct EmptyIo;
+
+    impl Io for EmptyIo {
+        fn read(&mut self, _buffer: &mut [u8]) -> crate::Result<usize> {
+            Ok(0)
+        }
+
+        fn write(&mut self, buffer: &[u8]) -> crate::Result<usize> {
+            Ok(buffer.len())
+        }
+    }
+
+    #[test]
+    fn unsupported_factories_return_errors_instead_of_panicking() {
+        assert!(matches!(
+            Y4mProbe::create_demuxer(Box::new(EmptyIo)),
+            Err(Message::Container("Y4M demuxing is not implemented"))
+        ));
+        assert!(matches!(
+            Y4mProbe::create_muxer(Box::new(EmptyIo)),
+            Err(Message::Container("Y4M muxing is not implemented"))
+        ));
+        assert!(Y4mProbe::muxer_matches(&Hint {
+            extension: Some("y4m".to_owned()),
+            ..Hint::default()
+        }));
     }
 }
