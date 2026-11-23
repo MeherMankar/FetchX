@@ -983,7 +983,7 @@ internal fun sanitizeFailureReason(reason: String): String {
     // Translate known error strings (matching messages from error.rs) to friendly text.
     when {
         lower.contains("the http request failed") ->
-            return "Could not connect to the server. Check your internet connection and try again."
+            return "The connection to the download server failed or was interrupted. Try again."
         lower.contains("the server rejected the request") || Regex("error [45]\\d\\d").containsMatchIn(lower) -> {
             val code = Regex("(\\d{3})").find(reason)?.value ?: ""
             return if (lower.contains("4")) {

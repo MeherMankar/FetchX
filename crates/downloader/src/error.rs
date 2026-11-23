@@ -163,7 +163,7 @@ impl DownloadEngineError {
             ),
             Self::Request(_) => (
                 DownloadErrorCode::Engine,
-                "Could not connect to the server. Check your internet connection and try again."
+                "The connection to the download server failed or was interrupted. Try again."
                     .to_owned(),
             ),
             Self::HttpStatus(status) if *status >= 400 && *status < 500 => (

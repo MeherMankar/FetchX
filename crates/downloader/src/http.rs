@@ -20,8 +20,8 @@ use fetchx_storage::DownloadRepository;
 use reqwest::{
     Client, Response, StatusCode, Url,
     header::{
-        ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE, LAST_MODIFIED, LOCATION,
-        RANGE, RETRY_AFTER,
+        ACCEPT_RANGES, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE,
+        LAST_MODIFIED, LOCATION, RANGE, RETRY_AFTER,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -514,7 +514,58 @@ where
         let result = if let Some(source_set) = sources {
             Box::pin(self.download_multi_source(id, source_set, &mut control)).await
         } else {
-            Box::pin(self.download_prepared(id, already_downloading, None, &mut control)).await
+            let mut result =
+                Box::pin(self.download_prepared(id, already_downloading, None, &mut control)).await;
+            let retry_started_at = Instant::now();
+            let mut failed_attempts = 0_u8;
+
+            while let Some(error) = result.as_ref().err() {
+                if !is_retryable_body_failure(error) {
+                    break;
+                }
+                match self.can_resume_after_body_failure(id).await {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        result = Err(error);
+                        break;
+                    }
+                }
+
+                failed_attempts = failed_attempts.saturating_add(1);
+                let Some(delay) =
+                    RetryPolicy::HTTP.delay(failed_attempts, None, retry_started_at.elapsed())
+                else {
+                    Self::record_retry_diagnostic(
+                        id,
+                        "retry_exhausted",
+                        "HTTP_INTERRUPTED_BODY",
+                        DiagnosticLevel::Error,
+                    );
+                    break;
+                };
+                Self::record_retry_diagnostic(
+                    id,
+                    "retry_started",
+                    "HTTP_INTERRUPTED_BODY",
+                    DiagnosticLevel::Warn,
+                );
+                warn!(
+                    download_id = %id,
+                    engine = "direct_http",
+                    attempt = failed_attempts.saturating_add(1),
+                    max_attempts = RetryPolicy::HTTP.max_attempts,
+                    delay_ms = delay.as_millis(),
+                    "retrying interrupted HTTP response body"
+                );
+
+                if let Err(error) = wait_for_retry(delay, &mut control).await {
+                    result = Err(error);
+                    break;
+                }
+                result = Box::pin(self.download_prepared(id, true, None, &mut control)).await;
+            }
+            result
         };
         match result {
             Ok(item) => {
@@ -955,6 +1006,37 @@ where
         Ok(())
     }
 
+    async fn can_resume_after_body_failure(
+        &self,
+        id: DownloadId,
+    ) -> Result<bool, DownloadEngineError> {
+        let item = self
+            .repository
+            .get(id)
+            .await?
+            .ok_or(DownloadEngineError::NotFound(id))?;
+        let temporary_path = temporary_path(item.destination());
+        let Some(partial_size) = inspect_partial_file(&temporary_path).await? else {
+            return Ok(false);
+        };
+        if partial_size == 0 {
+            return Ok(false);
+        }
+
+        let Some(identity) = load_resource_identity(&temporary_path).await? else {
+            return Ok(false);
+        };
+        let expected_total_size = identity.total_size.or(item.progress().total_bytes());
+        let url = parse_http_url_with_private_policy(
+            item.source().url(),
+            self.allow_loopback_benchmark_target(),
+        )?;
+        let incomplete = expected_total_size.is_none_or(|total_size| partial_size < total_size);
+        Ok(incomplete
+            && (identity.validator.is_some()
+                || (identity.url == url.as_str() && expected_total_size.is_some())))
+    }
+
     async fn download_prepared(
         &self,
         id: DownloadId,
@@ -996,6 +1078,10 @@ where
         let partial_exists = partial_size.is_some();
         let existing_size = partial_size.unwrap_or(0);
         let stored_identity = load_resource_identity(&temporary_path).await?;
+        let stored_total_size = stored_identity
+            .as_ref()
+            .and_then(|identity| identity.total_size)
+            .or(item.progress().total_bytes());
         let resume_validator = stored_identity
             .as_ref()
             .and_then(|identity| identity.validator.clone());
@@ -1009,8 +1095,14 @@ where
             self.allow_loopback_benchmark_target(),
         )?;
         let extra_headers = context_headers_for_source(&stored_headers, &url, &primary_url);
-        let range_start =
-            (existing_size > 0 && resume_validator.is_some()).then_some(existing_size);
+        let can_resume_without_validator = stored_identity.as_ref().is_some_and(|identity| {
+            identity.validator.is_none()
+                && identity.url == url.as_str()
+                && stored_total_size.is_some_and(|total_size| existing_size < total_size)
+        });
+        let range_start = (existing_size > 0
+            && (resume_validator.is_some() || can_resume_without_validator))
+            .then_some(existing_size);
         let mut expected_updated_at = item.updated_at();
         let initial_progress = DownloadProgress::new(existing_size, None, None, None)?;
         item.set_progress_at(initial_progress, next_timestamp(item.updated_at())?)?;
@@ -1054,16 +1146,20 @@ where
             let segment_count =
                 segmented_layout(&temporary_path, self.config.segment_count, total_size).await?;
             let validator = initial_validator.clone().unwrap_or_default();
-            let can_resume_segments = initial_validator
-                .as_ref()
-                .filter(|validator| !validator.is_empty())
-                .is_some_and(|validator| {
-                    stored_identity.as_ref().is_some_and(|identity| {
+            let can_resume_segments = stored_identity.as_ref().is_some_and(|identity| {
+                let same_layout = identity.total_size == Some(total_size)
+                    && identity.segment_count == Some(segment_count);
+                let validator_matches = initial_validator
+                    .as_ref()
+                    .filter(|validator| !validator.is_empty())
+                    .is_some_and(|validator| {
                         identity.validator.as_deref() == Some(validator.as_str())
-                            && identity.total_size == Some(total_size)
-                            && identity.segment_count == Some(segment_count)
-                    })
-                });
+                    });
+                let same_unvalidated_source = initial_validator.is_none()
+                    && identity.validator.is_none()
+                    && identity.url == url.as_str();
+                same_layout && (validator_matches || same_unvalidated_source)
+            });
             if !can_resume_segments {
                 cleanup_segment_files(&temporary_path, segment_count, total_size).await?;
             }
@@ -1146,6 +1242,10 @@ where
             if Some(range.start) != range_start
                 || range.end < range.start
                 || range.total.is_some_and(|total| range.end >= total)
+                || response
+                    .headers()
+                    .get(CONTENT_ENCODING)
+                    .is_some_and(|encoding| !encoding.as_bytes().eq_ignore_ascii_case(b"identity"))
             {
                 return Err(DownloadEngineError::RangeMismatch);
             }
@@ -1180,6 +1280,14 @@ where
         if append && current_validator.as_deref() != resume_validator.as_deref() {
             return Err(DownloadEngineError::RangeMismatch);
         }
+        let total_bytes = if append {
+            partial_content_range.and_then(|range| range.total)
+        } else {
+            parse_content_length(&response)?
+        };
+        if append && resume_validator.is_none() && stored_total_size != total_bytes {
+            return Err(DownloadEngineError::RangeMismatch);
+        }
         save_resource_identity(
             &temporary_path,
             &ResourceIdentity {
@@ -1187,7 +1295,7 @@ where
                 url: url.to_string(),
                 validator: current_validator,
                 finalizing: false,
-                total_size: None,
+                total_size: total_bytes,
                 segment_count: None,
                 extra_headers: extra_headers.clone(),
                 multi_source_sha256: None,
@@ -1200,11 +1308,6 @@ where
             reset_partial_file(&temporary_path, partial_exists).await?;
         }
 
-        let total_bytes = if append {
-            partial_content_range.and_then(|range| range.total)
-        } else {
-            parse_content_length(&response)?
-        };
         let file =
             open_partial_file(&temporary_path, existing_size, append, partial_exists).await?;
         let progress_offset = if append { existing_size } else { 0 };
@@ -1501,7 +1604,9 @@ where
             let allow_loopback_fixture =
                 redirect_count == 0 && self.allow_loopback_benchmark_target();
             let client = self.client_for_url(&url, allow_loopback_fixture).await?;
-            let mut request = client.get(url.clone());
+            let mut request = client
+                .get(url.clone())
+                .header(reqwest::header::ACCEPT_ENCODING, "identity");
             if let Some(start) = range_start {
                 let end = range_end.map_or_else(String::new, |end| end.to_string());
                 request = request.header(RANGE, format!("bytes={start}-{end}"));
@@ -2844,6 +2949,13 @@ pub(crate) fn response_validator(response: &Response) -> Option<String> {
                 .and_then(|value| value.to_str().ok())
         })
         .map(str::to_owned)
+}
+
+fn is_retryable_body_failure(error: &DownloadEngineError) -> bool {
+    matches!(
+        error,
+        DownloadEngineError::Request(source) if source.is_body() || source.is_decode()
+    ) || matches!(error, DownloadEngineError::IncompleteResponse { .. })
 }
 
 fn http_multi_source_set_path(destination: &Path) -> PathBuf {

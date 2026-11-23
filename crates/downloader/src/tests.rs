@@ -717,10 +717,14 @@ async fn write_resume_identity(
 async fn write_resume_identity_without_validator(
     destination: &Path,
     url: &str,
+    total_size: Option<u64>,
+    segment_count: Option<usize>,
 ) -> Result<(), Box<dyn Error>> {
     let metadata = serde_json::to_vec(&serde_json::json!({
         "url": url,
         "validator": null,
+        "total_size": total_size,
+        "segment_count": segment_count,
     }))?;
     tokio::fs::write(
         PathBuf::from(format!("{}.part.meta", destination.display())),
@@ -1782,23 +1786,27 @@ async fn failed_segment_does_not_publish_any_destination() -> Result<(), Box<dyn
 }
 
 #[tokio::test]
-async fn resumed_segments_without_a_server_validator_are_restarted() -> Result<(), Box<dyn Error>> {
+async fn resumed_segments_without_a_validator_continue_for_the_same_url()
+-> Result<(), Box<dyn Error>> {
     const TOTAL: usize = 256 * 1024;
+    const SEGMENT_SIZE: usize = TOTAL / 4;
     let body: Vec<u8> = (0..TOTAL).map(|index| (index % 239) as u8).collect();
     let (url, server) =
-        start_segment_server(body.clone(), 4, SegmentServerMode::NoValidator, 5, false).await?;
+        start_segment_server(body.clone(), 4, SegmentServerMode::NoValidator, 3, false).await?;
     let (database, engine, directory) = setup_engine(segmented_config(1024)).await?;
-    let destination = directory.destination("unverified-segment-resume.bin");
+    let destination = directory.destination("unvalidated-segment-resume.bin");
     let temporary_path = PathBuf::from(format!("{}.part", destination.display()));
 
-    for index in 0..4 {
+    for (index, length) in [(0, SEGMENT_SIZE), (1, SEGMENT_SIZE / 2), (3, SEGMENT_SIZE)] {
         let segment_path = PathBuf::from(format!(
             "{}.segments-4-{TOTAL}-{index}",
             temporary_path.display()
         ));
-        tokio::fs::write(segment_path, vec![0x11; TOTAL / 4]).await?;
+        let start = index * SEGMENT_SIZE;
+        tokio::fs::write(segment_path, &body[start..start + length]).await?;
     }
-    write_resume_identity_without_validator(&destination, &url).await?;
+    write_resume_identity_without_validator(&destination, &url, Some(TOTAL as u64), Some(4))
+        .await?;
 
     let source_item = make_item(&url, &destination)?;
     let item = DownloadItem::from_parts(
@@ -1825,12 +1833,7 @@ async fn resumed_segments_without_a_server_validator_are_restarted() -> Result<(
         .filter_map(|request| range_header(request))
         .collect::<Vec<_>>();
     ranges.sort_unstable();
-    let mut expected_ranges = vec![
-        "bytes=0-65535",
-        "bytes=65536-131071",
-        "bytes=131072-196607",
-        "bytes=196608-262143",
-    ];
+    let mut expected_ranges = vec!["bytes=98304-131071", "bytes=131072-196607"];
     expected_ranges.sort_unstable();
 
     assert_eq!(ranges, expected_ranges);
@@ -2487,6 +2490,83 @@ async fn changed_etag_prevents_appending_stale_partial_bytes() -> Result<(), Box
 }
 
 #[tokio::test]
+async fn changed_total_prevents_appending_an_unvalidated_partial() -> Result<(), Box<dyn Error>> {
+    let response = scripted_response(
+        206,
+        &[
+            ("Content-Range", "bytes 4-7/9"),
+            ("Content-Length", "4"),
+            ("Accept-Ranges", "bytes"),
+        ],
+        b"new!",
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("changed-total.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, b"old!").await?;
+    write_resume_identity_without_validator(&destination, &url, Some(8), Some(0)).await?;
+    let item = make_item(&url, &destination)?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    assert!(matches!(
+        engine.download(id, receiver).await,
+        Err(DownloadEngineError::RangeMismatch)
+    ));
+    let requests = server.await?;
+    assert_eq!(range_header(&requests[0]), Some("bytes=4-"));
+    assert_eq!(tokio::fs::read(partial_path).await?, b"old!");
+    assert!(!destination.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_partial_uses_persisted_total_when_sidecar_has_none() -> Result<(), Box<dyn Error>> {
+    let response = scripted_response(
+        206,
+        &[
+            ("Content-Range", "bytes 4-7/8"),
+            ("Content-Length", "4"),
+            ("Accept-Ranges", "bytes"),
+        ],
+        b"next",
+    );
+    let (url, server) = start_scripted_server(vec![response]).await?;
+    let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
+    let destination = directory.destination("legacy-partial.bin");
+    let partial_path = PathBuf::from(format!("{}.part", destination.display()));
+    tokio::fs::write(&partial_path, b"old!").await?;
+    write_resume_identity_without_validator(&destination, &url, None, None).await?;
+
+    let source_item = make_item(&url, &destination)?;
+    let item = DownloadItem::from_parts(
+        source_item.id(),
+        source_item.source().clone(),
+        source_item.filename().clone(),
+        source_item.destination().to_path_buf(),
+        DownloadStatus::Cancelled,
+        source_item.priority(),
+        DownloadProgress::new(4, Some(8), None, None)?,
+        source_item.created_at(),
+        Timestamp::from_unix_millis(2),
+        None,
+    )?;
+    let id = item.id();
+    database.downloads().create(&item).await?;
+    let (_sender, receiver) = watch::channel(false);
+
+    let completed = engine.download(id, receiver).await?;
+    let requests = server.await?;
+    assert_eq!(range_header(&requests[0]), Some("bytes=4-"));
+    assert!(!requests[0].to_ascii_lowercase().contains("if-range:"));
+    assert_eq!(tokio::fs::read(destination).await?, b"old!next");
+    assert_eq!(completed.status(), DownloadStatus::Completed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn refreshed_url_resumes_a_partial_with_the_saved_validator() -> Result<(), Box<dyn Error>> {
     let body: Vec<u8> = (0..100).collect();
     let refreshed_url_body = body[76..].to_vec();
@@ -3076,50 +3156,42 @@ async fn http_failures_persist_failed_state_and_safe_error() -> Result<(), Box<d
 }
 
 #[tokio::test]
-async fn truncated_response_fails_and_preserves_the_partial_file() -> Result<(), Box<dyn Error>> {
+async fn truncated_response_retries_from_the_partial_without_a_validator()
+-> Result<(), Box<dyn Error>> {
     let (database, engine, directory) = setup_engine(HttpEngineConfig::default()).await?;
-    let response = scripted_response(200, &[("Content-Length", "64")], b"partial");
-    let (url, server) = start_scripted_server(vec![response]).await?;
+    let body: Vec<u8> = (0..64).collect();
+    let responses = vec![
+        scripted_response(
+            200,
+            &[("Content-Length", "64"), ("Accept-Ranges", "bytes")],
+            &body[..7],
+        ),
+        scripted_response(
+            206,
+            &[
+                ("Content-Length", "57"),
+                ("Content-Range", "bytes 7-63/64"),
+                ("Accept-Ranges", "bytes"),
+            ],
+            &body[7..],
+        ),
+    ];
+    let (url, server) = start_scripted_server(responses).await?;
     let destination = directory.destination("truncated.bin");
     let item = make_item(&url, &destination)?;
     let id = item.id();
     database.downloads().create(&item).await?;
     let (_sender, receiver) = watch::channel(false);
 
-    let error = engine
-        .download(id, receiver)
-        .await
-        .expect_err("truncated response must fail without an automatic retry");
-    match &error {
-        DownloadEngineError::Request(request_error) => {
-            assert!(
-                request_error.is_decode(),
-                "truncated response should be classified as a decode failure"
-            );
-            assert!(
-                !crate::retry::RetryPolicy::is_transient_request(request_error),
-                "decode failures are intentionally excluded from automatic request retries"
-            );
-        }
-        other => panic!("unexpected truncation error: {other:?}"),
-    }
+    let completed = engine.download(id, receiver).await?;
     let requests = server.await?;
-    assert_eq!(
-        requests.len(),
-        1,
-        "body interruption is not automatically retried"
-    );
-    let persisted = database
-        .downloads()
-        .get(id)
-        .await?
-        .ok_or("failed download not found")?;
-    assert_eq!(persisted.status(), DownloadStatus::Failed);
-    assert!(persisted.progress().downloaded_bytes() <= 7);
-    assert!(!destination.exists());
-    let partial = PathBuf::from(format!("{}.part", destination.display()));
-    assert!(partial.exists());
-    assert_eq!(tokio::fs::metadata(partial).await?.len(), 7);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(range_header(&requests[0]), None);
+    assert_eq!(range_header(&requests[1]), Some("bytes=7-"));
+    assert!(!requests[1].to_ascii_lowercase().contains("if-range:"));
+    assert_eq!(tokio::fs::read(destination).await?, body);
+    assert_eq!(completed.progress().downloaded_bytes(), 64);
+    assert_eq!(completed.status(), DownloadStatus::Completed);
     Ok(())
 }
 

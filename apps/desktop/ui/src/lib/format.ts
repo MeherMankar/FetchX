@@ -74,7 +74,7 @@ export function friendlyErrorMessage(raw: string): string {
   const MAPPINGS: Array<[string | RegExp, Replacement]> = [
     [
       "The HTTP request failed.",
-      "Could not connect to the server. Check your internet connection and try again.",
+      "The connection to the download server failed or was interrupted. Try again.",
     ],
     [
       /The HTTP server returned status 4\d\d/,

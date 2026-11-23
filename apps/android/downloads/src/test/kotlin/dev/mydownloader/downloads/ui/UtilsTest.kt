@@ -62,6 +62,10 @@ class UtilsTest {
     @Test
     fun sanitize_network_error_returns_friendly_network_message() {
         assertEquals(
+            "The connection to the download server failed or was interrupted. Try again.",
+            sanitizeFailureReason("The HTTP request failed.")
+        )
+        assertEquals(
             "Network error. Check your connection and retry.",
             sanitizeFailureReason("network connection refused")
         )

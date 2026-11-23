@@ -6,7 +6,7 @@ use std::{
 
 use reqwest::{
     Client, StatusCode, Url,
-    header::{CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE, RANGE, RETRY_AFTER},
+    header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE, RANGE, RETRY_AFTER},
 };
 use thiserror::Error;
 use tokio::{
@@ -218,7 +218,10 @@ pub(super) async fn download_segment(
             .checked_add(segment.current)
             .ok_or_else(|| segment_error(segment))?;
         let range_value = format!("bytes={range_start}-{}", segment.end);
-        let mut request_builder = client.get(requested_url.clone()).header(RANGE, range_value);
+        let mut request_builder = client
+            .get(requested_url.clone())
+            .header(RANGE, range_value)
+            .header(reqwest::header::ACCEPT_ENCODING, "identity");
         if !validator.is_empty() {
             request_builder = request_builder.header(IF_RANGE, validator);
         }
@@ -308,6 +311,13 @@ pub(super) async fn download_segment(
             return Err(segment_error(segment));
         }
         if !same_http_target(response.url(), requested_url) {
+            return Ok(SegmentResult::Fallback);
+        }
+        if response
+            .headers()
+            .get(CONTENT_ENCODING)
+            .is_some_and(|encoding| !encoding.as_bytes().eq_ignore_ascii_case(b"identity"))
+        {
             return Ok(SegmentResult::Fallback);
         }
         if let Some(resp_val) = response_validator(&response)

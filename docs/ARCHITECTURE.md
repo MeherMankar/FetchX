@@ -157,29 +157,36 @@ currently supported.
 
 Resume metadata is stored beside the partial as `.part.meta`, including the original
 URL and a response validator (a strong ETag when available, otherwise Last-Modified).
-An existing non-empty `.part` is resumed only when that metadata matches the requested
-URL and includes a validator; the engine then sends `Range: bytes=N-` and `If-Range`,
-where `N` is the partial file's actual size, not the database progress value. Without
-matching resume metadata, the engine starts a fresh transfer rather than appending
-unverified bytes.
+An existing non-empty `.part` is resumed with `Range: bytes=N-` and `If-Range` when a
+saved validator is available, where `N` is the partial file's actual size, not the
+database progress value. If the server supplies no validator, resume is allowed only
+for the exact saved URL and a previously known total size; the response must still
+match the requested range and total size. This is best-effort identity checking: a
+server that changes content in place without changing its URL or size cannot be detected.
+Without matching resume metadata, the engine starts a fresh transfer rather than
+appending unverified bytes.
 
 The engine appends only after a `206 Partial Content` response has a valid
 `Content-Range` whose start matches `N`, whose end is not before the start, and whose
-known total is greater than the end. A `200 OK` response to a Range request is treated
-as Range unsupported: the partial is truncated and the response is downloaded from
-zero. For `416 Range Not Satisfiable`, an incomplete local file fails without being
-modified; when the local size is at least the reported remote total, the engine makes
-one ordinary full request and restarts rather than assuming the partial is complete.
-Known totals and received range lengths are checked before publication.
+known total is greater than the end. Range requests ask for identity encoding and
+encoded partial responses are rejected so byte offsets remain aligned. A `200 OK`
+response to a Range request is treated as Range unsupported: the partial is truncated
+and the response is downloaded from zero. For `416 Range Not Satisfiable`, an
+incomplete local file fails without being modified; when the local size is at least the
+reported remote total, the engine makes one ordinary full request and restarts rather
+than assuming the partial is complete. Known totals and received range lengths are
+checked before publication.
 
 Cancellation and transfer failures preserve the `.part` file for a later invocation.
 Queued, failed, cancelled, and paused downloads can be started again through the
 existing state machine; failed/cancelled items transition back to preparing. Progress
 is reconciled from the actual partial-file size before requesting bytes, and resumed
 progress counts the existing prefix only once. A resumed response is appended only
-when its range starts at the local size, its validator still matches, and its effective
-URL has not changed through a redirect. A `200 OK` to a range request restarts from
-zero; an incomplete `416 Range Not Satisfiable` fails without modifying the partial.
+when its range starts at the local size, its validator still matches (when present),
+and its effective URL has not changed through a redirect. A `200 OK` to a range
+request restarts from zero; an incomplete `416 Range Not Satisfiable` fails without
+modifying the partial. Interrupted response bodies are automatically retried when the
+saved partial can be resumed safely.
 The sidecar also records finalization state and expected size so a later invocation can
 recover a complete temporary file after a crash during publication. On service startup,
 interrupted non-Aria2 downloads are re-queued by default; when automatic resume is
@@ -208,12 +215,13 @@ controller, while exhausted failures remain visible as download errors.
 
 Segments write to separate sibling temporary files identified by segment count, total
 size, and index. Existing segment files are resumed using their original byte ranges
-only when the saved URL and response validator match. Global progress is the sum of
-actual local segment-file lengths and is periodically persisted; per-segment state and
-adaptive telemetry are not stored in SQLite. After all ranges complete, every segment's
-exact length and the contiguous assembly size are checked. Segments are copied in index
-order into `.part`, flushed and synced, then published with the same no-overwrite
-hard-link operation. Completed segment temporary files are removed before publication.
+when the saved validator matches, or when no validator is available and the saved URL,
+total size, and layout still match. Global progress is the sum of actual local
+segment-file lengths and is periodically persisted; per-segment state and adaptive
+telemetry are not stored in SQLite. After all ranges complete, every segment's exact
+length and the contiguous assembly size are checked. Segments are copied in index order
+into `.part`, flushed and synced, then published with the same no-overwrite hard-link
+operation. Completed segment temporary files are removed before publication.
 
 `AdaptiveConfig` defaults to minimum/initial/maximum concurrency of 1/4/8 and validates
 that all bounds, thresholds, and sampling intervals are usable. The hard maximum is
@@ -231,11 +239,12 @@ HTTP range semantics. After an unproductive probe or throughput regression, anot
 upward probe is held until measured throughput improves by the configured threshold.
 The measurement window must be at least 10 ms; zero-byte windows are ignored.
 
-Resume and segment reuse rely on the server's strong ETag or Last-Modified validator;
-they cannot prove representation identity if a server reuses a validator for changed
-content. Startup-wide reconciliation is not implemented. Transient connection errors
-and HTTP 408, 425, 429, and 5xx responses are retried within a four-attempt, 30-second
-budget; a valid `Retry-After` value is honored when it fits that budget. Adaptive
+Resume and segment reuse cannot prove representation identity if a server reuses a
+validator, or if it changes content without a validator while keeping the same URL and
+size. Startup-wide reconciliation is not implemented. Transient connection errors,
+interrupted response bodies, and HTTP 408, 425, 429, and 5xx responses are retried
+within a four-attempt, 30-second budget; a valid `Retry-After` value is honored when it
+fits that budget. Adaptive
 concurrency cannot overcome server-side or network bandwidth limits, and the engine
 does not attempt to bypass server throttling or access controls. Downloads remain
 single-source, with no dynamic segment sizing. Filesystem publication and database
