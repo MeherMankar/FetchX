@@ -1,4 +1,4 @@
-import { type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type { SortKey } from "../App";
 
@@ -47,6 +47,39 @@ export function Toolbar({
   theme,
   onToggleTheme,
 }: ToolbarProps) {
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const actionsButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!actionsOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !actionsRef.current?.contains(event.target)) {
+        setActionsOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActionsOpen(false);
+        actionsButtonRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [actionsOpen]);
+
+  const runAction = (action: () => void) => {
+    setActionsOpen(false);
+    actionsButtonRef.current?.focus();
+    action();
+  };
+
   return (
     <header className="toolbar">
       <div className="toolbar-left">
@@ -70,111 +103,103 @@ export function Toolbar({
           type="search"
           placeholder="Search"
           value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
+          onChange={(event) => onSearchChange(event.target.value)}
           aria-label="Search downloads"
         />
 
-        <label className="visually-hidden" htmlFor="sort-select">Sort by</label>
-        <select
-          id="sort-select"
-          className="sort-select"
-          value={sort}
-          onChange={(e) => onSortChange(e.target.value as SortKey)}
-          aria-label="Sort downloads"
-        >
-          <option value="newest">Newest first</option>
-          <option value="oldest">Oldest first</option>
-          <option value="filename">Filename A–Z</option>
-          <option value="progress">Progress</option>
-          <option value="size">Size</option>
-          <option value="speed">Speed</option>
-          <option value="priority">Priority</option>
-          <option value="queue">Queue position</option>
-        </select>
-
-        <button
-          className="button button-secondary"
-          onClick={onToggleQueueDispatch}
-          aria-label={dispatchManuallyPaused ? "Resume queued downloads" : "Hold queued downloads"}
-          title={dispatchManuallyPaused ? "Resume queue" : "Hold queue"}
-        >
-          {dispatchManuallyPaused ? "Resume queue" : "Hold queue"}
-        </button>
-
-        {activeCount > 0 && (
-          <button
-            className="button button-secondary"
-            onClick={onPauseAll}
-            aria-label="Pause all active downloads"
-          >
-            Pause all
-          </button>
-        )}
-        {pausedCount > 0 && (
-          <button
-            className="button button-secondary"
-            onClick={onResumeAll}
-            aria-label="Resume all paused downloads"
-          >
-            Resume all
-          </button>
-        )}
-
-        <button
-          className="button button-secondary"
-          onClick={onRefresh}
-          aria-label="Refresh downloads list"
-          title="Refresh"
-        >
-          Refresh
-        </button>
-
-        <button
-          className="button button-secondary"
-          onClick={onBatchClick}
-          aria-label="Batch add downloads"
-        >
-          Batch add
-        </button>
-
         <button
           className="button button-primary"
+          type="button"
           onClick={onAddClick}
           aria-label="Add new download"
         >
           Add download
         </button>
 
-        <button
-          className="button button-secondary theme-toggle-button"
-          onClick={onToggleTheme}
-          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-          title={theme === "dark" ? "Light mode" : "Dark mode"}
-        >
-          <svg
-            className="theme-toggle-icon"
-            viewBox="0 0 16 16"
-            aria-hidden="true"
+        <div className="toolbar-menu" ref={actionsRef}>
+          <button
+            ref={actionsButtonRef}
+            className="button button-secondary toolbar-menu-trigger"
+            type="button"
+            aria-label="More actions"
+            aria-expanded={actionsOpen}
+            aria-controls="toolbar-actions-menu"
+            title="More actions"
+            onClick={() => setActionsOpen((open) => !open)}
           >
-            {theme === "dark" ? (
-              <>
-                <circle cx="8" cy="8" r="3" />
-                <path d="M8 1.5v1.25M8 13.25v1.25M1.5 8h1.25M13.25 8h1.25M3.4 3.4l.9.9m7.4 7.4.9.9m0-9.2-.9.9m-7.4 7.4-.9.9" />
-              </>
-            ) : (
-              <path d="M13.25 9.5A5.5 5.5 0 0 1 6.5 2.75 5.5 5.5 0 1 0 13.25 9.5Z" />
-            )}
-          </svg>
-        </button>
-      </div>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="3" cy="8" r="1" />
+              <circle cx="8" cy="8" r="1" />
+              <circle cx="13" cy="8" r="1" />
+            </svg>
+          </button>
 
-      {appVersion && (
-        <span className="toolbar-version" aria-label={`App version ${appVersion}`}>
-          {appVersion.startsWith("v") || appVersion.startsWith("alpha") || appVersion.startsWith("beta")
-            ? appVersion
-            : `v${appVersion}`}
-        </span>
-      )}
+          <div
+            className="toolbar-menu-popover"
+            id="toolbar-actions-menu"
+            role="group"
+            aria-label="More download actions"
+            hidden={!actionsOpen}
+          >
+            <label className="toolbar-menu-label" htmlFor="sort-select">Sort by</label>
+            <select
+              id="sort-select"
+              className="sort-select toolbar-menu-sort"
+              value={sort}
+              onChange={(event) => {
+                onSortChange(event.target.value as SortKey);
+                setActionsOpen(false);
+                actionsButtonRef.current?.focus();
+              }}
+              aria-label="Sort downloads"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="filename">Filename A–Z</option>
+              <option value="progress">Progress</option>
+              <option value="size">Size</option>
+              <option value="speed">Speed</option>
+              <option value="priority">Priority</option>
+              <option value="queue">Queue position</option>
+            </select>
+
+            <div className="toolbar-menu-divider" />
+            <button className="toolbar-menu-item" type="button" onClick={() => runAction(onBatchClick)}>
+              Batch add downloads
+            </button>
+            {activeCount > 0 && (
+              <button className="toolbar-menu-item" type="button" onClick={() => runAction(onPauseAll)}>
+                Pause all active downloads
+              </button>
+            )}
+            {pausedCount > 0 && (
+              <button className="toolbar-menu-item" type="button" onClick={() => runAction(onResumeAll)}>
+                Resume all paused downloads
+              </button>
+            )}
+            <button
+              className="toolbar-menu-item"
+              type="button"
+              onClick={() => runAction(onToggleQueueDispatch)}
+            >
+              {dispatchManuallyPaused ? "Resume queued downloads" : "Hold queued downloads"}
+            </button>
+            <button className="toolbar-menu-item" type="button" onClick={() => runAction(onRefresh)}>
+              Refresh downloads list
+            </button>
+            <button className="toolbar-menu-item" type="button" onClick={() => runAction(onToggleTheme)}>
+              {theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            </button>
+            {appVersion && (
+              <span className="toolbar-version" aria-label={`App version ${appVersion}`}>
+                {appVersion.startsWith("v") || appVersion.startsWith("alpha") || appVersion.startsWith("beta")
+                  ? appVersion
+                  : `v${appVersion}`}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
     </header>
   );
 }
