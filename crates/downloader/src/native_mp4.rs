@@ -1893,12 +1893,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_native_merge_when_stream_durations_differ() -> Result<(), Box<dyn Error>> {
+    fn rejects_native_merge_when_stream_durations_exceed_tolerance() -> Result<(), Box<dyn Error>> {
         let directory = tempdir()?;
         let video = directory.path().join("video.mp4");
         let audio = directory.path().join("audio.mp4");
         let output = directory.path().join("merged.mp4");
-        make_mp4(&video, video_config(), 1000)?;
+        make_mp4(&video, video_config(), 11_000)?;
         make_mp4(&audio, audio_config(), 500)?;
 
         assert!(matches!(

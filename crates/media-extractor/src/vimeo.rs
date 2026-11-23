@@ -502,17 +502,17 @@ mod tests {
             "video": {
                 "title": "Public Vimeo",
                 "duration": 12,
-                "thumbs": {"base": "https://i.vimeocdn.com/video/poster.jpg"},
+                "thumbs": {"base": "https://1.1.1.1/video/poster.jpg"},
                 "files": {
                     "progressive": [{
-                        "url": "https://vod-progressive.akamaized.net/video.mp4",
+                        "url": "https://1.1.1.1/video.mp4",
                         "quality": "720p",
                         "width": 1280,
                         "height": 720,
                         "fps": 30
                     }],
-                    "hls": {"cdns": {"ak": {"url": "https://vod-adaptive.akamaized.net/master.m3u8"}}},
-                    "dash": {"cdns": {"ak": {"url": "https://vod-adaptive.akamaized.net/master.mpd"}}}
+                    "hls": {"cdns": {"ak": {"url": "https://1.1.1.1/master.m3u8"}}},
+                    "dash": {"cdns": {"ak": {"url": "https://1.1.1.1/master.mpd"}}}
                 }
             }
         });

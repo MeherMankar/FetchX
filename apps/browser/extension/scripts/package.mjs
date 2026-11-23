@@ -78,8 +78,13 @@ let offset = 0;
 const chunks = [];
 
 for (const filePath of allFiles) {
-  const data     = readFileSync(filePath);
   const name     = posix.normalize(relative(srcDir, filePath).replace(/\\/g, "/"));
+  let data       = readFileSync(filePath);
+  if (target === "chromium" && name === "manifest.json") {
+    const packagedManifest = JSON.parse(data.toString("utf8"));
+    delete packagedManifest.key;
+    data = Buffer.from(`${JSON.stringify(packagedManifest, null, 2)}\n`);
+  }
   const nameBytes = Buffer.from(name, "utf8");
   const compressed = deflateRawSync(data, { level: 9 });
   const crc      = crc32(data);

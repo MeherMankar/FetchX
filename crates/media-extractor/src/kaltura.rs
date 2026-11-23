@@ -574,8 +574,8 @@ mod tests {
         let metadata = json!({
             "name": "Public talk",
             "duration": 120,
-            "thumbnailUrl": "https://example.com/thumbnail.jpg",
-            "dataUrl": "https://example.com/entry/serveFlavor"
+            "thumbnailUrl": "https://1.1.1.1/thumbnail.jpg",
+            "dataUrl": "https://1.1.1.1/entry/serveFlavor"
         });
         let assets = vec![
             json!({"status":2,"id":"1234","fileExt":"mp4","bitrate":800,"height":720,"size":1000}),
@@ -596,14 +596,14 @@ mod tests {
         assert_eq!(info.formats.len(), 1);
         assert_eq!(
             info.formats[0].url,
-            "https://example.com/entry/serveFlavor/flavorId/1234"
+            "https://1.1.1.1/entry/serveFlavor/flavorId/1234"
         );
         assert!(
             build_media_info(
                 "https://inc.com/a/b.html",
                 "title",
                 "1_abcd1234",
-                json!({"name":"Restricted", "dataUrl":"https://example.com/playManifest/x"}),
+                json!({"name":"Restricted", "dataUrl":"https://1.1.1.1/playManifest/x"}),
                 vec![]
             )
             .await
