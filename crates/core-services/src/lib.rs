@@ -3027,18 +3027,13 @@ impl EngineRuntime {
             repository.clone(),
             Arc::clone(&direct_http),
         ));
-        let metalink_avail = if config.metalink.enabled {
-            info!(
-                engine = "metalink",
-                version = "orchestrator",
-                "engine ready"
-            );
-            EngineAvailability::Available {
-                version: "orchestrator".to_owned(),
-            }
-        } else {
-            info!(engine = "metalink", "engine disabled");
-            EngineAvailability::Disabled
+        info!(
+            engine = "metalink",
+            version = "orchestrator",
+            "engine ready"
+        );
+        let metalink_avail = EngineAvailability::Available {
+            version: "orchestrator".to_owned(),
         };
 
         let mut dispatcher = EngineDispatcher::new(repository, direct_http)

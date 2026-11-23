@@ -14,7 +14,6 @@ import {
   resetEngineConfig,
   saveEngineConfig,
   setFolderCategoriesConfig,
-  setNotificationConfig,
   setPostDownloadAction,
 } from "../api/engine";
 import type {
@@ -36,73 +35,6 @@ import { errorMessage } from "../lib/format";
 // ---------------------------------------------------------------------------
 // Status indicator
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// OS notifications section
-// ---------------------------------------------------------------------------
-
-function NotificationsSection({
-  cfg,
-  onSaved,
-  onError,
-}: {
-  cfg: EngineConfigDto;
-  onSaved: (updated: EngineConfigDto) => void;
-  onError: (message: string) => void;
-}) {
-  const [enabled, setEnabled] = useState(cfg.os_notifications_enabled);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => setEnabled(cfg.os_notifications_enabled), [cfg.os_notifications_enabled]);
-
-  const save = async (next: boolean) => {
-    setEnabled(next);
-    setBusy(true);
-    try {
-      await setNotificationConfig(next);
-      onSaved({ ...cfg, os_notifications_enabled: next });
-    } catch (cause) {
-      setEnabled(!next);
-      onError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="settings-section" aria-labelledby="notifications-heading">
-      <div className="settings-section-header">
-        <h3 id="notifications-heading" className="settings-section-title">
-          Notifications
-        </h3>
-      </div>
-      <div className="settings-row">
-        <span className="settings-label">OS notifications</span>
-        <div className="settings-control">
-          <label className="toggle-switch">
-            <input
-              type="checkbox"
-              checked={enabled}
-              disabled={busy}
-              onChange={(event) => void save(event.target.checked)}
-            />
-            <span className="toggle-track">
-              <span className="toggle-thumb" />
-            </span>
-            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
-              {enabled ? "Enabled" : "Disabled"}
-            </span>
-          </label>
-          <p className="settings-hint">
-            Show a system notification when a download completes or fails.
-            Completed downloads include a "Show file" button that opens the
-            containing folder.
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
 
 function NativeBuiltinsSection({
   cfg,
@@ -1504,75 +1436,6 @@ function ExportImportSection({
   );
 }
 
-function MetalinkSection({
-  cfg,
-  onSaved,
-  onError,
-}: {
-  cfg: EngineConfigDto;
-  onSaved: (updated: EngineConfigDto) => void;
-  onError: (message: string) => void;
-}) {
-  const [enabled, setEnabled] = useState(cfg.metalink.enabled);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => setEnabled(cfg.metalink.enabled), [cfg.metalink.enabled]);
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      const updated = await saveEngineConfig({
-        yt_dlp: { enabled: cfg.yt_dlp.enabled },
-        resource_policy: cfg.resource_policy,
-        weekly_queue_schedule: cfg.weekly_queue_schedule,
-        metalink: { enabled },
-      });
-      onSaved(updated);
-    } catch (cause) {
-      onError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="settings-section" aria-labelledby="metalink-heading">
-      <div className="settings-section-header">
-        <h3 id="metalink-heading" className="settings-section-title">
-          Metalink
-        </h3>
-      </div>
-      <div className="settings-row">
-        <span className="settings-label">Enable Metalink engine</span>
-        <div className="settings-control">
-          <label className="toggle-switch">
-            <input
-              type="checkbox"
-              checked={enabled}
-              disabled={busy}
-              onChange={(event) => setEnabled(event.target.checked)}
-            />
-            <span className="toggle-track">
-              <span className="toggle-thumb" />
-            </span>
-            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
-              {enabled ? "Enabled" : "Disabled"}
-            </span>
-          </label>
-          <p className="settings-hint">
-            Download .metalink and .meta4 files using multiple mirrors for maximum speed and reliability.
-          </p>
-        </div>
-      </div>
-      <div className="settings-actions">
-        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </section>
-  );
-}
-
 export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1657,9 +1520,7 @@ export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto
       <BrowserExtensionSection />
       {cfg && (
         <>
-          <NotificationsSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <NativeBuiltinsSection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <MetalinkSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
           <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />

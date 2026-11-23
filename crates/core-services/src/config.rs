@@ -249,6 +249,11 @@ pub enum ConfigError {
 }
 
 impl EngineConfig {
+    fn enforce_always_enabled_settings(&mut self) {
+        self.os_notifications_enabled = true;
+        self.metalink.enabled = true;
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.version != CURRENT_VERSION {
             return Err(ConfigError::UnsupportedVersion(self.version));
@@ -292,10 +297,11 @@ impl ConfigService {
             return Ok(EngineConfig::default());
         }
         match serde_json::from_str::<EngineConfig>(&json) {
-            Ok(cfg) => {
+            Ok(mut cfg) => {
                 if cfg.version > CURRENT_VERSION {
                     return Err(ConfigError::UnsupportedVersion(cfg.version));
                 }
+                cfg.enforce_always_enabled_settings();
                 Ok(cfg)
             }
             Err(err) => {
@@ -321,9 +327,11 @@ impl ConfigService {
     }
 
     pub async fn save(&self, config: &EngineConfig) -> Result<(), ConfigError> {
+        let mut config = config.clone();
+        config.enforce_always_enabled_settings();
         config.validate()?;
-        let json =
-            serde_json::to_string(config).map_err(|e| ConfigError::Serialization(e.to_string()))?;
+        let json = serde_json::to_string(&config)
+            .map_err(|e| ConfigError::Serialization(e.to_string()))?;
         self.repo
             .set(CONFIG_KEY, &json)
             .await
@@ -382,6 +390,39 @@ mod tests {
                 .native_torrent
                 .enabled
         );
+    }
+
+    #[tokio::test]
+    async fn always_enabled_settings_are_enforced_for_existing_configs() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database should initialize");
+        let repo = database.config();
+        let service = ConfigService::new(repo.clone());
+        let mut legacy_config = super::EngineConfig::default();
+        legacy_config.os_notifications_enabled = false;
+        legacy_config.metalink.enabled = false;
+        let json = serde_json::to_string(&legacy_config).expect("legacy config should serialize");
+        repo.set(super::CONFIG_KEY, &json)
+            .await
+            .expect("legacy config should be stored");
+
+        let mut loaded = service.load().await.expect("legacy config should load");
+        assert!(loaded.os_notifications_enabled);
+        assert!(loaded.metalink.enabled);
+
+        loaded.os_notifications_enabled = false;
+        loaded.metalink.enabled = false;
+        service.save(&loaded).await.expect("config should save");
+        let stored = repo
+            .get(super::CONFIG_KEY)
+            .await
+            .expect("stored config should be readable")
+            .expect("config should remain stored");
+        let stored: super::EngineConfig =
+            serde_json::from_str(&stored).expect("stored config should parse");
+        assert!(stored.os_notifications_enabled);
+        assert!(stored.metalink.enabled);
     }
 
     #[test]

@@ -951,9 +951,7 @@ impl IpcError {
             EngineKind::Sftp => {
                 "The SFTP engine is not available. Check Settings → Download Engines to enable it."
             }
-            EngineKind::Metalink => {
-                "The Metalink engine is not available. Check Settings → Download Engines to enable it."
-            }
+            EngineKind::Metalink => "The Metalink engine is not available in this build.",
             EngineKind::DirectHttp | EngineKind::Hls => {
                 // DirectHttp and Hls are always available; this branch should not be reached.
                 "The requested download engine is not available."
@@ -2549,7 +2547,6 @@ pub async fn import_settings(
     config.yt_dlp.enabled = imported.yt_dlp.enabled;
     config.resource_policy = imported.resource_policy;
     config.weekly_queue_schedule = imported.weekly_queue_schedule;
-    config.os_notifications_enabled = imported.os_notifications_enabled;
     config.native_builtins = imported.native_builtins;
     state
         .config_service

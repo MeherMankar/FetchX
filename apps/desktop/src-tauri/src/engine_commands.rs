@@ -75,9 +75,9 @@ impl From<&EngineConfig> for EngineConfigDto {
             },
             resource_policy: config.resource_policy.clone(),
             weekly_queue_schedule: config.weekly_queue_schedule.clone(),
-            os_notifications_enabled: config.os_notifications_enabled,
+            os_notifications_enabled: true,
             native_builtins: config.native_builtins.clone(),
-            metalink: config.metalink.clone(),
+            metalink: MetalinkConfig { enabled: true },
             auto_retry_count: config.auto_retry_count,
             auto_retry_delay_seconds: config.auto_retry_delay_seconds,
         }
@@ -137,6 +137,17 @@ pub async fn save_engine_config(
     state: State<'_, AppState>,
     request: SaveEngineConfigRequest,
 ) -> Result<EngineConfigDto, EngineIpcError> {
+    if request
+        .metalink
+        .as_ref()
+        .is_some_and(|config| !config.enabled)
+    {
+        return Err(EngineIpcError {
+            code: EngineIpcErrorCode::InvalidConfig,
+            message: "The Metalink engine is always enabled.".to_owned(),
+        });
+    }
+
     let mut config = state
         .config_service
         .load()
@@ -264,6 +275,13 @@ pub async fn set_notification_config(
     state: State<'_, AppState>,
     os_notifications_enabled: bool,
 ) -> Result<(), EngineIpcError> {
+    if !os_notifications_enabled {
+        return Err(EngineIpcError {
+            code: EngineIpcErrorCode::InvalidConfig,
+            message: "OS notifications are always enabled.".to_owned(),
+        });
+    }
+
     let mut config = state
         .config_service
         .load()

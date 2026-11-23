@@ -69,10 +69,6 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
             let fname = item.filename().as_str().to_owned();
 
             let config = app.state::<AppState>().config_service.load().await.ok();
-            let os_notifications_enabled = config
-                .as_ref()
-                .map(|c| c.os_notifications_enabled)
-                .unwrap_or(true);
             let post_download_action = config
                 .as_ref()
                 .map(|c| c.default_post_download_action.clone())
@@ -80,27 +76,25 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
 
             if status == fetchx_models::DownloadStatus::Completed {
                 emit_notification(app, &format!("Download complete: {fname}"), "");
-                if os_notifications_enabled {
-                    let dest = item.destination().to_owned();
-                    let parent_dir = dest.parent().map(|p| p.to_owned());
-                    let notif_id =
-                        NOTIFICATION_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let show_result = app
-                        .notification()
-                        .builder()
-                        .id(notif_id)
-                        .title("Download complete")
-                        .body(fname.clone())
-                        .action_type_id("fetchx_download_complete")
-                        .show();
-                    if let Err(error) = show_result {
-                        tracing::warn!(%error, "could not show OS notification");
-                    }
-                    if let Some(dir) = parent_dir
-                        && let Some(state) = app.try_state::<crate::PendingNotificationPaths>()
-                    {
-                        state.insert(notif_id, dir);
-                    }
+                let dest = item.destination().to_owned();
+                let parent_dir = dest.parent().map(|p| p.to_owned());
+                let notif_id =
+                    NOTIFICATION_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let show_result = app
+                    .notification()
+                    .builder()
+                    .id(notif_id)
+                    .title("Download complete")
+                    .body(fname.clone())
+                    .action_type_id("fetchx_download_complete")
+                    .show();
+                if let Err(error) = show_result {
+                    tracing::warn!(%error, "could not show OS notification");
+                }
+                if let Some(dir) = parent_dir
+                    && let Some(state) = app.try_state::<crate::PendingNotificationPaths>()
+                {
+                    state.insert(notif_id, dir);
                 }
                 // Execute the configured post-download action.
                 let dest = item.destination().to_owned();
@@ -208,21 +202,19 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                     .map(|e| e.message().to_owned())
                     .unwrap_or_default();
                 emit_notification(app, &format!("Download failed: {fname}"), &err);
-                if os_notifications_enabled {
-                    let body = if err.is_empty() {
-                        fname.clone()
-                    } else {
-                        format!("{fname}: {err}")
-                    };
-                    let show_result = app
-                        .notification()
-                        .builder()
-                        .title("Download failed")
-                        .body(body)
-                        .show();
-                    if let Err(error) = show_result {
-                        tracing::warn!(%error, "could not show OS failure notification");
-                    }
+                let body = if err.is_empty() {
+                    fname.clone()
+                } else {
+                    format!("{fname}: {err}")
+                };
+                let show_result = app
+                    .notification()
+                    .builder()
+                    .title("Download failed")
+                    .body(body)
+                    .show();
+                if let Err(error) = show_result {
+                    tracing::warn!(%error, "could not show OS failure notification");
                 }
                 // Auto-retry on failure.
                 {
