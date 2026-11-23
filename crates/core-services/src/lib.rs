@@ -644,6 +644,9 @@ impl CoreServices {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
                 interval.tick().await; // skip first immediate tick
                 let mut last_active_count: u32 = 0;
+                // Rolling speed buffer for a smoother ETA (last 10 samples ≈ 20 s).
+                let mut speed_history: std::collections::VecDeque<u64> =
+                    std::collections::VecDeque::with_capacity(10);
                 loop {
                     interval.tick().await;
                     match stats_queue.snapshot().await {
@@ -653,6 +656,7 @@ impl CoreServices {
                             if active_count == 0 {
                                 if last_active_count > 0 {
                                     stats_bus.publish_queue_idle();
+                                    speed_history.clear();
                                 }
                                 last_active_count = 0;
                                 continue;
@@ -664,7 +668,17 @@ impl CoreServices {
                                 .iter()
                                 .filter_map(|d| d.item.progress().speed_bytes_per_second())
                                 .sum();
-                            let estimated_completion_seconds = if speed_bps > 0 {
+                            // Maintain rolling average over last 10 samples for stable ETA.
+                            if speed_history.len() == 10 {
+                                speed_history.pop_front();
+                            }
+                            speed_history.push_back(speed_bps);
+                            let avg_speed_bps: u64 = if speed_history.is_empty() {
+                                speed_bps
+                            } else {
+                                speed_history.iter().sum::<u64>() / speed_history.len() as u64
+                            };
+                            let estimated_completion_seconds = if avg_speed_bps > 0 {
                                 let remaining: u64 = snapshot
                                     .active
                                     .iter()
@@ -674,7 +688,7 @@ impl CoreServices {
                                         total.checked_sub(downloaded)
                                     })
                                     .sum();
-                                Some(remaining.checked_div(speed_bps).unwrap_or(0))
+                                Some(remaining.checked_div(avg_speed_bps).unwrap_or(0))
                             } else {
                                 None
                             };
@@ -2924,11 +2938,13 @@ impl EngineRuntime {
         torrent_metadata: Option<fetchx_storage::SqliteTorrentMetadataRepository>,
     ) -> Result<Self, CoreServicesError> {
         // Build proxy_url from desktop_proxy config if set.
-        let proxy_url: Option<String> = config
-            .resource_policy
-            .desktop_proxy
-            .as_ref()
-            .and_then(|proxy| proxy.proxy_url());
+        let desktop_proxy = config.resource_policy.desktop_proxy.as_ref();
+        if let Some(proxy) = desktop_proxy {
+            proxy
+                .validate()
+                .map_err(|error| CoreServicesError::Engine(error.to_owned()))?;
+        }
+        let proxy_url = desktop_proxy.and_then(|proxy| proxy.proxy_url());
 
         let direct_http_config = fetchx_downloader::HttpEngineConfig {
             proxy_url: proxy_url.clone(),
