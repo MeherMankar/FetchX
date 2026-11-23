@@ -35,7 +35,7 @@ import { ToastStack, useToasts } from "./components/Toast";
 import { Toolbar } from "./components/Toolbar";
 import { useDownloads } from "./hooks/useDownloads";
 import { errorMessage } from "./lib/format";
-import { canCancel, canPause, countStatuses } from "./lib/status";
+import { canCancel, canPause, countStatuses, isActive } from "./lib/status";
 
 // ---------------------------------------------------------------------------
 // Public types used by sub-components
@@ -235,6 +235,9 @@ export function App() {
     ensureScheduleFetched, pause, resume, cancel, remove, retry,
     bulkOperation, setPriority, moveUpInQueue, moveDownInQueue, setSchedule, clearSchedule, dismissError,
   } = useDownloads();
+  const activeDownloads = downloads.filter((download) => isActive(download.status));
+  const singleActiveDownload =
+    activeDownloads.length === 1 ? activeDownloads[0] : null;
 
   // -------------------------------------------------------------------------
   // App info
@@ -979,7 +982,14 @@ export function App() {
         </div>
         )} {/* end settings ternary */}
 
-        <SpeedChart />
+        <SpeedChart
+          singleActiveProgress={singleActiveDownload?.progress ?? null}
+          singleActiveSpeedHistory={
+            singleActiveDownload
+              ? speedHistorySnapshot.get(singleActiveDownload.id) ?? null
+              : null
+          }
+        />
 
         <footer className="app-footer">
           Downloads are stored in your system Downloads folder. Removing an item preserves its files.

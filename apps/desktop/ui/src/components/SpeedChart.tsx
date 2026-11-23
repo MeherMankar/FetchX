@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { QueueStatsEvent } from "../api/types";
-import { formatSpeed } from "../lib/format";
+import type { DownloadProgress, QueueStatsEvent } from "../api/types";
+import { formatEta, formatSpeed } from "../lib/format";
 
 const HISTORY_SIZE = 60;
 
-function formatEtaShort(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.round((seconds % 3600) / 60);
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+interface SpeedChartProps {
+  singleActiveProgress: Pick<
+    DownloadProgress,
+    "speed_bytes_per_second" | "estimated_remaining_seconds"
+  > | null;
+  singleActiveSpeedHistory: number[] | null;
 }
 
-export function SpeedChart() {
+export function SpeedChart({
+  singleActiveProgress,
+  singleActiveSpeedHistory,
+}: SpeedChartProps) {
   const [history, setHistory] = useState<number[]>([]);
   const [currentSpeed, setCurrentSpeed] = useState(0);
   const [activeCount, setActiveCount] = useState(0);
@@ -21,6 +24,16 @@ export function SpeedChart() {
   const [eta, setEta] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartHistory =
+    singleActiveProgress && singleActiveSpeedHistory
+      ? singleActiveSpeedHistory
+      : history;
+  const displayedSpeed = singleActiveProgress
+    ? singleActiveProgress.speed_bytes_per_second
+    : currentSpeed;
+  const displayedEta = singleActiveProgress
+    ? singleActiveProgress.estimated_remaining_seconds
+    : eta;
 
   useEffect(() => {
     let offStats: (() => void) | undefined;
@@ -56,7 +69,7 @@ export function SpeedChart() {
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
-    if (!canvas || !container || history.length < 2) return;
+    if (!canvas || !container || chartHistory.length < 2) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -74,24 +87,24 @@ export function SpeedChart() {
 
     ctx.clearRect(0, 0, w, h);
 
-    const max = Math.max(...history, 1);
+    const max = Math.max(...chartHistory, 1);
     const pad = 4;
-    const step = w / (HISTORY_SIZE - 1);
+    const step = w / (chartHistory.length - 1);
 
     // Smooth curve using quadratic bezier
     ctx.beginPath();
-    history.forEach((val, i) => {
+    chartHistory.forEach((val, i) => {
       const x = i * step;
       const y = h - pad - (val / max) * (h - pad * 2);
       if (i === 0) {
         ctx.moveTo(x, y);
       } else {
         const prevX = (i - 1) * step;
-        const prevY = h - pad - (history[i - 1] / max) * (h - pad * 2);
+        const prevY = h - pad - (chartHistory[i - 1] / max) * (h - pad * 2);
         const cpX = (prevX + x) / 2;
         ctx.quadraticCurveTo(prevX, prevY, cpX, (prevY + y) / 2);
         // Final segment
-        if (i === history.length - 1) ctx.lineTo(x, y);
+        if (i === chartHistory.length - 1) ctx.lineTo(x, y);
       }
     });
 
@@ -101,7 +114,7 @@ export function SpeedChart() {
     gradient.addColorStop(1, "rgba(126,200,227,0.02)");
 
     // Close path for fill
-    const lastX = (history.length - 1) * step;
+    const lastX = (chartHistory.length - 1) * step;
     ctx.lineTo(lastX, h);
     ctx.lineTo(0, h);
     ctx.closePath();
@@ -110,17 +123,17 @@ export function SpeedChart() {
 
     // Draw the line on top, clean
     ctx.beginPath();
-    history.forEach((val, i) => {
+    chartHistory.forEach((val, i) => {
       const x = i * step;
       const y = h - pad - (val / max) * (h - pad * 2);
       if (i === 0) {
         ctx.moveTo(x, y);
       } else {
         const prevX = (i - 1) * step;
-        const prevY = h - pad - (history[i - 1] / max) * (h - pad * 2);
+        const prevY = h - pad - (chartHistory[i - 1] / max) * (h - pad * 2);
         const cpX = (prevX + x) / 2;
         ctx.quadraticCurveTo(prevX, prevY, cpX, (prevY + y) / 2);
-        if (i === history.length - 1) ctx.lineTo(x, y);
+        if (i === chartHistory.length - 1) ctx.lineTo(x, y);
       }
     });
     ctx.strokeStyle = "rgba(126,200,227,0.7)";
@@ -128,7 +141,7 @@ export function SpeedChart() {
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.stroke();
-  }, [history]);
+  }, [chartHistory]);
 
   // Redraw when history changes
   useEffect(() => {
@@ -144,21 +157,21 @@ export function SpeedChart() {
     return () => ro.disconnect();
   }, [draw]);
 
-  if (activeCount === 0 && history.every((v) => v === 0)) return null;
+  if (activeCount === 0 && chartHistory.every((v) => v === 0)) return null;
 
   const showQueued = queuedCount > 0;
-  const showEta = eta !== null && eta > 0;
+  const showEta = singleActiveProgress !== null || displayedEta !== null;
 
   return (
     <div className="speed-chart" ref={containerRef} aria-label="Queue speed chart">
       <div className="speed-chart-stats">
-        <span className="speed-chart-speed">{formatSpeed(currentSpeed)}</span>
+        <span className="speed-chart-speed">{formatSpeed(displayedSpeed)}</span>
         <span className="speed-chart-meta">
           {activeCount > 0 && (
             <span>{activeCount} {activeCount === 1 ? "active" : "active"}</span>
           )}
           {showQueued && <span> · {queuedCount} queued</span>}
-          {showEta && <span> · ETA {formatEtaShort(eta!)}</span>}
+          {showEta && <span> · ETA {formatEta(displayedEta)}</span>}
         </span>
       </div>
       <canvas

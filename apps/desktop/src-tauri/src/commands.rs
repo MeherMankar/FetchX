@@ -1,5 +1,5 @@
 use std::{
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicU8},
 };
 
@@ -1989,18 +1989,7 @@ fn parse_download_id(value: &str) -> Result<DownloadId, IpcError> {
 }
 
 fn filename_for_url(url: &Url) -> String {
-    let candidate = url
-        .path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|segment| !segment.is_empty())
-        .filter(|segment| is_single_normal_component(segment));
-
-    candidate.unwrap_or("download").to_owned()
-}
-
-fn is_single_normal_component(value: &str) -> bool {
-    let mut components = Path::new(value).components();
-    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+    fetchx_core_services::suggest_download_filename(url.as_str())
 }
 
 #[tauri::command]
@@ -2792,7 +2781,17 @@ mod tests {
     fn filename_uses_only_a_safe_url_path_component() -> Result<(), Box<dyn Error>> {
         assert_eq!(
             filename_for_url(&reqwest::Url::parse("https://example.test/a%20file.zip")?),
-            "a%20file.zip"
+            "a file.zip"
+        );
+        assert_eq!(
+            filename_for_url(&reqwest::Url::parse(
+                "https://example.test/Idiocracy%20%282006%29%201080p%20BRrip.mkv"
+            )?),
+            "Idiocracy (2006) 1080p BRrip.mkv"
+        );
+        assert_eq!(
+            filename_for_url(&reqwest::Url::parse("https://example.test/%2Fsecret.zip")?),
+            "_secret.zip"
         );
         assert_eq!(
             filename_for_url(&reqwest::Url::parse("https://example.test/")?),

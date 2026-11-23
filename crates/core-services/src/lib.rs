@@ -56,7 +56,7 @@ use fetchx_models::{
     StorageDiagnostics, Timestamp, TorrentFileSelection, TorrentMetadata, YtDlpAudioFormat,
     global_diagnostics, parse_magnet_uri, parse_torrent_metainfo,
 };
-use fetchx_queue::{DownloadEventBus, EventRepository, QueueManager};
+use fetchx_queue::{ActiveDownload, DownloadEventBus, EventRepository, QueueManager};
 use fetchx_scheduler::Scheduler;
 use fetchx_storage::{
     Database, DownloadRepository, SqliteDownloadRepository, TorrentMetadataRepository,
@@ -73,6 +73,30 @@ use tracing::{error, info, warn};
 use url::Url;
 
 const MAX_HTTP_MULTI_SOURCE_URL_LENGTH: usize = 8192;
+
+fn estimate_queue_completion(
+    active_downloads: &[ActiveDownload],
+    average_speed_bps: u64,
+) -> Option<u64> {
+    if let [download] = active_downloads {
+        return download.item.progress().estimated_remaining_seconds();
+    }
+
+    if average_speed_bps == 0 {
+        return None;
+    }
+
+    let remaining_bytes: u64 = active_downloads
+        .iter()
+        .filter_map(|download| {
+            let progress = download.item.progress();
+            let total = progress.total_bytes()?;
+            total.checked_sub(progress.downloaded_bytes())
+        })
+        .sum();
+
+    Some(remaining_bytes / average_speed_bps)
+}
 
 pub use config::{
     Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, FtpConfig,
@@ -697,20 +721,8 @@ impl CoreServices {
                             } else {
                                 speed_history.iter().sum::<u64>() / speed_history.len() as u64
                             };
-                            let estimated_completion_seconds = if avg_speed_bps > 0 {
-                                let remaining: u64 = snapshot
-                                    .active
-                                    .iter()
-                                    .filter_map(|d| {
-                                        let total = d.item.progress().total_bytes()?;
-                                        let downloaded = d.item.progress().downloaded_bytes();
-                                        total.checked_sub(downloaded)
-                                    })
-                                    .sum();
-                                Some(remaining.checked_div(avg_speed_bps).unwrap_or(0))
-                            } else {
-                                None
-                            };
+                            let estimated_completion_seconds =
+                                estimate_queue_completion(&snapshot.active, avg_speed_bps);
                             stats_bus.publish_queue_stats(
                                 speed_bps,
                                 active_count,
@@ -3566,6 +3578,7 @@ mod tests {
         DownloadStatus, EngineKind, FileName, Timestamp, TorrentFile, TorrentMetadata,
         YtDlpAudioFormat,
     };
+    use fetchx_queue::ActiveDownload;
     use fetchx_storage::{
         DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
         TorrentSourceType,
@@ -3574,8 +3587,8 @@ mod tests {
     use super::{
         BatchDownloadDestinationRequest, BatchDownloadError, BatchDownloadRequest, ConfigService,
         CoreServices, CoreServicesConfig, CoreServicesError, EngineAvailability, EngineConfig,
-        HttpMultiSourceRequest, NativeTorrentConfig, append_path_suffix, filename_for_media_title,
-        suggest_download_package_name,
+        HttpMultiSourceRequest, NativeTorrentConfig, append_path_suffix, estimate_queue_completion,
+        filename_for_media_title, suggest_download_package_name,
     };
     use fetchx_core::DownloadStateMachine;
     use fetchx_storage::Database;
@@ -3609,6 +3622,59 @@ mod tests {
             bundled_engines_dir: None,
             defer_queued_on_start: false,
         }
+    }
+
+    fn active_download(
+        downloaded_bytes: u64,
+        total_bytes: u64,
+        speed_bps: u64,
+        eta_seconds: u64,
+    ) -> Result<ActiveDownload, Box<dyn std::error::Error>> {
+        let timestamp = Timestamp::from_unix_millis(1);
+        let mut item = DownloadItem::new(
+            DownloadId::new(),
+            DownloadSource::new("https://example.com/file", EngineKind::DirectHttp)?,
+            FileName::new("file")?,
+            PathBuf::from("file"),
+            timestamp,
+        );
+        item.set_progress_at(
+            DownloadProgress::new(
+                downloaded_bytes,
+                Some(total_bytes),
+                Some(speed_bps),
+                Some(eta_seconds),
+            )?,
+            Timestamp::from_unix_millis(2),
+        )?;
+
+        Ok(ActiveDownload {
+            item,
+            desired_connections: 1,
+            allocated_connections: 1,
+            active_connections: 1,
+        })
+    }
+
+    #[test]
+    fn queue_eta_matches_download_eta_when_only_one_download_is_active()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let active = [active_download(100, 1_000, 10, 90)?];
+
+        assert_eq!(estimate_queue_completion(&active, 1), Some(90));
+        Ok(())
+    }
+
+    #[test]
+    fn queue_eta_uses_aggregate_remaining_bytes_for_multiple_downloads()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let active = [
+            active_download(20, 100, 10, 8)?,
+            active_download(30, 100, 10, 7)?,
+        ];
+
+        assert_eq!(estimate_queue_completion(&active, 10), Some(15));
+        Ok(())
     }
 
     async fn start_test_services(
