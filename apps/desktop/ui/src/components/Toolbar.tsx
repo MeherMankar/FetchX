@@ -21,6 +21,8 @@ interface ToolbarProps {
   onPauseAll: () => void;
   onResumeAll: () => void;
   appVersion: string | undefined;
+  theme: string;
+  onToggleTheme: () => void;
 }
 
 export function Toolbar({
@@ -42,6 +44,8 @@ export function Toolbar({
   onPauseAll,
   onResumeAll,
   appVersion,
+  theme,
+  onToggleTheme,
 }: ToolbarProps) {
   return (
     <header className="toolbar">
@@ -139,6 +143,15 @@ export function Toolbar({
           aria-label="Add new download"
         >
           Add download
+        </button>
+
+        <button
+          className="button button-secondary"
+          onClick={onToggleTheme}
+          aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+          title={theme === "dark" ? "Light mode" : "Dark mode"}
+        >
+          {theme === "dark" ? "☀" : "☾"}
         </button>
       </div>
 

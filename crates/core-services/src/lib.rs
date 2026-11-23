@@ -558,41 +558,60 @@ impl CoreServices {
         )
         .await?;
 
-        // Queue + Scheduler
-        // Feature 7 — Resume interrupted downloads on startup.
-        // The queue actor also calls `recover_interrupted` for all non-Aria2 downloads,
-        // so this pass is additive: it logs and respects the config flag.
-        if engine_config.resume_interrupted_on_start {
-            let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
-            let items = repository
-                .list()
-                .await
-                .map_err(|error| CoreServicesError::Database(error.to_string()))?;
-            let mut recovered = 0usize;
-            for item in &items {
-                if item.source().engine() == EngineKind::Aria2 {
-                    continue;
-                }
-                if matches!(
+        // Normalize interrupted downloads before queue construction. The queue also
+        // recovers interrupted work for standalone hosts, so pause here when the
+        // application setting explicitly disables automatic resume.
+        let state_machine = fetchx_core::DownloadStateMachine::new(repository.clone());
+        let items = repository
+            .list()
+            .await
+            .map_err(|error| CoreServicesError::Database(error.to_string()))?;
+        let mut recovered = 0usize;
+        let mut paused = 0usize;
+        for item in &items {
+            if item.source().engine() == EngineKind::Aria2
+                || !matches!(
                     item.status(),
-                    DownloadStatus::Downloading | DownloadStatus::Recovering
-                ) {
-                    match state_machine.recover_interrupted(item.id()).await {
-                        Ok(Some(_)) => recovered += 1,
-                        Ok(None) => {}
-                        Err(e) => {
-                            warn!(download_id = %item.id(), error = %e, "resume-on-start: could not recover interrupted download");
-                        }
+                    DownloadStatus::Preparing
+                        | DownloadStatus::Downloading
+                        | DownloadStatus::MetadataAcquiring
+                        | DownloadStatus::Recovering
+                        | DownloadStatus::Seeding
+                )
+            {
+                continue;
+            }
+
+            if engine_config.resume_interrupted_on_start {
+                match state_machine.recover_interrupted(item.id()).await {
+                    Ok(Some(_)) => recovered += 1,
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(download_id = %item.id(), error = %e, "resume-on-start: could not recover interrupted download");
                     }
                 }
-            }
-            if recovered > 0 {
-                info!(
-                    count = recovered,
-                    "resume-on-start: re-queued interrupted downloads"
-                );
+            } else {
+                state_machine
+                    .transition(item.id(), DownloadStatus::Paused)
+                    .await
+                    .map_err(|error| CoreServicesError::Queue(error.to_string()))?;
+                paused += 1;
             }
         }
+        if recovered > 0 {
+            info!(
+                count = recovered,
+                "resume-on-start: re-queued interrupted downloads"
+            );
+        }
+        if paused > 0 {
+            info!(
+                count = paused,
+                "resume-on-start: left interrupted downloads paused"
+            );
+        }
+
+        // Queue + Scheduler
 
         let deferred = if cfg.defer_queued_on_start {
             repository
@@ -6367,6 +6386,66 @@ mod tests {
             .ok_or("persisted download missing after restart")?;
         assert_eq!(recovered.status(), DownloadStatus::Paused);
         restarted.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_leaves_interrupted_downloads_paused_when_auto_resume_is_disabled()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let mut paths = config(root.path());
+        paths.defer_queued_on_start = true;
+        let database = Database::connect_path(&paths.database_path).await?;
+        let repository = database.downloads();
+        let now = Timestamp::now()?;
+        let statuses = [
+            DownloadStatus::Preparing,
+            DownloadStatus::Downloading,
+            DownloadStatus::MetadataAcquiring,
+            DownloadStatus::Recovering,
+            DownloadStatus::Seeding,
+        ];
+        let mut ids = Vec::new();
+        for status in statuses {
+            let id = DownloadId::new();
+            let item = DownloadItem::from_parts(
+                id,
+                DownloadSource::new("https://example.com/file.zip", EngineKind::DirectHttp)?,
+                FileName::new(format!("{status:?}.bin"))?,
+                paths.downloads_dir.join(format!("{status:?}.bin")),
+                status,
+                DownloadPriority::default(),
+                DownloadProgress::default(),
+                now,
+                now,
+                None,
+            )?;
+            repository.create(&item).await?;
+            ids.push(id);
+        }
+        drop(repository);
+        database.close().await;
+
+        let engine_config = EngineConfig {
+            resume_interrupted_on_start: false,
+            native_torrent: NativeTorrentConfig {
+                listen_port: 0,
+                session_dir: Some(root.path().join("runtime/native-torrent")),
+                ..NativeTorrentConfig::default()
+            },
+            ..EngineConfig::default()
+        };
+        let services = CoreServices::start_with_engine_config(paths, Some(engine_config)).await?;
+
+        for id in ids {
+            let item = services
+                .repository
+                .get(id)
+                .await?
+                .ok_or("interrupted download missing after startup")?;
+            assert_eq!(item.status(), DownloadStatus::Paused);
+        }
+        services.shutdown().await?;
         Ok(())
     }
 

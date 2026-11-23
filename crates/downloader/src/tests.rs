@@ -4529,8 +4529,9 @@ async fn ftp_path_traversal_rejected_before_connect() {
 /// must return a `DownloadEngineError` within a bounded time.
 #[tokio::test]
 async fn http_connection_refused_returns_error_quickly() -> Result<(), Box<dyn Error>> {
-    // Use a very short request timeout so the refused-connection error surfaces fast.
+    // Bound connection attempts so refused connections surface quickly.
     let config = HttpEngineConfig {
+        connect_timeout: Duration::from_secs(1),
         minimum_segmented_file_size: u64::MAX, // force single stream
         ..HttpEngineConfig::default()
     };

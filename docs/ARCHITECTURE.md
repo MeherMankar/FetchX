@@ -181,8 +181,11 @@ when its range starts at the local size, its validator still matches, and its ef
 URL has not changed through a redirect. A `200 OK` to a range request restarts from
 zero; an incomplete `416 Range Not Satisfiable` fails without modifying the partial.
 The sidecar also records finalization state and expected size so a later invocation can
-recover a complete temporary file after a crash during publication. Startup-wide
-reconciliation is not implemented. Parent directories are not created automatically.
+recover a complete temporary file after a crash during publication. On service startup,
+interrupted non-Aria2 downloads are re-queued by default; when automatic resume is
+disabled, they are left Paused. Partial-file identity and validator checks are
+engine-owned and run when a download is dispatched; there is no separate startup scan
+for orphaned partial files. Parent directories are not created automatically.
 
 For a fresh download, if the initial response advertises `Accept-Ranges: bytes`, has a
 known size at least `minimum_segmented_file_size` (4 MiB by default), and is not

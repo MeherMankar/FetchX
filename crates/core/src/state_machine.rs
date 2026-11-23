@@ -53,6 +53,7 @@ pub fn validate_transition(
             | (DownloadStatus::Stopped, DownloadStatus::Cancelled)
             | (DownloadStatus::Cancelled, DownloadStatus::Stopped)
             | (DownloadStatus::Recovering, DownloadStatus::Queued)
+            | (DownloadStatus::Recovering, DownloadStatus::Paused)
             | (DownloadStatus::Recovering, DownloadStatus::Downloading)
             | (DownloadStatus::Recovering, DownloadStatus::Seeding)
             | (DownloadStatus::Recovering, DownloadStatus::Failed)
@@ -286,7 +287,7 @@ mod tests {
         DownloadStatus::Stopped,
     ];
 
-    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 43] = [
+    const LEGAL_TRANSITIONS: [(DownloadStatus, DownloadStatus); 44] = [
         (DownloadStatus::Queued, DownloadStatus::Preparing),
         (DownloadStatus::Queued, DownloadStatus::Paused),
         (DownloadStatus::Preparing, DownloadStatus::Paused),
@@ -333,6 +334,7 @@ mod tests {
         (DownloadStatus::Stopped, DownloadStatus::Cancelled),
         (DownloadStatus::Cancelled, DownloadStatus::Stopped),
         (DownloadStatus::Recovering, DownloadStatus::Queued),
+        (DownloadStatus::Recovering, DownloadStatus::Paused),
         (DownloadStatus::Recovering, DownloadStatus::Downloading),
         (DownloadStatus::Recovering, DownloadStatus::Seeding),
         (DownloadStatus::Recovering, DownloadStatus::Failed),

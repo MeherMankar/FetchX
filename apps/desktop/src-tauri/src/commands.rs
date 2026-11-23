@@ -1955,6 +1955,31 @@ pub async fn stop_torrent_seeding(state: State<'_, AppState>, id: String) -> Res
         .map_err(|_| IpcError::internal())
 }
 
+/// Opens the parent directory of a download's destination in the OS file manager.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_download_folder(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<(), IpcError> {
+    let id = parse_download_id(&download_id)?;
+    let item = state
+        .repository
+        .get(id)
+        .await
+        .map_err(|_| IpcError::internal())?
+        .ok_or_else(IpcError::not_found)?;
+    let folder = item
+        .destination()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| item.destination().to_path_buf());
+    // `open::that` is non-blocking (it returns once the OS launcher has been
+    // spawned) and matches the post-download "OpenFolder" behaviour in app.rs.
+    // The newer `that_detached` API does not exist in the pinned `open` 3.2.0.
+    open::that(&folder).map_err(|_| IpcError::internal())?;
+    Ok(())
+}
+
 fn emit_event<T: Serialize + Clone>(app: &AppHandle, name: &str, payload: &T) {
     if let Err(error) = app.emit(name, payload.clone()) {
         tracing::warn!(%error, event = name, "could not emit desktop event");

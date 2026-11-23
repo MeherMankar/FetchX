@@ -323,6 +323,10 @@ export function stopTorrentSeeding(downloadId: string): Promise<void> {
   return invoke<void>("stop_torrent_seeding", { id: downloadId });
 }
 
+export function openDownloadFolder(downloadId: string): Promise<void> {
+  return invoke<void>("open_download_folder", { download_id: downloadId });
+}
+
 export function pauseAllDownloads(): Promise<void> {
   return invoke<void>('pause_all_downloads');
 }

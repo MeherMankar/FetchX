@@ -57,6 +57,7 @@ interface DownloadRowProps {
   onEnsureSchedule: (download: Download) => void;
   onUpdateUrl: (id: string, newUrl: string) => void;
   onSetBandwidthLimit: (id: string) => void;
+  onContextMenu?: (e: React.MouseEvent, download: Download) => void;
   speedHistory?: number[];
 }
 
@@ -81,6 +82,7 @@ export const DownloadRow = memo(function DownloadRow({
   onEnsureSchedule,
   onUpdateUrl,
   onSetBandwidthLimit,
+  onContextMenu,
   speedHistory,
 }: DownloadRowProps) {
   const { progress } = download;
@@ -109,6 +111,7 @@ export const DownloadRow = memo(function DownloadRow({
       className={`download-card${selected ? " download-card--selected" : ""}${checked ? " download-card--checked" : ""}`}
       data-status={download.status}
       aria-selected={selected}
+      onContextMenu={(e) => onContextMenu?.(e, download)}
       onClick={onSelect}
       onKeyDown={(e) => {
         if (e.key === "Enter") {

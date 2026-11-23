@@ -9,10 +9,12 @@ import {
   updateDownloadUrl,
   pauseAllDownloads,
   resumeAllDownloads,
+  openDownloadFolder,
 } from "./api/downloads";
 import type { Download, DownloadPriority, QueueSnapshot, UpdateCheckResult } from "./api/types";
 import { AddDialog } from "./components/AddDialog";
 import { BatchAddDialog } from "./components/BatchAddDialog";
+import { ContextMenu } from "./components/ContextMenu";
 import { BandwidthLimitDialog } from "./components/BandwidthLimitDialog";
 import { BulkActionBar } from "./components/BulkActionBar";
 import { BrowserExtensionSetupModal } from "./components/BrowserExtensionSetupModal";
@@ -214,6 +216,8 @@ export function App() {
   const [showBatchDialog, setShowBatchDialog] = useState(false);
   const [bandwidthLimitTarget, setBandwidthLimitTarget] = useState<{ id: string; filename: string; currentLimit: number | null } | null>(null);
   const [clipboardBanners, setClipboardBanners] = useState<Array<{ id: string; url: string; filename: string; timeoutId: ReturnType<typeof setTimeout> }>>([]);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; download: Download } | null>(null);
+  const [theme, setTheme] = useState(() => localStorage.getItem("fetchx_theme") ?? "dark");
   const searchRef = useRef<HTMLInputElement>(null);
   const prevCompletedRef = useRef<Set<string>>(new Set());
   const lastNotificationRef = useRef('');
@@ -241,6 +245,12 @@ export function App() {
       .then((info) => setAppVersion(info.version))
       .catch(() => { /* cosmetic */ });
   }, []);
+
+  // Apply and persist the theme (dark / light).
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("fetchx_theme", theme);
+  }, [theme]);
 
   // Listen for the update-available event emitted by the background checker
   useEffect(() => {
@@ -491,6 +501,21 @@ export function App() {
 
   const handleUpdateUrl = useCallback((id: string, newUrl: string) => {
     updateDownloadUrl(id, newUrl).catch((cause: unknown) => {
+      setGlobalError(cause instanceof Error ? cause.message : String(cause));
+    });
+  }, []);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, download: Download) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, download });
+  }, []);
+
+  const handleContextMenuCopyUrl = useCallback((download: Download) => {
+    void navigator.clipboard.writeText(download.url).catch(() => { /* non-critical */ });
+  }, []);
+
+  const handleContextMenuOpenFolder = useCallback((id: string) => {
+    void openDownloadFolder(id).catch((cause: unknown) => {
       setGlobalError(cause instanceof Error ? cause.message : String(cause));
     });
   }, []);
@@ -790,6 +815,8 @@ export function App() {
           onPauseAll={handlePauseAll}
           onResumeAll={handleResumeAll}
           appVersion={appVersion}
+          theme={theme}
+          onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
         />
 
         {updateBanner && (
@@ -921,6 +948,7 @@ export function App() {
                       const d = downloads.find((x) => x.id === id);
                       setBandwidthLimitTarget({ id, filename: d?.filename ?? id, currentLimit: d?.bandwidth_limit ?? null });
                     }}
+                    onContextMenu={handleContextMenu}
                     speedHistory={speedHistorySnapshot.get(download.id)}
                   />
                 ))}
@@ -1006,6 +1034,22 @@ export function App() {
           download={conversionDownload}
           onStarted={() => { setConversionDownload(null); addToast("Conversion started.", "success"); }}
           onClose={() => setConversionDownload(null)}
+        />
+      )}
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          download={contextMenu.download}
+          onClose={() => setContextMenu(null)}
+          onPause={pause}
+          onResume={resume}
+          onCancel={handleCancel}
+          onDelete={handleDelete}
+          onRetry={handleRetry}
+          onCopyUrl={handleContextMenuCopyUrl}
+          onOpenFolder={handleContextMenuOpenFolder}
         />
       )}
 

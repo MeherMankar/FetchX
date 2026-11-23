@@ -1522,3 +1522,83 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .onboarding-skip {
   font-size: 12px;
 }
+
+/* ============================================================
+   Context menu
+   ============================================================ */
+
+.context-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0 0 0 / 36%);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms cubic-bezier(0.22, 1, 0.36, 1),
+              color 120ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background: var(--surface-3);
+  outline: none;
+}
+
+.context-menu-item--danger {
+  color: var(--red);
+}
+
+.context-menu-item--danger:hover {
+  background: var(--red-bg);
+}
+
+.context-menu-separator {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--border);
+  border: 0;
+}
+
+/* ============================================================
+   Light theme
+   ============================================================ */
+
+[data-theme="light"] {
+  --bg:        #f4f6f8;
+  --surface:   #ffffff;
+  --surface-2: #eef1f4;
+  --surface-3: #e4e8ec;
+  --text:   #1a1f24;
+  --text-2: #3d4a52;
+  --text-3: #6b7c85;
+  --border:       rgba(0, 0, 0, 0.08);
+  --border-2:     rgba(0, 0, 0, 0.14);
+  --border-light: rgba(0, 0, 0, 0.06);
+  --accent:        #2a8fa8;
+  --accent-hover:  #237a90;
+  --accent-subtle: rgba(42, 143, 168, 0.10);
+  color-scheme: light;
+}
+
+[data-theme="light"] .icon-button:hover { background: rgba(0 0 0 / 8%); }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0 0 0 / 14%); }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0 0 0 / 24%); }
