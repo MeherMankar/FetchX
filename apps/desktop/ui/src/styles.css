@@ -25,6 +25,11 @@
   --accent:        #7ec8e3;
   --accent-hover:  #64b8d6;
   --accent-subtle: rgba(126, 200, 227, 0.10);
+  --accent-border: rgba(126, 200, 227, 0.32);
+  --accent-border-muted: rgba(126, 200, 227, 0.20);
+  --accent-border-subtle: rgba(126, 200, 227, 0.16);
+  --accent-selected: rgba(126, 200, 227, 0.04);
+  --accent-checked: rgba(126, 200, 227, 0.03);
 
   /* Semantic */
   --green:        #4cc38a;
@@ -238,17 +243,22 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
    ============================================================ */
 
 .toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "heading version"
+    "controls controls";
   align-items: center;
-  gap: 12px;
-  height: var(--toolbar-height);
+  column-gap: 16px;
+  row-gap: 8px;
+  min-height: 88px;
   padding: 0 24px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-.toolbar-left { display: flex; align-items: baseline; gap: 8px; flex: none; }
+.toolbar-left { grid-area: heading; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 
 /* Pass 5: 15px title, 500 weight, no negative tracking */
 .toolbar-title { font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--text); }
@@ -261,7 +271,14 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   letter-spacing: 0;
 }
 
-.toolbar-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.toolbar-controls {
+  grid-area: controls;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
 
 .queue-schedule-status {
   color: var(--text-3);
@@ -272,6 +289,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 
 .toolbar-version {
+  grid-area: version;
+  justify-self: end;
   font-family: "IBM Plex Mono", Consolas, monospace;
   font-size: 11px;
   letter-spacing: 0;
@@ -486,13 +505,13 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 /* Pass 7: selected is surface step + accent hairline, no box-shadow glow */
 .download-card--selected {
-  border-color: rgba(126, 200, 227, 0.32);
-  background: rgba(126, 200, 227, 0.04);
+  border-color: var(--accent-border);
+  background: var(--accent-selected);
 }
 
 .download-card--checked {
-  background: rgba(126, 200, 227, 0.03);
-  border-color: rgba(126, 200, 227, 0.20);
+  background: var(--accent-checked);
+  border-color: var(--accent-border-muted);
 }
 
 .download-main { flex: 1; min-width: 0; }
@@ -570,13 +589,13 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .status-preparing {
   color: var(--accent);
   background: var(--accent-subtle);
-  border-color: rgba(126, 200, 227, 0.16);
+  border-color: var(--accent-border-subtle);
 }
 
 .status-metadata_acquiring {
   color: var(--accent);
   background: var(--accent-subtle);
-  border-color: rgba(126, 200, 227, 0.16);
+  border-color: var(--accent-border-subtle);
 }
 
 .status-recovering {
@@ -809,7 +828,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   font-size: 12px;
   color: var(--accent);
   background: var(--accent-subtle);
-  border: 1px solid rgba(126, 200, 227, 0.16);
+  border: 1px solid var(--accent-border-subtle);
   border-radius: var(--radius-sm);
 }
 
@@ -953,7 +972,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
    ============================================================ */
 
 .toast-stack {
-  position: fixed; bottom: 20px; right: 20px; z-index: 200;
+  position: fixed; bottom: 56px; right: 20px; z-index: 200;
   display: flex; flex-direction: column; gap: 8px; pointer-events: none;
   max-width: 360px;
 }
@@ -1058,7 +1077,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 }
 .weekday-button-active {
   color: var(--accent);
-  border-color: rgba(126, 200, 227, 0.32);
+  border-color: var(--accent-border);
   background: var(--accent-subtle);
 }
 .weekday-button:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -1200,8 +1219,10 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   .snapshot-bar { display: none; }
 
   .toolbar { padding: 12px 16px; }
-  .toolbar-controls { width: 100%; margin-left: 0; }
+  .toolbar-controls { width: 100%; }
   .search-input { flex: 1 1 160px; }
+  .toast-stack { bottom: 64px; right: 12px; left: 12px; max-width: none; }
+  .toast { min-width: 0; max-width: none; }
   .content-area--split .detail-panel { display: none; }
   .download-card { flex-direction: column; }
   .download-actions { justify-content: flex-start; width: 100%; }
@@ -1209,17 +1230,11 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 @media (max-width: 1280px) {
   .toolbar {
-    flex-wrap: wrap;
-    height: auto;
-    min-height: var(--toolbar-height);
     padding-top: 8px;
     padding-bottom: 8px;
   }
   .toolbar-controls {
-    flex: 1 1 100%;
     width: 100%;
-    margin-left: 0;
-    flex-wrap: wrap;
   }
   .search-input { flex: 1 1 180px; min-width: 0; }
   .sort-select  { flex: 1 1 150px; min-width: 0; }
@@ -1603,11 +1618,24 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   --text-2: #3d4a52;
   --text-3: #59656d;
   --border:       rgba(0, 0, 0, 0.08);
-  --border-2:     rgba(0, 0, 0, 0.14);
   --border-light: rgba(0, 0, 0, 0.06);
-  --accent:        #2a8fa8;
-  --accent-hover:  #237a90;
-  --accent-subtle: rgba(42, 143, 168, 0.10);
+  --accent:        #17677d;
+  --accent-hover:  #14576b;
+  --accent-subtle: rgba(23, 103, 125, 0.10);
+  --accent-border: rgba(23, 103, 125, 0.32);
+  --accent-border-muted: rgba(23, 103, 125, 0.20);
+  --accent-border-subtle: rgba(23, 103, 125, 0.16);
+  --accent-selected: rgba(23, 103, 125, 0.04);
+  --accent-checked: rgba(23, 103, 125, 0.03);
+  --green: #18744b;
+  --green-bg: rgba(24, 116, 75, 0.10);
+  --green-border: rgba(24, 116, 75, 0.18);
+  --red: #b4232a;
+  --red-bg: rgba(180, 35, 42, 0.10);
+  --red-border: rgba(180, 35, 42, 0.18);
+  --amber: #875600;
+  --amber-bg: rgba(135, 86, 0, 0.10);
+  --amber-border: rgba(135, 86, 0, 0.18);
   --color-sidebar:        #eef1f4;
   --color-sidebar-text:   #48555d;
   --color-sidebar-hover:  #e5eaee;
