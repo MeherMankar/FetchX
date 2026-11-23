@@ -579,7 +579,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .download-meta {
   display: flex; align-items: center; justify-content: space-between;
-  flex-wrap: nowrap; gap: 8px;
+  flex-wrap: wrap; gap: 8px;
   margin-top: 6px;
   color: var(--text-3);
   font-family: "IBM Plex Mono", Consolas, monospace;
@@ -588,7 +588,14 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   letter-spacing: 0;
 }
 
-.download-speed { display: flex; gap: 8px; white-space: nowrap; align-items: center; }
+.download-speed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  white-space: normal;
+  align-items: center;
+}
 .download-eta   { color: var(--text-2); white-space: nowrap; }
 .download-sparkline { display: inline-block; vertical-align: middle; margin-left: 6px; opacity: 0.8; }
 .download-error { margin-top: 6px; color: var(--red); font-size: 12px; }
@@ -1254,6 +1261,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   .toast { min-width: 0; max-width: none; }
   .content-area--split .detail-panel { display: none; }
   .download-card { flex-direction: column; }
+  .download-main { width: 100%; }
   .download-actions { justify-content: flex-start; width: 100%; }
 }
 
@@ -1276,6 +1284,44 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   .browser-extension-item > :nth-child(4) {
     grid-column: 3;
     grid-row: 1 / span 2;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 820px) {
+  .toolbar {
+    height: auto;
+    min-height: 0;
+    padding: 12px 24px;
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .toolbar-controls {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .search-input {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 0;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1080px) {
+  .content-area--split .download-card {
+    flex-direction: column;
+  }
+
+  .content-area--split .download-main {
+    width: 100%;
+  }
+
+  .content-area--split .download-actions {
+    justify-content: flex-start;
+    width: 100%;
+    max-width: none;
   }
 }
 
