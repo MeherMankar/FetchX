@@ -172,7 +172,7 @@ function BrowserExtensionSection() {
     setMessage(null);
     try {
       await openBrowserExtensionInstallPage(browser);
-      setMessage("Opened " + browser + ". Follow the local-install steps below to add FetchX.");
+      setMessage("Opened the Firefox Add-ons page for " + browser + ". Click 'Add to Firefox' to install.");
       await refresh();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -262,11 +262,8 @@ function BrowserExtensionSection() {
           <div className="settings-row">
             <span className="settings-label">Firefox extension</span>
             <div className="settings-control">
-              <code className="settings-path">{status.firefox_extension_path}</code>
               <span className="settings-hint">
-                In Firefox, choose "Load Temporary Add-on" and select this folder's
-                manifest.json. Temporary add-ons are removed when Firefox exits;
-                permanent installation requires a signed add-on.
+                FetchX is available on the Firefox Add-ons store. Click "Install" to open the listing and add it in one click.
               </span>
             </div>
           </div>
