@@ -22,10 +22,10 @@ impl PendingNotificationPaths {
     pub fn insert(&self, id: i32, path: std::path::PathBuf) {
         if let Ok(mut map) = self.0.lock() {
             // Keep map small: evict entries beyond a reasonable cap.
-            if map.len() >= 128 {
-                if let Some(oldest) = map.keys().next().copied() {
-                    map.remove(&oldest);
-                }
+            if map.len() >= 128
+                && let Some(oldest) = map.keys().next().copied()
+            {
+                map.remove(&oldest);
             }
             map.insert(id, path);
         }

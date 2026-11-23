@@ -1595,11 +1595,11 @@ where
         }
         Command::SetBandwidthLimit { id, bps, reply } => {
             // Validate the rate if provided.
-            if let Some(rate) = bps {
-                if rate == 0 {
-                    let _ = reply.send(Err(QueueError::InvalidBandwidthPolicy));
-                    return Ok(());
-                }
+            if let Some(rate) = bps
+                && rate == 0
+            {
+                let _ = reply.send(Err(QueueError::InvalidBandwidthPolicy));
+                return Ok(());
             }
             // Verify the download exists.
             if !entries.contains_key(&id) {

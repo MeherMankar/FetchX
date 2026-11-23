@@ -1871,15 +1871,15 @@ impl CoreServices {
                     ),
                 }
             }
-            if native_builtins.page_scraper_enabled {
-                if let Some(discovered) = self.discover_archive_url(&canonical_url).await {
-                    match validate_http_source_url(&discovered) {
-                        Ok(discovered) => canonical_url = discovered,
-                        Err(_) => tracing::warn!(
-                            error_code = "BUILTIN_PAGE_SCRAPER_REJECTED_URL",
-                            "native page scraper returned an unsafe URL; keeping the submitted URL"
-                        ),
-                    }
+            if native_builtins.page_scraper_enabled
+                && let Some(discovered) = self.discover_archive_url(&canonical_url).await
+            {
+                match validate_http_source_url(&discovered) {
+                    Ok(discovered) => canonical_url = discovered,
+                    Err(_) => tracing::warn!(
+                        error_code = "BUILTIN_PAGE_SCRAPER_REJECTED_URL",
+                        "native page scraper returned an unsafe URL; keeping the submitted URL"
+                    ),
                 }
             }
             let normalized = normalize_download_url(&canonical_url);

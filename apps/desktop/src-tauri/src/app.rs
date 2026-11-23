@@ -96,10 +96,10 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                     if let Err(error) = show_result {
                         tracing::warn!(%error, "could not show OS notification");
                     }
-                    if let Some(dir) = parent_dir {
-                        if let Some(state) = app.try_state::<crate::PendingNotificationPaths>() {
-                            state.insert(notif_id, dir);
-                        }
+                    if let Some(dir) = parent_dir
+                        && let Some(state) = app.try_state::<crate::PendingNotificationPaths>()
+                    {
+                        state.insert(notif_id, dir);
                     }
                 }
                 // Execute the configured post-download action.
@@ -574,17 +574,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
                 let app_handle_for_action = app.handle().clone();
                 if let Err(error) = app.notification().on_action(move |action| {
-                    if action.action_id() == "show_file" {
-                        if let Some(notification) = action.notification() {
-                            let notif_id = notification.id();
-                            let paths = app_handle_for_action
-                                .try_state::<crate::PendingNotificationPaths>();
-                            let dir = paths.and_then(|p| p.get(notif_id));
-                            if let Some(dir) = dir {
-                                if let Err(error) = open::that(&dir) {
-                                    tracing::warn!(%error, path = %dir.display(), "could not open download directory");
-                                }
-                            }
+                    if action.action_id() == "show_file"
+                        && let Some(notification) = action.notification()
+                    {
+                        let notif_id = notification.id();
+                        let paths = app_handle_for_action
+                            .try_state::<crate::PendingNotificationPaths>();
+                        let dir = paths.and_then(|p| p.get(notif_id));
+                        if let Some(dir) = dir
+                            && let Err(error) = open::that(&dir)
+                        {
+                            tracing::warn!(%error, path = %dir.display(), "could not open download directory");
                         }
                     }
                 }) {

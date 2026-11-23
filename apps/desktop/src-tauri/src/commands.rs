@@ -147,20 +147,20 @@ impl AppState {
             return Err(IpcError::invalid_request());
         }
         // Duplicate-URL check for HTTP(S) downloads (skip for magnet/torrent).
-        if magnet.is_none() && torrent_path.is_none() {
-            if let Some(ref cs) = self.core_services {
-                if let Ok(Some(dup)) = cs.find_duplicate_download(&canonical_url).await {
-                    let msg_string = format!(
-                        "This URL is already in your downloads (status: {:?}, filename: {})",
-                        dup.status(),
-                        dup.filename()
-                    );
-                    // We need a 'static str; leak a small allocation so the
-                    // IpcError<'static> constraint is satisfied.
-                    let msg: &'static str = Box::leak(msg_string.into_boxed_str());
-                    return Err(IpcError::duplicate_url(msg));
-                }
-            }
+        if magnet.is_none()
+            && torrent_path.is_none()
+            && let Some(ref cs) = self.core_services
+            && let Ok(Some(dup)) = cs.find_duplicate_download(&canonical_url).await
+        {
+            let msg_string = format!(
+                "This URL is already in your downloads (status: {:?}, filename: {})",
+                dup.status(),
+                dup.filename()
+            );
+            // We need a 'static str; leak a small allocation so the
+            // IpcError<'static> constraint is satisfied.
+            let msg: &'static str = Box::leak(msg_string.into_boxed_str());
+            return Err(IpcError::duplicate_url(msg));
         }
         // Resolve the requested engine from the source when no override is present.
         let engine_kind = match (

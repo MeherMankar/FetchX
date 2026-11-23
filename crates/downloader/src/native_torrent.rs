@@ -2122,7 +2122,12 @@ mod tests {
                 .get(id)
                 .await?
                 .ok_or("persisted download disappeared during worker run")?;
-            if current.progress().downloaded_bytes() >= 128 * 1024 {
+            let complete_piece_persisted = match tokio::fs::metadata(&partial_path).await {
+                Ok(metadata) => metadata.len() >= 16_384,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(Box::new(error) as Box<dyn std::error::Error>),
+            };
+            if current.progress().downloaded_bytes() >= 128 * 1024 && complete_piece_persisted {
                 break current;
             }
             if tokio::time::Instant::now() >= progress_deadline {
