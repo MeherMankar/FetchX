@@ -84,6 +84,14 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isYtDlpUrl = !isTorrent && isLikelyYtDlpUrl(url);
   const isMetalink = !isTorrent && /\.(metalink|meta4)$/i.test(url.trim());
 
+  // Auto-load formats when a yt-dlp URL is detected, with a 600ms debounce.
+  useEffect(() => {
+    if (!isYtDlpUrl || formats !== null || formatsLoading) return;
+    const timer = setTimeout(() => void loadFormats(), 600);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isYtDlpUrl, url]);
+
   useEffect(() => {
     if (packageNameEdited || packageName.trim() || !url.trim()) return;
     let cancelled = false;
@@ -242,6 +250,14 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     }
   };
 
+  const handleUrlChange = (newUrl: string) => {
+    setUrl(newUrl);
+    setFormats(null);
+    setSelectedFormatId("");
+    setDuplicateWarning(null);
+    setForceAdd(false);
+  };
+
   const loadFormats = async () => {
     setError(null);
     setFormatsLoading(true);
@@ -346,13 +362,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               placeholder="https://example.com/file.zip, magnet URI, or local .torrent path"
               value={url}
               onChange={(e) => {
-                setUrl(e.target.value);
-                setFormats(null);
-                setSelectedFormatId("");
+                handleUrlChange(e.target.value);
                 setTorrentInspection(null);
                 setSelectedTorrentFiles([]);
-                setForceAdd(false);
-                setDuplicateWarning(null);
               }}
               required
               disabled={busy || formatsLoading}
@@ -459,42 +471,35 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
 
           {isYtDlpUrl && (
             <div className="field">
-              {formats === null ? (
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={() => void loadFormats()}
-                  disabled={!url || busy || formatsLoading}
-                >
-                  {formatsLoading ? "Loading formats…" : "Load available formats"}
-                </button>
-              ) : (
+              {formats !== null && formats.length > 0 && (
                 <>
                   <label htmlFor="add-format" className="field-label">
                     Video format
                   </label>
-                <select
-                  id="add-format"
-                  className="field-select"
-                  value={selectedFormatId}
-                  onChange={(e) => setSelectedFormatId(e.target.value)}
-                  disabled={busy}
-                >
-                  <option value="">Automatic best quality</option>
-                  {formats.map((format) => (
-                    <option key={format.format_id} value={format.format_id}>
-                      {format.label}
-                    </option>
-                  ))}
-                </select>
+                  <select
+                    id="add-format"
+                    className="field-select"
+                    value={selectedFormatId}
+                    onChange={(e) => setSelectedFormatId(e.target.value)}
+                    disabled={busy}
+                  >
+                    <option value="">Automatic best quality</option>
+                    {formats.map((format) => (
+                      <option key={format.format_id} value={format.format_id}>
+                        {format.label}
+                      </option>
+                    ))}
+                  </select>
                 </>
               )}
               <p className="field-hint">
-                {formats === null
-                  ? "Discover formats before selecting a specific quality."
-                  : formats.length === 0
-                    ? "No selectable video formats were found; automatic selection remains available."
-                    : "Choose a discovered format, or keep automatic best quality."}
+                {formatsLoading
+                  ? "Detecting available formats…"
+                  : formats === null
+                    ? ""
+                    : formats.length === 0
+                      ? "No selectable formats found — automatic best quality will be used."
+                      : "Choose a quality, or keep automatic best quality."}
               </p>
             </div>
           )}
