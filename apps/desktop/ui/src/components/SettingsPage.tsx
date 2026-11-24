@@ -75,9 +75,9 @@ function NativeBuiltinsSection({
   return (
     <section className="settings-section" aria-labelledby="native-builtins-heading">
       <div className="settings-section-header">
-        <h3 id="native-builtins-heading" className="settings-section-title">
+        <h4 id="native-builtins-heading" className="settings-section-title">
           Native built-ins
-        </h3>
+        </h4>
       </div>
       <div className="settings-row">
         <span className="settings-label">URL resolver</span>
@@ -221,9 +221,9 @@ function BrowserExtensionSection() {
   return (
     <section className="settings-section" aria-labelledby="browser-extension-heading">
       <div className="settings-section-header">
-        <h3 id="browser-extension-heading" className="settings-section-title">
+        <h4 id="browser-extension-heading" className="settings-section-title">
           Browser extensions
-        </h3>
+        </h4>
       </div>
 
       <p className="settings-hint">
@@ -395,6 +395,51 @@ function policyForProfile(
   return profiles[profile] ?? { ...current, profile };
 }
 
+type SettingsCategory =
+  | "general"
+  | "downloads"
+  | "scheduling"
+  | "network"
+  | "integrations"
+  | "backup";
+
+const SETTINGS_CATEGORIES: Array<{
+  id: SettingsCategory;
+  title: string;
+  description: string;
+}> = [
+  {
+    id: "general",
+    title: "General",
+    description: "Link handling and default download behavior.",
+  },
+  {
+    id: "downloads",
+    title: "Downloads",
+    description: "Connection limits and automatic retries.",
+  },
+  {
+    id: "scheduling",
+    title: "Scheduling",
+    description: "Choose when downloads run and how fast they transfer.",
+  },
+  {
+    id: "network",
+    title: "Network",
+    description: "Configure the proxy used by supported downloads.",
+  },
+  {
+    id: "integrations",
+    title: "Integrations",
+    description: "Connect FetchX to your browsers.",
+  },
+  {
+    id: "backup",
+    title: "Backup",
+    description: "Export or restore your FetchX settings.",
+  },
+];
+
 function formatBandwidthLimit(bytesPerSecond: number | null): string {
   return bytesPerSecond === null
     ? ""
@@ -472,7 +517,7 @@ function ResourcePolicySection({
   return (
     <section className="settings-section" aria-labelledby="resources-heading">
       <div className="settings-section-header">
-        <h3 id="resources-heading" className="settings-section-title">Resource policy</h3>
+        <h4 id="resources-heading" className="settings-section-title">Resource policy</h4>
       </div>
       <div className="settings-row">
         <label className="settings-label" htmlFor="resource-profile">Profile</label>
@@ -624,9 +669,9 @@ function WeeklyQueueScheduleSection({
   return (
     <section className="settings-section" aria-labelledby="queue-schedule-heading">
       <div className="settings-section-header">
-        <h3 id="queue-schedule-heading" className="settings-section-title">
+        <h4 id="queue-schedule-heading" className="settings-section-title">
           Download schedule
-        </h3>
+        </h4>
       </div>
       <div className="settings-row">
         <span className="settings-label">Weekly download window</span>
@@ -783,7 +828,7 @@ function ProxySection({
   return (
     <section className="settings-section" aria-labelledby="proxy-heading">
       <div className="settings-section-header">
-        <h3 id="proxy-heading" className="settings-section-title">Network proxy</h3>
+        <h4 id="proxy-heading" className="settings-section-title">Network proxy</h4>
       </div>
       <div className="settings-row">
         <label className="settings-label" htmlFor="proxy-kind">Type</label>
@@ -889,7 +934,7 @@ function BandwidthScheduleSection({ cfg, onSaved, onError }: { cfg: EngineConfig
   return (
     <section className="settings-section" aria-labelledby="bw-sched-heading">
       <div className="settings-section-header">
-        <h3 id="bw-sched-heading" className="settings-section-title">Bandwidth schedule</h3>
+        <h4 id="bw-sched-heading" className="settings-section-title">Bandwidth schedule</h4>
       </div>
       <p className="settings-hint">Limit download speed during specific time windows. Overlapping windows apply the lower limit.</p>
       {windows.map((w, i) => (
@@ -973,9 +1018,9 @@ function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
   return (
     <section className="settings-section" aria-labelledby="after-download-heading">
       <div className="settings-section-header">
-        <h3 id="after-download-heading" className="settings-section-title">
+        <h4 id="after-download-heading" className="settings-section-title">
           After download
-        </h3>
+        </h4>
       </div>
       <div className="settings-row">
         <label className="settings-label" htmlFor="after-download-action">
@@ -1115,9 +1160,9 @@ function FolderCategoriesSection({ onError }: { onError: (msg: string) => void }
   return (
     <section className="settings-section" aria-labelledby="folder-categories-heading">
       <div className="settings-section-header">
-        <h3 id="folder-categories-heading" className="settings-section-title">
+        <h4 id="folder-categories-heading" className="settings-section-title">
           Folder categories
-        </h3>
+        </h4>
       </div>
       <div className="settings-row">
         <span className="settings-label">Auto-categorise downloads</span>
@@ -1283,7 +1328,7 @@ function AutoRetrySection({
   return (
     <section className="settings-section" aria-labelledby="auto-retry-heading">
       <div className="settings-section-header">
-        <h3 id="auto-retry-heading" className="settings-section-title">Auto-retry</h3>
+        <h4 id="auto-retry-heading" className="settings-section-title">Auto-retry</h4>
       </div>
       <div className="settings-row">
         <span className="settings-label">Auto-retry failed downloads</span>
@@ -1399,9 +1444,9 @@ function ExportImportSection({
   return (
     <section className="settings-section" aria-labelledby="export-import-heading">
       <div className="settings-section-header">
-        <h3 id="export-import-heading" className="settings-section-title">
+        <h4 id="export-import-heading" className="settings-section-title">
           Export / Import
-        </h3>
+        </h4>
       </div>
       <p className="settings-hint">
         Back up your FetchX settings to a JSON file, or restore them from a
@@ -1433,11 +1478,13 @@ function ExportImportSection({
   );
 }
 
-export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
+export function SettingsPage() {
+  const [cfg, setCfg] = useState<EngineConfigDto | null>(null);
   const [_runtimeStatus, setRuntimeStatus] = useState<EngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<SettingsCategory>("general");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1513,20 +1560,87 @@ export function SettingsPage() {  const [cfg, setCfg] = useState<EngineConfigDto
         downloads keep their existing runtime settings.
       </div>
 
-      <ExportImportSection onImported={() => void load()} onError={setError} />
-      <BrowserExtensionSection />
-      {cfg && (
-        <>
-          <NativeBuiltinsSection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <WeeklyQueueScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <BandwidthScheduleSection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <ResourcePolicySection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <AutoRetrySection cfg={cfg} onSaved={setCfg} onError={setError} />
-          <AfterDownloadSection onError={setError} />
-          <FolderCategoriesSection onError={setError} />
-          <ProxySection cfg={cfg} onSaved={setCfg} onError={setError} />
-        </>
-      )}
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {SETTINGS_CATEGORIES.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              className={`settings-nav-item${activeCategory === category.id ? " settings-nav-item--active" : ""}`}
+              aria-current={activeCategory === category.id ? "page" : undefined}
+              aria-controls={`settings-panel-${category.id}`}
+              onClick={() => setActiveCategory(category.id)}
+            >
+              {category.title}
+            </button>
+          ))}
+        </nav>
+
+        <div className="settings-content">
+          {SETTINGS_CATEGORIES.map((category) => (
+            <section
+              key={category.id}
+              id={`settings-panel-${category.id}`}
+              className="settings-category-panel"
+              aria-label={`${category.title} settings`}
+              hidden={activeCategory !== category.id}
+            >
+              <div className="settings-category-heading">
+                <h3>{category.title}</h3>
+                <p>{category.description}</p>
+              </div>
+
+              {category.id === "general" && (
+                <>
+                  {cfg && (
+                    <NativeBuiltinsSection
+                      cfg={cfg}
+                      onSaved={setCfg}
+                      onError={setError}
+                    />
+                  )}
+                  <AfterDownloadSection onError={setError} />
+                  <FolderCategoriesSection onError={setError} />
+                </>
+              )}
+              {category.id === "downloads" && cfg && (
+                <>
+                  <ResourcePolicySection
+                    cfg={cfg}
+                    onSaved={setCfg}
+                    onError={setError}
+                  />
+                  <AutoRetrySection cfg={cfg} onSaved={setCfg} onError={setError} />
+                </>
+              )}
+              {category.id === "scheduling" && cfg && (
+                <>
+                  <WeeklyQueueScheduleSection
+                    cfg={cfg}
+                    onSaved={setCfg}
+                    onError={setError}
+                  />
+                  <BandwidthScheduleSection
+                    cfg={cfg}
+                    onSaved={setCfg}
+                    onError={setError}
+                  />
+                </>
+              )}
+              {category.id === "network" && cfg && (
+                <ProxySection cfg={cfg} onSaved={setCfg} onError={setError} />
+              )}
+              {category.id === "integrations" && <BrowserExtensionSection />}
+              {category.id === "backup" && (
+                <ExportImportSection
+                  onImported={() => void load()}
+                  onError={setError}
+                />
+              )}
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

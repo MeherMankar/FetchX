@@ -1047,7 +1047,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
    Settings — Pass 1 spacing, Pass 2 color, Pass 7 details
    ============================================================ */
 
-.settings-page { max-width: 640px; padding: 0 0 32px; }
+.settings-page { max-width: 900px; padding: 0 0 32px; }
 
 .settings-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -1064,6 +1064,77 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   padding: 10px 14px; margin-bottom: 16px;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   font-size: 12px; color: var(--text-2); line-height: 1.5;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-nav-item {
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 140ms cubic-bezier(0.22, 1, 0.36, 1),
+              color 140ms cubic-bezier(0.22, 1, 0.36, 1),
+              border-color 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.settings-nav-item:hover,
+.settings-nav-item--active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.settings-nav-item--active {
+  border-left-color: var(--accent);
+}
+
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.settings-content,
+.settings-category-panel {
+  min-width: 0;
+}
+
+.settings-category-panel[hidden] {
+  display: none;
+}
+
+.settings-category-heading {
+  padding: 0 2px 10px;
+}
+
+.settings-category-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.settings-category-heading p {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .settings-section {
@@ -1204,6 +1275,23 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   :root { --sidebar-width: 200px; --detail-width: 280px; }
   .nav-item { padding: 0 10px; }
   .search-input { width: 140px; }
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: thin;
+  }
+  .settings-nav-item {
+    flex: 0 0 auto;
+    border-left-color: transparent;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+  }
+  .settings-nav-item--active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+  }
 }
 
 @media (max-width: 720px) {
