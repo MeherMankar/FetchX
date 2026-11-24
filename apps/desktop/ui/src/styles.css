@@ -1658,6 +1658,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   position: fixed;
   z-index: 300;
   min-width: 200px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   padding: 4px;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -1671,6 +1673,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .context-menu-item {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   width: 100%;
   padding: 7px 12px;
   border: 0;
@@ -1703,6 +1706,37 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   margin: 3px 4px;
   background: var(--border);
   border: 0;
+}
+
+.context-menu-heading {
+  display: block;
+  padding: 6px 12px 2px;
+  color: var(--text-3);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.context-menu-url-editor {
+  padding: 4px 8px;
+}
+
+.context-menu-url-editor input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.context-menu-url-editor p {
+  margin: 6px 2px;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 /* ============================================================

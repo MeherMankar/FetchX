@@ -506,10 +506,18 @@ export function App() {
     await updateDownloadUrl(id, newUrl);
   }, []);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent, download: Download) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, download });
+  const handleContextMenu = useCallback((x: number, y: number, download: Download) => {
+    setContextMenu({ x, y, download });
   }, []);
+
+  const handleSetBandwidthLimit = useCallback((id: string) => {
+    const download = downloads.find((item) => item.id === id);
+    setBandwidthLimitTarget({
+      id,
+      filename: download?.filename ?? id,
+      currentLimit: download?.bandwidth_limit ?? null,
+    });
+  }, [downloads]);
 
   const handleContextMenuCopyUrl = useCallback((download: Download) => {
     void navigator.clipboard.writeText(download.url).catch(() => { /* non-critical */ });
@@ -936,19 +944,11 @@ export function App() {
                     onPause={pause}
                     onResume={resume}
                     onCancel={handleCancel}
-                    onDelete={handleDelete}
                     onRetry={handleRetry}
-                    onPriorityChange={handlePriorityChange}
-                    onQueueMove={handleQueueMove}
                     onSetSchedule={handleSetSchedule}
                     onClearSchedule={handleClearSchedule}
                     onError={handleError}
                     onEnsureSchedule={ensureScheduleFetched}
-                    onUpdateUrl={handleUpdateUrl}
-                    onSetBandwidthLimit={(id) => {
-                      const d = downloads.find((x) => x.id === id);
-                      setBandwidthLimitTarget({ id, filename: d?.filename ?? id, currentLimit: d?.bandwidth_limit ?? null });
-                    }}
                     onContextMenu={handleContextMenu}
                     speedHistory={speedHistorySnapshot.get(download.id)}
                   />
@@ -1051,13 +1051,15 @@ export function App() {
           y={contextMenu.y}
           download={contextMenu.download}
           onClose={() => setContextMenu(null)}
-          onPause={pause}
-          onResume={resume}
           onCancel={handleCancel}
           onDelete={handleDelete}
-          onRetry={handleRetry}
           onCopyUrl={handleContextMenuCopyUrl}
           onOpenFolder={handleContextMenuOpenFolder}
+          onPriorityChange={handlePriorityChange}
+          onQueueMove={handleQueueMove}
+          onSetBandwidthLimit={handleSetBandwidthLimit}
+          onUpdateUrl={handleUpdateUrl}
+          onError={handleError}
         />
       )}
 

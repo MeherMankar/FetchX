@@ -1,19 +1,24 @@
-import { useEffect, useRef } from "react";
-import type { Download } from "../api/types";
-import { canCancel, canPause, canResume, canRetry } from "../lib/status";
+import { useEffect, useRef, useState } from "react";
+import type { Download, DownloadPriority } from "../api/types";
+import {
+  canCancel,
+  canChangePriority,
+} from "../lib/status";
 
 interface ContextMenuProps {
   x: number;
   y: number;
   download: Download;
   onClose: () => void;
-  onPause: (id: string) => void;
-  onResume: (id: string) => void;
   onCancel: (id: string) => void;
   onDelete: (id: string) => void;
-  onRetry: (id: string) => void;
   onCopyUrl: (download: Download) => void;
   onOpenFolder: (id: string) => void;
+  onPriorityChange: (id: string, priority: DownloadPriority) => void;
+  onQueueMove: (id: string, direction: "up" | "down") => void;
+  onSetBandwidthLimit: (id: string) => void;
+  onUpdateUrl: (id: string, newUrl: string) => Promise<void>;
+  onError: (message: string) => void;
 }
 
 export function ContextMenu({
@@ -21,24 +26,28 @@ export function ContextMenu({
   y,
   download,
   onClose,
-  onPause,
-  onResume,
   onCancel,
   onDelete,
-  onRetry,
   onCopyUrl,
   onOpenFolder,
+  onPriorityChange,
+  onQueueMove,
+  onSetBandwidthLimit,
+  onUpdateUrl,
+  onError,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const isLegacyAria2 = download.engine === "aria2";
+  const [urlEditing, setUrlEditing] = useState(false);
+  const [urlDraft, setUrlDraft] = useState(download.url);
+  const [urlSaving, setUrlSaving] = useState(false);
 
-  // Close on click outside or Escape
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
-    const handleMouseDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    const handleMouseDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         onClose();
       }
     };
@@ -50,16 +59,60 @@ export function ContextMenu({
     };
   }, [onClose]);
 
-  // Position to stay in viewport (flip up if too close to bottom)
-  const MENU_HEIGHT = 280;
-  const MENU_WIDTH = 200;
-  const adjustedY = y + MENU_HEIGHT > window.innerHeight ? y - MENU_HEIGHT : y;
-  const adjustedX = x + MENU_WIDTH > window.innerWidth ? x - MENU_WIDTH : x;
+  useEffect(() => {
+    if (urlEditing) {
+      menuRef.current
+        ?.querySelector<HTMLInputElement>(".context-menu-url-editor input")
+        ?.focus();
+      return;
+    }
+
+    menuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"], [role="menuitemradio"]')
+      ?.focus();
+  }, [urlEditing]);
+
+  const MENU_HEIGHT = 440;
+  const MENU_WIDTH = 240;
+  const adjustedY =
+    y + MENU_HEIGHT > window.innerHeight
+      ? Math.max(8, window.innerHeight - MENU_HEIGHT - 8)
+      : y;
+  const adjustedX =
+    x + MENU_WIDTH > window.innerWidth
+      ? Math.max(8, window.innerWidth - MENU_WIDTH - 8)
+      : x;
 
   const handleItem = (action: () => void) => {
     action();
     onClose();
   };
+
+  const submitUrl = async () => {
+    const newUrl = urlDraft.trim();
+    if (!newUrl) {
+      onError("Paste a fresh download URL.");
+      return;
+    }
+
+    setUrlSaving(true);
+    try {
+      await onUpdateUrl(download.id, newUrl);
+      onClose();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUrlSaving(false);
+    }
+  };
+
+  const canUpdateUrl =
+    !isLegacyAria2 &&
+    ["failed", "cancelled", "paused", "queued"].includes(download.status);
+  const canSetBandwidthLimit =
+    !isLegacyAria2 &&
+    ["downloading", "queued", "paused"].includes(download.status);
+  const hasTaskAction = canCancel(download.status);
 
   return (
     <div
@@ -68,34 +121,82 @@ export function ContextMenu({
       style={{ left: adjustedX, top: adjustedY }}
       role="menu"
       aria-label={`Actions for ${download.filename}`}
+      onKeyDown={(event) => {
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        if (
+          !(event.target instanceof HTMLElement) ||
+          !event.target.closest('[role="menuitem"], [role="menuitemradio"]')
+        ) {
+          return;
+        }
+        const items = Array.from(
+          menuRef.current?.querySelectorAll<HTMLElement>(
+            '[role="menuitem"], [role="menuitemradio"]',
+          ) ?? [],
+        ).filter((item) => !item.hasAttribute("disabled"));
+        if (items.length === 0) return;
+
+        event.preventDefault();
+        const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+        const nextIndex =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? items.length - 1
+              : (currentIndex + (event.key === "ArrowDown" ? 1 : -1) + items.length) %
+                items.length;
+        items[nextIndex]?.focus();
+      }}
     >
-      {!isLegacyAria2 && canPause(download.status) && (
-        <button
-          className="context-menu-item"
-          role="menuitem"
-          onClick={() => handleItem(() => onPause(download.id))}
-        >
-          Pause
-        </button>
+      {!isLegacyAria2 && download.status === "queued" && (
+        <>
+          <button
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => handleItem(() => onQueueMove(download.id, "up"))}
+          >
+            Move earlier in queue
+          </button>
+          <button
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => handleItem(() => onQueueMove(download.id, "down"))}
+          >
+            Move later in queue
+          </button>
+          <div className="context-menu-separator" role="separator" />
+        </>
       )}
-      {!isLegacyAria2 && canResume(download.status) && (
-        <button
-          className="context-menu-item"
-          role="menuitem"
-          onClick={() => handleItem(() => onResume(download.id))}
+
+      {!isLegacyAria2 && canChangePriority(download.status) && (
+        <div
+          className="context-menu-priority"
+          role="group"
+          aria-label="Download priority"
         >
-          Resume
-        </button>
+          <span className="context-menu-heading">Priority</span>
+          {(["low", "normal", "high"] as const).map(
+            (priority: DownloadPriority) => (
+              <button
+                key={priority}
+                className="context-menu-item"
+                role="menuitemradio"
+                aria-checked={download.priority === priority}
+                onClick={() =>
+                  handleItem(() => onPriorityChange(download.id, priority))
+                }
+              >
+                <span>{priority[0].toUpperCase() + priority.slice(1)}</span>
+                {download.priority === priority && (
+                  <span aria-hidden="true">✓</span>
+                )}
+              </button>
+            ),
+          )}
+          <div className="context-menu-separator" role="separator" />
+        </div>
       )}
-      {!isLegacyAria2 && canRetry(download.status) && (
-        <button
-          className="context-menu-item"
-          role="menuitem"
-          onClick={() => handleItem(() => onRetry(download.id))}
-        >
-          Retry
-        </button>
-      )}
+
       {!isLegacyAria2 && canCancel(download.status) && (
         <button
           className="context-menu-item"
@@ -106,8 +207,65 @@ export function ContextMenu({
         </button>
       )}
 
-      {(canPause(download.status) || canResume(download.status) || canRetry(download.status) || canCancel(download.status)) && (
-        <div className="context-menu-separator" role="separator" />
+      {hasTaskAction && <div className="context-menu-separator" role="separator" />}
+
+      {canUpdateUrl &&
+        (urlEditing ? (
+          <div className="context-menu-url-editor">
+            <input
+              type="text"
+              value={urlDraft}
+              aria-label="Refreshed download URL"
+              placeholder="Paste refreshed URL"
+              disabled={urlSaving}
+              onChange={(event) => setUrlDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submitUrl();
+                if (event.key === "Escape") setUrlEditing(false);
+              }}
+            />
+            <p>
+              Saved bytes are reused only when the server confirms the same file.
+            </p>
+            <button
+              className="context-menu-item"
+              role="menuitem"
+              disabled={urlSaving}
+              onClick={() => void submitUrl()}
+            >
+              {urlSaving ? "Updating..." : "Replace URL and retry"}
+            </button>
+            <button
+              className="context-menu-item"
+              role="menuitem"
+              disabled={urlSaving}
+              onClick={() => setUrlEditing(false)}
+            >
+              Back
+            </button>
+          </div>
+        ) : (
+          <button
+            className="context-menu-item"
+            role="menuitem"
+            onClick={() => setUrlEditing(true)}
+          >
+            {download.status === "failed" || download.status === "cancelled"
+              ? "Refresh link"
+              : "Update URL"}
+          </button>
+        ))}
+
+      {canSetBandwidthLimit && (
+        <button
+          className="context-menu-item"
+          role="menuitem"
+          onClick={() => handleItem(() => onSetBandwidthLimit(download.id))}
+        >
+          {download.bandwidth_limit
+            ? `Set speed limit · ${Math.round(download.bandwidth_limit / 1024)} KiB/s`
+            : "Set speed limit"}
+        </button>
       )}
 
       <button
