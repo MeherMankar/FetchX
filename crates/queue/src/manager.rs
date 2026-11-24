@@ -4003,6 +4003,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacing_failed_download_url_requeues_the_same_native_download()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (repository, engine, _release) = setup_engine().await?;
+        let id = persist_item_in_status(&repository, DownloadStatus::Failed).await?;
+        let manager = QueueManager::new(repository.clone(), engine, QueueConfig::default()).await?;
+        manager.pause_dispatch().await?;
+
+        let updated = manager
+            .update_url(id, "https://example.test/refreshed?token=new".to_owned())
+            .await?;
+
+        assert_eq!(updated.id(), id);
+        assert_eq!(updated.status(), DownloadStatus::Queued);
+        assert_eq!(
+            updated.source().url(),
+            "https://example.test/refreshed?token=new"
+        );
+        assert!(manager.snapshot().await?.queued.contains(&id));
+
+        manager.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn remove_unknown_download_reports_not_found() -> Result<(), Box<dyn std::error::Error>> {
         let (repository, engine, _release) = setup_engine().await?;
         let manager = QueueManager::new(repository, engine, QueueConfig::default()).await?;

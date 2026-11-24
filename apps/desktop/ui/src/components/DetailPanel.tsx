@@ -93,7 +93,7 @@ interface DetailPanelProps {
   onClearSchedule: (id: string) => Promise<void>;
   onError: (message: string) => void;
   onStopSeeding: (id: string) => Promise<void>;
-  onUpdateUrl: (id: string, newUrl: string) => void;
+  onUpdateUrl: (id: string, newUrl: string) => Promise<void>;
 }
 
 export function DetailPanel({
@@ -152,6 +152,7 @@ export function DetailPanel({
 
   const [urlEditing, setUrlEditing] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
+  const [urlSaving, setUrlSaving] = useState(false);
 
   useEffect(() => {
     setRestartOpen(false);
@@ -237,6 +238,24 @@ export function DetailPanel({
     download.status === "paused" ||
     download.status === "queued"
   );
+  const urlRetryable = download.status === "failed" || download.status === "cancelled";
+  const submitUrl = async () => {
+    const newUrl = urlDraft.trim();
+    if (!newUrl) {
+      onError("Paste a fresh download URL.");
+      return;
+    }
+
+    setUrlSaving(true);
+    try {
+      await onUpdateUrl(download.id, newUrl);
+      setUrlEditing(false);
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUrlSaving(false);
+    }
+  };
 
   const startNativeRestart = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1101,7 +1120,7 @@ export function DetailPanel({
               disabled={busy}
               onClick={() => { setUrlDraft(download.url); setUrlEditing(true); }}
             >
-              Update URL
+              {urlRetryable ? "Refresh link" : "Update URL"}
             </button>
           )}
           {canUpdateUrl && urlEditing && (
@@ -1110,27 +1129,32 @@ export function DetailPanel({
                 className="url-refresh-input"
                 type="text"
                 value={urlDraft}
-                placeholder="Paste new URL"
+                placeholder="Paste refreshed download URL"
                 onChange={(e) => setUrlDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
-                    onUpdateUrl(download.id, urlDraft);
-                    setUrlEditing(false);
+                    void submitUrl();
                   } else if (e.key === "Escape") {
                     setUrlEditing(false);
                   }
                 }}
+                disabled={urlSaving}
                 // eslint-disable-next-line jsx-a11y/no-autofocus
                 autoFocus
               />
+              <p className="url-refresh-help">
+                FetchX resumes saved bytes only when the server confirms the same file; otherwise it safely restarts.
+              </p>
               <button
                 className="button button-secondary"
-                onClick={() => { onUpdateUrl(download.id, urlDraft); setUrlEditing(false); }}
+                disabled={urlSaving}
+                onClick={() => void submitUrl()}
               >
-                Confirm
+                {urlSaving ? "Updating..." : urlRetryable ? "Replace & retry" : "Update URL"}
               </button>
               <button
                 className="button button-secondary"
+                disabled={urlSaving}
                 onClick={() => setUrlEditing(false)}
               >
                 Cancel

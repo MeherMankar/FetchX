@@ -1467,9 +1467,18 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 /* ── URL refresh inline editor ──────────────────────── */
 .url-refresh-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+}
+
+.url-refresh-help {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .url-refresh-input {

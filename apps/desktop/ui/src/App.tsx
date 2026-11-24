@@ -502,10 +502,8 @@ export function App() {
     }
   }, [load, refreshSnapshot]);
 
-  const handleUpdateUrl = useCallback((id: string, newUrl: string) => {
-    updateDownloadUrl(id, newUrl).catch((cause: unknown) => {
-      setGlobalError(cause instanceof Error ? cause.message : String(cause));
-    });
+  const handleUpdateUrl = useCallback(async (id: string, newUrl: string) => {
+    await updateDownloadUrl(id, newUrl);
   }, []);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, download: Download) => {
