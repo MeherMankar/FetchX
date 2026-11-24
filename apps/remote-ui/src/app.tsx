@@ -79,6 +79,10 @@ interface CreateResult {
   id: string;
 }
 
+interface BatchCreateResult {
+  results: Array<{ index: number; id?: string; error_code?: string }>;
+}
+
 export function App() {
   const [serverUrl, setServerUrl] = useState("http://127.0.0.1:39800");
   const [tokenInput, setTokenInput] = useState("");
@@ -90,6 +94,7 @@ export function App() {
   const [section, setSection] = useState<Section>("dashboard");
   const [search, setSearch] = useState("");
   const [newUrl, setNewUrl] = useState("");
+  const [batchMode, setBatchMode] = useState(false);
   const [priority, setPriority] = useState<DownloadPriority>("normal");
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -112,6 +117,7 @@ export function App() {
     setProtocol(null);
     setDownloads([]);
     setEngineStatuses(null);
+    setBatchMode(false);
     setEventState("Disconnected");
     setTokenInput("");
     if (clearMessage) setError("");
@@ -350,6 +356,34 @@ export function App() {
     setError("");
     setNotice("");
     try {
+      if (batchMode) {
+        if (!capabilities.has("download.createBatch")) {
+          throw new RemoteError("Batch creation is not available on this server.", "protocol");
+        }
+        const urls = newUrl.split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+        if (urls.length > 100) {
+          throw new RemoteError("A batch can contain at most 100 URLs.", "protocol");
+        }
+        if (urls.some((url) => !/^https?:\/\//i.test(url))) {
+          throw new RemoteError("Batch add accepts HTTP(S) URLs only, one URL per line.", "protocol");
+        }
+        const result = await client.call<BatchCreateResult>("download.createBatch", {
+          downloads: urls.map((url) => ({ url })),
+          priority,
+        });
+        if (!Array.isArray(result.results) || result.results.length !== urls.length) {
+          throw new RemoteError("The server returned an invalid batch result.", "protocol");
+        }
+        const failures = result.results.filter((item) => item.error_code);
+        const accepted = result.results.length - failures.length;
+        setNewUrl("");
+        await refreshDownloads(client);
+        setNotice(`${accepted} download${accepted === 1 ? "" : "s"} queued; ${failures.length} failed.`);
+        if (failures.length > 0) {
+          setError(failures.map((item) => `Line ${item.index + 1}: ${item.error_code}`).join("; "));
+        }
+        return;
+      }
       if (!capabilities.has("download.create")) {
         throw new RemoteError("download.create is not available in the current protocol.", "protocol");
       }
@@ -373,7 +407,7 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, capabilities, client, handleError, newUrl, priority, refreshDownloads]);
+  }, [batchMode, busy, capabilities, client, handleError, newUrl, priority, refreshDownloads]);
 
   const refreshNow = useCallback(async () => {
     if (!client || refreshing) return;
@@ -533,6 +567,8 @@ export function App() {
               onSearch={setSearch}
               newUrl={newUrl}
               onNewUrl={setNewUrl}
+              batchMode={batchMode}
+              onBatchMode={setBatchMode}
               priority={priority}
               onPriority={setPriority}
               onAdd={(event) => void addDownload(event)}
@@ -693,6 +729,8 @@ function DownloadsView(props: {
   onSearch: (value: string) => void;
   newUrl: string;
   onNewUrl: (value: string) => void;
+  batchMode: boolean;
+  onBatchMode: (value: boolean) => void;
   priority: DownloadPriority;
   onPriority: (value: DownloadPriority) => void;
   onAdd: (event: FormEvent<HTMLFormElement>) => void;
@@ -705,9 +743,12 @@ function DownloadsView(props: {
 }) {
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const canCreate = props.capabilities.has("download.create");
-  const isMagnet = props.newUrl.trim().toLowerCase().startsWith("magnet:");
+  const canBatchCreate = props.capabilities.has("download.createBatch");
+  const isMagnet = !props.batchMode && props.newUrl.trim().toLowerCase().startsWith("magnet:");
   const nativeTorrentAvailable = supportsNativeMagnetSelection(props.capabilities);
-  const canSubmit = canCreate && (!isMagnet || nativeTorrentAvailable);
+  const canSubmit = props.batchMode
+    ? canBatchCreate
+    : canCreate && (!isMagnet || nativeTorrentAvailable);
   const waitingForSelection = props.downloads.find((download) =>
     download.engine === "native_torrent" && download.status === "metadata_acquiring"
   );
@@ -718,19 +759,47 @@ function DownloadsView(props: {
       <section className="panel add-panel">
         <div className="panel-heading">
           <div><p className="eyebrow">New transfer</p><h2>Add a download</h2></div>
-          <span className="capability-chip">{props.allDownloads.length} records</span>
+          <div className="topbar-actions">
+            <span className="capability-chip">{props.allDownloads.length} records</span>
+            {canBatchCreate && (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => props.onBatchMode(!props.batchMode)}
+                disabled={props.busy}
+              >
+                {props.batchMode ? "Single URL" : "Batch add"}
+              </button>
+            )}
+          </div>
         </div>
         <form className="add-form" onSubmit={props.onAdd}>
-          <label className="visually-hidden" htmlFor="download-url">Download URL or magnet URI</label>
-          <input
-            id="download-url"
-            type="text"
-            value={props.newUrl}
-            onChange={(event) => props.onNewUrl(event.target.value)}
-            placeholder="https://example.com/file.zip or magnet:?xt=..."
-            required
-            disabled={!canSubmit || props.busy}
-          />
+          {props.batchMode ? (
+            <label className="visually-hidden" htmlFor="download-url">HTTP(S) URLs, one per line</label>
+          ) : (
+            <label className="visually-hidden" htmlFor="download-url">Download URL or magnet URI</label>
+          )}
+          {props.batchMode ? (
+            <textarea
+              id="download-url"
+              rows={3}
+              value={props.newUrl}
+              onChange={(event) => props.onNewUrl(event.target.value)}
+              placeholder={"Paste HTTP(S) URLs, one per line"}
+              required
+              disabled={!canSubmit || props.busy}
+            />
+          ) : (
+            <input
+              id="download-url"
+              type="text"
+              value={props.newUrl}
+              onChange={(event) => props.onNewUrl(event.target.value)}
+              placeholder="https://example.com/file.zip or magnet:?xt=..."
+              required
+              disabled={!canSubmit || props.busy}
+            />
+          )}
           <label className="visually-hidden" htmlFor="download-priority">Priority</label>
           <select
             id="download-priority"
@@ -743,10 +812,13 @@ function DownloadsView(props: {
             <option value="high">High priority</option>
           </select>
           <button className="primary-button" type="submit" disabled={!canSubmit || props.busy}>
-            {props.busy ? "Sending…" : "Add download"}
+            {props.busy ? "Sending…" : props.batchMode ? "Queue batch" : "Add download"}
           </button>
         </form>
         {!canCreate && <p className="muted small-note">Download creation is not advertised by this server.</p>}
+        {props.batchMode && (
+          <p className="muted small-note">Up to 100 HTTP(S) links per batch. Each link is validated independently.</p>
+        )}
         {isMagnet && !nativeTorrentAvailable && (
           <p className="muted small-note">
             Native torrent creation is unavailable on this server. FetchX will not use an external engine fallback.

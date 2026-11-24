@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use fetchx_models::{DownloadId, DownloadPriority, EngineKind};
+use fetchx_models::{DownloadId, DownloadPriority, EngineKind, YtDlpAudioFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -23,6 +23,8 @@ pub const MAX_REQUEST_ID_BYTES: usize = 256;
 pub const MAX_DOWNLOAD_URL_BYTES: usize = 16_384;
 /// Maximum UTF-8 byte length of a suggested download filename.
 pub const MAX_DOWNLOAD_FILENAME_BYTES: usize = 255;
+/// Maximum number of independent downloads accepted by one batch request.
+pub const MAX_DOWNLOAD_BATCH_ITEMS: usize = 100;
 
 /// Top-level method namespaces reserved by the remote protocol.
 pub const NAMESPACES: &[&str] = &[
@@ -39,6 +41,7 @@ pub const SYSTEM_DISCOVER: &str = "system.discover";
 pub const SYSTEM_WEBSOCKET_TICKET: &str = "system.websocketTicket";
 pub const ENGINE_RUNTIME_STATUS: &str = "engine.runtimeStatus";
 pub const DOWNLOAD_CREATE: &str = "download.create";
+pub const DOWNLOAD_CREATE_BATCH: &str = "download.createBatch";
 pub const DOWNLOAD_GET: &str = "download.get";
 pub const DOWNLOAD_LIST: &str = "download.list";
 pub const DOWNLOAD_TORRENT_METADATA: &str = "download.torrentMetadata";
@@ -146,6 +149,7 @@ pub enum RemoteCommand {
     WebSocketTicket,
     EngineRuntimeStatus,
     DownloadCreate(DownloadCreateParams),
+    DownloadCreateBatch(DownloadBatchCreateParams),
     DownloadGet(DownloadId),
     DownloadList,
     DownloadTorrentMetadata(DownloadId),
@@ -195,6 +199,30 @@ pub struct DownloadCreateParams {
     pub user_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cookies: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadBatchCreateParams {
+    pub downloads: Vec<DownloadBatchItemParams>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<DownloadPriority>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DownloadBatchItemParams {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<EngineKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_format: Option<YtDlpAudioFormat>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -291,6 +319,7 @@ pub const CAPABILITIES: &[&str] = &[
     SYSTEM_WEBSOCKET_TICKET,
     ENGINE_RUNTIME_STATUS,
     DOWNLOAD_CREATE,
+    DOWNLOAD_CREATE_BATCH,
     DOWNLOAD_GET,
     DOWNLOAD_LIST,
     DOWNLOAD_TORRENT_METADATA,
@@ -479,6 +508,20 @@ pub fn parse_request(bytes: &[u8]) -> Result<ValidatedRequest, ProtocolError> {
                 Ok(RemoteCommand::DownloadCreate(params))
             }
         }),
+        DOWNLOAD_CREATE_BATCH => {
+            parse_params::<DownloadBatchCreateParams>(&request).and_then(|params| {
+                if params.downloads.is_empty()
+                    || params.downloads.len() > MAX_DOWNLOAD_BATCH_ITEMS
+                    || params.downloads.iter().any(|item| {
+                        item.url.trim().is_empty() || item.url.len() > MAX_DOWNLOAD_URL_BYTES
+                    })
+                {
+                    Err(invalid_params(&request))
+                } else {
+                    Ok(RemoteCommand::DownloadCreateBatch(params))
+                }
+            })
+        }
         DOWNLOAD_GET => parse_params::<DownloadIdParams>(&request)
             .map(|params| RemoteCommand::DownloadGet(params.id)),
         DOWNLOAD_LIST => parse_empty_params(&request).map(|()| RemoteCommand::DownloadList),
@@ -652,6 +695,70 @@ mod tests {
     }
 
     #[test]
+    fn batch_create_request_accepts_bounded_items_and_priority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let body = request(
+            DOWNLOAD_CREATE_BATCH,
+            Some(serde_json::json!({
+                "downloads": [
+                    { "url": "https://example.test/one.bin" },
+                    { "url": "https://example.test/two.mp4", "engine": "yt_dlp", "format_id": "best" }
+                ],
+                "priority": "high"
+            })),
+        );
+        assert_eq!(
+            parse_request(&encoded(&body)?)?.command,
+            RemoteCommand::DownloadCreateBatch(DownloadBatchCreateParams {
+                downloads: vec![
+                    DownloadBatchItemParams {
+                        url: "https://example.test/one.bin".to_owned(),
+                        package_name: None,
+                        engine: None,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    },
+                    DownloadBatchItemParams {
+                        url: "https://example.test/two.mp4".to_owned(),
+                        package_name: None,
+                        engine: Some(EngineKind::YtDlp),
+                        format_id: Some("best".to_owned()),
+                        extension: None,
+                        audio_format: None,
+                    },
+                ],
+                priority: Some(DownloadPriority::High),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn batch_create_rejects_empty_oversized_and_unbounded_requests()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let oversized_url = "x".repeat(MAX_DOWNLOAD_URL_BYTES + 1);
+        let too_many = (0..=MAX_DOWNLOAD_BATCH_ITEMS)
+            .map(|_| serde_json::json!({ "url": "https://example.test/file.bin" }))
+            .collect::<Vec<_>>();
+        for downloads in [
+            serde_json::json!([]),
+            serde_json::json!(too_many),
+            serde_json::json!([{ "url": oversized_url }]),
+        ] {
+            let body = request(
+                DOWNLOAD_CREATE_BATCH,
+                Some(serde_json::json!({ "downloads": downloads })),
+            );
+            assert!(matches!(
+                parse_request(&encoded(&body)?),
+                Err(ProtocolError::InvalidParams { .. })
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn all_documented_download_operations_parse() -> Result<(), Box<dyn std::error::Error>> {
         let cases = [
             (DOWNLOAD_GET, serde_json::json!({ "id": ID })),
@@ -719,6 +826,7 @@ mod tests {
             })
         );
         assert!(BROWSER_RPC_METHODS.contains(&DOWNLOAD_RUNTIME_STATUS));
+        assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_CREATE_BATCH));
         assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_TORRENT_METADATA));
         assert!(!BROWSER_RPC_METHODS.contains(&DOWNLOAD_SELECT_TORRENT_FILES));
         assert!(!BROWSER_RPC_METHODS.contains(&ENGINE_RUNTIME_STATUS));
@@ -879,6 +987,10 @@ mod tests {
         let value = serde_json::to_value(&info)?;
         assert_eq!(value["protocol_version"], PROTOCOL_VERSION);
         assert!(info.capabilities.contains(&DOWNLOAD_CREATE.to_owned()));
+        assert!(
+            info.capabilities
+                .contains(&DOWNLOAD_CREATE_BATCH.to_owned())
+        );
         assert_eq!(
             NAMESPACES,
             &[

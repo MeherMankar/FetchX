@@ -126,7 +126,9 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
 #[cfg(test)]
 mod tests {
     use fetchx_models::{DownloadId, DownloadPriority, EngineKind};
-    use fetchx_remote_protocol::{DownloadCreateParams, RemoteCommand};
+    use fetchx_remote_protocol::{
+        DownloadBatchCreateParams, DownloadBatchItemParams, DownloadCreateParams, RemoteCommand,
+    };
 
     use super::{AuthenticatedPrincipal, Permission, Role, required_permission};
 
@@ -143,6 +145,20 @@ mod tests {
                     engine: None,
                     priority: None,
                     ..Default::default()
+                }),
+                Permission::DownloadsCreate,
+            ),
+            (
+                RemoteCommand::DownloadCreateBatch(DownloadBatchCreateParams {
+                    downloads: vec![DownloadBatchItemParams {
+                        url: "https://example.invalid/file".to_owned(),
+                        package_name: None,
+                        engine: None,
+                        format_id: None,
+                        extension: None,
+                        audio_format: None,
+                    }],
+                    priority: None,
                 }),
                 Permission::DownloadsCreate,
             ),
@@ -219,7 +235,7 @@ mod tests {
 
     #[test]
     fn every_protocol_command_has_an_explicit_permission() {
-        assert_eq!(commands().len(), 20);
+        assert_eq!(commands().len(), 21);
         for (command, expected) in commands() {
             assert_eq!(required_permission(&command), expected);
         }

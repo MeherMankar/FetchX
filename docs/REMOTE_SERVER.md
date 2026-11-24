@@ -74,7 +74,7 @@ material is never included in the error body or logs. Requests are verified cent
 before JSON-RPC dispatch, not separately inside each operation.
 
 Current implemented RPC operations include `system.discover`, `download.create`,
-`download.get`, `download.list`, `download.pause`, `download.resume`,
+`download.createBatch`, `download.get`, `download.list`, `download.pause`, `download.resume`,
 `download.cancel`, `download.remove`, `download.setPriority`, `queue.moveUp`,
 `queue.moveDown`, and `system.websocketTicket`. Queue move methods accept
 `{ "id": "<download-id>" }`, act only on queued downloads, and move within the
@@ -84,6 +84,20 @@ downloads through DirectHttp and magnet downloads through the engine selected by
 Discovery reports only supported operations and event names. An operation accepted by
 the shared Phase 21A parser but not implemented by CoreServices returns the stable
 `UnsupportedOperation` error; it is not reported as a successful no-op.
+
+`download.createBatch` accepts 1–100 HTTP(S) entries in `downloads`, with optional
+per-item `package_name`, `engine`, and yt-dlp format fields, plus an optional batch
+`priority`. Each item is validated and admitted independently, so one bad or duplicate
+URL does not prevent later items from being queued. The result contains one entry per
+input, in input order: accepted entries contain `{ "index": 0, "id": "<download-id>" }`;
+rejected entries contain an `error_code` instead of an ID. Results never echo source
+URLs, filesystem paths, or raw engine errors. Batch creation requires the same
+download-create permission as `download.create`. It is not included in the separate
+browser-extension/native-host allowlist.
+
+The authenticated remote web UI exposes batch add when the server advertises
+`download.createBatch`. Paste one HTTP(S) URL per line; each URL receives an independent
+result.
 
 `download.aria2Recovery` is an additive read-only RPC for one persisted download ID. It delegates to `CoreServices::assess_aria2_recovery`, requires the existing `downloads.read` permission (including the ReadOnly role), and is listed in `system.discover` under the unchanged `fetchx.rpc.v1` protocol. Its response includes `assessment_version: 1`, the download ID, typed state, and sanitized explanation/next-step text; it excludes local paths, GIDs, credentials, and raw aria2 errors. Runtime evidence is the server CoreServices runtime only. This method does not inspect a client's separately configured aria2 endpoint, start/restart aria2, dispatch a download, or mutate records/files. The browser/native-host allowlist intentionally does not expose it. Clients should capability-gate this additive operation; the CLI does so and remains compatible with older servers.
 

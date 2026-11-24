@@ -140,6 +140,7 @@ export type RemoteMethod =
   | "system.websocketTicket"
   | "engine.runtimeStatus"
   | "download.create"
+  | "download.createBatch"
   | "download.get"
   | "download.list"
   | "download.torrentMetadata"

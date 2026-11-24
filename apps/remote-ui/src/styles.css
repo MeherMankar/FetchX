@@ -87,7 +87,7 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
 
 .connect-form { display: grid; gap: 16px; }
 .connect-form label { display: grid; gap: 8px; color: var(--text); font-size: 13px; font-weight: 500; }
-.connect-form input, .add-form input, .add-form select, .search-field input, .priority-select {
+.connect-form input, .add-form input, .add-form select, .add-form textarea, .search-field input, .priority-select {
   min-width: 0;
   height: 42px;
   padding: 0 12px;
@@ -98,7 +98,7 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
   outline: none;
   transition: border-color 140ms ease;
 }
-.connect-form input:focus, .add-form input:focus, .add-form select:focus, .search-field:focus-within, .priority-select:focus {
+.connect-form input:focus, .add-form input:focus, .add-form select:focus, .add-form textarea:focus, .search-field:focus-within, .priority-select:focus {
   border-color: var(--accent);
 }
 
@@ -269,6 +269,7 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
 .add-panel { padding-bottom: 20px; }
 .add-form { display: grid; grid-template-columns: minmax(180px, 1fr) 152px 176px auto; gap: 8px; }
 .add-form input { width: 100%; }
+.add-form textarea { grid-column: 1 / -1; width: 100%; height: auto; min-height: 82px; padding: 10px 12px; resize: vertical; }
 .add-form select { width: 100%; }
 .capability-chip { display: inline-flex; align-items: center; width: fit-content; padding: 0; color: var(--text-muted); background: transparent; font: 12px ui-monospace, monospace; }
 .small-note { margin-top: 12px; font-size: 12px; }
@@ -352,7 +353,7 @@ code { font-family: "Cascadia Code", Consolas, monospace; }
   .metric-card strong { font-size: 19px; }
   .panel { padding: 16px; }
   .add-form { grid-template-columns: minmax(0, 1fr) 1fr; }
-  .add-form input { grid-column: 1 / -1; }
+  .add-form input, .add-form textarea { grid-column: 1 / -1; }
   .add-form button { grid-column: 1 / -1; }
   .downloads-heading { align-items: flex-start; flex-direction: column; }
   .search-field { width: 100%; }

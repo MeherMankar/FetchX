@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use fetchx_core_services::{
-    CoreServices, CoreServicesError, EngineRuntimeState as CoreEngineRuntimeState,
+    BatchDownloadError, BatchDownloadRequest, CoreServices, CoreServicesError,
+    EngineRuntimeState as CoreEngineRuntimeState,
 };
 use fetchx_downloader::{save_initial_context_headers, validate_http_source_url};
 use fetchx_models::{
@@ -10,14 +11,15 @@ use fetchx_models::{
 };
 use fetchx_queue::QueueError;
 use fetchx_remote_protocol::{
-    CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_FIND_DUPLICATE, DOWNLOAD_GET,
-    DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME, DOWNLOAD_RUNTIME_STATUS,
-    DOWNLOAD_SELECT_TORRENT_FILES, DOWNLOAD_SET_ENGINE, DOWNLOAD_SET_PRIORITY,
-    DOWNLOAD_SET_SPEED_LIMIT, DOWNLOAD_TORRENT_METADATA, DownloadCreateParams,
-    ENGINE_RUNTIME_STATUS, EngineRuntimeState, EngineRuntimeStatusEntry, EngineRuntimeStatusResult,
-    JSON_RPC_VERSION, PROTOCOL_VERSION, ProtocolError, ProtocolInfo, QUEUE_MOVE_DOWN,
-    QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH, QUEUE_RESUME_DISPATCH, RemoteCommand, RpcErrorCode,
-    RpcFailure, RpcId, RpcSuccess, SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
+    CAPABILITIES, DOWNLOAD_CANCEL, DOWNLOAD_CREATE, DOWNLOAD_CREATE_BATCH, DOWNLOAD_FIND_DUPLICATE,
+    DOWNLOAD_GET, DOWNLOAD_LIST, DOWNLOAD_PAUSE, DOWNLOAD_REMOVE, DOWNLOAD_RESUME,
+    DOWNLOAD_RUNTIME_STATUS, DOWNLOAD_SELECT_TORRENT_FILES, DOWNLOAD_SET_ENGINE,
+    DOWNLOAD_SET_PRIORITY, DOWNLOAD_SET_SPEED_LIMIT, DOWNLOAD_TORRENT_METADATA,
+    DownloadBatchItemParams, DownloadCreateParams, ENGINE_RUNTIME_STATUS, EngineRuntimeState,
+    EngineRuntimeStatusEntry, EngineRuntimeStatusResult, JSON_RPC_VERSION, PROTOCOL_VERSION,
+    ProtocolError, ProtocolInfo, QUEUE_MOVE_DOWN, QUEUE_MOVE_UP, QUEUE_PAUSE_DISPATCH,
+    QUEUE_RESUME_DISPATCH, RemoteCommand, RpcErrorCode, RpcFailure, RpcId, RpcSuccess,
+    SYSTEM_WEBSOCKET_TICKET, ValidatedRequest,
 };
 use fetchx_storage::{DownloadRepository, StorageError};
 use serde_json::{Value, json};
@@ -153,6 +155,24 @@ pub(crate) async fn dispatch(
             };
             json!({ "id": id })
         }
+        RemoteCommand::DownloadCreateBatch(params) => {
+            let priority = params.priority.unwrap_or_default();
+            let requests = batch_download_requests(params.downloads);
+            let outcomes = services
+                .enqueue_download_batch_by_source(requests, priority)
+                .await;
+            let results = outcomes
+                .into_iter()
+                .enumerate()
+                .map(|(index, outcome)| match outcome.result {
+                    Ok(id) => json!({ "index": index, "id": id }),
+                    Err(error) => {
+                        json!({ "index": index, "error_code": batch_error_code(&error) })
+                    }
+                })
+                .collect::<Vec<_>>();
+            json!({ "results": results })
+        }
         RemoteCommand::DownloadGet(id) => {
             let item = services
                 .repository
@@ -276,6 +296,46 @@ pub(crate) async fn dispatch(
     Ok(result)
 }
 
+fn batch_download_requests(downloads: Vec<DownloadBatchItemParams>) -> Vec<BatchDownloadRequest> {
+    downloads
+        .into_iter()
+        .map(|item| BatchDownloadRequest {
+            engine: item
+                .engine
+                .unwrap_or_else(|| EngineKind::from_source_url(&item.url)),
+            url: item.url,
+            package_name: item.package_name,
+            format_id: item.format_id,
+            extension: item.extension,
+            audio_format: item.audio_format,
+        })
+        .collect()
+}
+
+fn batch_error_code(error: &BatchDownloadError) -> &'static str {
+    match error {
+        BatchDownloadError::DuplicateUrl => "duplicate_url",
+        BatchDownloadError::InvalidUrl => "invalid_url",
+        BatchDownloadError::InvalidPackageName => "invalid_package_name",
+        BatchDownloadError::InvalidFormat => "invalid_format",
+        BatchDownloadError::InvalidChecksum => "invalid_checksum",
+        BatchDownloadError::InvalidSourceSet => "invalid_source_set",
+        BatchDownloadError::InvalidMultiSourceUrl => "invalid_multi_source_url",
+        BatchDownloadError::InvalidDestination => "invalid_destination",
+        BatchDownloadError::UnavailableEngine(_) => "engine_unavailable",
+        BatchDownloadError::Destination(_) => "destination_error",
+        BatchDownloadError::Storage(_) => "storage_error",
+        BatchDownloadError::Queue(_) => "queue_error",
+        BatchDownloadError::RestartNotEligible => "restart_not_eligible",
+        BatchDownloadError::DestinationCollision => "destination_collision",
+        BatchDownloadError::InvalidTorrentRestartSource => "invalid_torrent_source",
+        BatchDownloadError::TorrentSourceMismatch => "torrent_source_mismatch",
+        BatchDownloadError::InvalidTorrentRestartSelection => "invalid_torrent_selection",
+        BatchDownloadError::InvalidTorrentRestartDestination => "invalid_torrent_destination",
+        BatchDownloadError::TorrentDestinationCollision => "torrent_destination_collision",
+    }
+}
+
 pub(crate) fn success(id: RpcId, result: Value) -> RpcSuccess {
     RpcSuccess {
         jsonrpc: JSON_RPC_VERSION.to_owned(),
@@ -291,6 +351,7 @@ pub(crate) fn discovery_info() -> ProtocolInfo {
         SYSTEM_WEBSOCKET_TICKET,
         ENGINE_RUNTIME_STATUS,
         DOWNLOAD_CREATE,
+        DOWNLOAD_CREATE_BATCH,
         DOWNLOAD_GET,
         DOWNLOAD_LIST,
         DOWNLOAD_TORRENT_METADATA,
@@ -618,6 +679,42 @@ mod tests {
         let downloads = services.repository.list().await?;
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].source().engine(), EngineKind::Hls);
+        services.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn batch_create_returns_sanitized_per_item_results()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let services = CoreServices::start(CoreServicesConfig {
+            database_path: directory.path().join("fetchx.db"),
+            downloads_dir: directory.path().join("downloads"),
+            runtime_dir: directory.path().join("runtime"),
+            bundled_engines_dir: None,
+            defer_queued_on_start: true,
+        })
+        .await?;
+        services.queue().pause_dispatch().await?;
+
+        let request = fetchx_remote_protocol::parse_request(
+            br#"{"jsonrpc":"2.0","id":1,"method":"download.createBatch","params":{"downloads":[{"url":"https://cdn.example.test/one.bin"},{"url":"file:///tmp/two.bin"}],"priority":"high"}}"#,
+        )?;
+        let result = dispatch(
+            &services,
+            AuthenticatedPrincipal::primary(Role::Operator),
+            request,
+            &WebSocketTickets::default(),
+            [0; 32],
+        )
+        .await?;
+
+        assert_eq!(result["results"][0]["index"], 0);
+        assert!(result["results"][0]["id"].is_string());
+        assert_eq!(result["results"][1]["index"], 1);
+        assert_eq!(result["results"][1]["error_code"], "invalid_url");
+        assert!(!serde_json::to_string(&result)?.contains("cdn.example.test"));
+        assert_eq!(services.repository.list().await?.len(), 1);
         services.shutdown().await?;
         Ok(())
     }
