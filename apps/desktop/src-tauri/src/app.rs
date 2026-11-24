@@ -112,19 +112,59 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                         }
                     }
                     fetchx_models::PostDownloadAction::RunCommand { command } => {
+                        let status_str = "completed";
+                        let size_str = item
+                            .progress()
+                            .total_bytes()
+                            .map(|b| b.to_string())
+                            .unwrap_or_default();
+                        let filename_str = dest
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        let id_str = item.id().to_string();
+                        let engine_str = format!("{:?}", item.source().engine())
+                            .to_lowercase()
+                            .replace(' ', "_");
+                        let url_str = item.source().url().to_owned();
                         #[cfg(windows)]
                         let spawn_result = tokio::process::Command::new("cmd")
                             .args(["/C", &command])
                             .env("FETCHX_FILE", &dest)
+                            .env("FETCHX_URL", &url_str)
+                            .env("FETCHX_STATUS", status_str)
+                            .env("FETCHX_SIZE", &size_str)
+                            .env("FETCHX_FILENAME", &filename_str)
+                            .env("FETCHX_ID", &id_str)
+                            .env("FETCHX_ENGINE", &engine_str)
                             .spawn();
                         #[cfg(not(windows))]
                         let spawn_result = tokio::process::Command::new("sh")
                             .args(["-c", &command])
                             .env("FETCHX_FILE", &dest)
+                            .env("FETCHX_URL", &url_str)
+                            .env("FETCHX_STATUS", status_str)
+                            .env("FETCHX_SIZE", &size_str)
+                            .env("FETCHX_FILENAME", &filename_str)
+                            .env("FETCHX_ID", &id_str)
+                            .env("FETCHX_ENGINE", &engine_str)
                             .spawn();
                         if let Err(error) = spawn_result {
                             tracing::warn!(%error, %command, "post-download: could not spawn command");
                         }
+                    }
+                    fetchx_models::PostDownloadAction::ExtractArchive { delete_after } => {
+                        let archive_path = dest.clone();
+                        tauri::async_runtime::spawn(async move {
+                            match extract_archive(&archive_path, delete_after).await {
+                                Ok(()) => {
+                                    tracing::info!(path = %archive_path.display(), "post-download: archive extracted");
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, path = %archive_path.display(), "post-download: archive extraction failed");
+                                }
+                            }
+                        });
                     }
                 }
 
@@ -275,6 +315,69 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                             }
                             Err(e) => {
                                 tracing::warn!(download_id = %download_id, error = %e, "auto-retry: retry failed");
+                            }
+                        }
+                    });
+                }
+            }
+            // Webhook notification
+            if matches!(
+                status,
+                fetchx_models::DownloadStatus::Completed | fetchx_models::DownloadStatus::Failed
+            ) {
+                let webhook_config = config
+                    .as_ref()
+                    .map(|c| c.webhook.clone())
+                    .unwrap_or_default();
+                if webhook_config.enabled
+                    && !webhook_config.url.is_empty()
+                    && ((status == fetchx_models::DownloadStatus::Completed && webhook_config.on_complete)
+                        || (status == fetchx_models::DownloadStatus::Failed && webhook_config.on_fail))
+                {
+                    let event_str = if status == fetchx_models::DownloadStatus::Completed {
+                        "completed"
+                    } else {
+                        "failed"
+                    };
+                    let webhook_url = webhook_config.url.clone();
+                    let secret = webhook_config.secret.clone();
+                    let timestamp_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let body = serde_json::json!({
+                        "event": event_str,
+                        "download": {
+                            "id": item.id().to_string(),
+                            "filename": item.filename().as_str(),
+                            "url": item.source().url(),
+                            "destination": item.destination().to_string_lossy(),
+                            "size_bytes": item.progress().total_bytes(),
+                        },
+                        "timestamp": timestamp_ms,
+                    });
+                    tauri::async_runtime::spawn(async move {
+                        let body_bytes = body.to_string();
+                        let client = reqwest::Client::new();
+                        let mut req = client.post(&webhook_url)
+                            .header("Content-Type", "application/json")
+                            .body(body_bytes.clone());
+                        if !secret.is_empty() {
+                            use std::fmt::Write as _;
+                            let key = hmac_sha256_key(secret.as_bytes());
+                            let sig_bytes = hmac_sha256_sign(&key, body_bytes.as_bytes());
+                            let mut hex_sig = String::with_capacity(sig_bytes.len() * 2);
+                            for byte in &sig_bytes {
+                                let _ = write!(hex_sig, "{byte:02x}");
+                            }
+                            req = req.header("X-FetchX-Signature", format!("sha256={hex_sig}"));
+                        }
+                        match req.send().await {
+                            Ok(resp) => {
+                                tracing::info!(status = %resp.status(), url = %webhook_url, "webhook: fired");
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, url = %webhook_url, "webhook: request failed");
                             }
                         }
                     });

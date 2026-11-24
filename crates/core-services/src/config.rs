@@ -63,6 +63,9 @@ pub struct EngineConfig {
     /// a download completes. Advisory only — does not change download status.
     #[serde(default = "default_true")]
     pub health_check_on_complete: bool,
+    /// Optional outgoing webhook fired when a download completes or fails.
+    #[serde(default)]
+    pub webhook: WebhookConfig,
 }
 
 fn default_auto_retry_count() -> u32 {
@@ -71,6 +74,25 @@ fn default_auto_retry_count() -> u32 {
 
 fn default_auto_retry_delay_seconds() -> u64 {
     30
+}
+
+// ── Webhook config ────────────────────────────────────────────────────────────
+
+/// Configuration for outgoing webhook notifications on download completion or failure.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WebhookConfig {
+    /// Whether the webhook is active.
+    pub enabled: bool,
+    /// HTTP POST target URL.
+    pub url: String,
+    /// Fire the webhook when a download completes.
+    pub on_complete: bool,
+    /// Fire the webhook when a download fails.
+    pub on_fail: bool,
+    /// Optional HMAC-SHA256 secret. When non-empty the POST includes an
+    /// `X-FetchX-Signature: sha256=<hex>` header.
+    pub secret: String,
 }
 
 impl Default for EngineConfig {
@@ -95,6 +117,7 @@ impl Default for EngineConfig {
             auto_retry_delay_seconds: default_auto_retry_delay_seconds(),
             resume_interrupted_on_start: true,
             health_check_on_complete: true,
+            webhook: WebhookConfig::default(),
         }
     }
 }

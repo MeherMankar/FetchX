@@ -84,6 +84,7 @@ impl ResourcePolicy {
             }
             crate::EngineKind::Sftp => self.engine_bandwidth_limits.sftp_bytes_per_second,
             crate::EngineKind::Metalink => self.engine_bandwidth_limits.metalink_bytes_per_second,
+            crate::EngineKind::Ed2k => self.engine_bandwidth_limits.direct_http_bytes_per_second,
         }
     }
 

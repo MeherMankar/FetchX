@@ -100,7 +100,7 @@ fn estimate_queue_completion(
 
 pub use config::{
     Aria2Config, ConfigError, ConfigService, DirectHttpConfig, EngineConfig, FtpConfig,
-    MetalinkConfig, NativeTorrentConfig, SftpConfig, YtDlpConfig,
+    MetalinkConfig, NativeTorrentConfig, SftpConfig, WebhookConfig, YtDlpConfig,
 };
 pub use engine_status::{
     EngineAvailability, EngineRuntimeState, EngineRuntimeStatus, EngineStatusEntry,

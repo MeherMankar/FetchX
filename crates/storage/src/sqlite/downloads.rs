@@ -571,6 +571,7 @@ fn engine_to_str(value: EngineKind) -> &'static str {
         EngineKind::Ftps => "ftps",
         EngineKind::Sftp => "sftp",
         EngineKind::Metalink => "metalink",
+        EngineKind::Ed2k => "ed2k",
     }
 }
 
@@ -585,6 +586,7 @@ fn engine_from_str(value: &str) -> Result<EngineKind, StorageError> {
         "ftps" => Ok(EngineKind::Ftps),
         "sftp" => Ok(EngineKind::Sftp),
         "metalink" => Ok(EngineKind::Metalink),
+        "ed2k" => Ok(EngineKind::Ed2k),
         _ => Err(StorageError::invalid_data(
             "engine_kind",
             "unknown engine kind",

@@ -28,6 +28,10 @@ pub enum EngineKind {
     /// Metalink / Metalink4 orchestration engine (.metalink / .meta4 manifests).
     #[serde(rename = "metalink")]
     Metalink,
+    /// ed2k (eDonkey2000) link engine. Parses ed2k:// URIs and delegates to
+    /// DirectHttp via an eMule HTTP gateway.
+    #[serde(rename = "ed2k")]
+    Ed2k,
 }
 
 impl EngineKind {
@@ -42,6 +46,7 @@ impl EngineKind {
         };
         match url.scheme() {
             "magnet" | "torrent+file" => Self::NativeTorrent,
+            "ed2k" => Self::Ed2k,
             "ftp" => Self::Ftp,
             "ftps" => Self::Ftps,
             "sftp" => Self::Sftp,
@@ -112,6 +117,7 @@ mod tests {
             (EngineKind::Ftps, "\"ftps\""),
             (EngineKind::Sftp, "\"sftp\""),
             (EngineKind::Metalink, "\"metalink\""),
+            (EngineKind::Ed2k, "\"ed2k\""),
         ] {
             let serialized = serde_json::to_string(&engine)?;
             assert_eq!(serialized, expected);

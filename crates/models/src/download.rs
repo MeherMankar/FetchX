@@ -70,7 +70,7 @@ impl DownloadSource {
             return Err(DownloadSourceError::InvalidTorrentFile);
         }
 
-        // Scheme-engine consistency checks for FTP/FTPS/SFTP.
+        // Scheme-engine consistency checks for FTP/FTPS/SFTP/ed2k.
         if url.starts_with("ftp://") && engine != EngineKind::Ftp {
             return Err(DownloadSourceError::SchemeMismatch);
         }
@@ -78,6 +78,9 @@ impl DownloadSource {
             return Err(DownloadSourceError::SchemeMismatch);
         }
         if url.starts_with("sftp://") && engine != EngineKind::Sftp {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        if url.starts_with("ed2k://") && engine != EngineKind::Ed2k {
             return Err(DownloadSourceError::SchemeMismatch);
         }
 
@@ -172,7 +175,7 @@ impl DownloadSource {
         if url.starts_with("magnet:") || url.starts_with("torrent+file:") {
             return Err(DownloadSourceError::InvalidMagnetUri);
         }
-        // Scheme-engine consistency for FTP/FTPS/SFTP.
+        // Scheme-engine consistency for FTP/FTPS/SFTP/ed2k.
         if url.starts_with("ftp://") && self.engine != EngineKind::Ftp {
             return Err(DownloadSourceError::SchemeMismatch);
         }
@@ -180,6 +183,9 @@ impl DownloadSource {
             return Err(DownloadSourceError::SchemeMismatch);
         }
         if url.starts_with("sftp://") && self.engine != EngineKind::Sftp {
+            return Err(DownloadSourceError::SchemeMismatch);
+        }
+        if url.starts_with("ed2k://") && self.engine != EngineKind::Ed2k {
             return Err(DownloadSourceError::SchemeMismatch);
         }
         Ok(Self {
