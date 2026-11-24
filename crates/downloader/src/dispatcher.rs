@@ -7,7 +7,7 @@ use reqwest::{Client, Url, header::CONTENT_TYPE};
 use tokio::sync::watch;
 
 use crate::{
-    DirectHttpEngine, DownloadEngine, DownloadEngineError, FtpEngine, HlsEngine,
+    DirectHttpEngine, DownloadEngine, DownloadEngineError, Ed2kEngine, FtpEngine, HlsEngine,
     ManagedDownloadControl, ManagedDownloadEngine, MetalinkEngine, NativeTorrentEngine, SftpEngine,
     YtDlpEngine, YtDlpFormat, is_hls_url,
 };
@@ -22,6 +22,7 @@ pub struct EngineDispatcher<R> {
     ftp: Option<Arc<FtpEngine<R>>>,
     sftp: Option<Arc<SftpEngine<R>>>,
     metalink: Option<Arc<MetalinkEngine<R>>>,
+    ed2k: Option<Arc<Ed2kEngine<R>>>,
     probe_client: Client,
 }
 
@@ -39,6 +40,7 @@ where
             ftp: None,
             sftp: None,
             metalink: None,
+            ed2k: None,
             probe_client: Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -100,6 +102,11 @@ where
 
     pub fn with_metalink(mut self, engine: Arc<MetalinkEngine<R>>) -> Self {
         self.metalink = Some(engine);
+        self
+    }
+
+    pub fn with_ed2k(mut self, engine: Arc<Ed2kEngine<R>>) -> Self {
+        self.ed2k = Some(engine);
         self
     }
 
@@ -206,6 +213,10 @@ where
                 Some(engine) => Box::pin(engine.download(id, cancellation)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
+            EngineKind::Ed2k => match &self.ed2k {
+                Some(engine) => Box::pin(engine.download(id, cancellation)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 }
@@ -248,6 +259,10 @@ where
                 Some(engine) => Box::pin(engine.download_managed(id, control)).await,
                 None => Err(DownloadEngineError::EngineNotAvailable),
             },
+            EngineKind::Ed2k => match &self.ed2k {
+                Some(engine) => Box::pin(engine.download_managed(id, control)).await,
+                None => Err(DownloadEngineError::EngineNotAvailable),
+            },
         }
     }
 
@@ -264,7 +279,8 @@ where
             | EngineKind::Ftp
             | EngineKind::Ftps
             | EngineKind::Sftp
-            | EngineKind::Metalink => true,
+            | EngineKind::Metalink
+            | EngineKind::Ed2k => true,
         }
     }
 
@@ -293,7 +309,8 @@ where
                 | EngineKind::Ftp
                 | EngineKind::Ftps
                 | EngineKind::Sftp
-                | EngineKind::Metalink => Ok(()),
+                | EngineKind::Metalink
+                | EngineKind::Ed2k => Ok(()),
             }
         }
     }

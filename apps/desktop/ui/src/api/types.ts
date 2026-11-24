@@ -53,7 +53,7 @@ export interface DownloadError {
   message: string;
 }
 
-export type EngineKind = "direct_http" | "yt_dlp" | "native_torrent" | "metalink";
+export type EngineKind = "direct_http" | "yt_dlp" | "native_torrent" | "metalink" | "ed2k";
 
 export interface Download {
   id: string;
@@ -362,12 +362,15 @@ export type PostDownloadActionKind =
   | "nothing"
   | "open_file"
   | "open_folder"
-  | "run_command";
+  | "run_command"
+  | "extract_archive";
 
 export interface PostDownloadActionDto {
   kind: PostDownloadActionKind;
   /** Present only when kind is "run_command". */
   command?: string;
+  /** Present only when kind is "extract_archive". */
+  delete_after?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,4 +399,16 @@ export interface UpdateCheckResult {
   latest_version: string;
   release_url: string;
   release_notes: string;
+}
+
+// ---------------------------------------------------------------------------
+// Webhook configuration
+// ---------------------------------------------------------------------------
+
+export interface WebhookConfigDto {
+  enabled: boolean;
+  url: string;
+  on_complete: boolean;
+  on_fail: boolean;
+  secret: string;
 }

@@ -19,6 +19,8 @@ pub struct EngineRuntimeStatus {
     pub sftp: EngineAvailability,
     /// Metalink orchestration engine availability (wired in Phase 2).
     pub metalink: EngineAvailability,
+    /// ed2k gateway engine — always available (delegates to DirectHttp).
+    pub ed2k: EngineAvailability,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +49,7 @@ impl EngineRuntimeStatus {
             status_entry(EngineKind::Ftps, &self.ftp),
             status_entry(EngineKind::Sftp, &self.sftp),
             status_entry(EngineKind::Metalink, &self.metalink),
+            status_entry(EngineKind::Ed2k, &self.ed2k),
         ]
     }
 }
@@ -105,6 +108,9 @@ mod tests {
             metalink: EngineAvailability::Unavailable {
                 reason: "metalink runtime failed".to_owned(),
             },
+            ed2k: EngineAvailability::Available {
+                version: "gateway".to_owned(),
+            },
         };
 
         let entries = status.entries();
@@ -119,6 +125,7 @@ mod tests {
                 EngineKind::Ftps,
                 EngineKind::Sftp,
                 EngineKind::Metalink,
+                EngineKind::Ed2k,
             ]
         );
         assert!(
@@ -135,5 +142,7 @@ mod tests {
         assert_eq!(entries[5].state, EngineRuntimeState::Available);
         assert_eq!(entries[6].state, EngineRuntimeState::Disabled);
         assert_eq!(entries[7].state, EngineRuntimeState::Unavailable);
+        assert_eq!(entries[8].state, EngineRuntimeState::Available);
+        assert_eq!(entries[8].version.as_deref(), Some("gateway"));
     }
 }

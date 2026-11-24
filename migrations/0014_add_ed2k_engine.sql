@@ -1,0 +1,4 @@
+-- ed2k (eDonkey2000) engine support.
+-- EngineKind::Ed2k is serialised as "ed2k" and stored in the existing
+-- engine column of the downloads table.  No schema change is required;
+-- this migration records the addition for audit purposes only.

@@ -35,8 +35,8 @@ use std::{
 };
 
 use fetchx_downloader::{
-    DirectHttpEngine, DownloadEngineError, EngineDispatcher, FtpEngine, HlsEngine, MetalinkEngine,
-    NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine,
+    DirectHttpEngine, DownloadEngineError, Ed2kEngine, EngineDispatcher, FtpEngine, HlsEngine,
+    MetalinkEngine, NativeTorrentConfig as DownloaderNativeTorrentConfig, NativeTorrentEngine,
     NativeYtDlpProcessRunner, SftpEngine, YtDlpConfig as DownloaderYtDlpConfig, YtDlpEngine,
     YtDlpFormat, YtDlpProcessRunner, YtDlpProcessRunnerAdapter, is_dash_url, is_hls_url,
     remove_http_multi_source_set, save_http_multi_source_set, validate_http_source_url,
@@ -1133,6 +1133,7 @@ impl CoreServices {
             EngineKind::Ftp | EngineKind::Ftps => &self.engine_runtime.status.ftp,
             EngineKind::Sftp => &self.engine_runtime.status.sftp,
             EngineKind::Metalink => &self.engine_runtime.status.metalink,
+            EngineKind::Ed2k => &self.engine_runtime.status.ed2k,
         };
         match availability {
             Available { .. } => DiagnosticHealth::Healthy,
@@ -2948,6 +2949,7 @@ pub struct EngineRuntime {
     pub ftp_engine: Arc<FtpEngine<CoreRepository>>,
     pub sftp_engine: Arc<SftpEngine<CoreRepository>>,
     pub metalink_engine: Arc<MetalinkEngine<CoreRepository>>,
+    pub ed2k_engine: Arc<Ed2kEngine<CoreRepository>>,
     pub status: EngineRuntimeStatus,
     pub media_registry: Arc<ExtractorRegistry>,
 }
@@ -3048,11 +3050,22 @@ impl EngineRuntime {
             version: "orchestrator".to_owned(),
         };
 
+        // ed2k engine — always available (delegates to DirectHttp via gateway).
+        let ed2k_engine = Arc::new(Ed2kEngine::new(
+            repository.clone(),
+            Arc::clone(&direct_http),
+        ));
+        info!(engine = "ed2k", version = "gateway", "engine ready");
+        let ed2k_avail = EngineAvailability::Available {
+            version: "gateway".to_owned(),
+        };
+
         let mut dispatcher = EngineDispatcher::new(repository, direct_http)
             .with_hls(hls_engine)
             .with_ftp(Arc::clone(&ftp_engine))
             .with_sftp(Arc::clone(&sftp_engine))
-            .with_metalink(Arc::clone(&metalink_engine));
+            .with_metalink(Arc::clone(&metalink_engine))
+            .with_ed2k(Arc::clone(&ed2k_engine));
 
         // Capture the resolved executable BEFORE moving the engine into the dispatcher.
         let ytdlp_executable: Option<std::path::PathBuf> =
@@ -3106,12 +3119,14 @@ impl EngineRuntime {
             ftp_engine,
             sftp_engine,
             metalink_engine,
+            ed2k_engine,
             status: EngineRuntimeStatus {
                 yt_dlp: ytdlp_avail,
                 native_torrent: native_torrent_avail,
                 ftp: ftp_avail,
                 sftp: sftp_avail,
                 metalink: metalink_avail,
+                ed2k: ed2k_avail,
             },
             media_registry,
         })
@@ -3145,6 +3160,9 @@ impl EngineRuntime {
             }
             EngineKind::Metalink => {
                 matches!(self.status.metalink, EngineAvailability::Available { .. })
+            }
+            EngineKind::Ed2k => {
+                matches!(self.status.ed2k, EngineAvailability::Available { .. })
             }
         }
     }

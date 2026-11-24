@@ -81,8 +81,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
   const isTorrent = isMagnet || isTorrentFile;
-  const isYtDlpUrl = !isTorrent && isLikelyYtDlpUrl(url);
-  const isMetalink = !isTorrent && /\.(metalink|meta4)$/i.test(url.trim());
+  const isEd2k = url.trimStart().toLowerCase().startsWith("ed2k://");
+  const isYtDlpUrl = !isTorrent && !isEd2k && isLikelyYtDlpUrl(url);
+  const isMetalink = !isTorrent && !isEd2k && /\.(metalink|meta4)$/i.test(url.trim());
 
   // Auto-load formats when a yt-dlp URL is detected, with a 600ms debounce.
   useEffect(() => {
@@ -213,7 +214,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   package_name: urlsToAdd.length > 1
                     ? packageNameForBatch
                     : packageName.trim() || undefined,
-                  engine_kind: isMetalink ? "metalink" : undefined,
+                  engine_kind: isMetalink ? "metalink" : isEd2k ? "ed2k" : undefined,
                 });
           admitted = true;
           queuedCount += 1;
@@ -377,11 +378,18 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   ? "Local .torrent files use FetchX's native BitTorrent engine."
                   : isMetalink
                     ? "FetchX will select the fastest mirror automatically."
-                    : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
+                    : isEd2k
+                      ? "ed2k links are routed through the eMule HTTP gateway."
+                      : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
             {isMetalink && (
               <div className="metalink-badge" role="note">
                 Metalink — multi-source download with automatic mirror selection
+              </div>
+            )}
+            {isEd2k && (
+              <div className="metalink-badge" role="note">
+                Ed2k — eDonkey2000 download
               </div>
             )}
             {isTorrentFile && (
