@@ -9,12 +9,14 @@ import {
   getEngineStatus,
   getFolderCategoriesConfig,
   getPostDownloadAction,
+  getWebhookConfig,
   exportSettings,
   importSettings,
   resetEngineConfig,
   saveEngineConfig,
   setFolderCategoriesConfig,
   setPostDownloadAction,
+  setWebhookConfig,
 } from "../api/engine";
 import type {
   BrowserExtensionStatus,
@@ -29,6 +31,7 @@ import type {
   ResourcePolicyDto,
   ResourceProfile,
   WeeklyQueueScheduleDto,
+  WebhookConfigDto,
 } from "../api/types";
 import { errorMessage } from "../lib/format";
 
@@ -401,6 +404,7 @@ type SettingsCategory =
   | "scheduling"
   | "network"
   | "integrations"
+  | "notifications"
   | "backup";
 
 const SETTINGS_CATEGORIES: Array<{
@@ -432,6 +436,11 @@ const SETTINGS_CATEGORIES: Array<{
     id: "integrations",
     title: "Integrations",
     description: "Connect FetchX to your browsers.",
+  },
+  {
+    id: "notifications",
+    title: "Notifications",
+    description: "Webhooks and notification settings.",
   },
   {
     id: "backup",
@@ -978,11 +987,13 @@ const ACTION_LABELS: Record<PostDownloadActionKind, string> = {
   open_file: "Open file",
   open_folder: "Open containing folder",
   run_command: "Run command",
+  extract_archive: "Extract archive",
 };
 
 function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
   const [action, setAction] = useState<PostDownloadActionDto>({ kind: "nothing" });
   const [commandText, setCommandText] = useState("");
+  const [deleteAfter, setDeleteAfter] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -993,6 +1004,9 @@ function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
         if (dto.kind === "run_command") {
           setCommandText(dto.command ?? "");
         }
+        if (dto.kind === "extract_archive") {
+          setDeleteAfter(dto.delete_after ?? false);
+        }
       })
       .catch((cause) => onError(errorMessage(cause)));
   }, [onError]);
@@ -1001,10 +1015,14 @@ function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
     setBusy(true);
     setSaved(false);
     try {
-      const payload: PostDownloadActionDto =
-        action.kind === "run_command"
-          ? { kind: "run_command", command: commandText }
-          : { kind: action.kind };
+      let payload: PostDownloadActionDto;
+      if (action.kind === "run_command") {
+        payload = { kind: "run_command", command: commandText };
+      } else if (action.kind === "extract_archive") {
+        payload = { kind: "extract_archive", delete_after: deleteAfter };
+      } else {
+        payload = { kind: action.kind };
+      }
       await setPostDownloadAction(payload);
       setAction(payload);
       setSaved(true);
@@ -1071,6 +1089,32 @@ function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
               The environment variable <code>FETCHX_FILE</code> is set to the
               downloaded file path. On Windows use <code>%FETCHX_FILE%</code>,
               on macOS/Linux use <code>$FETCHX_FILE</code>.
+            </p>
+          </div>
+        </div>
+      )}
+      {action.kind === "extract_archive" && (
+        <div className="settings-row">
+          <span className="settings-label">Delete archive after extraction</span>
+          <div className="settings-control">
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={deleteAfter}
+                disabled={busy}
+                onChange={(event) => {
+                  setDeleteAfter(event.target.checked);
+                  setSaved(false);
+                }}
+              />
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+              <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+                {deleteAfter ? "Yes — remove archive" : "No — keep archive"}
+              </span>
+            </label>
+            <p className="settings-hint">
+              Supports <code>.zip</code>, <code>.tar.gz</code>, and <code>.tgz</code> archives.
+              The archive is extracted into a folder named after the file, next to the archive.
             </p>
           </div>
         </div>
@@ -1391,6 +1435,96 @@ function AutoRetrySection({
 }
 
 // ---------------------------------------------------------------------------
+// Webhook section
+// ---------------------------------------------------------------------------
+
+function WebhookSection({ onError }: { onError: (msg: string) => void }) {
+  const [cfg, setCfg] = useState<WebhookConfigDto>({
+    enabled: false, url: "", on_complete: true, on_fail: true, secret: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    getWebhookConfig().then(setCfg).catch((cause) => onError(errorMessage(cause)));
+  }, [onError]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      await setWebhookConfig(cfg);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="webhook-heading">
+      <div className="settings-section-header">
+        <h4 id="webhook-heading" className="settings-section-title">Webhooks</h4>
+      </div>
+      <p className="settings-hint">
+        Send an HTTP POST request to a URL when a download completes or fails.
+        Useful for Telegram, Discord, Gotify, or any notification service.
+      </p>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="webhook-enabled">Enabled</label>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input id="webhook-enabled" type="checkbox" checked={cfg.enabled}
+              onChange={(e) => setCfg((c) => ({ ...c, enabled: e.target.checked }))} />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+          </label>
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="webhook-url">URL</label>
+        <div className="settings-control">
+          <input id="webhook-url" type="url" className="settings-input" value={cfg.url}
+            placeholder="https://example.com/webhook"
+            onChange={(e) => setCfg((c) => ({ ...c, url: e.target.value }))}
+            disabled={busy} />
+        </div>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Fire on</span>
+        <div className="settings-control">
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={cfg.on_complete}
+              onChange={(e) => setCfg((c) => ({ ...c, on_complete: e.target.checked }))} />
+            Completed downloads
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+            <input type="checkbox" checked={cfg.on_fail}
+              onChange={(e) => setCfg((c) => ({ ...c, on_fail: e.target.checked }))} />
+            Failed downloads
+          </label>
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="webhook-secret">Secret</label>
+        <div className="settings-control">
+          <input id="webhook-secret" type="password" className="settings-input" value={cfg.secret}
+            placeholder="Optional HMAC-SHA256 secret"
+            onChange={(e) => setCfg((c) => ({ ...c, secret: e.target.value }))}
+            disabled={busy} />
+          <span className="settings-hint">If set, adds an X-FetchX-Signature header to verify requests.</span>
+        </div>
+      </div>
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {saved ? "Saved!" : busy ? "Saving…" : "Save webhook"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Export / Import section
 // ---------------------------------------------------------------------------
 
@@ -1631,6 +1765,7 @@ export function SettingsPage() {
                 <ProxySection cfg={cfg} onSaved={setCfg} onError={setError} />
               )}
               {category.id === "integrations" && <BrowserExtensionSection />}
+              {category.id === "notifications" && <WebhookSection onError={setError} />}
               {category.id === "backup" && (
                 <ExportImportSection
                   onImported={() => void load()}
