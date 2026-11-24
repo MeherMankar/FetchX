@@ -106,7 +106,9 @@ pub(crate) const fn required_permission(command: &RemoteCommand) -> Permission {
         | RemoteCommand::DownloadRuntimeStatus
         | RemoteCommand::DownloadFindDuplicate(_) => Permission::DownloadsRead,
         RemoteCommand::DownloadSelectTorrentFiles { .. } => Permission::DownloadsControl,
-        RemoteCommand::DownloadCreate(_) => Permission::DownloadsCreate,
+        RemoteCommand::DownloadCreate(_) | RemoteCommand::DownloadCreateBatch(_) => {
+            Permission::DownloadsCreate
+        }
         RemoteCommand::DownloadPause(_)
         | RemoteCommand::DownloadResume(_)
         | RemoteCommand::DownloadCancel(_)

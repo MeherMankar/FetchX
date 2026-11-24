@@ -707,7 +707,8 @@ mod tests {
             &WebSocketTickets::default(),
             [0; 32],
         )
-        .await?;
+        .await
+        .expect("batch dispatch should return per-item outcomes");
 
         assert_eq!(result["results"][0]["index"], 0);
         assert!(result["results"][0]["id"].is_string());
