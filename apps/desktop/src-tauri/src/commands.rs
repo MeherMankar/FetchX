@@ -585,6 +585,7 @@ fn engine_matches_source(engine: EngineKind, source: &Url) -> bool {
         EngineKind::Ftps => source.scheme() == "ftps",
         EngineKind::Sftp => source.scheme() == "sftp",
         EngineKind::NativeTorrent | EngineKind::Aria2 => false,
+        EngineKind::Ed2k => source.scheme() == "ed2k",
     }
 }
 
@@ -952,6 +953,9 @@ impl IpcError {
                 "The SFTP engine is not available. Check Settings → Download Engines to enable it."
             }
             EngineKind::Metalink => "The Metalink engine is not available in this build.",
+            EngineKind::Ed2k => {
+                "The ed2k engine is not available. Check Settings → Download Engines to enable it."
+            }
             EngineKind::DirectHttp | EngineKind::Hls => {
                 // DirectHttp and Hls are always available; this branch should not be reached.
                 "The requested download engine is not available."
