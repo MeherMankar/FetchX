@@ -1181,6 +1181,8 @@ impl DownloadService {
                 share_ratio: value.share_ratio,
                 seeding: value.seeding,
                 tracker_uris: value.tracker_uris,
+                connected_peers: value.connected_peers,
+                total_peers: value.total_peers,
             }))
         })
     }

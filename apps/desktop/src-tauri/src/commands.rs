@@ -190,11 +190,34 @@ impl AppState {
 
         if magnet.is_some() {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
+            // Append any extra tracker URLs as &tr= parameters to the magnet URI.
+            let magnet_url = if let Some(ref trackers) = request.extra_trackers {
+                let mut uri = canonical_url.clone();
+                for tracker in trackers.iter().filter(|t| !t.is_empty()) {
+                    uri.push_str("&tr=");
+                    // Percent-encode the tracker URL for safe embedding in the magnet URI.
+                    for byte in tracker.bytes() {
+                        if byte.is_ascii_alphanumeric()
+                            || matches!(byte, b'-' | b'_' | b'.' | b'~'
+                                | b':' | b'/' | b'?' | b'#' | b'[' | b']'
+                                | b'@' | b'!' | b'$' | b'&' | b'\'' | b'('
+                                | b')' | b'*' | b'+' | b',' | b';' | b'=')
+                        {
+                            uri.push(byte as char);
+                        } else {
+                            uri.push_str(&format!("%{:02X}", byte));
+                        }
+                    }
+                }
+                uri
+            } else {
+                canonical_url.clone()
+            };
             let id = match request.engine_kind {
                 Some(engine) => {
                     core_services
                         .enqueue_magnet_with_engine(
-                            &canonical_url,
+                            &magnet_url,
                             engine,
                             DownloadPriority::Normal,
                             None,
@@ -203,7 +226,7 @@ impl AppState {
                 }
                 None => {
                     core_services
-                        .enqueue_magnet(&canonical_url, DownloadPriority::Normal, None)
+                        .enqueue_magnet(&magnet_url, DownloadPriority::Normal, None)
                         .await
                 }
             }
@@ -608,6 +631,10 @@ pub struct AddDownloadRequest {
     /// Raw `Cookie` header value captured by the extension.
     #[serde(default)]
     pub cookies: Option<String>,
+    /// Extra tracker announce URLs to add to the torrent (magnet or .torrent file).
+    /// Ignored for non-torrent downloads.
+    #[serde(default)]
+    pub extra_trackers: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1634,6 +1661,8 @@ pub struct TorrentTelemetryDto {
     pub share_ratio: Option<f64>,
     pub seeding: Option<bool>,
     pub tracker_uris: Option<Vec<String>>,
+    pub connected_peers: Option<u32>,
+    pub total_peers: Option<u32>,
 }
 
 #[tauri::command]
@@ -1810,6 +1839,8 @@ pub async fn get_torrent_telemetry(
         share_ratio: value.share_ratio,
         seeding: value.seeding,
         tracker_uris: value.tracker_uris,
+        connected_peers: value.connected_peers,
+        total_peers: value.total_peers,
     }))
 }
 

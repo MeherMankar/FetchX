@@ -539,6 +539,10 @@ pub struct TorrentTelemetry {
     pub seeding: Option<bool>,
     /// Tracker URIs reported by the engine, or `None` when unavailable.
     pub tracker_uris: Option<Vec<String>>,
+    /// Number of actively connected peers (live connections).
+    pub connected_peers: Option<u32>,
+    /// Total peers in the peer pool (queued + connecting + live).
+    pub total_peers: Option<u32>,
 }
 
 #[cfg(test)]

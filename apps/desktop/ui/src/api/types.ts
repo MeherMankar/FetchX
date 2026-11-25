@@ -108,6 +108,8 @@ export interface AddDownloadRequest {
   package_name?: string;
   /** Optional engine selection. Omitting defaults to Direct HTTP on the backend. */
   engine_kind?: EngineKind;
+  /** Extra tracker announce URLs for torrent/magnet downloads. */
+  extra_trackers?: string[];
 }
 
 export interface BatchDownloadResult {
@@ -127,6 +129,8 @@ export interface TorrentTelemetry {
   share_ratio: number | null;
   seeding: boolean | null;
   tracker_uris: string[] | null;
+  connected_peers: number | null;
+  total_peers: number | null;
 }
 
 export interface TorrentInspection {

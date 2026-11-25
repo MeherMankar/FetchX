@@ -882,7 +882,12 @@ private fun DownloadStateBadge(state: DownloadState) {
 
 @Composable
 private fun TorrentTelemetryDetails(telemetry: TorrentTelemetry) {
-    val peers = telemetry.peerCount?.toString() ?: "Unavailable"
+    val peers = when {
+        telemetry.connectedPeers != null && telemetry.totalPeers != null ->
+            "${telemetry.connectedPeers}/${telemetry.totalPeers}"
+        telemetry.peerCount != null -> telemetry.peerCount.toString()
+        else -> "Unavailable"
+    }
     val completedPeers = telemetry.completedPeerCount?.toString() ?: "Unavailable"
     val seeds = telemetry.seedCount?.toString() ?: "Unavailable"
     val download = telemetry.downloadSpeedBytesPerSecond?.let(::formatSpeed) ?: "Unavailable"

@@ -77,6 +77,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [error, setError] = useState<string | null>(null);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [forceAdd, setForceAdd] = useState(false);
+  const [extraTrackers, setExtraTrackers] = useState("");
   const urlInputRef = useRef<HTMLInputElement>(null);
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
@@ -215,6 +216,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                     ? packageNameForBatch
                     : packageName.trim() || undefined,
                   engine_kind: isMetalink ? "metalink" : isEd2k ? "ed2k" : undefined,
+                  ...(isMagnet && extraTrackers.trim()
+                    ? { extra_trackers: extraTrackers.split("\n").filter(Boolean) }
+                    : {}),
                 });
           admitted = true;
           queuedCount += 1;
@@ -476,6 +480,29 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
               </div>
             )}
           </div>
+
+          {isTorrent && (
+            <details className="field">
+              <summary className="field-label" style={{ cursor: "pointer" }}>Advanced</summary>
+              <div className="field" style={{ marginTop: "8px" }}>
+                <label htmlFor="add-extra-trackers" className="field-label">
+                  Extra tracker URLs
+                </label>
+                <textarea
+                  id="add-extra-trackers"
+                  className="field-input"
+                  rows={3}
+                  value={extraTrackers}
+                  onChange={(e) => setExtraTrackers(e.target.value)}
+                  placeholder={"https://tracker.example.com/announce"}
+                  disabled={busy}
+                />
+                <p className="field-hint">
+                  One tracker URL per line. Added to the torrent on top of any trackers in the magnet link.
+                </p>
+              </div>
+            </details>
+          )}
 
           {isYtDlpUrl && (
             <div className="field">

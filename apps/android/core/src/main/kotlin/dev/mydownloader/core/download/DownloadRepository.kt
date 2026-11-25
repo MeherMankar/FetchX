@@ -50,6 +50,8 @@ data class TorrentTelemetry(
     val shareRatio: Double?,
     val seeding: Boolean?,
     val trackerUris: List<String>?,
+    val connectedPeers: Int? = null,
+    val totalPeers: Int? = null,
 )
 
 data class TorrentFile(

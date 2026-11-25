@@ -403,6 +403,8 @@ class BridgeDownloadRepository(
                     shareRatio = telemetry.shareRatio,
                     seeding = telemetry.seeding,
                     trackerUris = telemetry.trackerUris,
+                    connectedPeers = telemetry.connectedPeers?.toInt(),
+                    totalPeers = telemetry.totalPeers?.toInt(),
                 )
             }
         }

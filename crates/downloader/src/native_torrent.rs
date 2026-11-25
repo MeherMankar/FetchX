@@ -408,6 +408,12 @@ where
         let down_bps = live.map(|l| l.download_speed.as_bytes());
         let up_bps = live.map(|l| l.upload_speed.as_bytes());
         let peer_count = live.map(|l| u64::from(l.snapshot.peer_stats.live));
+        let connected_peers = live.map(|l| l.snapshot.peer_stats.live);
+        let total_peers = live.map(|l| {
+            l.snapshot.peer_stats.queued
+                .saturating_add(l.snapshot.peer_stats.connecting)
+                .saturating_add(l.snapshot.peer_stats.live)
+        });
         Some(fetchx_models::TorrentTelemetry {
             download_speed_bps: down_bps,
             upload_speed_bps: up_bps,
@@ -419,6 +425,8 @@ where
             share_ratio: None,
             seeding: None,
             tracker_uris: None,
+            connected_peers,
+            total_peers,
         })
     }
 

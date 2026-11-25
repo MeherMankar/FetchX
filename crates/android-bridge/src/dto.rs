@@ -158,6 +158,8 @@ pub struct TorrentTelemetryDto {
     pub share_ratio: Option<f64>,
     pub seeding: Option<bool>,
     pub tracker_uris: Option<Vec<String>>,
+    pub connected_peers: Option<u32>,
+    pub total_peers: Option<u32>,
 }
 
 pub struct TorrentFileDto {

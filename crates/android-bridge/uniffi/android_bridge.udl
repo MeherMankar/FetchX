@@ -61,6 +61,8 @@ dictionary TorrentTelemetryDto {
     f64? share_ratio;
     boolean? seeding;
     sequence<string>? tracker_uris;
+    u32? connected_peers;
+    u32? total_peers;
 };
 
 dictionary TorrentFileDto {
