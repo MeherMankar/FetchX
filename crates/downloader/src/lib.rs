@@ -3,6 +3,7 @@
 mod adaptive;
 mod bandwidth;
 mod dispatcher;
+mod ed2k;
 mod engine;
 mod error;
 mod ffmpeg;
@@ -26,6 +27,7 @@ mod ytdlp;
 pub use adaptive::AdaptiveConfig;
 pub use bandwidth::{BandwidthControl, BandwidthLimiter};
 pub use dispatcher::{EngineDispatcher, is_dash_url};
+pub use ed2k::{Ed2kEngine, Ed2kLink, ed2k_to_http_url, parse_ed2k_uri};
 pub use engine::{DownloadEngine, ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
 pub use error::DownloadEngineError;
 pub use ffmpeg::{

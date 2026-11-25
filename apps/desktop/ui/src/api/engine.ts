@@ -7,6 +7,7 @@ import type {
   FolderCategoriesConfigDto,
   PostDownloadActionDto,
   SaveEngineConfigRequest,
+  WebhookConfigDto,
 } from "./types";
 
 export function getEngineConfig(): Promise<EngineConfigDto> {
@@ -67,3 +68,10 @@ export function importSettings(): Promise<EngineConfigDto> {
   return invoke<EngineConfigDto>("import_settings");
 }
 
+export function getWebhookConfig(): Promise<WebhookConfigDto> {
+  return invoke<WebhookConfigDto>("get_webhook_config");
+}
+
+export function setWebhookConfig(config: WebhookConfigDto): Promise<void> {
+  return invoke<void>("set_webhook_config", { config });
+}

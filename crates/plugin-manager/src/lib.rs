@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod js_runtime;
 pub mod lifecycle;
 pub mod registry;
 
@@ -50,6 +51,7 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
+pub use js_runtime::JsPluginRunner;
 pub use lifecycle::PluginLifecycleState;
 pub use registry::{PluginRegistry, PluginRegistryError};
 
@@ -125,6 +127,8 @@ pub struct PluginEntry {
     pub state: PluginLifecycleState,
     manifest_path: Option<PathBuf>,
     artifact_root: PathBuf,
+    /// Path to `plugin.js` when this entry was registered as a JS plugin.
+    pub js_script: Option<PathBuf>,
     /// Set while the plugin process is running.
     process: Option<Child>,
     /// Crash-loop tracking for the supervisor. This is a guardrail for the host,
@@ -147,6 +151,7 @@ impl PluginEntry {
             state: PluginLifecycleState::Registered,
             manifest_path,
             artifact_root,
+            js_script: None,
             process: None,
             restart_count: 0,
             last_failure: None,
@@ -173,6 +178,8 @@ struct ManagerInner {
     plugin_dir: PathBuf,
     sandbox_config: PluginSandboxConfig,
     publisher_store: PluginPublisherStore,
+    /// Paths to discovered `plugin.js` scripts (JS-only plugins with no binary manifest).
+    js_plugins: Vec<PathBuf>,
 }
 
 impl PluginManager {
@@ -282,6 +289,7 @@ impl PluginManager {
                 plugin_dir,
                 sandbox_config: PluginSandboxConfig::default(),
                 publisher_store,
+                js_plugins: Vec::new(),
             }),
         })
     }
@@ -395,8 +403,23 @@ impl PluginManager {
             let bytes = match fs::read(&manifest_path).await {
                 Ok(b) => b,
                 Err(e) => {
-                    warn!(path = %manifest_path.display(), error = %e, "could not read plugin manifest");
-                    result.invalid += 1;
+                    // No plugin.json — check for a bare plugin.js (JS-only plugin).
+                    let js_path = path.join("plugin.js");
+                    if js_path.is_file() {
+                        match self.register_js_plugin(&js_path).await {
+                            Ok(id) => {
+                                info!(plugin_id = %id, "JS plugin registered");
+                                result.registered += 1;
+                            }
+                            Err(err) => {
+                                warn!(path = %js_path.display(), error = %err, "JS plugin registration failed");
+                                result.invalid += 1;
+                            }
+                        }
+                    } else {
+                        warn!(path = %manifest_path.display(), error = %e, "could not read plugin manifest");
+                        result.invalid += 1;
+                    }
                     continue;
                 }
             };
@@ -433,6 +456,72 @@ impl PluginManager {
     /// Returns an error if a plugin with the same ID is already registered.
     pub async fn register(&self, manifest: PluginManifest) -> Result<(), PluginManagerError> {
         self.register_with_path(manifest, None).await
+    }
+
+    /// Registers a directory-local `plugin.js` as a JavaScript plugin.
+    ///
+    /// A synthetic manifest ID is derived from the script directory name.
+    /// The entry is marked with `js_script` so callers can run it via
+    /// [`JsPluginRunner`].
+    async fn register_js_plugin(&self, js_path: &PathBuf) -> Result<String, PluginManagerError> {
+        let dir = js_path.parent().ok_or_else(|| {
+            PluginManagerError::InvalidManifest("JS script has no parent directory".to_owned())
+        })?;
+        let dir_name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("js-plugin");
+        let id = format!("js:{dir_name}");
+
+        let mut inner = self.inner.lock().await;
+        if inner.entries.contains_key(&id) {
+            return Ok(id); // already registered
+        }
+
+        // Build a minimal synthetic manifest so the entry can live in the
+        // registry.  The executable field points at the js script path as a
+        // placeholder; it is never actually spawned by the binary-plugin path.
+        use fetchx_plugin_api::{PluginCompatibility, PluginManifest, PluginVersion};
+        let manifest = PluginManifest {
+            manifest_version: fetchx_plugin_api::PLUGIN_MANIFEST_VERSION,
+            id: id.clone(),
+            name: dir_name.to_owned(),
+            version: PluginVersion::parse("0.0.0")
+                .unwrap_or_else(|_| PluginVersion::parse("0.1.0").unwrap()),
+            api_version: fetchx_plugin_api::PLUGIN_API_VERSION,
+            compatibility: PluginCompatibility {
+                minimum_api_version: fetchx_plugin_api::PLUGIN_API_VERSION,
+                maximum_api_version: fetchx_plugin_api::PLUGIN_API_VERSION,
+            },
+            publisher: String::new(),
+            description: format!("JavaScript plugin: {dir_name}"),
+            executable: js_path.clone(),
+            permissions: vec![],
+            capabilities: vec![],
+            platforms: vec![],
+            signature: None,
+        };
+
+        let trust_context = fetchx_plugin_api::PluginTrustContext::unknown(&manifest)
+            .map_err(|e| PluginManagerError::Policy(e.to_string()))?;
+
+        let mut entry = PluginEntry::new(manifest, None);
+        entry.js_script = Some(js_path.clone());
+
+        inner.entries.insert(id.clone(), entry);
+        inner.trust_contexts.insert(id.clone(), trust_context);
+
+        Ok(id)
+    }
+
+    /// Returns the paths of all registered JS plugin scripts.
+    pub async fn js_script_paths(&self) -> Vec<PathBuf> {
+        let inner = self.inner.lock().await;
+        inner
+            .entries
+            .values()
+            .filter_map(|entry| entry.js_script.clone())
+            .collect()
     }
 
     async fn register_discovered(

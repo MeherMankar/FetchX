@@ -2223,13 +2223,17 @@ pub async fn get_post_queue_action(state: State<'_, AppState>) -> Result<String,
 /// Simple string-based DTO for the post-download action setting.
 ///
 /// The `kind` field mirrors the serde tag of `PostDownloadAction`:
-/// `"nothing"`, `"open_file"`, `"open_folder"`, or `"run_command"`.
-/// When `kind` is `"run_command"` the `command` field holds the shell string.
+/// `"nothing"`, `"open_file"`, `"open_folder"`, `"run_command"`, or
+/// `"extract_archive"`. When `kind` is `"run_command"` the `command` field
+/// holds the shell string. When `kind` is `"extract_archive"` the
+/// `delete_after` field controls archive deletion after extraction.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PostDownloadActionDto {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_after: Option<bool>,
 }
 
 impl From<fetchx_models::PostDownloadAction> for PostDownloadActionDto {
@@ -2238,18 +2242,27 @@ impl From<fetchx_models::PostDownloadAction> for PostDownloadActionDto {
             fetchx_models::PostDownloadAction::Nothing => Self {
                 kind: "nothing".to_owned(),
                 command: None,
+                delete_after: None,
             },
             fetchx_models::PostDownloadAction::OpenFile => Self {
                 kind: "open_file".to_owned(),
                 command: None,
+                delete_after: None,
             },
             fetchx_models::PostDownloadAction::OpenFolder => Self {
                 kind: "open_folder".to_owned(),
                 command: None,
+                delete_after: None,
             },
             fetchx_models::PostDownloadAction::RunCommand { command } => Self {
                 kind: "run_command".to_owned(),
                 command: Some(command),
+                delete_after: None,
+            },
+            fetchx_models::PostDownloadAction::ExtractArchive { delete_after } => Self {
+                kind: "extract_archive".to_owned(),
+                command: None,
+                delete_after: Some(delete_after),
             },
         }
     }
@@ -2270,6 +2283,9 @@ impl TryFrom<PostDownloadActionDto> for fetchx_models::PostDownloadAction {
                 }
                 Ok(Self::RunCommand { command })
             }
+            "extract_archive" => Ok(Self::ExtractArchive {
+                delete_after: dto.delete_after.unwrap_or(false),
+            }),
             _ => Err(IpcError::invalid_request()),
         }
     }
@@ -2566,6 +2582,73 @@ fn iso_utc_now() -> String {
     let minute = (secs_of_day % 3600) / 60;
     let second = secs_of_day % 60;
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+// ---------------------------------------------------------------------------
+// Webhook configuration
+// ---------------------------------------------------------------------------
+
+/// Transfer object for webhook configuration, mirroring [`fetchx_core_services::WebhookConfig`].
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WebhookConfigDto {
+    pub enabled: bool,
+    pub url: String,
+    pub on_complete: bool,
+    pub on_fail: bool,
+    pub secret: String,
+}
+
+impl From<fetchx_core_services::WebhookConfig> for WebhookConfigDto {
+    fn from(cfg: fetchx_core_services::WebhookConfig) -> Self {
+        Self {
+            enabled: cfg.enabled,
+            url: cfg.url,
+            on_complete: cfg.on_complete,
+            on_fail: cfg.on_fail,
+            secret: cfg.secret,
+        }
+    }
+}
+
+impl From<WebhookConfigDto> for fetchx_core_services::WebhookConfig {
+    fn from(dto: WebhookConfigDto) -> Self {
+        Self {
+            enabled: dto.enabled,
+            url: dto.url,
+            on_complete: dto.on_complete,
+            on_fail: dto.on_fail,
+            secret: dto.secret,
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_webhook_config(state: State<'_, AppState>) -> Result<WebhookConfigDto, IpcError> {
+    let config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    Ok(WebhookConfigDto::from(config.webhook))
+}
+
+#[tauri::command]
+pub async fn set_webhook_config(
+    state: State<'_, AppState>,
+    config: WebhookConfigDto,
+) -> Result<(), IpcError> {
+    let webhook = fetchx_core_services::WebhookConfig::from(config);
+    let mut engine_config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    engine_config.webhook = webhook;
+    state
+        .config_service
+        .save(&engine_config)
+        .await
+        .map_err(|_| IpcError::internal())
 }
 
 /// Converts a count of days since the Unix epoch (1970-01-01) to a proleptic

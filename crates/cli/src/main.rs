@@ -71,6 +71,12 @@ async fn run(cli: Cli) -> Result<exit::ExitCode, Box<dyn std::error::Error>> {
             svc.shutdown().await?;
             Ok(code)
         }
+        Info(opts) => {
+            let svc = bootstrap::start().await?;
+            let code = commands::status::run(&svc, opts, cli.json).await;
+            svc.shutdown().await?;
+            Ok(code)
+        }
         Pause(opts) => {
             let svc = bootstrap::start().await?;
             let code = commands::lifecycle::pause(&svc, opts.id, cli.json).await;

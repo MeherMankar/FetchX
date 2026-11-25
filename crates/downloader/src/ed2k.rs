@@ -69,10 +69,7 @@ pub fn ed2k_to_http_url(link: &Ed2kLink) -> String {
             }
         })
         .collect();
-    format!(
-        "http://ed2k.2x4u.de/{}/{}",
-        link.hash, encoded_name
-    )
+    format!("http://ed2k.2x4u.de/{}/{}", link.hash, encoded_name)
 }
 
 // ── Engine ────────────────────────────────────────────────────────────────
@@ -111,15 +108,12 @@ where
             return Err(DownloadEngineError::EngineMismatch);
         }
 
-        let link = parse_ed2k_uri(item.source().url())
-            .ok_or(DownloadEngineError::InvalidUrl)?;
+        let link = parse_ed2k_uri(item.source().url()).ok_or(DownloadEngineError::InvalidUrl)?;
         let http_url = ed2k_to_http_url(&link);
 
         // Rewrite the stored URL to the HTTP gateway URL so the DirectHttp
         // engine reads the correct source from the database.
-        self.repository
-            .update_source_url(id, &http_url)
-            .await?;
+        self.repository.update_source_url(id, &http_url).await?;
 
         Box::pin(self.http.download(id, cancellation)).await
     }
@@ -144,14 +138,11 @@ where
             return Err(DownloadEngineError::EngineMismatch);
         }
 
-        let link = parse_ed2k_uri(item.source().url())
-            .ok_or(DownloadEngineError::InvalidUrl)?;
+        let link = parse_ed2k_uri(item.source().url()).ok_or(DownloadEngineError::InvalidUrl)?;
         let http_url = ed2k_to_http_url(&link);
 
         // Rewrite the stored URL to the HTTP gateway URL.
-        self.repository
-            .update_source_url(id, &http_url)
-            .await?;
+        self.repository.update_source_url(id, &http_url).await?;
 
         Box::pin(self.http.download_managed(id, control)).await
     }
@@ -179,10 +170,9 @@ mod tests {
 
     #[test]
     fn parses_canonical_ed2k_uri() {
-        let link = parse_ed2k_uri(
-            "ed2k://|file|example.zip|1234567|aabbccddeeff00112233445566778899|/",
-        )
-        .expect("valid ed2k URI");
+        let link =
+            parse_ed2k_uri("ed2k://|file|example.zip|1234567|aabbccddeeff00112233445566778899|/")
+                .expect("valid ed2k URI");
         assert_eq!(link.name, "example.zip");
         assert_eq!(link.size, 1_234_567);
         assert_eq!(link.hash, "aabbccddeeff00112233445566778899");
@@ -217,9 +207,7 @@ mod tests {
 
     #[test]
     fn parses_uri_without_trailing_slash() {
-        let link = parse_ed2k_uri(
-            "ed2k://|file|test.bin|999|00112233445566778899aabbccddeeff|",
-        );
+        let link = parse_ed2k_uri("ed2k://|file|test.bin|999|00112233445566778899aabbccddeeff|");
         assert!(link.is_some());
     }
 }

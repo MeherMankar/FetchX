@@ -51,6 +51,9 @@ pub enum Command {
     /// Show detailed status of one download.
     Status(IdOpts),
 
+    /// Show full details for one download (alias for status).
+    Info(IdOpts),
+
     /// Pause a download.
     Pause(IdOpts),
 
@@ -337,6 +340,10 @@ pub struct ListOpts {
     /// Filter by status: all | active | queued | paused | completed | failed | cancelled
     #[arg(short = 'f', long, value_name = "STATUS", default_value = "all")]
     pub filter: String,
+
+    /// Alias for --filter (gopeed-compatible).
+    #[arg(long, value_name = "STATUS", conflicts_with = "filter")]
+    pub status: Option<String>,
 
     /// Limit number of results.
     #[arg(short = 'n', long, value_name = "N")]

@@ -18,8 +18,12 @@ pub async fn run(svc: &CoreServices, opts: ListOpts, json: bool) -> ExitCode {
         }
     };
 
-    // Filter by status
-    let filter = opts.filter.to_ascii_lowercase();
+    // --status is a gopeed-compatible alias for --filter
+    let filter = opts
+        .status
+        .as_deref()
+        .unwrap_or(&opts.filter)
+        .to_ascii_lowercase();
     let mut items: Vec<_> = all
         .into_iter()
         .filter(|d| match filter.as_str() {
