@@ -198,10 +198,30 @@ impl AppState {
                     // Percent-encode the tracker URL for safe embedding in the magnet URI.
                     for byte in tracker.bytes() {
                         if byte.is_ascii_alphanumeric()
-                            || matches!(byte, b'-' | b'_' | b'.' | b'~'
-                                | b':' | b'/' | b'?' | b'#' | b'[' | b']'
-                                | b'@' | b'!' | b'$' | b'&' | b'\'' | b'('
-                                | b')' | b'*' | b'+' | b',' | b';' | b'=')
+                            || matches!(
+                                byte,
+                                b'-' | b'_'
+                                    | b'.'
+                                    | b'~'
+                                    | b':'
+                                    | b'/'
+                                    | b'?'
+                                    | b'#'
+                                    | b'['
+                                    | b']'
+                                    | b'@'
+                                    | b'!'
+                                    | b'$'
+                                    | b'&'
+                                    | b'\''
+                                    | b'('
+                                    | b')'
+                                    | b'*'
+                                    | b'+'
+                                    | b','
+                                    | b';'
+                                    | b'='
+                            )
                         {
                             uri.push(byte as char);
                         } else {

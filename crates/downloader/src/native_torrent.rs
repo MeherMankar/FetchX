@@ -410,7 +410,9 @@ where
         let peer_count = live.map(|l| u64::from(l.snapshot.peer_stats.live));
         let connected_peers = live.map(|l| l.snapshot.peer_stats.live);
         let total_peers = live.map(|l| {
-            l.snapshot.peer_stats.queued
+            l.snapshot
+                .peer_stats
+                .queued
                 .saturating_add(l.snapshot.peer_stats.connecting)
                 .saturating_add(l.snapshot.peer_stats.live)
         });
