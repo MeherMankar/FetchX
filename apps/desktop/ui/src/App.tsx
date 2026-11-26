@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getAppInfo } from "./api/app";
+import { cancelPostQueueAction } from "./api/app";
 import {
   getQueueSnapshot,
   pauseQueueDispatch,
@@ -231,6 +232,9 @@ export function App() {
   // Update banner state for in-app update notifications
   const [updateBanner, setUpdateBanner] = useState<UpdateCheckResult | null>(null);
 
+  // Shutdown/sleep countdown banner
+  const [shutdownBanner, setShutdownBanner] = useState<string | null>(null);
+
   const {
     downloads, schedules, loading, error, busyId, load,
     ensureScheduleFetched, pause, resume, cancel, remove, retry,
@@ -276,6 +280,15 @@ export function App() {
     let off: (() => void)|undefined;
     void listen<NotificationEvent>("fetchx-notification", (e) => {
       const text = e.payload.title + (e.payload.body ? ": " + e.payload.body : "");
+      // Show shutdown/sleep/hibernate countdown as a dismissible banner.
+      if (e.payload.body && (
+        e.payload.body.includes("shutting down") ||
+        e.payload.body.includes("sleeping") ||
+        e.payload.body.includes("hibernating")
+      )) {
+        setShutdownBanner(e.payload.body);
+        return;
+      }
       if (text !== lastNotificationRef.current) {
         lastNotificationRef.current = text;
         addToast(text, "success");
@@ -872,6 +885,28 @@ export function App() {
               className="icon-button"
               aria-label="Dismiss update notification"
               onClick={() => setUpdateBanner(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {shutdownBanner && (
+          <div className="update-banner" role="alert" aria-live="assertive">
+            <span>{shutdownBanner}</span>
+            <button
+              className="button button-primary"
+              onClick={() => {
+                void cancelPostQueueAction();
+                setShutdownBanner(null);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="icon-button"
+              aria-label="Dismiss shutdown notification"
+              onClick={() => setShutdownBanner(null)}
             >
               ×
             </button>

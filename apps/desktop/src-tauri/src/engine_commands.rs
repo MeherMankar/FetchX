@@ -3,7 +3,7 @@
 use crate::commands::AppState;
 use fetchx_core_services::config::{MetalinkConfig, NativeBuiltinsConfig};
 use fetchx_core_services::{ConfigError, EngineAvailability, EngineConfig};
-use fetchx_models::{ResourcePolicy, ResourceProfile, WeeklyQueueSchedule};
+use fetchx_models::{PostQueueAction, ResourcePolicy, ResourceProfile, WeeklyQueueSchedule};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -26,6 +26,8 @@ pub struct SaveEngineConfigRequest {
     pub virus_scan_on_complete: Option<bool>,
     #[serde(default)]
     pub mark_of_the_web: Option<bool>,
+    #[serde(default)]
+    pub post_queue_action: Option<PostQueueAction>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -47,6 +49,7 @@ pub struct EngineConfigDto {
     pub auto_retry_delay_seconds: u64,
     pub virus_scan_on_complete: bool,
     pub mark_of_the_web: bool,
+    pub post_queue_action: PostQueueAction,
 }
 
 fn resource_policy_for_save(policy: ResourcePolicy) -> ResourcePolicy {
@@ -88,6 +91,7 @@ impl From<&EngineConfig> for EngineConfigDto {
             auto_retry_delay_seconds: config.auto_retry_delay_seconds,
             virus_scan_on_complete: config.virus_scan_on_complete,
             mark_of_the_web: config.mark_of_the_web,
+            post_queue_action: config.resource_policy.post_queue_action.clone(),
         }
     }
 }
@@ -192,6 +196,9 @@ pub async fn save_engine_config(
     }
     if let Some(motw) = request.mark_of_the_web {
         config.mark_of_the_web = motw;
+    }
+    if let Some(action) = request.post_queue_action {
+        config.resource_policy.post_queue_action = action;
     }
     state
         .config_service

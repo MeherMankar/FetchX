@@ -9,3 +9,7 @@ export function getAppInfo(): Promise<AppInfo> {
 export function checkForUpdate(): Promise<UpdateCheckResult> {
   return invoke<UpdateCheckResult>("check_for_update");
 }
+
+export function cancelPostQueueAction(): Promise<void> {
+  return invoke<void>("cancel_post_queue_action");
+}

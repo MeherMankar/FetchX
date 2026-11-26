@@ -16,6 +16,7 @@ import {
   saveEngineConfig,
   setFolderCategoriesConfig,
   setPostDownloadAction,
+  setPostQueueAction,
   setWebhookConfig,
 } from "../api/engine";
 import type {
@@ -28,6 +29,7 @@ import type {
   NativeBuiltinsConfigDto,
   PostDownloadActionDto,
   PostDownloadActionKind,
+  PostQueueActionDto,
   ResourcePolicyDto,
   ResourceProfile,
   WeeklyQueueScheduleDto,
@@ -990,6 +992,96 @@ const ACTION_LABELS: Record<PostDownloadActionKind, string> = {
   extract_archive: "Extract archive",
 };
 
+// ---------------------------------------------------------------------------
+// After-queue section
+// ---------------------------------------------------------------------------
+
+const QUEUE_ACTION_LABELS: Record<PostQueueActionDto, string> = {
+  nothing: "Do nothing",
+  shutdown: "Shut down",
+  sleep: "Sleep",
+  hibernate: "Hibernate",
+};
+
+function AfterQueueSection({ onError }: { onError: (msg: string) => void }) {
+  const [action, setAction] = useState<PostQueueActionDto>("nothing");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    // Load from engine config (resource_policy.post_queue_action)
+    getEngineConfig()
+      .then((cfg) => {
+        setAction(cfg.post_queue_action ?? "nothing");
+      })
+      .catch((cause) => onError(errorMessage(cause)));
+  }, [onError]);
+
+  const save = async () => {
+    setBusy(true);
+    setSaved(false);
+    try {
+      await setPostQueueAction(action);
+      setSaved(true);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="after-queue-heading">
+      <div className="settings-section-header">
+        <h4 id="after-queue-heading" className="settings-section-title">
+          After queue finishes
+        </h4>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="after-queue-action">
+          Action
+        </label>
+        <div className="settings-control">
+          <select
+            id="after-queue-action"
+            className="settings-input"
+            value={action}
+            disabled={busy}
+            onChange={(event) => {
+              setAction(event.target.value as PostQueueActionDto);
+              setSaved(false);
+            }}
+          >
+            {(Object.keys(QUEUE_ACTION_LABELS) as PostQueueActionDto[]).map((k) => (
+              <option key={k} value={k}>
+                {QUEUE_ACTION_LABELS[k]}
+              </option>
+            ))}
+          </select>
+          <p className="settings-hint">
+            Performed after the last queued download completes. A 30-second countdown
+            is shown so you can cancel.
+          </p>
+        </div>
+      </div>
+      {saved && (
+        <div className="settings-notice" role="status">
+          After-queue action saved.
+        </div>
+      )}
+      <div className="settings-actions">
+        <button
+          className="button button-primary"
+          onClick={() => void save()}
+          disabled={busy}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function AfterDownloadSection({ onError }: { onError: (msg: string) => void }) {
   const [action, setAction] = useState<PostDownloadActionDto>({ kind: "nothing" });
   const [commandText, setCommandText] = useState("");
@@ -1880,6 +1972,7 @@ export function SettingsPage() {
                       onError={setError}
                     />
                   )}
+                  <AfterQueueSection onError={setError} />
                   <AfterDownloadSection onError={setError} />
                   <FolderCategoriesSection onError={setError} />
                   {cfg && (

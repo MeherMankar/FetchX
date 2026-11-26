@@ -244,6 +244,7 @@ export interface EngineConfigDto {
   auto_retry_delay_seconds: number;
   virus_scan_on_complete: boolean;
   mark_of_the_web: boolean;
+  post_queue_action: PostQueueActionDto;
 }
 
 export interface NativeBuiltinsConfigDto {
@@ -303,6 +304,7 @@ export interface SaveEngineConfigRequest {
   auto_retry_delay_seconds?: number;
   virus_scan_on_complete?: boolean;
   mark_of_the_web?: boolean;
+  post_queue_action?: PostQueueActionDto;
 }
 
 export interface DiagnosticResult {
@@ -388,6 +390,12 @@ export interface PostDownloadActionDto {
   /** Present only when kind is "extract_archive". */
   delete_after?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Post-queue action
+// ---------------------------------------------------------------------------
+
+export type PostQueueActionDto = "nothing" | "shutdown" | "sleep" | "hibernate";
 
 // ---------------------------------------------------------------------------
 // Folder categories (folder-categories feature)

@@ -10,7 +10,7 @@ static NOTIFICATION_ID_COUNTER: std::sync::atomic::AtomicI32 = std::sync::atomic
 
 use crate::browser_ipc::BrowserIpcServer;
 use crate::clipboard_monitor::spawn_clipboard_monitor;
-use crate::commands::{self, AppState};
+use crate::commands::{self, AppState, PostQueueActionState};
 use crate::engine_commands;
 use crate::events::DownloadUpdatedEvent;
 use crate::media_processing::{self, MediaProcessingManager};
@@ -508,6 +508,8 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                 tracing::warn!(%error, "could not emit queue idle event");
             }
             update_tray(app, 0, 0);
+            // Trigger the post-queue action countdown if configured.
+            spawn_post_queue_action(app);
         }
     }
 }
@@ -525,6 +527,148 @@ fn emit_notification(app: &tauri::AppHandle, title: &str, body: &str) {
             body: body.to_owned(),
         },
     );
+}
+
+// ── Post-queue action countdown ───────────────────────────────────────────────
+
+/// Spawns a 30-second countdown for the configured post-queue action.
+/// A `fetchx-notification` event is emitted so the UI can show a cancel banner.
+/// If the user cancels via `cancel_post_queue_action`, the countdown is aborted.
+fn spawn_post_queue_action(app: &tauri::AppHandle) {
+    use fetchx_models::PostQueueAction;
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Read the config.
+        let state = app.state::<AppState>();
+        let action = match state.config_service.load().await {
+            Ok(cfg) => cfg.resource_policy.post_queue_action,
+            Err(err) => {
+                tracing::warn!(%err, "post-queue: could not read config");
+                return;
+            }
+        };
+
+        if action == PostQueueAction::Nothing {
+            return;
+        }
+
+        // Set up a cancellation channel.
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        {
+            let pq = app.try_state::<PostQueueActionState>();
+            if let Some(pq) = pq {
+                let mut guard = pq
+                    .cancel_tx
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Replace any previous pending action.
+                *guard = Some(cancel_tx);
+            } else {
+                tracing::warn!("post-queue: PostQueueActionState not managed");
+                return;
+            }
+        }
+
+        let action_label = match action {
+            PostQueueAction::Shutdown => "shutting down",
+            PostQueueAction::Sleep => "sleeping",
+            PostQueueAction::Hibernate => "hibernating",
+            PostQueueAction::Nothing | PostQueueAction::RunCommand { .. } => return,
+        };
+        emit_notification(
+            &app,
+            "Queue finished",
+            &format!("System {action_label} in 30 seconds. Click Cancel to stop."),
+        );
+
+        // 30-second countdown with early cancellation.
+        let countdown = tokio::time::sleep(std::time::Duration::from_secs(30));
+        tokio::select! {
+            _ = countdown => {}
+            _ = cancel_rx => {
+                tracing::info!("post-queue: countdown cancelled by user");
+                return;
+            }
+        }
+
+        // Clear the cancellation token (we consumed it).
+        if let Some(pq) = app.try_state::<PostQueueActionState>() {
+            let mut guard = pq
+                .cancel_tx
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard = None;
+        }
+
+        tracing::info!(?action, "post-queue: executing action");
+        execute_post_queue_action(action).await;
+    });
+}
+
+async fn execute_post_queue_action(action: fetchx_models::PostQueueAction) {
+    use fetchx_models::PostQueueAction;
+    let result = match action {
+        PostQueueAction::Shutdown => {
+            #[cfg(target_os = "windows")]
+            {
+                tokio::process::Command::new("shutdown")
+                    .args(["/s", "/t", "0"])
+                    .spawn()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                tokio::process::Command::new("shutdown")
+                    .args(["-h", "now"])
+                    .spawn()
+            }
+        }
+        PostQueueAction::Sleep => {
+            #[cfg(target_os = "windows")]
+            {
+                tokio::process::Command::new("rundll32.exe")
+                    .args(["powrprof.dll,SetSuspendState", "0,1,0"])
+                    .spawn()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                tokio::process::Command::new("pmset")
+                    .arg("sleepnow")
+                    .spawn()
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                tokio::process::Command::new("systemctl")
+                    .arg("suspend")
+                    .spawn()
+            }
+        }
+        PostQueueAction::Hibernate => {
+            #[cfg(target_os = "windows")]
+            {
+                tokio::process::Command::new("shutdown")
+                    .args(["/h"])
+                    .spawn()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                tokio::process::Command::new("sh")
+                    .args(["-c", "pmset -a hibernatemode 25 && pmset sleepnow"])
+                    .spawn()
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                tokio::process::Command::new("systemctl")
+                    .arg("hibernate")
+                    .spawn()
+            }
+        }
+        PostQueueAction::Nothing | PostQueueAction::RunCommand { .. } => return,
+    };
+
+    if let Err(err) = result {
+        tracing::warn!(%err, "post-queue: could not spawn system power command");
+    }
 }
 
 fn update_tray(app: &tauri::AppHandle, active_count: u32, speed_bps: u64) {
@@ -1106,6 +1250,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::clear_download_history,
             commands::provide_download_credentials,
             commands::get_post_queue_action,
+            commands::set_post_queue_action,
+            commands::cancel_post_queue_action,
             commands::get_post_download_action,
             commands::set_post_download_action,
             commands::get_folder_categories_config,
@@ -1209,6 +1355,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             spawn_clipboard_monitor(app.handle().clone());
             if !app.manage(state) {
                 return Err("desktop application state was already initialized".into());
+            }
+            if !app.manage(PostQueueActionState::default()) {
+                return Err("post-queue action state was already initialized".into());
             }
 
             // Start the browser integration IPC server after state is managed.

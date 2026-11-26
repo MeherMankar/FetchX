@@ -6,6 +6,7 @@ import type {
   EngineStatus,
   FolderCategoriesConfigDto,
   PostDownloadActionDto,
+  PostQueueActionDto,
   SaveEngineConfigRequest,
   WebhookConfigDto,
 } from "./types";
@@ -74,4 +75,8 @@ export function getWebhookConfig(): Promise<WebhookConfigDto> {
 
 export function setWebhookConfig(config: WebhookConfigDto): Promise<void> {
   return invoke<void>("set_webhook_config", { config });
+}
+
+export function setPostQueueAction(action: PostQueueActionDto): Promise<void> {
+  return invoke<void>("set_post_queue_action", { action });
 }

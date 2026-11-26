@@ -2108,7 +2108,9 @@ pub async fn verify_download_checksum(
         Err(_) => None,
     };
 
-    let matches = expected_hex.as_deref().map(|exp| exp == actual_hex.as_str());
+    let matches = expected_hex
+        .as_deref()
+        .map(|exp| exp == actual_hex.as_str());
 
     Ok(ChecksumVerificationResult {
         expected: expected_hex,
@@ -2346,6 +2348,21 @@ pub async fn provide_download_credentials(
 // T9 — Post-queue action
 // ---------------------------------------------------------------------------
 
+/// Shared state for the pending post-queue-action countdown.
+/// Holds a sender that can be used to cancel the pending action.
+/// When `None` there is no pending countdown.
+pub struct PostQueueActionState {
+    pub cancel_tx: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl Default for PostQueueActionState {
+    fn default() -> Self {
+        Self {
+            cancel_tx: std::sync::Mutex::new(None),
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn get_post_queue_action(state: State<'_, AppState>) -> Result<String, IpcError> {
     if let Some(ref cs) = state.core_services {
@@ -2354,6 +2371,51 @@ pub async fn get_post_queue_action(state: State<'_, AppState>) -> Result<String,
     } else {
         Ok("Nothing".to_owned())
     }
+}
+
+/// Saves the post-queue action to the resource policy.
+#[tauri::command]
+pub async fn set_post_queue_action(
+    state: State<'_, AppState>,
+    action: String,
+) -> Result<(), IpcError> {
+    use fetchx_models::PostQueueAction;
+    let model = match action.as_str() {
+        "nothing" | "Nothing" => PostQueueAction::Nothing,
+        "shutdown" | "Shutdown" => PostQueueAction::Shutdown,
+        "sleep" | "Sleep" => PostQueueAction::Sleep,
+        "hibernate" | "Hibernate" => PostQueueAction::Hibernate,
+        _ => return Err(IpcError::invalid_request()),
+    };
+    let mut config = state
+        .config_service
+        .load()
+        .await
+        .map_err(|_| IpcError::internal())?;
+    config.resource_policy.post_queue_action = model;
+    state
+        .config_service
+        .save(&config)
+        .await
+        .map_err(|_| IpcError::internal())
+}
+
+/// Cancels a pending post-queue-action countdown (if any).
+#[tauri::command]
+pub async fn cancel_post_queue_action(
+    pq_state: State<'_, PostQueueActionState>,
+) -> Result<(), IpcError> {
+    let maybe_tx = {
+        let mut guard = pq_state
+            .cancel_tx
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.take()
+    };
+    if let Some(tx) = maybe_tx {
+        let _ = tx.send(());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
