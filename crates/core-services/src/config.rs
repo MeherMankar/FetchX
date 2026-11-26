@@ -70,6 +70,14 @@ pub struct EngineConfig {
     /// Uses Windows Defender on Windows, clamscan on Linux, and is skipped on macOS.
     #[serde(default)]
     pub virus_scan_on_complete: bool,
+    /// Write a Mark-of-the-Web tag on completed downloads so that the OS and
+    /// security tools know the file originated from the internet.
+    ///
+    /// On Windows this writes an NTFS Alternate Data Stream (`Zone.Identifier`).
+    /// On macOS this sets the `com.apple.quarantine` extended attribute.
+    /// On other platforms this is a no-op.
+    #[serde(default = "default_true")]
+    pub mark_of_the_web: bool,
 }
 
 fn default_auto_retry_count() -> u32 {
@@ -123,6 +131,7 @@ impl Default for EngineConfig {
             health_check_on_complete: true,
             webhook: WebhookConfig::default(),
             virus_scan_on_complete: false,
+            mark_of_the_web: true,
         }
     }
 }

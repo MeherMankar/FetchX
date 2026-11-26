@@ -24,6 +24,8 @@ pub struct SaveEngineConfigRequest {
     pub auto_retry_delay_seconds: Option<u64>,
     #[serde(default)]
     pub virus_scan_on_complete: Option<bool>,
+    #[serde(default)]
+    pub mark_of_the_web: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -44,6 +46,7 @@ pub struct EngineConfigDto {
     pub auto_retry_count: u32,
     pub auto_retry_delay_seconds: u64,
     pub virus_scan_on_complete: bool,
+    pub mark_of_the_web: bool,
 }
 
 fn resource_policy_for_save(policy: ResourcePolicy) -> ResourcePolicy {
@@ -84,6 +87,7 @@ impl From<&EngineConfig> for EngineConfigDto {
             auto_retry_count: config.auto_retry_count,
             auto_retry_delay_seconds: config.auto_retry_delay_seconds,
             virus_scan_on_complete: config.virus_scan_on_complete,
+            mark_of_the_web: config.mark_of_the_web,
         }
     }
 }
@@ -185,6 +189,9 @@ pub async fn save_engine_config(
     }
     if let Some(scan) = request.virus_scan_on_complete {
         config.virus_scan_on_complete = scan;
+    }
+    if let Some(motw) = request.mark_of_the_web {
+        config.mark_of_the_web = motw;
     }
     state
         .config_service

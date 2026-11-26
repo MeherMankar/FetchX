@@ -254,16 +254,14 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                                     match tokio::fs::read(&dest).await {
                                         Ok(bytes) => {
                                             let hash = sha256(&bytes);
-                                            let actual_hex: String = hash
-                                                .iter()
-                                                .fold(
-                                                    String::with_capacity(64),
-                                                    |mut s, b| {
-                                                        use std::fmt::Write as _;
-                                                        let _ = write!(s, "{b:02x}");
-                                                        s
-                                                    },
-                                                );
+                                            let actual_hex: String = hash.iter().fold(
+                                                String::with_capacity(64),
+                                                |mut s, b| {
+                                                    use std::fmt::Write as _;
+                                                    let _ = write!(s, "{b:02x}");
+                                                    s
+                                                },
+                                            );
                                             if actual_hex != expected_hex {
                                                 tracing::warn!(
                                                     path = %dest.display(),
@@ -311,6 +309,15 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                     let fname_for_scan = fname.clone();
                     tauri::async_runtime::spawn(async move {
                         spawn_virus_scan(scan_path, fname_for_scan, app_for_scan).await;
+                    });
+                }
+                // Mark-of-the-Web tagging on completion.
+                let motw_enabled = config.as_ref().map(|c| c.mark_of_the_web).unwrap_or(true);
+                if motw_enabled {
+                    let motw_path = item.destination().to_owned();
+                    let motw_url = item.source().url().to_owned();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        mark_of_the_web(&motw_path, &motw_url);
                     });
                 }
             } else if status == fetchx_models::DownloadStatus::Failed {
@@ -753,6 +760,82 @@ async fn spawn_virus_scan(path: std::path::PathBuf, filename: String, app: tauri
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         let _ = (path, filename, app);
+    }
+}
+
+// ── Mark-of-the-Web ────────────────────────────────────────────────────────────
+
+/// Tags a completed download with a Mark-of-the-Web so the OS and security
+/// tools know the file was downloaded from the internet.
+///
+/// * **Windows** — writes an NTFS Alternate Data Stream `{path}:Zone.Identifier`
+///   containing a `[ZoneTransfer]` section with `ZoneId=3` and the source URL.
+/// * **macOS** — sets the `com.apple.quarantine` extended attribute via `xattr`.
+/// * **Other** — no-op (no standard mechanism exists).
+///
+/// Failures are logged at WARN level and are never fatal.
+fn mark_of_the_web(path: &std::path::Path, url: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        // The `:Zone.Identifier` suffix is an NTFS Alternate Data Stream.
+        let ads_path = {
+            let mut s = path.as_os_str().to_owned();
+            s.push(":Zone.Identifier");
+            std::path::PathBuf::from(s)
+        };
+        let content = format!(
+            "[ZoneTransfer]\r\nZoneId=3\r\nReferrerUrl={url}\r\nHostUrl={url}\r\n",
+            url = url
+        );
+        if let Err(e) = std::fs::write(&ads_path, content.as_bytes()) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "motw: could not write Zone.Identifier ADS"
+            );
+        } else {
+            tracing::info!(path = %path.display(), "motw: Zone.Identifier written");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Build the quarantine flag string: "0083;<hex-epoch>;<appname>;"
+        let epoch_hex = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| format!("{:x}", d.as_secs()))
+            .unwrap_or_else(|_| "0".to_owned());
+        let quarantine_value = format!("0083;{epoch_hex};FetchX;");
+        let result = std::process::Command::new("xattr")
+            .args([
+                "-w",
+                "com.apple.quarantine",
+                &quarantine_value,
+                path.to_str().unwrap_or(""),
+            ])
+            .output();
+        match result {
+            Ok(output) if output.status.success() => {
+                tracing::info!(path = %path.display(), "motw: com.apple.quarantine set");
+            }
+            Ok(output) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "motw: xattr exited with non-zero status"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "motw: could not run xattr");
+            }
+        }
+        let _ = url; // URL not embedded in quarantine attribute on macOS
+    }
+
+    // Linux and all other platforms: no standard MotW mechanism.
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (path, url);
     }
 }
 

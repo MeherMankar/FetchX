@@ -1319,6 +1319,80 @@ function FolderCategoriesSection({ onError }: { onError: (msg: string) => void }
 }
 
 // ---------------------------------------------------------------------------
+// Mark-of-the-Web section
+// ---------------------------------------------------------------------------
+
+function MarkOfTheWebSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [enabled, setEnabled] = useState(cfg.mark_of_the_web ?? true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEnabled(cfg.mark_of_the_web ?? true);
+  }, [cfg.mark_of_the_web]);
+
+  const save = async (next: boolean) => {
+    setEnabled(next);
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+        native_builtins: cfg.native_builtins,
+        mark_of_the_web: next,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+      setEnabled(!next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="motw-heading">
+      <div className="settings-section-header">
+        <h4 id="motw-heading" className="settings-section-title">
+          Mark-of-the-Web
+        </h4>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Tag as internet-sourced</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(event) => void save(event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+          <p className="settings-hint">
+            Mark downloaded files as internet-sourced (Mark-of-the-Web / Quarantine).
+            On Windows this writes a Zone.Identifier stream so SmartScreen and other
+            security tools know the file came from the internet. On macOS this sets the
+            quarantine extended attribute. Has no effect on Linux.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Virus scan section
 // ---------------------------------------------------------------------------
 
@@ -1810,6 +1884,13 @@ export function SettingsPage() {
                   <FolderCategoriesSection onError={setError} />
                   {cfg && (
                     <VirusScanSection
+                      cfg={cfg}
+                      onSaved={setCfg}
+                      onError={setError}
+                    />
+                  )}
+                  {cfg && (
+                    <MarkOfTheWebSection
                       cfg={cfg}
                       onSaved={setCfg}
                       onError={setError}

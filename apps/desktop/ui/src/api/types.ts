@@ -243,6 +243,7 @@ export interface EngineConfigDto {
   auto_retry_count: number;
   auto_retry_delay_seconds: number;
   virus_scan_on_complete: boolean;
+  mark_of_the_web: boolean;
 }
 
 export interface NativeBuiltinsConfigDto {
@@ -301,6 +302,7 @@ export interface SaveEngineConfigRequest {
   auto_retry_count?: number;
   auto_retry_delay_seconds?: number;
   virus_scan_on_complete?: boolean;
+  mark_of_the_web?: boolean;
 }
 
 export interface DiagnosticResult {
