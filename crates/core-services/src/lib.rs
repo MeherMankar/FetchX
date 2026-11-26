@@ -3196,6 +3196,15 @@ async fn init_ytdlp(
     if runner.is_none() {
         ytdlp_cfg = ytdlp_cfg.with_version_cache_path(runtime_dir.join("yt-dlp-version.json"));
     }
+    ytdlp_cfg.download_subtitles = config.yt_dlp.download_subtitles;
+    ytdlp_cfg.subtitle_langs = config
+        .yt_dlp
+        .subtitle_langs
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
     let initialized = if let Some(runner) = runner {
         YtDlpEngine::initialize_with_runner_and_executable(
             repository,

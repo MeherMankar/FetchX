@@ -282,6 +282,8 @@ pub struct YtDlpEngine<R> {
     version: String,
     runner: Arc<dyn YtDlpProcessRunner>,
     native_media_processor: Arc<FfmpegProcessor>,
+    download_subtitles: bool,
+    subtitle_langs: Vec<String>,
 }
 
 impl<R> YtDlpEngine<R>
@@ -339,6 +341,8 @@ where
             version,
             runner,
             native_media_processor,
+            download_subtitles: config.download_subtitles,
+            subtitle_langs: config.subtitle_langs.clone(),
         })
     }
 
@@ -457,6 +461,27 @@ where
             item.source().yt_dlp_format(),
             audio_format,
             control.bandwidth.external_download_rate_bytes_per_second,
+            {
+                // Per-download override wins; fall back to engine-level global setting.
+                match item.source().download_subtitles() {
+                    Some(override_val) => override_val,
+                    None => self.download_subtitles,
+                }
+            },
+            {
+                // Resolve the subtitle language list in priority order:
+                // 1. Per-download override (comma-separated string split to vec)
+                // 2. Engine-level global list
+                match item.source().subtitle_langs() {
+                    Some(override_langs) if !override_langs.trim().is_empty() => override_langs
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                    _ => self.subtitle_langs.clone(),
+                }
+            },
         );
         let allows_component_reset =
             audio_format.is_some() || format_selector(item.source().yt_dlp_format()).contains(',');
@@ -1259,6 +1284,8 @@ fn build_arguments(
     selected_format: Option<&str>,
     audio_format: Option<YtDlpAudioFormat>,
     max_download_rate_bytes_per_second: Option<u64>,
+    download_subtitles: bool,
+    subtitle_langs: Vec<String>,
 ) -> Vec<OsString> {
     let selected_format = if audio_format.is_some() {
         "bestaudio/best".to_owned()
@@ -1294,6 +1321,18 @@ fn build_arguments(
             "--audio-format".into(),
             audio_format.as_str().into(),
         ]);
+    }
+    // Subtitle download flags: write regular and auto-generated subtitles,
+    // select languages, and convert to .srt.
+    if download_subtitles {
+        arguments.push("--write-subs".into());
+        arguments.push("--write-auto-subs".into());
+        if !subtitle_langs.is_empty() {
+            arguments.push("--sub-langs".into());
+            arguments.push(subtitle_langs.join(",").into());
+        }
+        arguments.push("--convert-subs".into());
+        arguments.push("srt".into());
     }
     // Note: download_subtitles / subtitle_langs are not yet plumbed into build_args;
     // they are injected by YtDlpEngine before calling build_args.
@@ -2718,6 +2757,8 @@ mod tests {
             Some("137+bestaudio/137"),
             None,
             Some(4096),
+            false,
+            vec![],
         );
         let format_index = args
             .iter()
@@ -2744,6 +2785,8 @@ mod tests {
             Some("571+bestaudio/571"),
             None,
             None,
+            false,
+            vec![],
         );
 
         assert!(args.iter().any(|arg| arg == OsStr::new("--continue")));
@@ -2762,6 +2805,8 @@ mod tests {
             None,
             None,
             None,
+            false,
+            vec![],
         );
         let format_index = args
             .iter()
@@ -2791,6 +2836,8 @@ mod tests {
             Some("137"),
             Some(YtDlpAudioFormat::Mp3),
             None,
+            false,
+            vec![],
         );
         let format_index = args
             .iter()

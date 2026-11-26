@@ -59,7 +59,7 @@ function NativeBuiltinsSection({
     setBusy(true);
     try {
       const updated = await saveEngineConfig({
-        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        yt_dlp: { ...cfg.yt_dlp },
         resource_policy: cfg.resource_policy,
         weekly_queue_schedule: cfg.weekly_queue_schedule,
         native_builtins: settings,
@@ -339,6 +339,102 @@ function BrowserExtensionSection() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// yt-dlp subtitle settings
+// ---------------------------------------------------------------------------
+
+function YtDlpSubtitlesSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [downloadSubtitles, setDownloadSubtitles] = useState(
+    cfg.yt_dlp.download_subtitles,
+  );
+  const [subtitleLangs, setSubtitleLangs] = useState(cfg.yt_dlp.subtitle_langs);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setDownloadSubtitles(cfg.yt_dlp.download_subtitles);
+    setSubtitleLangs(cfg.yt_dlp.subtitle_langs);
+  }, [cfg.yt_dlp]);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: {
+          enabled: cfg.yt_dlp.enabled,
+          download_subtitles: downloadSubtitles,
+          subtitle_langs: subtitleLangs.trim(),
+        },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="ytdlp-subs-heading">
+      <div className="settings-section-header">
+        <h4 id="ytdlp-subs-heading" className="settings-section-title">
+          Subtitles (yt-dlp)
+        </h4>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Download subtitles</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={downloadSubtitles}
+              disabled={busy}
+              onChange={(event) => setDownloadSubtitles(event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span>{downloadSubtitles ? "Enabled" : "Disabled"}</span>
+          </label>
+          <p className="settings-hint">
+            Save subtitle files (.srt) alongside yt-dlp video downloads. Auto-generated
+            subtitles are included when no manual ones exist.
+          </p>
+        </div>
+      </div>
+      <div className="settings-row">
+        <label className="settings-label" htmlFor="subtitle-langs">Subtitle languages</label>
+        <div className="settings-control">
+          <input
+            id="subtitle-langs"
+            className="settings-input"
+            value={subtitleLangs}
+            placeholder="en"
+            disabled={busy || !downloadSubtitles}
+            onChange={(event) => setSubtitleLangs(event.target.value)}
+          />
+          <p className="settings-hint">
+            Comma-separated language codes (e.g. <code>en,fr</code>). Leave empty to
+            download all available languages.
+          </p>
+        </div>
+      </div>
+      <div className="settings-actions">
+        <button className="button button-primary" onClick={() => void save()} disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Root SettingsPage
 // ---------------------------------------------------------------------------
 
@@ -477,6 +573,8 @@ function ResourcePolicySection({
       const updated = await saveEngineConfig({
         yt_dlp: {
           enabled: cfg.yt_dlp.enabled,
+          download_subtitles: cfg.yt_dlp.download_subtitles,
+          subtitle_langs: cfg.yt_dlp.subtitle_langs,
         },
         resource_policy: policy,
         weekly_queue_schedule: cfg.weekly_queue_schedule,
@@ -657,6 +755,8 @@ function WeeklyQueueScheduleSection({
       const updated = await saveEngineConfig({
         yt_dlp: {
           enabled: cfg.yt_dlp.enabled,
+          download_subtitles: cfg.yt_dlp.download_subtitles,
+          subtitle_langs: cfg.yt_dlp.subtitle_langs,
         },
         resource_policy: cfg.resource_policy,
         weekly_queue_schedule: schedule,
@@ -820,7 +920,7 @@ function ProxySection({
           username: cfg.resource_policy.desktop_proxy?.username ?? null,
         };
       const updated = await saveEngineConfig({
-        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        yt_dlp: { ...cfg.yt_dlp },
         resource_policy: {
           ...cfg.resource_policy,
           desktop_proxy: desktopProxy,
@@ -936,7 +1036,7 @@ function BandwidthScheduleSection({ cfg, onSaved, onError }: { cfg: EngineConfig
     setBusy(true);
     try {
       const bwWindows = windows.map((w) => ({ weekdays: w.weekdays, start_minute: w.start_minute, end_minute: w.end_minute, limit_bps: Math.round(parseFloat(w.limit_mbps) * 1024 * 1024) }));
-      const updated = await saveEngineConfig({ yt_dlp: { enabled: cfg.yt_dlp.enabled }, resource_policy: { ...cfg.resource_policy, weekly_bandwidth_schedule: { windows: bwWindows } }, weekly_queue_schedule: cfg.weekly_queue_schedule });
+      const updated = await saveEngineConfig({ yt_dlp: { ...cfg.yt_dlp }, resource_policy: { ...cfg.resource_policy, weekly_bandwidth_schedule: { windows: bwWindows } }, weekly_queue_schedule: cfg.weekly_queue_schedule });
       onSaved(updated);
     } catch (cause) { onError(errorMessage(cause)); }
     finally { setBusy(false); }
@@ -1435,7 +1535,7 @@ function MarkOfTheWebSection({
     setBusy(true);
     try {
       const updated = await saveEngineConfig({
-        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        yt_dlp: { ...cfg.yt_dlp },
         resource_policy: cfg.resource_policy,
         weekly_queue_schedule: cfg.weekly_queue_schedule,
         native_builtins: cfg.native_builtins,
@@ -1509,7 +1609,7 @@ function VirusScanSection({
     setBusy(true);
     try {
       const updated = await saveEngineConfig({
-        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        yt_dlp: { ...cfg.yt_dlp },
         resource_policy: cfg.resource_policy,
         weekly_queue_schedule: cfg.weekly_queue_schedule,
         native_builtins: cfg.native_builtins,
@@ -1585,7 +1685,7 @@ function AutoRetrySection({
     setBusy(true);
     try {
       const updated = await saveEngineConfig({
-        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        yt_dlp: { ...cfg.yt_dlp },
         resource_policy: cfg.resource_policy,
         weekly_queue_schedule: cfg.weekly_queue_schedule,
         native_builtins: cfg.native_builtins,
@@ -1998,6 +2098,7 @@ export function SettingsPage() {
                     onSaved={setCfg}
                     onError={setError}
                   />
+                  <YtDlpSubtitlesSection cfg={cfg} onSaved={setCfg} onError={setError} />
                   <AutoRetrySection cfg={cfg} onSaved={setCfg} onError={setError} />
                 </>
               )}
