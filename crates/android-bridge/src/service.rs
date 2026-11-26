@@ -171,10 +171,12 @@ pub struct DownloadService {
 
 fn canonical_source_url(url: &str, engine: EngineKind) -> Result<String, MobileApiError> {
     match engine {
-        EngineKind::DirectHttp | EngineKind::YtDlp | EngineKind::Hls | EngineKind::Metalink => {
-            validate_http_source_url(url)
-                .map_err(|_| MobileApiError::Validation("invalid HTTP(S) download URL".to_owned()))
-        }
+        EngineKind::DirectHttp
+        | EngineKind::YtDlp
+        | EngineKind::Hls
+        | EngineKind::Metalink
+        | EngineKind::Ed2k => validate_http_source_url(url)
+            .map_err(|_| MobileApiError::Validation("invalid HTTP(S) download URL".to_owned())),
         EngineKind::Ftp | EngineKind::Ftps | EngineKind::Sftp => {
             if url.split('/').any(|segment| segment == "..") {
                 return Err(MobileApiError::Validation(
