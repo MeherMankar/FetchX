@@ -287,6 +287,8 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
                 referer: browser_req.referer,
                 user_agent: browser_req.user_agent,
                 cookies: browser_req.cookies,
+                extra_trackers: None,
+                proxy_url: None,
             };
 
             match app_state.add_from_browser(add_request).await {
