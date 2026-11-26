@@ -188,12 +188,16 @@ export function addMediaDownload(
   formatId?: string,
   extension?: string | null,
   audioFormat?: "mp3" | "m4a",
+  downloadSubtitles?: boolean,
+  subtitleLangs?: string,
 ): Promise<Download> {
   return invoke<Download>("add_media_download", {
     url,
     format_id: formatId ?? null,
     extension: extension ?? null,
     audio_format: audioFormat ?? null,
+    download_subtitles: downloadSubtitles ?? null,
+    subtitle_langs: subtitleLangs ?? null,
   });
 }
 

@@ -118,6 +118,10 @@ export interface AddDownloadRequest {
   cookies?: string;
   /** Per-download proxy URL that overrides the global proxy setting. */
   proxy_url?: string;
+  /** Per-download subtitle download override. Omitting defers to the global setting. */
+  download_subtitles?: boolean;
+  /** Per-download subtitle languages, comma-separated (e.g. "en,fr"). */
+  subtitle_langs?: string;
 }
 
 export interface BatchDownloadResult {
@@ -226,6 +230,8 @@ export interface DirectHttpConfigDto {
 
 export interface YtDlpConfigDto {
   enabled: boolean;
+  download_subtitles: boolean;
+  subtitle_langs: string;
 }
 
 export interface MetalinkConfigDto {
@@ -292,6 +298,8 @@ export interface WeeklyQueueScheduleDto {
 
 export interface SaveYtDlpConfigRequest {
   enabled: boolean;
+  download_subtitles: boolean;
+  subtitle_langs: string;
 }
 
 export interface SaveEngineConfigRequest {

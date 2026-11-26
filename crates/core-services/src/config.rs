@@ -190,6 +190,13 @@ impl Aria2Config {}
 pub struct YtDlpConfig {
     pub enabled: bool,
     pub executable_path: Option<PathBuf>,
+    /// Download subtitle files alongside the video.
+    #[serde(default)]
+    pub download_subtitles: bool,
+    /// Comma-separated subtitle language codes (e.g. `"en,fr"`).
+    /// An empty string means "all available languages".
+    #[serde(default)]
+    pub subtitle_langs: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

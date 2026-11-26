@@ -329,6 +329,13 @@ impl AppState {
                     source
                 }
             })
+            .map(|mut source| {
+                if engine_kind == EngineKind::YtDlp {
+                    source.download_subtitles = request.download_subtitles;
+                    source.subtitle_langs = request.subtitle_langs.clone();
+                }
+                source
+            })
             .map_err(|_| IpcError::invalid_request())?;
         let destination = package_destination(&self.downloads_dir, request.package_name.as_deref())
             .join(filename.as_str());
@@ -665,6 +672,13 @@ pub struct AddDownloadRequest {
     /// Optional per-download proxy URL that overrides the global desktop proxy.
     #[serde(default)]
     pub proxy_url: Option<String>,
+    /// Per-download subtitle download override. `None` defers to the global setting.
+    #[serde(default)]
+    pub download_subtitles: Option<bool>,
+    /// Per-download subtitle languages (comma-separated, e.g. `"en,fr"`).
+    /// Only used when `download_subtitles` is `Some(true)`.
+    #[serde(default)]
+    pub subtitle_langs: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1238,12 +1252,16 @@ pub async fn add_media_download(
     format_id: Option<String>,
     extension: Option<String>,
     audio_format: Option<YtDlpAudioFormat>,
+    download_subtitles: Option<bool>,
+    subtitle_langs: Option<String>,
 ) -> Result<DownloadDto, IpcError> {
     let download = state
         .add_with_ytdlp_format(
             AddDownloadRequest {
                 url,
                 engine_kind: Some(EngineKind::YtDlp),
+                download_subtitles,
+                subtitle_langs,
                 ..Default::default()
             },
             format_id,

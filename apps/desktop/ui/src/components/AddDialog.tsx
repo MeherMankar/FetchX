@@ -14,6 +14,7 @@ import {
   setDownloadPriority,
   findDuplicateDownload,
 } from "../api/downloads";
+import { getEngineConfig } from "../api/engine";
 import type { DownloadPriority, YtDlpFormat } from "../api/types";
 import { errorMessage, formatBytes, msToDatetimeLocal } from "../lib/format";
 
@@ -80,6 +81,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [extraTrackers, setExtraTrackers] = useState("");
   const [advancedProxyUrl, setAdvancedProxyUrl] = useState("");
   const [advancedUserAgent, setAdvancedUserAgent] = useState("");
+  const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
+  const [subtitleLangs, setSubtitleLangs] = useState("");
   const urlInputRef = useRef<HTMLInputElement>(null);
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
@@ -95,6 +98,20 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isYtDlpUrl, url]);
+
+  // Load global subtitle defaults once when the dialog opens for a yt-dlp URL.
+  useEffect(() => {
+    if (!isYtDlpUrl) return;
+    let cancelled = false;
+    void getEngineConfig().then((cfg) => {
+      if (!cancelled) {
+        setSubtitlesEnabled(cfg.yt_dlp.download_subtitles);
+        setSubtitleLangs(cfg.yt_dlp.subtitle_langs);
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isYtDlpUrl]);
 
   useEffect(() => {
     if (packageNameEdited || packageName.trim() || !url.trim()) return;
@@ -211,6 +228,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   selectedFormatId,
                   formats?.find((format) => format.format_id === selectedFormatId)?.extension,
                   undefined,
+                  subtitlesEnabled,
+                  subtitleLangs.trim() || undefined,
                 )
               : await addDownload({
                   url: targetUrl.trim(),
@@ -223,6 +242,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                     : {}),
                   ...(advancedProxyUrl.trim() ? { proxy_url: advancedProxyUrl.trim() } : {}),
                   ...(advancedUserAgent.trim() ? { user_agent: advancedUserAgent.trim() } : {}),
+                  ...(isYtDlpUrl ? { download_subtitles: subtitlesEnabled } : {}),
+                  ...(isYtDlpUrl && subtitleLangs.trim() ? { subtitle_langs: subtitleLangs.trim() } : {}),
                 });
           admitted = true;
           queuedCount += 1;
@@ -265,6 +286,10 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     setSelectedFormatId("");
     setDuplicateWarning(null);
     setForceAdd(false);
+    // Reset subtitle state when URL changes; it will reload from global config
+    // when isYtDlpUrl becomes true again via the useEffect above.
+    setSubtitlesEnabled(false);
+    setSubtitleLangs("");
   };
 
   const loadFormats = async () => {
@@ -540,6 +565,34 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                       ? "No selectable formats found — automatic best quality will be used."
                       : "Choose a quality, or keep automatic best quality."}
               </p>
+              <div className="field field-checkbox" style={{ marginTop: "8px" }}>
+                <input
+                  id="add-subtitles-toggle"
+                  type="checkbox"
+                  checked={subtitlesEnabled}
+                  onChange={(e) => setSubtitlesEnabled(e.target.checked)}
+                  disabled={busy}
+                />
+                <label htmlFor="add-subtitles-toggle">Download subtitles (.srt)</label>
+              </div>
+              {subtitlesEnabled && (
+                <div className="field" style={{ marginTop: "4px" }}>
+                  <label htmlFor="add-subtitle-langs" className="field-label">
+                    Languages
+                  </label>
+                  <input
+                    id="add-subtitle-langs"
+                    className="field-input"
+                    value={subtitleLangs}
+                    placeholder="en"
+                    disabled={busy}
+                    onChange={(e) => setSubtitleLangs(e.target.value)}
+                  />
+                  <p className="field-hint">
+                    Comma-separated language codes (e.g. en,fr). Leave empty for all languages.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

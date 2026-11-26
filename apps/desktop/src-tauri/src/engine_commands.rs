@@ -34,6 +34,10 @@ pub struct SaveEngineConfigRequest {
 #[serde(deny_unknown_fields)]
 pub struct SaveYtDlpConfigRequest {
     pub enabled: bool,
+    #[serde(default)]
+    pub download_subtitles: bool,
+    #[serde(default)]
+    pub subtitle_langs: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -71,6 +75,8 @@ pub struct DirectHttpConfigDto {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct YtDlpConfigDto {
     pub enabled: bool,
+    pub download_subtitles: bool,
+    pub subtitle_langs: String,
 }
 
 impl From<&EngineConfig> for EngineConfigDto {
@@ -81,6 +87,8 @@ impl From<&EngineConfig> for EngineConfigDto {
             },
             yt_dlp: YtDlpConfigDto {
                 enabled: config.yt_dlp.enabled,
+                download_subtitles: config.yt_dlp.download_subtitles,
+                subtitle_langs: config.yt_dlp.subtitle_langs.clone(),
             },
             resource_policy: config.resource_policy.clone(),
             weekly_queue_schedule: config.weekly_queue_schedule.clone(),
@@ -167,6 +175,8 @@ pub async fn save_engine_config(
         .map_err(EngineIpcError::from)?;
     config.yt_dlp.enabled = request.yt_dlp.enabled;
     config.yt_dlp.executable_path = None;
+    config.yt_dlp.download_subtitles = request.yt_dlp.download_subtitles;
+    config.yt_dlp.subtitle_langs = request.yt_dlp.subtitle_langs.clone();
     if let Some(policy) = request.resource_policy {
         if let Some(proxy) = policy.desktop_proxy.as_ref() {
             proxy.validate().map_err(|error| EngineIpcError {

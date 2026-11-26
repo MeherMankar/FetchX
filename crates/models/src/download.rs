@@ -21,6 +21,15 @@ pub struct DownloadSource {
     /// Optional per-download proxy URL that overrides the global desktop proxy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_url: Option<String>,
+    /// Per-download subtitle download override. When `Some(true)` subtitles are
+    /// downloaded regardless of the global setting; `Some(false)` disables them.
+    /// `None` defers to the engine-level global setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_subtitles: Option<bool>,
+    /// Per-download subtitle language list (comma-separated). Only used when
+    /// `download_subtitles` is `Some(true)`. `None` falls back to the global list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_langs: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -94,6 +103,8 @@ impl DownloadSource {
             yt_dlp_audio_format: None,
             bandwidth_limit_bps: None,
             proxy_url: None,
+            download_subtitles: None,
+            subtitle_langs: None,
         })
     }
 
@@ -199,6 +210,8 @@ impl DownloadSource {
             yt_dlp_audio_format: self.yt_dlp_audio_format,
             bandwidth_limit_bps: self.bandwidth_limit_bps,
             proxy_url: self.proxy_url.clone(),
+            download_subtitles: self.download_subtitles,
+            subtitle_langs: self.subtitle_langs.clone(),
         })
     }
 
@@ -262,6 +275,18 @@ impl DownloadSource {
     #[must_use]
     pub fn proxy_url(&self) -> Option<&str> {
         self.proxy_url.as_deref()
+    }
+
+    /// Returns the per-download subtitle override. `None` means use the global setting.
+    #[must_use]
+    pub const fn download_subtitles(&self) -> Option<bool> {
+        self.download_subtitles
+    }
+
+    /// Returns the per-download subtitle language list. `None` falls back to the global list.
+    #[must_use]
+    pub fn subtitle_langs(&self) -> Option<&str> {
+        self.subtitle_langs.as_deref()
     }
 
     #[must_use]
@@ -445,6 +470,10 @@ struct DownloadSourceRepr {
     bandwidth_limit_bps: Option<u64>,
     #[serde(default)]
     proxy_url: Option<String>,
+    #[serde(default)]
+    download_subtitles: Option<bool>,
+    #[serde(default)]
+    subtitle_langs: Option<String>,
 }
 
 impl TryFrom<DownloadSourceRepr> for DownloadSource {
@@ -471,6 +500,8 @@ impl TryFrom<DownloadSourceRepr> for DownloadSource {
             (Some(_), Some(_)) => return Err(DownloadSourceError::InvalidYtDlpAudioFormat),
         };
         source.proxy_url = value.proxy_url;
+        source.download_subtitles = value.download_subtitles;
+        source.subtitle_langs = value.subtitle_langs;
         Ok(source)
     }
 }
