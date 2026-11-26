@@ -322,6 +322,13 @@ impl AppState {
                     Err(fetchx_models::DownloadSourceError::InvalidYtDlpAudioFormat)
                 }
             })
+            .map(|source| {
+                if let Some(ref proxy) = request.proxy_url {
+                    source.with_proxy(proxy.clone())
+                } else {
+                    source
+                }
+            })
             .map_err(|_| IpcError::invalid_request())?;
         let destination = package_destination(&self.downloads_dir, request.package_name.as_deref())
             .join(filename.as_str());
@@ -655,6 +662,9 @@ pub struct AddDownloadRequest {
     /// Ignored for non-torrent downloads.
     #[serde(default)]
     pub extra_trackers: Option<Vec<String>>,
+    /// Optional per-download proxy URL that overrides the global desktop proxy.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

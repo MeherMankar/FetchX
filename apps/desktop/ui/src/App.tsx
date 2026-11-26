@@ -218,6 +218,7 @@ export function App() {
   const [clipboardBanners, setClipboardBanners] = useState<Array<{ id: string; url: string; filename: string; timeoutId: ReturnType<typeof setTimeout> }>>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; download: Download } | null>(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("fetchx_theme") ?? "dark");
+  const [accent, setAccent] = useState(() => localStorage.getItem("fetchx_accent") ?? "sky");
   const searchRef = useRef<HTMLInputElement>(null);
   const prevCompletedRef = useRef<Set<string>>(new Set());
   const lastNotificationRef = useRef('');
@@ -254,6 +255,12 @@ export function App() {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("fetchx_theme", theme);
   }, [theme]);
+
+  // Apply and persist the accent color.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-accent", accent);
+    localStorage.setItem("fetchx_accent", accent);
+  }, [accent]);
 
   // Listen for the update-available event emitted by the background checker
   useEffect(() => {
@@ -522,6 +529,28 @@ export function App() {
   const handleContextMenuCopyUrl = useCallback((download: Download) => {
     void navigator.clipboard.writeText(download.url).catch(() => { /* non-critical */ });
   }, []);
+
+  const handleShareDownload = useCallback((download: Download) => {
+    // Build the fetchx:// deep link.
+    // For simple cases (no special headers), just embed the URL.
+    // For richer cases, build a JSON payload and base64-encode it.
+    const payload: Record<string, unknown> = { url: download.url, filename: download.filename };
+    const json = JSON.stringify(payload);
+    // btoa works on ASCII; use encodeURIComponent + escape to handle Unicode.
+    const encoded = btoa(unescape(encodeURIComponent(json)));
+    const deepLink = `fetchx://import/${encoded}`;
+    void navigator.clipboard.writeText(deepLink)
+      .then(() => addToast("Link copied", "success"))
+      .catch(() => addToast("Could not copy to clipboard", "success"));
+  }, [addToast]);
+
+  const handleCopyAsCurl = useCallback((download: Download) => {
+    const parts: string[] = ["curl", "-L", `-o "${download.filename}"`, `"${download.url}"`];
+    const cmd = parts.join(" ");
+    void navigator.clipboard.writeText(cmd).then(() => {
+      addToast("Copied cURL command.", "success");
+    }).catch(() => { /* non-critical */ });
+  }, [addToast]);
 
   const handleContextMenuOpenFolder = useCallback((id: string) => {
     void openDownloadFolder(id).catch((cause: unknown) => {
@@ -826,6 +855,8 @@ export function App() {
           appVersion={appVersion}
           theme={theme}
           onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+          accent={accent}
+          onAccentChange={setAccent}
         />
 
         {updateBanner && (
@@ -975,6 +1006,7 @@ export function App() {
               onError={handleError}
               onStopSeeding={handleStopSeeding}
               onUpdateUrl={handleUpdateUrl}
+              onShareDownload={handleShareDownload}
             />
           )}
         </div>
@@ -1055,6 +1087,7 @@ export function App() {
           onDelete={handleDelete}
           onCopyUrl={handleContextMenuCopyUrl}
           onOpenFolder={handleContextMenuOpenFolder}
+          onCopyAsCurl={handleCopyAsCurl}
           onPriorityChange={handlePriorityChange}
           onQueueMove={handleQueueMove}
           onSetBandwidthLimit={handleSetBandwidthLimit}

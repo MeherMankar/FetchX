@@ -2,6 +2,19 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 
 import type { SortKey } from "../App";
 
+type AccentKey = "sky" | "blue" | "purple" | "green" | "amber" | "red" | "pink" | "teal";
+
+const ACCENT_SWATCHES: { key: AccentKey; color: string; label: string }[] = [
+  { key: "sky",    color: "#7ec8e3", label: "Sky" },
+  { key: "blue",   color: "#5b9bd5", label: "Blue" },
+  { key: "purple", color: "#9b87e0", label: "Purple" },
+  { key: "green",  color: "#4cc38a", label: "Green" },
+  { key: "amber",  color: "#e2a336", label: "Amber" },
+  { key: "red",    color: "#e5484d", label: "Red" },
+  { key: "pink",   color: "#e878a2", label: "Pink" },
+  { key: "teal",   color: "#38c5b2", label: "Teal" },
+];
+
 interface ToolbarProps {
   title: string;
   count: number;
@@ -23,6 +36,8 @@ interface ToolbarProps {
   appVersion: string | undefined;
   theme: string;
   onToggleTheme: () => void;
+  accent: string;
+  onAccentChange: (accent: string) => void;
 }
 
 export function Toolbar({
@@ -46,6 +61,8 @@ export function Toolbar({
   appVersion,
   theme,
   onToggleTheme,
+  accent,
+  onAccentChange,
 }: ToolbarProps) {
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -190,6 +207,25 @@ export function Toolbar({
             <button className="toolbar-menu-item" type="button" onClick={() => runAction(onToggleTheme)}>
               {theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
             </button>
+            <div className="toolbar-menu-divider" />
+            <span className="toolbar-menu-label">Accent color</span>
+            <div className="accent-picker" role="group" aria-label="Accent color">
+              {ACCENT_SWATCHES.map((swatch) => (
+                <button
+                  key={swatch.key}
+                  type="button"
+                  className={`accent-swatch${accent === swatch.key ? " accent-swatch--active" : ""}`}
+                  style={{ background: swatch.color }}
+                  aria-label={swatch.label}
+                  aria-pressed={accent === swatch.key}
+                  title={swatch.label}
+                  onClick={() => {
+                    onAccentChange(swatch.key);
+                    localStorage.setItem("fetchx_accent", swatch.key);
+                  }}
+                />
+              ))}
+            </div>
             {appVersion && (
               <span className="toolbar-version" aria-label={`App version ${appVersion}`}>
                 {appVersion.startsWith("v") || appVersion.startsWith("alpha") || appVersion.startsWith("beta")

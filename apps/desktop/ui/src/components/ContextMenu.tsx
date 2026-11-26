@@ -13,7 +13,9 @@ interface ContextMenuProps {
   onCancel: (id: string) => void;
   onDelete: (id: string) => void;
   onCopyUrl: (download: Download) => void;
+  onShareDownload?: (download: Download) => void;
   onOpenFolder: (id: string) => void;
+  onCopyAsCurl?: (download: Download) => void;
   onPriorityChange: (id: string, priority: DownloadPriority) => void;
   onQueueMove: (id: string, direction: "up" | "down") => void;
   onSetBandwidthLimit: (id: string) => void;
@@ -29,7 +31,9 @@ export function ContextMenu({
   onCancel,
   onDelete,
   onCopyUrl,
+  onShareDownload,
   onOpenFolder,
+  onCopyAsCurl,
   onPriorityChange,
   onQueueMove,
   onSetBandwidthLimit,
@@ -275,6 +279,26 @@ export function ContextMenu({
       >
         Copy URL
       </button>
+
+      {onCopyAsCurl && (
+        <button
+          className="context-menu-item"
+          role="menuitem"
+          onClick={() => handleItem(() => onCopyAsCurl(download))}
+        >
+          Copy as cURL
+        </button>
+      )}
+
+      {onShareDownload && (
+        <button
+          className="context-menu-item"
+          role="menuitem"
+          onClick={() => handleItem(() => onShareDownload(download))}
+        >
+          Share link
+        </button>
+      )}
 
       {download.status === "completed" && (
         <button

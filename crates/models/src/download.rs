@@ -18,6 +18,9 @@ pub struct DownloadSource {
     yt_dlp_audio_format: Option<YtDlpAudioFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bandwidth_limit_bps: Option<u64>,
+    /// Optional per-download proxy URL that overrides the global desktop proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -90,6 +93,7 @@ impl DownloadSource {
             yt_dlp_format: None,
             yt_dlp_audio_format: None,
             bandwidth_limit_bps: None,
+            proxy_url: None,
         })
     }
 
@@ -194,6 +198,7 @@ impl DownloadSource {
             yt_dlp_format: self.yt_dlp_format.clone(),
             yt_dlp_audio_format: self.yt_dlp_audio_format,
             bandwidth_limit_bps: self.bandwidth_limit_bps,
+            proxy_url: self.proxy_url.clone(),
         })
     }
 
@@ -241,6 +246,22 @@ impl DownloadSource {
     #[must_use]
     pub const fn bandwidth_limit_bps(&self) -> Option<u64> {
         self.bandwidth_limit_bps
+    }
+
+    /// Sets a per-download proxy URL that overrides the global desktop proxy for this download.
+    #[must_use]
+    pub fn with_proxy(mut self, url: String) -> Self {
+        self.proxy_url = if url.trim().is_empty() {
+            None
+        } else {
+            Some(url)
+        };
+        self
+    }
+
+    #[must_use]
+    pub fn proxy_url(&self) -> Option<&str> {
+        self.proxy_url.as_deref()
     }
 
     #[must_use]
@@ -422,6 +443,8 @@ struct DownloadSourceRepr {
     yt_dlp_audio_format: Option<YtDlpAudioFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bandwidth_limit_bps: Option<u64>,
+    #[serde(default)]
+    proxy_url: Option<String>,
 }
 
 impl TryFrom<DownloadSourceRepr> for DownloadSource {
@@ -429,24 +452,26 @@ impl TryFrom<DownloadSourceRepr> for DownloadSource {
 
     fn try_from(value: DownloadSourceRepr) -> Result<Self, Self::Error> {
         let source = Self::new(value.url, value.engine)?;
-        match (value.yt_dlp_format, value.yt_dlp_audio_format) {
+        let mut source = match (value.yt_dlp_format, value.yt_dlp_audio_format) {
             (Some(format_id), None) => {
-                let mut source = source.with_yt_dlp_format(format_id)?;
-                source.bandwidth_limit_bps = value.bandwidth_limit_bps;
-                Ok(source)
+                let mut s = source.with_yt_dlp_format(format_id)?;
+                s.bandwidth_limit_bps = value.bandwidth_limit_bps;
+                s
             }
             (None, Some(audio_format)) => {
-                let mut source = source.with_yt_dlp_audio_format(audio_format)?;
-                source.bandwidth_limit_bps = value.bandwidth_limit_bps;
-                Ok(source)
+                let mut s = source.with_yt_dlp_audio_format(audio_format)?;
+                s.bandwidth_limit_bps = value.bandwidth_limit_bps;
+                s
             }
             (None, None) => {
-                let mut source = source;
-                source.bandwidth_limit_bps = value.bandwidth_limit_bps;
-                Ok(source)
+                let mut s = source;
+                s.bandwidth_limit_bps = value.bandwidth_limit_bps;
+                s
             }
-            (Some(_), Some(_)) => Err(DownloadSourceError::InvalidYtDlpAudioFormat),
-        }
+            (Some(_), Some(_)) => return Err(DownloadSourceError::InvalidYtDlpAudioFormat),
+        };
+        source.proxy_url = value.proxy_url;
+        Ok(source)
     }
 }
 
@@ -509,6 +534,9 @@ pub struct DownloadItem {
     created_at: Timestamp,
     updated_at: Timestamp,
     error: Option<DownloadError>,
+    /// Optional named-queue identifier. `None` means the default (global) queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    queue_id: Option<String>,
 }
 
 impl DownloadItem {
@@ -531,6 +559,7 @@ impl DownloadItem {
             created_at,
             updated_at: created_at,
             error: None,
+            queue_id: None,
         }
     }
 
@@ -547,6 +576,35 @@ impl DownloadItem {
         updated_at: Timestamp,
         error: Option<DownloadError>,
     ) -> Result<Self, DownloadItemError> {
+        Self::from_parts_with_queue(
+            id,
+            source,
+            filename,
+            destination,
+            status,
+            priority,
+            progress,
+            created_at,
+            updated_at,
+            error,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts_with_queue(
+        id: DownloadId,
+        source: DownloadSource,
+        filename: FileName,
+        destination: PathBuf,
+        status: DownloadStatus,
+        priority: DownloadPriority,
+        progress: DownloadProgress,
+        created_at: Timestamp,
+        updated_at: Timestamp,
+        error: Option<DownloadError>,
+        queue_id: Option<String>,
+    ) -> Result<Self, DownloadItemError> {
         if updated_at < created_at {
             return Err(DownloadItemError::UpdatedBeforeCreated);
         }
@@ -562,7 +620,20 @@ impl DownloadItem {
             created_at,
             updated_at,
             error,
+            queue_id,
         })
+    }
+
+    /// Returns the named queue this download belongs to.
+    /// `None` means the default (global) queue.
+    #[must_use]
+    pub fn queue_id(&self) -> Option<&str> {
+        self.queue_id.as_deref()
+    }
+
+    /// Assigns this download to a named queue (or the default queue when `None`).
+    pub fn set_queue_id(&mut self, queue_id: Option<String>) {
+        self.queue_id = queue_id;
     }
 
     #[must_use]

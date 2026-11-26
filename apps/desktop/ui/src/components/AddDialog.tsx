@@ -78,6 +78,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [forceAdd, setForceAdd] = useState(false);
   const [extraTrackers, setExtraTrackers] = useState("");
+  const [advancedProxyUrl, setAdvancedProxyUrl] = useState("");
+  const [advancedUserAgent, setAdvancedUserAgent] = useState("");
   const urlInputRef = useRef<HTMLInputElement>(null);
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
@@ -219,6 +221,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   ...(isMagnet && extraTrackers.trim()
                     ? { extra_trackers: extraTrackers.split("\n").filter(Boolean) }
                     : {}),
+                  ...(advancedProxyUrl.trim() ? { proxy_url: advancedProxyUrl.trim() } : {}),
+                  ...(advancedUserAgent.trim() ? { user_agent: advancedUserAgent.trim() } : {}),
                 });
           admitted = true;
           queuedCount += 1;
@@ -537,6 +541,46 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                       : "Choose a quality, or keep automatic best quality."}
               </p>
             </div>
+          )}
+
+          {!isTorrent && (
+            <details className="field">
+              <summary className="field-label" style={{ cursor: "pointer" }}>Advanced</summary>
+              <div className="field" style={{ marginTop: "8px" }}>
+                <label htmlFor="add-proxy-url" className="field-label">
+                  Proxy
+                </label>
+                <input
+                  id="add-proxy-url"
+                  className="field-input"
+                  type="text"
+                  value={advancedProxyUrl}
+                  onChange={(e) => setAdvancedProxyUrl(e.target.value)}
+                  placeholder="http://proxy.example.com:8080"
+                  disabled={busy}
+                />
+                <p className="field-hint">
+                  Optional proxy URL for this download only. Overrides the global proxy setting.
+                </p>
+              </div>
+              <div className="field" style={{ marginTop: "8px" }}>
+                <label htmlFor="add-user-agent" className="field-label">
+                  User-Agent
+                </label>
+                <input
+                  id="add-user-agent"
+                  className="field-input"
+                  type="text"
+                  value={advancedUserAgent}
+                  onChange={(e) => setAdvancedUserAgent(e.target.value)}
+                  placeholder="Mozilla/5.0 ..."
+                  disabled={busy}
+                />
+                <p className="field-hint">
+                  Optional User-Agent header for this download only.
+                </p>
+              </div>
+            </details>
           )}
 
           <div className="field">

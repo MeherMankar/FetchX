@@ -94,6 +94,7 @@ interface DetailPanelProps {
   onError: (message: string) => void;
   onStopSeeding: (id: string) => Promise<void>;
   onUpdateUrl: (id: string, newUrl: string) => Promise<void>;
+  onShareDownload: (download: Download) => void;
 }
 
 export function DetailPanel({
@@ -113,6 +114,7 @@ export function DetailPanel({
   onError,
   onStopSeeding,
   onUpdateUrl,
+  onShareDownload,
 }: DetailPanelProps) {
   const { progress } = download;
   const pct = progress.percentage_basis_points;
@@ -1171,6 +1173,13 @@ export function DetailPanel({
             onClick={() => onDelete(download.id)}
           >
             Delete
+          </button>
+          <button
+            className="button button-secondary"
+            disabled={busy}
+            onClick={() => onShareDownload(download)}
+          >
+            Share link
           </button>
         </section>
       </div>
