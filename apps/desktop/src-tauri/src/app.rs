@@ -236,6 +236,70 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                         }
                     }
                 }
+                // Checksum auto-verification on completion.
+                if health_check_enabled {
+                    let dest = item.destination().to_owned();
+                    let fname_for_checksum = fname.clone();
+                    let app_for_checksum = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let sidecar = {
+                            let mut s = dest.as_os_str().to_owned();
+                            s.push(".fetchx.sha256");
+                            std::path::PathBuf::from(s)
+                        };
+                        if sidecar.exists() {
+                            match tokio::fs::read_to_string(&sidecar).await {
+                                Ok(expected_hex) => {
+                                    let expected_hex = expected_hex.trim().to_ascii_lowercase();
+                                    match tokio::fs::read(&dest).await {
+                                        Ok(bytes) => {
+                                            let hash = sha256(&bytes);
+                                            let actual_hex: String = hash
+                                                .iter()
+                                                .fold(
+                                                    String::with_capacity(64),
+                                                    |mut s, b| {
+                                                        use std::fmt::Write as _;
+                                                        let _ = write!(s, "{b:02x}");
+                                                        s
+                                                    },
+                                                );
+                                            if actual_hex != expected_hex {
+                                                tracing::warn!(
+                                                    path = %dest.display(),
+                                                    expected = %expected_hex,
+                                                    actual = %actual_hex,
+                                                    "checksum: SHA-256 mismatch after download completed"
+                                                );
+                                                let _ = app_for_checksum.emit(
+                                                    "fetchx-notification",
+                                                    serde_json::json!({
+                                                        "title": "Checksum mismatch",
+                                                        "body": format!("SHA-256 did not match for: {fname_for_checksum}")
+                                                    }),
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                path = %dest.display(),
+                                                error = %e,
+                                                "checksum: could not read file for verification"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        path = %sidecar.display(),
+                                        error = %e,
+                                        "checksum: could not read sidecar file"
+                                    );
+                                }
+                            }
+                        }
+                    });
+                }
                 // Virus scan on completion.
                 let virus_scan_enabled = config
                     .as_ref()
@@ -504,7 +568,7 @@ fn hmac_sha256_sign(key_block: &[u8; 64], message: &[u8]) -> [u8; 32] {
 }
 
 /// Minimal pure-Rust SHA-256 implementation (RFC 6234 / FIPS 180-4).
-fn sha256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -968,6 +1032,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::import_settings,
             commands::get_webhook_config,
             commands::set_webhook_config,
+            commands::verify_download_checksum,
         ])
         .setup(|app| {
             let paths = resolve_app_paths(app);

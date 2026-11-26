@@ -426,3 +426,18 @@ export interface WebhookConfigDto {
   on_fail: boolean;
   secret: string;
 }
+
+// ---------------------------------------------------------------------------
+// Checksum verification
+// ---------------------------------------------------------------------------
+
+export interface ChecksumVerificationResult {
+  /** Hex SHA-256 from the sidecar file, or null if no sidecar exists. */
+  expected: string | null;
+  /** Hex SHA-256 computed from the file, or null if the file is missing. */
+  actual: string | null;
+  /** True when hashes match, false on mismatch, null when no expected hash. */
+  matches: boolean | null;
+  /** File size in bytes, or null if the file is missing. */
+  file_size: number | null;
+}

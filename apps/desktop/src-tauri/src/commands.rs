@@ -2043,6 +2043,81 @@ pub async fn open_download_folder(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Checksum verification
+// ---------------------------------------------------------------------------
+
+/// Result returned by [`verify_download_checksum`].
+#[derive(Clone, Debug, Serialize)]
+pub struct ChecksumVerificationResult {
+    /// Hex SHA-256 read from the `.fetchx.sha256` sidecar, or `None` if no sidecar exists.
+    pub expected: Option<String>,
+    /// Hex SHA-256 computed from the destination file, or `None` if the file is missing.
+    pub actual: Option<String>,
+    /// `Some(true)` when hashes match, `Some(false)` on mismatch, `None` when no expected hash.
+    pub matches: Option<bool>,
+    /// Size of the destination file in bytes, or `None` when the file is missing.
+    pub file_size: Option<u64>,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn verify_download_checksum(
+    state: State<'_, AppState>,
+    download_id: String,
+) -> Result<ChecksumVerificationResult, String> {
+    let id = DownloadId::parse(&download_id).map_err(|_| "Invalid download ID.".to_owned())?;
+    let item = state
+        .repository
+        .get(id)
+        .await
+        .map_err(|_| "Could not load download.".to_owned())?
+        .ok_or_else(|| "Download not found.".to_owned())?;
+
+    let dest = item.destination().to_owned();
+
+    // Read the destination file.
+    let file_data = match tokio::fs::read(&dest).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Ok(ChecksumVerificationResult {
+                expected: None,
+                actual: None,
+                matches: None,
+                file_size: None,
+            });
+        }
+    };
+    let file_size = file_data.len() as u64;
+
+    // Compute the actual SHA-256.
+    let hash = crate::app::sha256(&file_data);
+    let actual_hex: String = hash.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+
+    // Look for the sidecar file.
+    let sidecar = {
+        let mut s = dest.as_os_str().to_owned();
+        s.push(".fetchx.sha256");
+        std::path::PathBuf::from(s)
+    };
+    let expected_hex = match tokio::fs::read_to_string(&sidecar).await {
+        Ok(raw) => Some(raw.trim().to_ascii_lowercase()),
+        Err(_) => None,
+    };
+
+    let matches = expected_hex.as_deref().map(|exp| exp == actual_hex.as_str());
+
+    Ok(ChecksumVerificationResult {
+        expected: expected_hex,
+        actual: Some(actual_hex),
+        matches,
+        file_size: Some(file_size),
+    })
+}
+
 fn emit_event<T: Serialize + Clone>(app: &AppHandle, name: &str, payload: &T) {
     if let Err(error) = app.emit(name, payload.clone()) {
         tracing::warn!(%error, event = name, "could not emit desktop event");

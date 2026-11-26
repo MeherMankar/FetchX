@@ -17,12 +17,14 @@ import {
   setTorrentSelectionAll,
   startMediaMerge,
   startMediaRemux,
+  verifyDownloadChecksum,
 } from "../api/downloads";
 import type { Download, DownloadSchedule, MediaProcessJob } from "../api/types";
 import { errorMessage, formatBytes, formatDatetime, formatEta, formatPercent, formatRelativeTime, formatSpeed } from "../lib/format";
 import { canSchedule, canChangePriority, canPause, canResume, canCancel, canRetry } from "../lib/status";
 import { ScheduleEditor } from "./ScheduleEditor";
 import type {
+  ChecksumVerificationResult,
   DownloadPriority,
   TorrentDownloadMetadata,
   TorrentTelemetry,
@@ -156,6 +158,9 @@ export function DetailPanel({
   const [urlDraft, setUrlDraft] = useState('');
   const [urlSaving, setUrlSaving] = useState(false);
 
+  const [checksumResult, setChecksumResult] = useState<ChecksumVerificationResult | null>(null);
+  const [checksumLoading, setChecksumLoading] = useState(false);
+
   useEffect(() => {
     setRestartOpen(false);
     setRestartError(null);
@@ -165,6 +170,7 @@ export function DetailPanel({
     setRestartedTorrentDownloadId(null);
     setMergeAudioId("");
     setUrlEditing(false);
+    setChecksumResult(null);
   }, [download.id]);
   useEffect(() => {
     setTorrentTelemetry(null);
@@ -1079,6 +1085,60 @@ export function DetailPanel({
               onClear={() => onClearSchedule(download.id)}
               onError={onError}
             />
+          </section>
+        )}
+
+        {/* Checksum verification — only for completed downloads */}
+        {download.status === "completed" && (
+          <section className="detail-section" aria-label="Checksum verification">
+            <p className="detail-section-title">Checksum</p>
+            <div className="detail-actions">
+              <button
+                className="button button-secondary"
+                disabled={checksumLoading}
+                onClick={() => {
+                  setChecksumLoading(true);
+                  verifyDownloadChecksum(download.id)
+                    .then((result) => { setChecksumResult(result); })
+                    .catch((cause) => {
+                      onError(cause instanceof Error ? cause.message : String(cause));
+                    })
+                    .finally(() => { setChecksumLoading(false); });
+                }}
+              >
+                {checksumLoading ? "Verifying…" : "Verify checksum"}
+              </button>
+            </div>
+            {checksumResult !== null && (
+              <div role="status" aria-live="polite" style={{ marginTop: "0.5rem" }}>
+                {checksumResult.expected === null ? (
+                  <p className="field-hint">No checksum on file</p>
+                ) : checksumResult.actual === null ? (
+                  <p className="detail-error-message">File not found — cannot verify checksum</p>
+                ) : checksumResult.matches === true ? (
+                  <>
+                    <p style={{ color: "var(--color-success, #22c55e)", fontWeight: 500 }}>
+                      ✓ SHA-256 verified
+                    </p>
+                    <code className="detail-hash" title={checksumResult.actual}>
+                      {checksumResult.actual.slice(0, 16)}…
+                    </code>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ color: "var(--color-danger, #ef4444)", fontWeight: 500 }}>
+                      ✗ Checksum mismatch
+                    </p>
+                    <dl className="detail-dl">
+                      <dt>Expected</dt>
+                      <dd><code title={checksumResult.expected}>{checksumResult.expected}</code></dd>
+                      <dt>Actual</dt>
+                      <dd><code title={checksumResult.actual}>{checksumResult.actual}</code></dd>
+                    </dl>
+                  </>
+                )}
+              </div>
+            )}
           </section>
         )}
 

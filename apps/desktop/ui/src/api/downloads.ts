@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AddDownloadRequest,
   BatchDownloadResult,
+  ChecksumVerificationResult,
   DeleteDownloadResponse,
   Download,
   DuplicateDownloadMatch,
@@ -361,5 +362,13 @@ export function listenForMediaProcessUpdates(
 ): Promise<UnlistenFn> {
   return listen<MediaProcessJob>("media_process_updated", (event) => {
     onUpdated(event.payload);
+  });
+}
+
+export function verifyDownloadChecksum(
+  downloadId: string,
+): Promise<ChecksumVerificationResult> {
+  return invoke<ChecksumVerificationResult>("verify_download_checksum", {
+    download_id: downloadId,
   });
 }
