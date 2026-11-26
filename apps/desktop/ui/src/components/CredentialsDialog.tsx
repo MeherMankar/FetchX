@@ -1,5 +1,6 @@
 ﻿import { useState } from "react";
 import { provideDownloadCredentials } from "../api/history";
+import type { HttpAuthType } from "../api/types";
 import { errorMessage } from "../lib/format";
 
 interface Props {
@@ -10,16 +11,25 @@ interface Props {
 }
 
 export function CredentialsDialog({ downloadId, filename, onRetried, onClose }: Props) {
+  const [authType, setAuthType] = useState<HttpAuthType>("basic");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [domain, setDomain] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isNtlm = authType === "ntlm";
 
   const submit = async () => {
     if (!username.trim()) { setError("Username is required."); return; }
     setBusy(true);
     try {
-      await provideDownloadCredentials(downloadId, username, password);
+      await provideDownloadCredentials(
+        downloadId,
+        username,
+        password,
+        isNtlm && domain.trim() ? domain.trim() : undefined,
+      );
       onRetried();
     } catch (cause) {
       setError(errorMessage(cause));
@@ -36,6 +46,35 @@ export function CredentialsDialog({ downloadId, filename, onRetried, onClose }: 
           <strong title={filename}>{filename}</strong> requires a username and password.
         </p>
         {error && <div className="error-banner" role="alert">{error}</div>}
+        <div className="settings-row">
+          <label className="settings-label" htmlFor="cred-auth-type">Authentication type</label>
+          <select
+            id="cred-auth-type"
+            className="settings-input"
+            value={authType}
+            onChange={(e) => setAuthType(e.target.value as HttpAuthType)}
+            disabled={busy}
+          >
+            <option value="basic">Basic</option>
+            <option value="digest">Digest</option>
+            <option value="ntlm">NTLM (Windows / IIS)</option>
+          </select>
+        </div>
+        {isNtlm && (
+          <div className="settings-row">
+            <label className="settings-label" htmlFor="cred-domain">Domain</label>
+            <input
+              id="cred-domain"
+              type="text"
+              className="settings-input"
+              autoComplete="off"
+              placeholder="CORP (optional)"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+        )}
         <div className="settings-row">
           <label className="settings-label" htmlFor="cred-user">Username</label>
           <input

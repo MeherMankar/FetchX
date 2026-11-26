@@ -23,11 +23,13 @@ export function provideDownloadCredentials(
   downloadId: string,
   username: string,
   password: string,
+  domain?: string,
 ): Promise<Download> {
   return invoke<Download>("provide_download_credentials", {
     download_id: downloadId,
     username,
     password,
+    domain: domain ?? null,
   });
 }
 

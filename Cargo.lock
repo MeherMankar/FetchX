@@ -2507,11 +2507,13 @@ dependencies = [
  "fetchx-models",
  "fetchx-storage",
  "hex",
+ "hmac 0.13.0",
  "hound",
  "id3",
  "image",
  "librqbit",
  "md-5 0.11.0",
+ "md4",
  "mp4",
  "openh264",
  "opus",
@@ -4903,6 +4905,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
 dependencies = [
  "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
+name = "md4"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd76fb0fd6b2e4be62a73f8e0858ca97f81babcb1af322dcaca196f735f17f80"
+dependencies = [
  "digest 0.11.3",
 ]
 

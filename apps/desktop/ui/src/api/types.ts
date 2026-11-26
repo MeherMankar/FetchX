@@ -459,3 +459,10 @@ export interface ChecksumVerificationResult {
   /** File size in bytes, or null if the file is missing. */
   file_size: number | null;
 }
+
+// ---------------------------------------------------------------------------
+// HTTP authentication
+// ---------------------------------------------------------------------------
+
+/** Authentication scheme a user selected when providing credentials. */
+export type HttpAuthType = "basic" | "digest" | "ntlm";

@@ -2323,9 +2323,14 @@ pub async fn provide_download_credentials(
     download_id: String,
     username: String,
     password: String,
+    /// Optional Windows domain for NTLM authentication.
+    domain: Option<String>,
 ) -> Result<DownloadDto, IpcError> {
     let id = DownloadId::parse(&download_id).map_err(|_| IpcError::invalid_request())?;
     if username.trim().is_empty() || username.len() > 4096 || password.len() > 4096 {
+        return Err(IpcError::invalid_request());
+    }
+    if domain.as_deref().is_some_and(|d| d.len() > 256) {
         return Err(IpcError::invalid_request());
     }
     let item = state
@@ -2340,10 +2345,14 @@ pub async fn provide_download_credentials(
     {
         return Err(IpcError::invalid_request());
     }
+    let mut credentials = HttpCredentials::new(username, password);
+    if let Some(d) = domain.filter(|d| !d.trim().is_empty()) {
+        credentials = credentials.with_domain(d);
+    }
     state
         .engine_runtime
         .dispatcher
-        .provide_http_credentials_for_retry(id, HttpCredentials::new(username, password))
+        .provide_http_credentials_for_retry(id, credentials)
         .map_err(|_| IpcError::internal())?;
     if state.queue.retry_download(id).await.is_err() {
         state

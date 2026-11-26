@@ -37,7 +37,10 @@ use tracing::{info, warn};
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, AdaptiveDecision, AdaptiveSample};
 use crate::engine::{ManagedDownloadControl, ManagedDownloadEngine, ResourceDemand};
-use crate::http_auth::{AuthKind, basic_header, digest_header, parse_www_authenticate};
+use crate::http_auth::{
+    AuthKind, basic_header, digest_header, ntlm_authenticate_header, ntlm_negotiate_header,
+    parse_ntlm_challenge, parse_www_authenticate,
+};
 use crate::retry::{RetryPolicy, retry_after_delay};
 use crate::segments::{self, Segment, SegmentResult, SegmentState};
 use crate::{BandwidthControl, DownloadEngine, DownloadEngineError};
@@ -1650,6 +1653,84 @@ where
                 if let (Some(challenge), Some(credentials)) = (www_auth, credentials) {
                     let al2 = redirect_count == 0 && self.allow_loopback_benchmark_target();
                     let client2 = self.client_for_url(&url, al2).await?;
+
+                    // NTLM requires a 3-step handshake: Type 1 -> 401 with Type 2 -> Type 3.
+                    if matches!(challenge.kind, AuthKind::Ntlm) {
+                        // Step 1: send Type 1 (Negotiate).
+                        let mut neg_req = client2
+                            .get(url.clone())
+                            .header(reqwest::header::ACCEPT_ENCODING, "identity");
+                        if let Some(start) = range_start {
+                            let end = range_end.map_or_else(String::new, |e| e.to_string());
+                            neg_req = neg_req.header(RANGE, format!("bytes={start}-{end}"));
+                            if let Some(validator) = if_range {
+                                neg_req = neg_req.header(IF_RANGE, validator);
+                            }
+                        }
+                        let negotiate_hdr = ntlm_negotiate_header();
+                        if let Ok(hv) = reqwest::header::HeaderValue::from_str(&negotiate_hdr) {
+                            neg_req = neg_req.header(reqwest::header::AUTHORIZATION, hv);
+                        }
+                        let neg_resp =
+                            neg_req.send().await.map_err(DownloadEngineError::Request)?;
+
+                        // Step 2: extract Type 2 (Challenge) from the 401 response.
+                        if neg_resp.status() == StatusCode::UNAUTHORIZED {
+                            if let Some(type2_token) = neg_resp
+                                .headers()
+                                .get("www-authenticate")
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(parse_www_authenticate)
+                                .and_then(|ch| ch.ntlm_token)
+                            {
+                                if let Some((server_challenge, _target_name)) =
+                                    parse_ntlm_challenge(&type2_token)
+                                {
+                                    // Step 3: send Type 3 (Authenticate) with NTLMv2 response.
+                                    let domain = credentials.domain.as_deref().unwrap_or("");
+                                    // A fixed client challenge is acceptable here; IIS/NTLMv2
+                                    // only requires it to be 8 non-zero bytes.
+                                    let client_challenge =
+                                        [0x38, 0xd7, 0x5a, 0x2b, 0xf9, 0x1e, 0xc4, 0x11];
+                                    let auth_val = ntlm_authenticate_header(
+                                        &credentials.username,
+                                        &credentials.password,
+                                        domain,
+                                        server_challenge,
+                                        client_challenge,
+                                    );
+                                    let client3 = self.client_for_url(&url, al2).await?;
+                                    let mut auth_req = client3
+                                        .get(url.clone())
+                                        .header(reqwest::header::ACCEPT_ENCODING, "identity");
+                                    if let Some(start) = range_start {
+                                        let end =
+                                            range_end.map_or_else(String::new, |e| e.to_string());
+                                        auth_req =
+                                            auth_req.header(RANGE, format!("bytes={start}-{end}"));
+                                        if let Some(validator) = if_range {
+                                            auth_req = auth_req.header(IF_RANGE, validator);
+                                        }
+                                    }
+                                    if let Ok(hv) =
+                                        reqwest::header::HeaderValue::from_str(&auth_val)
+                                    {
+                                        auth_req =
+                                            auth_req.header(reqwest::header::AUTHORIZATION, hv);
+                                    }
+                                    let auth_resp = auth_req
+                                        .send()
+                                        .await
+                                        .map_err(DownloadEngineError::Request)?;
+                                    return Ok(auth_resp);
+                                }
+                            }
+                        }
+                        // Type 2 not received or parse failed; return whatever we got.
+                        return Ok(neg_resp);
+                    }
+
+                    // Basic / Digest single-step auth.
                     let mut ar = client2.get(url.clone());
                     if let Some(start) = range_start {
                         let end = range_end.map_or_else(String::new, |e| e.to_string());
@@ -1671,6 +1752,7 @@ where
                             &uri,
                             &challenge,
                         ),
+                        AuthKind::Ntlm => unreachable!("handled above"),
                     };
                     if let Ok(hv) = reqwest::header::HeaderValue::from_str(&auth_val) {
                         ar = ar.header(reqwest::header::AUTHORIZATION, hv);

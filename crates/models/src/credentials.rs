@@ -21,6 +21,8 @@ impl CredentialKey {
 pub struct HttpCredentials {
     pub username: String,
     pub password: String,
+    /// Optional Windows domain for NTLM authentication (e.g. "CORP").
+    pub domain: Option<String>,
 }
 
 impl HttpCredentials {
@@ -28,7 +30,14 @@ impl HttpCredentials {
         Self {
             username: username.into(),
             password: password.into(),
+            domain: None,
         }
+    }
+
+    /// Sets the Windows domain for NTLM authentication.
+    pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
+        self.domain = Some(domain.into());
+        self
     }
 }
 
