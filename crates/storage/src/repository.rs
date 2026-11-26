@@ -1,8 +1,8 @@
 use std::{future::Future, path::PathBuf};
 
 use fetchx_models::{
-    DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, Timestamp,
-    TorrentMetadata,
+    DownloadId, DownloadItem, DownloadPriority, DownloadSchedule, DownloadStatus, QueueDefinition,
+    Timestamp, TorrentMetadata,
 };
 use serde::{Deserialize, Serialize};
 
@@ -199,4 +199,47 @@ pub trait TorrentMetadataRepository: Send + Sync {
         &self,
         id: DownloadId,
     ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+}
+
+/// Async CRUD operations for named download queue definitions.
+pub trait QueueDefinitionRepository: Send + Sync {
+    /// Lists all defined queues in name-then-id order.
+    fn list_queue_definitions(
+        &self,
+    ) -> impl Future<Output = Result<Vec<QueueDefinition>, StorageError>> + Send;
+
+    /// Finds one queue definition by its UUID identifier.
+    fn get_queue_definition(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<QueueDefinition>, StorageError>> + Send;
+
+    /// Inserts a new queue definition. Duplicate identifier is a database error.
+    fn create_queue_definition(
+        &self,
+        def: &QueueDefinition,
+    ) -> impl Future<Output = Result<(), StorageError>> + Send;
+
+    /// Replaces an existing queue definition. Returns `true` when a row was updated.
+    fn update_queue_definition(
+        &self,
+        def: &QueueDefinition,
+    ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+
+    /// Deletes a queue definition by its UUID. Returns `true` when a row was removed.
+    fn delete_queue_definition(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<bool, StorageError>> + Send;
+
+    /// Returns the number of downloads assigned to the given queue.
+    fn count_downloads_in_queue(
+        &self,
+        queue_id: &str,
+    ) -> impl Future<Output = Result<u64, StorageError>> + Send;
+
+    /// Returns per-queue download counts for all queues (including `None` = default).
+    fn count_all_queue_downloads(
+        &self,
+    ) -> impl Future<Output = Result<Vec<(Option<String>, u64)>, StorageError>> + Send;
 }

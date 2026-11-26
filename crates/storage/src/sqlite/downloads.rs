@@ -35,9 +35,9 @@ impl DownloadRepository for SqliteDownloadRepository {
                 id, source_url, engine_kind, yt_dlp_format, yt_dlp_audio_format, filename, destination, status, priority,
                 downloaded_bytes, total_bytes, speed_bytes_per_second,
                 estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
-                queue_order
+                queue_order, queue_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM downloads))",
+                (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM downloads), ?)",
         )
         .bind(item.id().to_string())
         .bind(item.source().url())
@@ -74,6 +74,7 @@ impl DownloadRepository for SqliteDownloadRepository {
         )?)
         .bind(error.map(|value| error_code_to_str(value.code())))
         .bind(error.map(DownloadError::message))
+        .bind(item.queue_id())
         .execute(&self.pool)
         .await?;
 
@@ -84,7 +85,8 @@ impl DownloadRepository for SqliteDownloadRepository {
         let row = sqlx::query(
             "SELECT id, source_url, engine_kind, yt_dlp_format, yt_dlp_audio_format, filename, destination, status, priority,
                     downloaded_bytes, total_bytes, speed_bytes_per_second,
-                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message
+                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
+                    queue_id
              FROM downloads
              WHERE id = ?",
         )
@@ -99,7 +101,8 @@ impl DownloadRepository for SqliteDownloadRepository {
         let rows = sqlx::query(
             "SELECT id, source_url, engine_kind, yt_dlp_format, yt_dlp_audio_format, filename, destination, status, priority,
                     downloaded_bytes, total_bytes, speed_bytes_per_second,
-                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message
+                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
+                    queue_id
              FROM downloads
              ORDER BY queue_order, id",
         )
@@ -114,7 +117,8 @@ impl DownloadRepository for SqliteDownloadRepository {
         let rows = sqlx::query(
             "SELECT id, source_url, engine_kind, yt_dlp_format, yt_dlp_audio_format, filename, destination, status, priority,
                     downloaded_bytes, total_bytes, speed_bytes_per_second,
-                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message
+                    estimated_remaining_seconds, created_at, updated_at, error_code, error_message,
+                    queue_id
              FROM downloads
              WHERE status = 'completed'
              ORDER BY updated_at DESC, id DESC
@@ -267,7 +271,7 @@ impl DownloadRepository for SqliteDownloadRepository {
                 source_url = ?, engine_kind = ?, yt_dlp_format = ?, yt_dlp_audio_format = ?, filename = ?, destination = ?, status = ?,
                 priority = ?, downloaded_bytes = ?, total_bytes = ?,
                 speed_bytes_per_second = ?, estimated_remaining_seconds = ?,
-                created_at = ?, updated_at = ?, error_code = ?, error_message = ?
+                created_at = ?, updated_at = ?, error_code = ?, error_message = ?, queue_id = ?
              WHERE id = ?",
         )
         .bind(item.source().url())
@@ -304,6 +308,7 @@ impl DownloadRepository for SqliteDownloadRepository {
         )?)
         .bind(error.map(|value| error_code_to_str(value.code())))
         .bind(error.map(DownloadError::message))
+        .bind(item.queue_id())
         .bind(item.id().to_string())
         .execute(&self.pool)
         .await?;
@@ -376,7 +381,7 @@ async fn conditional_update(
             source_url = ?, engine_kind = ?, yt_dlp_format = ?, yt_dlp_audio_format = ?, filename = ?, destination = ?, status = ?,
             priority = ?, downloaded_bytes = ?, total_bytes = ?,
             speed_bytes_per_second = ?, estimated_remaining_seconds = ?,
-            created_at = ?, updated_at = ?, error_code = ?, error_message = ?
+            created_at = ?, updated_at = ?, error_code = ?, error_message = ?, queue_id = ?
          WHERE id = ? AND status = ? AND (? IS NULL OR updated_at = ?)",
     )
     .bind(item.source().url())
@@ -413,6 +418,7 @@ async fn conditional_update(
     )?)
     .bind(error.map(|value| error_code_to_str(value.code())))
     .bind(error.map(DownloadError::message))
+    .bind(item.queue_id())
     .bind(item.id().to_string())
     .bind(status_to_str(expected_status))
     .bind(expected_updated_at)
@@ -508,7 +514,8 @@ fn row_to_item(row: SqliteRow) -> Result<DownloadItem, StorageError> {
         };
 
     let destination: String = row.try_get("destination")?;
-    DownloadItem::from_parts(
+    let queue_id: Option<String> = row.try_get("queue_id").unwrap_or(None);
+    DownloadItem::from_parts_with_queue(
         id,
         source,
         filename,
@@ -519,6 +526,7 @@ fn row_to_item(row: SqliteRow) -> Result<DownloadItem, StorageError> {
         created_at,
         updated_at,
         error,
+        queue_id,
     )
     .map_err(|error| StorageError::invalid_data("updated_at", error.to_string()))
 }

@@ -22,6 +22,8 @@ pub struct SaveEngineConfigRequest {
     pub auto_retry_count: Option<u32>,
     #[serde(default)]
     pub auto_retry_delay_seconds: Option<u64>,
+    #[serde(default)]
+    pub virus_scan_on_complete: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -41,6 +43,7 @@ pub struct EngineConfigDto {
     pub metalink: MetalinkConfig,
     pub auto_retry_count: u32,
     pub auto_retry_delay_seconds: u64,
+    pub virus_scan_on_complete: bool,
 }
 
 fn resource_policy_for_save(policy: ResourcePolicy) -> ResourcePolicy {
@@ -80,6 +83,7 @@ impl From<&EngineConfig> for EngineConfigDto {
             metalink: MetalinkConfig { enabled: true },
             auto_retry_count: config.auto_retry_count,
             auto_retry_delay_seconds: config.auto_retry_delay_seconds,
+            virus_scan_on_complete: config.virus_scan_on_complete,
         }
     }
 }
@@ -178,6 +182,9 @@ pub async fn save_engine_config(
     }
     if let Some(delay) = request.auto_retry_delay_seconds {
         config.auto_retry_delay_seconds = delay;
+    }
+    if let Some(scan) = request.virus_scan_on_complete {
+        config.virus_scan_on_complete = scan;
     }
     state
         .config_service

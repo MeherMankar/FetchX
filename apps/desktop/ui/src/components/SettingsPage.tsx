@@ -1319,6 +1319,79 @@ function FolderCategoriesSection({ onError }: { onError: (msg: string) => void }
 }
 
 // ---------------------------------------------------------------------------
+// Virus scan section
+// ---------------------------------------------------------------------------
+
+function VirusScanSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [enabled, setEnabled] = useState(cfg.virus_scan_on_complete ?? false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEnabled(cfg.virus_scan_on_complete ?? false);
+  }, [cfg.virus_scan_on_complete]);
+
+  const save = async (next: boolean) => {
+    setEnabled(next);
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: { enabled: cfg.yt_dlp.enabled },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+        native_builtins: cfg.native_builtins,
+        virus_scan_on_complete: next,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+      setEnabled(!next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="virus-scan-heading">
+      <div className="settings-section-header">
+        <h4 id="virus-scan-heading" className="settings-section-title">
+          Virus scan
+        </h4>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">Scan on completion</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(event) => void save(event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+          <p className="settings-hint">
+            Automatically scan each completed download. Uses Windows Defender on
+            Windows and clamscan on Linux (skipped if not installed). No action
+            is taken on macOS.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Auto-retry section (Feature 5)
 // ---------------------------------------------------------------------------
 
@@ -1735,6 +1808,13 @@ export function SettingsPage() {
                   )}
                   <AfterDownloadSection onError={setError} />
                   <FolderCategoriesSection onError={setError} />
+                  {cfg && (
+                    <VirusScanSection
+                      cfg={cfg}
+                      onSaved={setCfg}
+                      onError={setError}
+                    />
+                  )}
                 </>
               )}
               {category.id === "downloads" && cfg && (

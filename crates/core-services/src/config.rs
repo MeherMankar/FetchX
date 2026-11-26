@@ -66,6 +66,10 @@ pub struct EngineConfig {
     /// Optional outgoing webhook fired when a download completes or fails.
     #[serde(default)]
     pub webhook: WebhookConfig,
+    /// Run a virus scan on completed downloads.
+    /// Uses Windows Defender on Windows, clamscan on Linux, and is skipped on macOS.
+    #[serde(default)]
+    pub virus_scan_on_complete: bool,
 }
 
 fn default_auto_retry_count() -> u32 {
@@ -118,6 +122,7 @@ impl Default for EngineConfig {
             resume_interrupted_on_start: true,
             health_check_on_complete: true,
             webhook: WebhookConfig::default(),
+            virus_scan_on_complete: false,
         }
     }
 }

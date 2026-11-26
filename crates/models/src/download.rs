@@ -765,13 +765,15 @@ struct DownloadItemRepr {
     created_at: Timestamp,
     updated_at: Timestamp,
     error: Option<DownloadError>,
+    #[serde(default)]
+    queue_id: Option<String>,
 }
 
 impl TryFrom<DownloadItemRepr> for DownloadItem {
     type Error = DownloadItemError;
 
     fn try_from(value: DownloadItemRepr) -> Result<Self, Self::Error> {
-        Self::from_parts(
+        Self::from_parts_with_queue(
             value.id,
             value.source,
             value.filename,
@@ -782,6 +784,7 @@ impl TryFrom<DownloadItemRepr> for DownloadItem {
             value.created_at,
             value.updated_at,
             value.error,
+            value.queue_id,
         )
     }
 }

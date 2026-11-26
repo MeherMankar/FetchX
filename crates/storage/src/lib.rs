@@ -15,11 +15,12 @@ pub use maintenance::{
     MIN_SUPPORTED_SCHEMA_VERSION, SchemaMigrationStatus,
 };
 pub use repository::{
-    DownloadRepository, TorrentMetadataRepository, TorrentMetadataRow, TorrentSeedState,
-    TorrentSourceType,
+    DownloadRepository, QueueDefinitionRepository, TorrentMetadataRepository, TorrentMetadataRow,
+    TorrentSeedState, TorrentSourceType,
 };
 pub use sqlite::{
-    SqliteConfigRepository, SqliteDownloadRepository, SqliteTorrentMetadataRepository,
+    SqliteConfigRepository, SqliteDownloadRepository, SqliteQueueDefinitionRepository,
+    SqliteTorrentMetadataRepository,
 };
 
 #[cfg(test)]

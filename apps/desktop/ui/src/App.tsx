@@ -1086,6 +1086,7 @@ export function App() {
           onCancel={handleCancel}
           onDelete={handleDelete}
           onCopyUrl={handleContextMenuCopyUrl}
+          onShareDownload={handleShareDownload}
           onOpenFolder={handleContextMenuOpenFolder}
           onCopyAsCurl={handleCopyAsCurl}
           onPriorityChange={handlePriorityChange}

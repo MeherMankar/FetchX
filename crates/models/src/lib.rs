@@ -13,6 +13,7 @@ mod post_queue_action;
 mod priority;
 mod progress;
 mod proxy;
+mod queue_definition;
 mod resources;
 mod runtime;
 mod schedule;
@@ -41,6 +42,7 @@ pub use post_queue_action::PostQueueAction;
 pub use priority::DownloadPriority;
 pub use progress::{DownloadProgress, DownloadProgressError};
 pub use proxy::{DesktopProxyConfig, ProxyKind};
+pub use queue_definition::{QueueDefinition, QueueProfile};
 pub use resources::{
     BandwidthWindow, EngineBandwidthLimits, ResourcePolicy, ResourcePolicyError, ResourcePressure,
     ResourceProfile, WeeklyBandwidthSchedule, WeeklyQueueSchedule, WeeklyQueueScheduleError,

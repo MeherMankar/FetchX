@@ -110,6 +110,14 @@ export interface AddDownloadRequest {
   engine_kind?: EngineKind;
   /** Extra tracker announce URLs for torrent/magnet downloads. */
   extra_trackers?: string[];
+  /** Referer URL forwarded as a request header. */
+  referer?: string;
+  /** User-Agent header override for this download. */
+  user_agent?: string;
+  /** Raw Cookie header value for this download. */
+  cookies?: string;
+  /** Per-download proxy URL that overrides the global proxy setting. */
+  proxy_url?: string;
 }
 
 export interface BatchDownloadResult {
@@ -234,6 +242,7 @@ export interface EngineConfigDto {
   metalink: MetalinkConfigDto;
   auto_retry_count: number;
   auto_retry_delay_seconds: number;
+  virus_scan_on_complete: boolean;
 }
 
 export interface NativeBuiltinsConfigDto {
@@ -291,6 +300,7 @@ export interface SaveEngineConfigRequest {
   metalink?: MetalinkConfigDto;
   auto_retry_count?: number;
   auto_retry_delay_seconds?: number;
+  virus_scan_on_complete?: boolean;
 }
 
 export interface DiagnosticResult {

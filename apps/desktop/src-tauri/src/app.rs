@@ -236,6 +236,19 @@ async fn forward_event(app: &tauri::AppHandle, event: DownloadEvent) {
                         }
                     }
                 }
+                // Virus scan on completion.
+                let virus_scan_enabled = config
+                    .as_ref()
+                    .map(|c| c.virus_scan_on_complete)
+                    .unwrap_or(false);
+                if virus_scan_enabled {
+                    let scan_path = item.destination().to_owned();
+                    let app_for_scan = app.clone();
+                    let fname_for_scan = fname.clone();
+                    tauri::async_runtime::spawn(async move {
+                        spawn_virus_scan(scan_path, fname_for_scan, app_for_scan).await;
+                    });
+                }
             } else if status == fetchx_models::DownloadStatus::Failed {
                 let err = item
                     .error()
@@ -571,6 +584,112 @@ fn sha256(data: &[u8]) -> [u8; 32] {
         out[i * 4..(i + 1) * 4].copy_from_slice(&word.to_be_bytes());
     }
     out
+}
+
+// ── Virus scan ────────────────────────────────────────────────────────────────
+
+/// Runs a virus scan on a completed download file.
+/// Windows: MpCmdRun.exe -Scan -ScanType 3 -File <path>
+/// Linux:   clamscan (skipped if not found)
+/// macOS:   no-op
+async fn spawn_virus_scan(path: std::path::PathBuf, filename: String, app: tauri::AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        // Windows Defender is located in a versioned subdirectory under Program Files.
+        // Try the most common location; fall back to searching PATH.
+        let defender_paths = [
+            std::path::PathBuf::from(r"C:\Program Files\Windows Defender\MpCmdRun.exe"),
+            std::path::PathBuf::from(r"C:\Program Files (x86)\Windows Defender\MpCmdRun.exe"),
+        ];
+        let exe = defender_paths
+            .iter()
+            .find(|p| p.exists())
+            .cloned()
+            .unwrap_or_else(|| std::path::PathBuf::from("MpCmdRun.exe"));
+
+        tracing::info!(path = %path.display(), scanner = %exe.display(), "virus-scan: starting Windows Defender scan");
+        match tokio::process::Command::new(&exe)
+            .args([
+                "-Scan",
+                "-ScanType",
+                "3",
+                "-File",
+                path.to_str().unwrap_or(""),
+            ])
+            .output()
+            .await
+        {
+            Ok(output) => {
+                let clean = output.status.success();
+                tracing::info!(
+                    path = %path.display(),
+                    exit_code = output.status.code(),
+                    clean,
+                    "virus-scan: Windows Defender finished"
+                );
+                if !clean {
+                    let _ = app.emit(
+                        "fetchx-notification",
+                        serde_json::json!({
+                            "title": "Virus scan warning",
+                            "body": format!("Windows Defender flagged: {filename}")
+                        }),
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "virus-scan: could not launch Windows Defender");
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // clamscan is optional — skip silently if not installed.
+        match tokio::process::Command::new("clamscan")
+            .arg("--no-summary")
+            .arg(path.to_str().unwrap_or(""))
+            .output()
+            .await
+        {
+            Ok(output) => {
+                let clean = output.status.success();
+                tracing::info!(
+                    path = %path.display(),
+                    exit_code = output.status.code(),
+                    clean,
+                    "virus-scan: clamscan finished"
+                );
+                if !clean {
+                    let _ = app.emit(
+                        "fetchx-notification",
+                        serde_json::json!({
+                            "title": "Virus scan warning",
+                            "body": format!("clamscan flagged: {filename}")
+                        }),
+                    );
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!("virus-scan: clamscan not found, skipping");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "virus-scan: could not launch clamscan");
+            }
+        }
+    }
+
+    // macOS: no built-in CLI scanner — skip.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (path, filename, app);
+    }
+
+    // Other targets: no-op.
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (path, filename, app);
+    }
 }
 
 // ── Archive extraction ────────────────────────────────────────────────────────

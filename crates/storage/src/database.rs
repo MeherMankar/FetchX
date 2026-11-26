@@ -10,7 +10,8 @@ use sqlx::{
 };
 
 use crate::{
-    SqliteConfigRepository, SqliteDownloadRepository, SqliteTorrentMetadataRepository, StorageError,
+    SqliteConfigRepository, SqliteDownloadRepository, SqliteQueueDefinitionRepository,
+    SqliteTorrentMetadataRepository, StorageError,
 };
 
 pub(crate) static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
@@ -74,6 +75,21 @@ pub(crate) static MIGRATOR: LazyLock<Migrator> = LazyLock::new(|| Migrator {
             12,
             "add_ytdlp_audio_format",
             include_str!("../../../migrations/0012_add_ytdlp_audio_format.sql"),
+        ),
+        embedded_migration(
+            13,
+            "add_bandwidth_limit_bps",
+            include_str!("../../../migrations/0013_add_bandwidth_limit_bps.sql"),
+        ),
+        embedded_migration(
+            14,
+            "add_ed2k_engine",
+            include_str!("../../../migrations/0014_add_ed2k_engine.sql"),
+        ),
+        embedded_migration(
+            15,
+            "add_queue_definitions",
+            include_str!("../../../migrations/0015_add_queue_definitions.sql"),
         ),
     ]),
     ..Migrator::DEFAULT
@@ -242,6 +258,12 @@ impl Database {
     #[must_use]
     pub fn torrent_metadata(&self) -> SqliteTorrentMetadataRepository {
         SqliteTorrentMetadataRepository::new(self.pool.clone())
+    }
+
+    /// Returns a repository for named queue definitions.
+    #[must_use]
+    pub fn queue_definitions(&self) -> SqliteQueueDefinitionRepository {
+        SqliteQueueDefinitionRepository::new(self.pool.clone())
     }
 
     /// Closes all database connections and waits for active operations to finish.
