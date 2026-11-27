@@ -98,7 +98,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const urlInputRef = useRef<HTMLInputElement>(null);
   const isMagnet = url.trimStart().toLowerCase().startsWith("magnet:");
   const isTorrentFile = !url.includes("://") && /\.torrent$/i.test(url.trim());
-  const isTorrent = isMagnet || isTorrentFile;
+  const isInfoHash = /^[0-9a-fA-F]{40}$/.test(url.trim()) ||
+                     /^(btih:|urn:btih:)[0-9a-fA-F]{40}$/i.test(url.trim());
+  const isTorrent = isMagnet || isTorrentFile || isInfoHash;
   const isEd2k = url.trimStart().toLowerCase().startsWith("ed2k://");
   const isYtDlpUrl = !isTorrent && !isEd2k && isLikelyYtDlpUrl(url);
   const isMetalink = !isTorrent && !isEd2k && /\.(metalink|meta4)$/i.test(url.trim());
@@ -257,7 +259,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   package_name: urlsToAdd.length > 1
                     ? packageNameForBatch
                     : packageName.trim() || undefined,
-                  engine_kind: isMetalink ? "metalink" : isEd2k ? "ed2k" : undefined,
+                  engine_kind: isInfoHash ? "native_torrent" : isMetalink ? "metalink" : isEd2k ? "ed2k" : undefined,
                   ...(isMagnet && extraTrackers.trim()
                     ? { extra_trackers: extraTrackers.split("\n").filter(Boolean) }
                     : {}),
@@ -446,12 +448,19 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                 ? "Magnet links use FetchX's native BitTorrent engine."
                 : isTorrentFile
                   ? "Local .torrent files use FetchX's native BitTorrent engine."
-                  : isMetalink
-                    ? "FetchX will select the fastest mirror automatically."
-                    : isEd2k
-                      ? "ed2k links are routed through the eMule HTTP gateway."
-                      : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
+                  : isInfoHash
+                    ? "BitTorrent info-hash — will search for peers automatically."
+                    : isMetalink
+                      ? "FetchX will select the fastest mirror automatically."
+                      : isEd2k
+                        ? "ed2k links are routed through the eMule HTTP gateway."
+                        : "HTTP and HTTPS URLs only. Credentials in URLs are not accepted."}
             </p>
+            {isInfoHash && (
+              <div className="metalink-badge" role="note">
+                BitTorrent info-hash — will search for peers automatically
+              </div>
+            )}
             {isMetalink && (
               <div className="metalink-badge" role="note">
                 Metalink — multi-source download with automatic mirror selection

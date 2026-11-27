@@ -213,6 +213,19 @@ fun AddDownloadDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
+                val trimmed = url.trim()
+                val isInfoHash = Regex("^[0-9a-fA-F]{40}$").matches(trimmed) ||
+                    Regex("^(btih:|urn:btih:)[0-9a-fA-F]{40}$", RegexOption.IGNORE_CASE).matches(trimmed)
+
+                if (isInfoHash) {
+                    Text(
+                        text = "BitTorrent info-hash — will search for peers automatically",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+
                 if (bulkUrls.size > 1) {
                     Text(
                         text = "${bulkUrls.size} unique links detected",
@@ -540,6 +553,9 @@ fun AddDownloadDialog(
 internal fun validateUrl(url: String): String? {
     val trimmed = url.trim()
     if (trimmed.isBlank()) return "URL cannot be empty"
+    val isInfoHash = Regex("^[0-9a-fA-F]{40}$").matches(trimmed) ||
+        Regex("^(btih:|urn:btih:)[0-9a-fA-F]{40}$", RegexOption.IGNORE_CASE).matches(trimmed)
+    if (isInfoHash) return null
     if (!trimmed.startsWith("http://", ignoreCase = true) &&
         !trimmed.startsWith("https://", ignoreCase = true) &&
         !trimmed.startsWith("ftp://", ignoreCase = true) &&
@@ -548,7 +564,7 @@ internal fun validateUrl(url: String): String? {
         !trimmed.startsWith("magnet:", ignoreCase = true) &&
         (trimmed.contains("://") || !trimmed.endsWith(".torrent", ignoreCase = true))
     ) {
-        return "Enter a supported download URL, magnet URI, or local .torrent path"
+        return "Enter a supported download URL, magnet URI, info-hash, or local .torrent path"
     }
 
     return null

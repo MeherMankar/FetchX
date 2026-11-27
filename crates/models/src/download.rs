@@ -66,12 +66,55 @@ impl TryFrom<&str> for YtDlpAudioFormat {
     }
 }
 
+/// Expands a bare info-hash input to a full magnet URI.
+///
+/// Accepts:
+/// - 40 lowercase or uppercase hex characters (raw SHA-1 info-hash)
+/// - `btih:<40hexchars>` (case-insensitive)
+/// - `urn:btih:<40hexchars>` (case-insensitive)
+///
+/// Returns the expanded `magnet:?xt=urn:btih:<hash>` string, or `None` if the
+/// input does not match any of these patterns.
+pub fn expand_info_hash(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    let hash = if trimmed.len() == 40 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        trimmed
+    } else if let Some(rest) = trimmed.strip_prefix_ignore_ascii_case("btih:") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix_ignore_ascii_case("urn:btih:") {
+        rest
+    } else {
+        return None;
+    };
+    if hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(format!("magnet:?xt=urn:btih:{}", hash.to_ascii_lowercase()))
+    } else {
+        None
+    }
+}
+
+trait StripPrefixIgnoreAsciiCase {
+    fn strip_prefix_ignore_ascii_case<'a>(&'a self, prefix: &str) -> Option<&'a str>;
+}
+
+impl StripPrefixIgnoreAsciiCase for str {
+    fn strip_prefix_ignore_ascii_case<'a>(&'a self, prefix: &str) -> Option<&'a str> {
+        if self.len() >= prefix.len() && self[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            Some(&self[prefix.len()..])
+        } else {
+            None
+        }
+    }
+}
+
 impl DownloadSource {
     pub fn new(url: impl Into<String>, engine: EngineKind) -> Result<Self, DownloadSourceError> {
         let url = url.into();
         if url.trim().is_empty() {
             return Err(DownloadSourceError::EmptyUrl);
         }
+        // Expand bare info-hashes (hex, btih:<hash>, urn:btih:<hash>) to full magnet URIs.
+        let url = expand_info_hash(url.trim()).unwrap_or(url);
         let is_torrent_engine = matches!(engine, EngineKind::Aria2 | EngineKind::NativeTorrent);
         if url.starts_with("magnet:") && (!is_torrent_engine || parse_magnet_uri(&url).is_err()) {
             return Err(DownloadSourceError::InvalidMagnetUri);
@@ -1137,6 +1180,87 @@ mod tests {
         value["updated_at"] = serde_json::json!(1);
 
         assert!(serde_json::from_value::<DownloadItem>(value).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn expand_info_hash_normalizes_all_accepted_forms() {
+        const HASH: &str = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3";
+        let expected = format!("magnet:?xt=urn:btih:{HASH}");
+
+        // Raw 40-hex-char SHA-1
+        assert_eq!(
+            super::expand_info_hash(HASH),
+            Some(expected.clone()),
+            "bare hex hash"
+        );
+        // Uppercase hex
+        assert_eq!(
+            super::expand_info_hash(&HASH.to_ascii_uppercase()),
+            Some(expected.clone()),
+            "uppercase hex hash"
+        );
+        // btih: prefix
+        assert_eq!(
+            super::expand_info_hash(&format!("btih:{HASH}")),
+            Some(expected.clone()),
+            "btih: prefix"
+        );
+        // urn:btih: prefix
+        assert_eq!(
+            super::expand_info_hash(&format!("urn:btih:{HASH}")),
+            Some(expected.clone()),
+            "urn:btih: prefix"
+        );
+        // Case-insensitive prefix matching
+        assert_eq!(
+            super::expand_info_hash(&format!("BTIH:{HASH}")),
+            Some(expected.clone()),
+            "BTIH: uppercase prefix"
+        );
+        assert_eq!(
+            super::expand_info_hash(&format!("URN:BTIH:{}", HASH.to_ascii_uppercase())),
+            Some(expected.clone()),
+            "URN:BTIH: uppercase prefix with uppercase hash"
+        );
+
+        // Should NOT match
+        assert!(super::expand_info_hash("not-a-hash").is_none());
+        assert!(super::expand_info_hash("https://example.com").is_none());
+        assert!(
+            super::expand_info_hash("magnet:?xt=urn:btih:a94a8fe5ccb19ba61c4c0873d391e987982fbbd3")
+                .is_none()
+        );
+        // Too short
+        assert!(super::expand_info_hash("a94a8fe5ccb19ba61c4c0873d391e987982fbb").is_none());
+        // Not all hex
+        assert!(super::expand_info_hash("a94a8fe5ccb19ba61c4c0873d391e987982fbbzz").is_none());
+    }
+
+    #[test]
+    fn download_source_new_accepts_bare_info_hash_with_torrent_engine()
+    -> Result<(), DownloadSourceError> {
+        const HASH: &str = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3";
+        let source = DownloadSource::new(HASH, EngineKind::NativeTorrent)?;
+        assert!(source.is_magnet());
+        assert_eq!(
+            source.url(),
+            "magnet:?xt=urn:btih:a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"
+        );
+
+        // btih: prefix
+        let source2 = DownloadSource::new(format!("btih:{HASH}"), EngineKind::NativeTorrent)?;
+        assert_eq!(source.url(), source2.url());
+
+        // urn:btih: prefix
+        let source3 = DownloadSource::new(format!("urn:btih:{HASH}"), EngineKind::NativeTorrent)?;
+        assert_eq!(source.url(), source3.url());
+
+        // Should reject bare info-hash with non-torrent engine
+        assert!(matches!(
+            DownloadSource::new(HASH, EngineKind::DirectHttp),
+            Err(DownloadSourceError::InvalidMagnetUri)
+        ));
         Ok(())
     }
 }

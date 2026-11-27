@@ -4,7 +4,7 @@ use fetchx_core_services::CoreServices;
 use fetchx_downloader::validate_http_source_url;
 use fetchx_models::{
     DownloadId, DownloadItem, DownloadPriority, DownloadSource, EngineKind, FileName, Timestamp,
-    YtDlpAudioFormat, parse_magnet_uri,
+    YtDlpAudioFormat, expand_info_hash, parse_magnet_uri,
 };
 use reqwest::Url;
 
@@ -23,6 +23,15 @@ pub async fn run(svc: &CoreServices, opts: AddOpts, json: bool) -> ExitCode {
         .as_deref()
         .or(opts.url.as_deref())
         .unwrap_or_default();
+    // Expand bare info-hashes (hex, btih:<hash>, urn:btih:<hash>) to full magnet URIs
+    // so the rest of the pipeline treats them identically to `magnet:` inputs.
+    let expanded_input;
+    let input = if let Some(expanded) = expand_info_hash(input.trim()) {
+        expanded_input = expanded;
+        expanded_input.as_str()
+    } else {
+        input
+    };
     let magnet = if input.starts_with("magnet:") {
         match parse_magnet_uri(input) {
             Ok(info) => Some(info),
@@ -384,7 +393,7 @@ fn filename_for_url(url: &Url) -> String {
 #[cfg(test)]
 mod tests {
     use super::{parse_torrent_selection, resolve_engine};
-    use fetchx_models::{EngineKind, parse_magnet_uri};
+    use fetchx_models::{EngineKind, expand_info_hash, parse_magnet_uri};
 
     #[test]
     fn magnet_defaults_to_native_and_rejects_aria2_selection() {
@@ -454,5 +463,23 @@ mod tests {
         assert!(parse_torrent_selection("0").is_err());
         assert!(parse_torrent_selection("1,1").is_err());
         assert!(parse_torrent_selection("1,x").is_err());
+    }
+
+    #[test]
+    fn bare_info_hash_expands_to_magnet() {
+        let hash = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3";
+        let expanded = expand_info_hash(hash).unwrap();
+        assert!(expanded.starts_with("magnet:?xt=urn:btih:"));
+        // Verify expanded form parses as a valid magnet URI.
+        assert!(parse_magnet_uri(&expanded).is_ok());
+        // All accepted prefix forms.
+        assert_eq!(
+            expand_info_hash(&format!("btih:{hash}")),
+            Some(expanded.clone())
+        );
+        assert_eq!(
+            expand_info_hash(&format!("urn:btih:{hash}")),
+            Some(expanded.clone())
+        );
     }
 }
