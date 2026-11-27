@@ -36,7 +36,10 @@ pub use ffmpeg::{
     MetadataOverride, TranscodePreset, write_metadata,
 };
 pub use ftp::{FtpEngine, FtpEngineConfig};
-pub use hls::{HlsEngine, HlsEngineConfig, is_hls_url};
+pub use hls::{
+    HlsEngine, HlsEngineConfig, VariantStream as HlsVariantStream, discover_hls_variants,
+    is_hls_url,
+};
 
 #[cfg(feature = "phase30-queue-fault-injection")]
 pub use http::inject_next_write_failure;

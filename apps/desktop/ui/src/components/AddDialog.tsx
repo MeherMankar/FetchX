@@ -6,6 +6,7 @@ import {
   addTorrentDownload,
   addMediaDownload,
   discoverYtDlpFormats,
+  discoverHlsVariants,
   extractDownloadLinks,
   suggestDownloadFilename,
   suggestDownloadPackageName,
@@ -15,7 +16,7 @@ import {
   findDuplicateDownload,
 } from "../api/downloads";
 import { getEngineConfig } from "../api/engine";
-import type { DownloadPriority, YtDlpFormat } from "../api/types";
+import type { DownloadPriority, HlsVariantDto, YtDlpFormat } from "../api/types";
 import { errorMessage, formatBytes, msToDatetimeLocal } from "../lib/format";
 
 interface AddDialogProps {
@@ -60,6 +61,15 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
+function isHlsUrl(value: string): boolean {
+  try {
+    const lower = value.trim().toLowerCase();
+    return lower.includes(".m3u8");
+  } catch {
+    return false;
+  }
+}
+
 export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps) {
   const [url, setUrl] = useState(initialUrl);
   const [packageName, setPackageName] = useState("");
@@ -76,7 +86,9 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const [selectedTorrentFiles, setSelectedTorrentFiles] = useState<number[]>([]);
   const [formatsLoading, setFormatsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [hlsVariants, setHlsVariants] = useState<HlsVariantDto[] | null>(null);
+  const [hlsVariantsLoading, setHlsVariantsLoading] = useState(false);
+  const [selectedHlsVariantUrl, setSelectedHlsVariantUrl] = useState("");  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [forceAdd, setForceAdd] = useState(false);
   const [extraTrackers, setExtraTrackers] = useState("");
   const [advancedProxyUrl, setAdvancedProxyUrl] = useState("");
@@ -90,6 +102,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
   const isEd2k = url.trimStart().toLowerCase().startsWith("ed2k://");
   const isYtDlpUrl = !isTorrent && !isEd2k && isLikelyYtDlpUrl(url);
   const isMetalink = !isTorrent && !isEd2k && /\.(metalink|meta4)$/i.test(url.trim());
+  const isHlsDetected = !isTorrent && !isEd2k && !isYtDlpUrl && isHlsUrl(url);
 
   // Auto-load formats when a yt-dlp URL is detected, with a 600ms debounce.
   useEffect(() => {
@@ -98,6 +111,14 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isYtDlpUrl, url]);
+
+  // Auto-load HLS variants when an HLS URL is detected, with a 600ms debounce.
+  useEffect(() => {
+    if (!isHlsDetected || hlsVariants !== null || hlsVariantsLoading) return;
+    const timer = setTimeout(() => void loadHlsVariants(), 600);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHlsDetected, url]);
 
   // Load global subtitle defaults once when the dialog opens for a yt-dlp URL.
   useEffect(() => {
@@ -244,6 +265,7 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   ...(advancedUserAgent.trim() ? { user_agent: advancedUserAgent.trim() } : {}),
                   ...(isYtDlpUrl ? { download_subtitles: subtitlesEnabled } : {}),
                   ...(isYtDlpUrl && subtitleLangs.trim() ? { subtitle_langs: subtitleLangs.trim() } : {}),
+                  ...(isHlsDetected && selectedHlsVariantUrl ? { hls_variant_url: selectedHlsVariantUrl } : {}),
                 });
           admitted = true;
           queuedCount += 1;
@@ -284,6 +306,8 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
     setUrl(newUrl);
     setFormats(null);
     setSelectedFormatId("");
+    setHlsVariants(null);
+    setSelectedHlsVariantUrl("");
     setDuplicateWarning(null);
     setForceAdd(false);
     // Reset subtitle state when URL changes; it will reload from global config
@@ -302,6 +326,19 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
       setError(errorMessage(cause));
     } finally {
       setFormatsLoading(false);
+    }
+  };
+
+  const loadHlsVariants = async () => {
+    setError(null);
+    setHlsVariantsLoading(true);
+    try {
+      setHlsVariants(await discoverHlsVariants(url));
+      setSelectedHlsVariantUrl("");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setHlsVariantsLoading(false);
     }
   };
 
@@ -593,6 +630,41 @@ export function AddDialog({ initialUrl = "", onAdded, onClose }: AddDialogProps)
                   </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {isHlsDetected && (
+            <div className="field">
+              {hlsVariants !== null && hlsVariants.length > 1 && (
+                <>
+                  <label htmlFor="add-hls-quality" className="field-label">
+                    Quality
+                  </label>
+                  <select
+                    id="add-hls-quality"
+                    className="field-select"
+                    value={selectedHlsVariantUrl}
+                    onChange={(e) => setSelectedHlsVariantUrl(e.target.value)}
+                    disabled={busy}
+                  >
+                    <option value="">Best quality (auto)</option>
+                    {hlsVariants.map((variant) => (
+                      <option key={variant.url} value={variant.url}>
+                        {variant.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
+              <p className="field-hint">
+                {hlsVariantsLoading
+                  ? "Detecting available qualities…"
+                  : hlsVariants === null
+                    ? ""
+                    : hlsVariants.length <= 1
+                      ? "Single-quality stream — no quality selection available."
+                      : "Choose a quality, or keep best quality (auto)."}
+              </p>
             </div>
           )}
 

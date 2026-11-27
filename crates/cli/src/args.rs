@@ -331,6 +331,11 @@ pub struct AddOpts {
     /// Schedule start time (ISO-8601 or "YYYY-MM-DD HH:MM").
     #[arg(long, value_name = "DATETIME")]
     pub schedule: Option<String>,
+
+    /// For HLS URLs: quality to select. Use `best` (default), a resolution height
+    /// like `720p`/`1080p`, or `audio` for the audio-only stream.
+    #[arg(short = 'q', long, value_name = "QUALITY", requires = "url")]
+    pub quality: Option<String>,
 }
 
 // ── List ──────────────────────────────────────────────────────────────────

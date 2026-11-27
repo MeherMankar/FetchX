@@ -8,7 +8,8 @@ use fetchx_core_services::{
     BatchDownloadRequest, ConfigService, CoreRepository, CoreServices, EngineRuntime,
 };
 use fetchx_downloader::{
-    DownloadEngineError, YtDlpError, YtDlpFormat, is_dash_url, is_hls_url, validate_http_source_url,
+    DownloadEngineError, YtDlpError, YtDlpFormat, discover_hls_variants as fetch_hls_variants,
+    is_dash_url, is_hls_url, validate_http_source_url,
 };
 use fetchx_media_extractor::MediaProtocol;
 use fetchx_models::{
@@ -187,6 +188,18 @@ impl AppState {
         if !self.engine_runtime.is_available(engine_kind) {
             return Err(IpcError::engine_unavailable(engine_kind));
         }
+
+        // When the user selected a specific HLS variant in the quality picker,
+        // replace the master playlist URL with the chosen variant playlist URL.
+        let canonical_url = if engine_kind == EngineKind::Hls {
+            if let Some(ref variant_url) = request.hls_variant_url {
+                validate_source_url(variant_url)?
+            } else {
+                canonical_url
+            }
+        } else {
+            canonical_url
+        };
 
         if magnet.is_some() {
             let core_services = self.core_services.as_ref().ok_or_else(IpcError::internal)?;
@@ -679,6 +692,10 @@ pub struct AddDownloadRequest {
     /// Only used when `download_subtitles` is `Some(true)`.
     #[serde(default)]
     pub subtitle_langs: Option<String>,
+    /// When set for an HLS download, use this specific variant playlist URL
+    /// instead of the original master playlist URL.
+    #[serde(default)]
+    pub hls_variant_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1420,6 +1437,95 @@ pub async fn discover_ytdlp_formats(
     url: String,
 ) -> Result<Vec<YtDlpFormat>, IpcError> {
     state.discover_ytdlp_formats(&url).await
+}
+
+/// Transfer object for a single HLS variant stream.
+#[derive(Clone, Debug, Serialize)]
+pub struct HlsVariantDto {
+    /// Absolute URL of the variant media playlist.
+    pub url: String,
+    /// Peak bandwidth in bits per second.
+    pub bandwidth_bps: u64,
+    /// Resolution string, e.g. `"1920x1080"`.
+    pub resolution: Option<String>,
+    /// Codecs string from the manifest.
+    pub codecs: Option<String>,
+    /// Human-readable label, e.g. `"1080p · 5.2 Mbps"` or `"Audio only"`.
+    pub label: String,
+    /// True when the variant carries no video tracks (audio-only stream).
+    pub is_audio_only: bool,
+}
+
+fn make_hls_label(
+    resolution: Option<&str>,
+    bandwidth_bps: u64,
+    codecs: Option<&str>,
+) -> (String, bool) {
+    let mbps = bandwidth_bps as f64 / 1_000_000.0;
+    let speed_str = format!("{mbps:.1} Mbps");
+
+    // Heuristic: if codecs are present and contain no video codec, it is audio-only.
+    let is_audio_only = match codecs {
+        Some(c) => {
+            let lower = c.to_lowercase();
+            // Common video codec prefixes: avc, hevc, hvc, vp8, vp9, av01, dvh.
+            let has_video = lower.contains("avc")
+                || lower.contains("hvc")
+                || lower.contains("hev")
+                || lower.contains("vp8")
+                || lower.contains("vp9")
+                || lower.contains("av01")
+                || lower.contains("dvh");
+            !has_video
+        }
+        None => resolution.is_none(),
+    };
+
+    let label = if is_audio_only {
+        format!("Audio only · {speed_str}")
+    } else if let Some(res) = resolution {
+        // Extract vertical dimension for a friendly label (e.g. "1080p").
+        let height_label = res
+            .split('x')
+            .nth(1)
+            .and_then(|h| h.parse::<u32>().ok())
+            .map(|h| format!("{h}p"))
+            .unwrap_or_else(|| res.to_owned());
+        format!("{height_label} · {speed_str}")
+    } else {
+        speed_str
+    };
+
+    (label, is_audio_only)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn discover_hls_variants(url: String) -> Result<Vec<HlsVariantDto>, String> {
+    if !is_hls_url(&url) {
+        return Err("URL does not appear to be an HLS playlist".to_owned());
+    }
+    let mut variants = fetch_hls_variants(&url).await.map_err(|e| e.to_string())?;
+
+    // Sort best-first by bandwidth descending.
+    variants.sort_by(|a, b| b.bandwidth.cmp(&a.bandwidth));
+
+    let dtos = variants
+        .into_iter()
+        .map(|v| {
+            let (label, is_audio_only) =
+                make_hls_label(v.resolution.as_deref(), v.bandwidth, v.codecs.as_deref());
+            HlsVariantDto {
+                url: v.uri,
+                bandwidth_bps: v.bandwidth,
+                resolution: v.resolution,
+                codecs: v.codecs,
+                label,
+                is_audio_only,
+            }
+        })
+        .collect();
+
+    Ok(dtos)
 }
 
 #[tauri::command(rename_all = "snake_case")]

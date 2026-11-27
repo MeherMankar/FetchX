@@ -1201,6 +1201,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             commands::add_media_download,
             commands::extract_media_formats,
             commands::discover_ytdlp_formats,
+            commands::discover_hls_variants,
             media_processing::get_media_process_for_download,
             media_processing::start_media_remux,
             media_processing::start_media_merge,

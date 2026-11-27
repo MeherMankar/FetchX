@@ -140,9 +140,17 @@ enum PlaylistKind {
     Media(MediaPlaylistInfo),
 }
 
-struct VariantStream {
-    bandwidth: u64,
-    uri: String,
+/// A single variant stream from a master HLS playlist.
+#[derive(Clone, Debug)]
+pub struct VariantStream {
+    /// Peak bandwidth in bits per second.
+    pub bandwidth: u64,
+    /// Absolute URI of the variant media playlist.
+    pub uri: String,
+    /// Resolution string from the `RESOLUTION` attribute, e.g. `"1920x1080"`.
+    pub resolution: Option<String>,
+    /// Codecs string from the `CODECS` attribute.
+    pub codecs: Option<String>,
 }
 
 // ── HLS Engine ────────────────────────────────────────────────────────────────
@@ -1328,21 +1336,73 @@ fn parse_playlist(text: &str, base_url: &Url) -> Result<PlaylistKind, DownloadEn
 fn parse_master_playlist(lines: &[&str], base_url: &Url) -> Vec<VariantStream> {
     let mut variants = Vec::new();
     let mut bandwidth: Option<u64> = None;
+    let mut resolution: Option<String> = None;
+    let mut codecs: Option<String> = None;
 
     for line in lines {
         let line = line.trim();
         if line.starts_with("#EXT-X-STREAM-INF:") {
             bandwidth = extract_attribute(line, "BANDWIDTH").and_then(|v| v.parse::<u64>().ok());
+            resolution = extract_attribute(line, "RESOLUTION").map(str::to_owned);
+            codecs = extract_attribute(line, "CODECS").map(str::to_owned);
         } else if !line.starts_with('#') && !line.is_empty() {
             let uri = resolve_uri(line, base_url);
             variants.push(VariantStream {
                 bandwidth: bandwidth.unwrap_or(0),
                 uri,
+                resolution: resolution.take(),
+                codecs: codecs.take(),
             });
             bandwidth = None;
         }
     }
     variants
+}
+
+/// Fetches the M3U8 at `url` using a plain `reqwest` client and returns the list
+/// of variant streams found in a master playlist, or a single synthetic entry
+/// when the URL already points to a media playlist.
+///
+/// This is a lightweight, one-shot helper for quality-picker UI — it does not
+/// use the full HLS engine or the application state machine.
+pub async fn discover_hls_variants(url: &str) -> Result<Vec<VariantStream>, String> {
+    use reqwest::Client;
+
+    let client = Client::builder()
+        .user_agent(DEFAULT_USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let parsed = Url::parse(url).map_err(|e| e.to_string())?;
+    let response = client
+        .get(parsed.clone())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status().as_u16()));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        return Err("manifest too large".to_owned());
+    }
+    let text = String::from_utf8(bytes.to_vec()).map_err(|_| "non-UTF-8 manifest".to_owned())?;
+
+    match parse_playlist(&text, &parsed) {
+        Ok(PlaylistKind::Master(variants)) => Ok(variants),
+        Ok(PlaylistKind::Media(_)) => {
+            // Already a media playlist — return a single synthetic entry.
+            Ok(vec![VariantStream {
+                bandwidth: 0,
+                uri: url.to_owned(),
+                resolution: None,
+                codecs: None,
+            }])
+        }
+        Err(_) => Err("failed to parse M3U8 playlist".to_owned()),
+    }
 }
 
 fn parse_media_playlist_info(

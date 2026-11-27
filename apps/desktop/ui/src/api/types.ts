@@ -122,6 +122,8 @@ export interface AddDownloadRequest {
   download_subtitles?: boolean;
   /** Per-download subtitle languages, comma-separated (e.g. "en,fr"). */
   subtitle_langs?: string;
+  /** When set for an HLS download, download the specific variant URL instead of the master playlist. */
+  hls_variant_url?: string;
 }
 
 export interface BatchDownloadResult {
@@ -173,6 +175,15 @@ export interface YtDlpFormat {
   label: string;
   extension: string | null;
   file_size_bytes: number | null;
+}
+
+export interface HlsVariantDto {
+  url: string;
+  bandwidth_bps: number;
+  resolution: string | null;
+  codecs: string | null;
+  label: string;
+  is_audio_only: boolean;
 }
 
 export interface SetPriorityRequest {

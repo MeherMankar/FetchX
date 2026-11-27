@@ -12,6 +12,7 @@ import type {
   DownloadRemovedEvent,
   DownloadSchedule,
   DownloadUpdatedEvent,
+  HlsVariantDto,
   MediaProcessJob,
   QueueSnapshot,
   ScheduleDownloadRequest,
@@ -203,6 +204,10 @@ export function addMediaDownload(
 
 export function discoverYtDlpFormats(url: string): Promise<YtDlpFormat[]> {
   return invoke<YtDlpFormat[]>("discover_ytdlp_formats", { url });
+}
+
+export function discoverHlsVariants(url: string): Promise<HlsVariantDto[]> {
+  return invoke<HlsVariantDto[]>("discover_hls_variants", { url });
 }
 
 export function pauseDownload(downloadId: string): Promise<Download> {
