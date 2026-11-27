@@ -6,12 +6,14 @@ pub mod error;
 
 // Re-export DTO types at the crate root so the UniFFI scaffolding can find them.
 pub use dto::{
-    BatchDownloadAudioFormatDto, BatchDownloadEngineDto, BatchDownloadErrorCodeDto,
-    BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig, DownloadEventDto,
-    DownloadInfoDto, DownloadPriorityDto, DownloadProgressDto, DownloadRuntimeProgressDto,
-    DownloadRuntimeStatusDto, DownloadStatusDto, DuplicateDownloadMatchDto,
-    TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto, TorrentTelemetryDto,
-    YoutubePlayerClientDto, YoutubePoTokenContextDto, YoutubePoTokenDto, YtDlpFormatDto,
+    AdvancedDownloadOptionsDto, BatchDownloadAudioFormatDto, BatchDownloadEngineDto,
+    BatchDownloadErrorCodeDto, BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig,
+    DownloadEventDto, DownloadInfoDto, DownloadPriorityDto, DownloadProgressDto,
+    DownloadRuntimeProgressDto, DownloadRuntimeStatusDto, DownloadStatusDto,
+    DuplicateDownloadMatchDto, HlsVariantDto, HttpAuthTypeDto, HttpCredentialsDto,
+    TorrentConfigDto, TorrentDownloadMetadataDto, TorrentFileDto, TorrentMetadataDto,
+    TorrentTelemetryDto, WebhookConfigDto, YoutubePlayerClientDto, YoutubePoTokenContextDto,
+    YoutubePoTokenDto, YtDlpFormatDto,
 };
 pub use error::MobileApiError;
 
