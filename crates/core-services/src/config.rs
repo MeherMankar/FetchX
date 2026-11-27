@@ -209,6 +209,10 @@ pub struct NativeTorrentConfig {
     /// since /data/local/tmp is not writable by the app sandbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_dir: Option<std::path::PathBuf>,
+    /// Attempt UPnP/NAT-PMP port forwarding so the router opens the
+    /// BitTorrent listen port for incoming peer connections. Default: true.
+    #[serde(default = "default_true")]
+    pub enable_upnp: bool,
 }
 
 impl Default for NativeTorrentConfig {
@@ -217,6 +221,7 @@ impl Default for NativeTorrentConfig {
             enabled: true,
             listen_port: 6881,
             session_dir: None,
+            enable_upnp: true,
         }
     }
 }

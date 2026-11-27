@@ -60,6 +60,8 @@ fn ytdlp_engine_config() -> EngineConfig {
         yt_dlp: YtDlpConfig {
             enabled: true,
             executable_path: Some(ytdlp_executable()),
+            download_subtitles: false,
+            subtitle_langs: String::new(),
         },
         ..EngineConfig::default()
     }

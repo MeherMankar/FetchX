@@ -28,6 +28,8 @@ pub struct SaveEngineConfigRequest {
     pub mark_of_the_web: Option<bool>,
     #[serde(default)]
     pub post_queue_action: Option<PostQueueAction>,
+    #[serde(default)]
+    pub enable_upnp: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -54,6 +56,7 @@ pub struct EngineConfigDto {
     pub virus_scan_on_complete: bool,
     pub mark_of_the_web: bool,
     pub post_queue_action: PostQueueAction,
+    pub enable_upnp: bool,
 }
 
 fn resource_policy_for_save(policy: ResourcePolicy) -> ResourcePolicy {
@@ -100,6 +103,7 @@ impl From<&EngineConfig> for EngineConfigDto {
             virus_scan_on_complete: config.virus_scan_on_complete,
             mark_of_the_web: config.mark_of_the_web,
             post_queue_action: config.resource_policy.post_queue_action.clone(),
+            enable_upnp: config.native_torrent.enable_upnp,
         }
     }
 }
@@ -209,6 +213,9 @@ pub async fn save_engine_config(
     }
     if let Some(action) = request.post_queue_action {
         config.resource_policy.post_queue_action = action;
+    }
+    if let Some(upnp) = request.enable_upnp {
+        config.native_torrent.enable_upnp = upnp;
     }
     state
         .config_service

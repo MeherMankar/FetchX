@@ -1658,6 +1658,78 @@ function VirusScanSection({
 }
 
 // ---------------------------------------------------------------------------
+// UPnP port forwarding section (BitTorrent)
+// ---------------------------------------------------------------------------
+
+function UPnPSection({
+  cfg,
+  onSaved,
+  onError,
+}: {
+  cfg: EngineConfigDto;
+  onSaved: (updated: EngineConfigDto) => void;
+  onError: (message: string) => void;
+}) {
+  const [enabled, setEnabled] = useState(cfg.enable_upnp ?? true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setEnabled(cfg.enable_upnp ?? true);
+  }, [cfg.enable_upnp]);
+
+  const save = async (next: boolean) => {
+    setEnabled(next);
+    setBusy(true);
+    try {
+      const updated = await saveEngineConfig({
+        yt_dlp: { ...cfg.yt_dlp },
+        resource_policy: cfg.resource_policy,
+        weekly_queue_schedule: cfg.weekly_queue_schedule,
+        native_builtins: cfg.native_builtins,
+        enable_upnp: next,
+      });
+      onSaved(updated);
+    } catch (cause) {
+      onError(errorMessage(cause));
+      setEnabled(!next);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-section" aria-labelledby="upnp-heading">
+      <div className="settings-section-header">
+        <h4 id="upnp-heading" className="settings-section-title">
+          BitTorrent
+        </h4>
+      </div>
+      <div className="settings-row">
+        <span className="settings-label">UPnP port forwarding</span>
+        <div className="settings-control">
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={busy}
+              onChange={(event) => void save(event.target.checked)}
+            />
+            <span className="toggle-track"><span className="toggle-thumb" /></span>
+            <span style={{ fontSize: "13px", color: "var(--text-2)" }}>
+              {enabled ? "Enabled" : "Disabled"}
+            </span>
+          </label>
+          <p className="settings-hint">
+            Automatically opens ports on your router for better torrent connectivity.
+            Requires a UPnP-capable router. Takes effect after restarting FetchX.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Auto-retry section (Feature 5)
 // ---------------------------------------------------------------------------
 
@@ -2099,6 +2171,7 @@ export function SettingsPage() {
                     onError={setError}
                   />
                   <YtDlpSubtitlesSection cfg={cfg} onSaved={setCfg} onError={setError} />
+                  <UPnPSection cfg={cfg} onSaved={setCfg} onError={setError} />
                   <AutoRetrySection cfg={cfg} onSaved={setCfg} onError={setError} />
                 </>
               )}

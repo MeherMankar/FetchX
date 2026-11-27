@@ -47,6 +47,9 @@ pub struct NativeTorrentConfig {
     pub session_dir: Option<std::path::PathBuf>,
     /// Disables DHT discovery. Useful for isolated environments and deterministic peers.
     pub disable_dht: bool,
+    /// Enables UPnP/NAT-PMP port forwarding so the router opens the BitTorrent
+    /// listen port for incoming peer connections.
+    pub enable_upnp: bool,
 }
 
 impl Default for NativeTorrentConfig {
@@ -56,6 +59,7 @@ impl Default for NativeTorrentConfig {
             max_connections_per_torrent: 20,
             session_dir: None,
             disable_dht: false,
+            enable_upnp: true,
         }
     }
 }
@@ -110,6 +114,7 @@ where
         let session_opts = SessionOptions {
             listen: Some(ListenerOptions {
                 listen_addr,
+                enable_upnp_port_forwarding: config.enable_upnp,
                 ..ListenerOptions::default()
             }),
             // Cap peers per torrent to stay within Android's fd sandbox limit.

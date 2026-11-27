@@ -262,6 +262,7 @@ export interface EngineConfigDto {
   virus_scan_on_complete: boolean;
   mark_of_the_web: boolean;
   post_queue_action: PostQueueActionDto;
+  enable_upnp: boolean;
 }
 
 export interface NativeBuiltinsConfigDto {
@@ -324,6 +325,7 @@ export interface SaveEngineConfigRequest {
   virus_scan_on_complete?: boolean;
   mark_of_the_web?: boolean;
   post_queue_action?: PostQueueActionDto;
+  enable_upnp?: boolean;
 }
 
 export interface DiagnosticResult {

@@ -3251,6 +3251,7 @@ async fn init_native_torrent(
         max_connections_per_torrent: 20,
         session_dir: config.native_torrent.session_dir.clone(),
         disable_dht: false,
+        enable_upnp: config.native_torrent.enable_upnp,
     };
     match NativeTorrentEngine::new(repository, native_cfg).await {
         Ok(engine) => {
@@ -3731,6 +3732,7 @@ mod tests {
                     enabled: true,
                     listen_port: 0,
                     session_dir: Some(session_dir.to_path_buf()),
+                    enable_upnp: true,
                 },
                 ..EngineConfig::default()
             })
@@ -4193,6 +4195,7 @@ mod tests {
                 enabled: true,
                 listen_port: 0,
                 session_dir: Some(paths.runtime_dir.join("librqbit-session")),
+                enable_upnp: false,
             },
             ..EngineConfig::default()
         };
@@ -5551,6 +5554,7 @@ mod tests {
                     enabled: true,
                     listen_port: 0,
                     session_dir: Some(root.path().join("librqbit")),
+                    enable_upnp: false,
                 },
                 ..EngineConfig::default()
             })
@@ -5663,11 +5667,14 @@ mod tests {
             yt_dlp: YtDlpConfig {
                 enabled: true,
                 executable_path: Some(root.path().join("missing-yt-dlp")),
+                download_subtitles: false,
+                subtitle_langs: String::new(),
             },
             native_torrent: NativeTorrentConfig {
                 enabled: true,
                 listen_port: 0,
                 session_dir: Some(root.path().join("runtime/native-torrent")),
+                enable_upnp: false,
             },
             ..EngineConfig::default()
         };
@@ -5730,6 +5737,7 @@ mod tests {
                     enabled: true,
                     listen_port: 0,
                     session_dir: Some(root.path().join("librqbit")),
+                    enable_upnp: false,
                 },
                 ..EngineConfig::default()
             })
@@ -6141,6 +6149,7 @@ mod tests {
                     enabled: true,
                     listen_port: 0,
                     session_dir: Some(root.path().join("native-torrent-session")),
+                    enable_upnp: false,
                 },
                 ..EngineConfig::default()
             })
