@@ -186,6 +186,45 @@ pub struct TorrentDownloadMetadataDto {
     pub selection_confirmed: bool,
 }
 
+// ── Parity feature DTOs ───────────────────────────────────────────────────
+
+pub struct WebhookConfigDto {
+    pub enabled: bool,
+    pub url: String,
+    pub on_complete: bool,
+    pub on_fail: bool,
+    pub secret: String,
+}
+
+pub struct HlsVariantDto {
+    pub url: String,
+    pub label: String,
+    pub bandwidth_bps: Option<u64>,
+    pub resolution: Option<String>,
+}
+
+pub enum HttpAuthTypeDto {
+    Basic,
+    Digest,
+    Ntlm,
+}
+
+pub struct HttpCredentialsDto {
+    pub auth_type: HttpAuthTypeDto,
+    pub username: String,
+    pub password: String,
+    pub domain: Option<String>,
+}
+
+pub struct TorrentConfigDto {
+    pub enable_upnp: bool,
+}
+
+pub struct AdvancedDownloadOptionsDto {
+    pub proxy_url: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 /// Event emitted by the Rust backend, forwarded to Kotlin listeners.
 /// Maps to the `[Enum] interface DownloadEventDto` in android_bridge.udl.
 pub enum DownloadEventDto {

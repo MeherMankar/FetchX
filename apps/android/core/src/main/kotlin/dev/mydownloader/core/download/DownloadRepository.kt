@@ -225,6 +225,44 @@ interface DownloadRepository {
 
     /** Retrieve a single download by ID, or null if not found. */
     suspend fun getDownload(downloadId: String): DownloadItem?
+
+    /** Add a media download with optional subtitle parameters. */
+    suspend fun addMediaDownloadWithSubtitles(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority = DownloadPriority.DEFAULT,
+        formatId: String? = null,
+        audioFormat: String? = null,
+        downloadSubtitles: Boolean = false,
+        subtitleLangs: String = "en",
+    ): String = addMediaDownload(url, fileName, destinationPath, priority, formatId, audioFormat)
+
+    /** Add a download with HTTP credentials. */
+    suspend fun addDownloadWithCredentials(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority = DownloadPriority.DEFAULT,
+        credentials: HttpCredentials,
+    ): String = addDownload(url, fileName, destinationPath, priority)
+
+    /** Add a download with advanced options (proxy, user-agent). */
+    suspend fun addDownloadAdvanced(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority = DownloadPriority.DEFAULT,
+        options: AdvancedDownloadOptions = AdvancedDownloadOptions(),
+    ): String = addDownload(url, fileName, destinationPath, priority)
+
+    /** Discover HLS variant streams for the given playlist URL. */
+    suspend fun discoverHlsVariants(url: String): List<HlsVariant> =
+        throw UnsupportedOperationException("HLS variant discovery is unavailable")
+
+    /** Verify the SHA-256 checksum of a completed download. Returns "match", "mismatch", or "no_checksum". */
+    suspend fun verifyChecksum(downloadId: String): String =
+        throw UnsupportedOperationException("Checksum verification is unavailable")
 }
 
 /**
@@ -250,4 +288,47 @@ interface BatchDownloadRepository {
         priority: DownloadPriority,
         expectedSha256: String? = null,
     ): List<DownloadBatchOutcome>
+}
+
+// ── Parity feature data classes ───────────────────────────────────────────
+
+data class HlsVariant(
+    val url: String,
+    val label: String,
+    val bandwidthBps: Long?,
+    val resolution: String?,
+)
+
+enum class HttpAuthType { BASIC, DIGEST, NTLM }
+
+data class HttpCredentials(
+    val authType: HttpAuthType,
+    val username: String,
+    val password: String,
+    val domain: String? = null,
+)
+
+data class AdvancedDownloadOptions(
+    val proxyUrl: String? = null,
+    val userAgent: String? = null,
+)
+
+data class WebhookConfig(
+    val enabled: Boolean,
+    val url: String,
+    val onComplete: Boolean,
+    val onFail: Boolean,
+    val secret: String,
+)
+
+interface WebhookRepository {
+    suspend fun getWebhookConfig(): WebhookConfig
+    suspend fun setWebhookConfig(config: WebhookConfig)
+}
+
+data class TorrentConfig(val enableUpnp: Boolean)
+
+interface TorrentConfigRepository {
+    suspend fun getTorrentConfig(): TorrentConfig
+    suspend fun setTorrentConfig(config: TorrentConfig)
 }

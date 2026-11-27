@@ -13,6 +13,11 @@ import dev.fetchx.bridge.uniffi.DownloadService
 import dev.fetchx.bridge.uniffi.DownloadStatusDto
 import dev.fetchx.bridge.uniffi.TorrentTelemetryDto
 import dev.fetchx.bridge.uniffi.TorrentMetadataDto
+import dev.fetchx.bridge.uniffi.HttpAuthTypeDto
+import dev.fetchx.bridge.uniffi.HttpCredentialsDto as BridgeHttpCredentialsDto
+import dev.fetchx.bridge.uniffi.AdvancedDownloadOptionsDto
+import dev.fetchx.bridge.uniffi.WebhookConfigDto as BridgeWebhookConfigDto
+import dev.fetchx.bridge.uniffi.TorrentConfigDto as BridgeTorrentConfigDto
 import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.Aria2NativeRestartRepository
 import dev.fetchx.core.download.DownloadEvent
@@ -30,6 +35,14 @@ import dev.fetchx.core.download.TorrentFile
 import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentTelemetry
 import dev.fetchx.core.download.YtDlpFormat
+import dev.fetchx.core.download.HlsVariant
+import dev.fetchx.core.download.HttpAuthType
+import dev.fetchx.core.download.HttpCredentials
+import dev.fetchx.core.download.AdvancedDownloadOptions
+import dev.fetchx.core.download.WebhookConfig
+import dev.fetchx.core.download.WebhookRepository
+import dev.fetchx.core.download.TorrentConfig
+import dev.fetchx.core.download.TorrentConfigRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -76,7 +89,7 @@ class BridgeDownloadRepository(
     private val externalScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : TorrentDownloadRepository, DuplicateDownloadRepository, BatchDownloadRepository,
-    Aria2NativeRestartRepository {
+    Aria2NativeRestartRepository, WebhookRepository, TorrentConfigRepository {
 
     private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
     private val _events = MutableSharedFlow<DownloadEvent>(extraBufferCapacity = 64)
@@ -341,6 +354,110 @@ class BridgeDownloadRepository(
                 )
             }
         }
+
+    override suspend fun addMediaDownloadWithSubtitles(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        formatId: String?,
+        audioFormat: String?,
+        downloadSubtitles: Boolean,
+        subtitleLangs: String,
+    ): String = withContext(Dispatchers.IO) {
+        val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
+        service.addMediaDownloadWithSubtitles(
+            url, fileName, stagingPath, mapPriorityToDto(priority),
+            formatId, audioFormat, downloadSubtitles, subtitleLangs,
+        )
+    }
+
+    override suspend fun discoverHlsVariants(url: String): List<HlsVariant> =
+        withContext(Dispatchers.IO) {
+            service.discoverHlsVariants(url).map { v ->
+                HlsVariant(
+                    url = v.url,
+                    label = v.label,
+                    bandwidthBps = v.bandwidthBps?.toLong(),
+                    resolution = v.resolution,
+                )
+            }
+        }
+
+    override suspend fun addDownloadWithCredentials(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        credentials: HttpCredentials,
+    ): String = withContext(Dispatchers.IO) {
+        val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
+        val bridgeAuthType = when (credentials.authType) {
+            HttpAuthType.BASIC -> HttpAuthTypeDto.BASIC
+            HttpAuthType.DIGEST -> HttpAuthTypeDto.DIGEST
+            HttpAuthType.NTLM -> HttpAuthTypeDto.NTLM
+        }
+        service.addDownloadWithCredentials(
+            url, fileName, stagingPath, mapPriorityToDto(priority),
+            BridgeHttpCredentialsDto(
+                authType = bridgeAuthType,
+                username = credentials.username,
+                password = credentials.password,
+                domain = credentials.domain,
+            ),
+        )
+    }
+
+    override suspend fun verifyChecksum(downloadId: String): String =
+        withContext(Dispatchers.IO) {
+            service.verifyChecksum(downloadId)
+        }
+
+    override suspend fun addDownloadAdvanced(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        options: AdvancedDownloadOptions,
+    ): String = withContext(Dispatchers.IO) {
+        val stagingPath = publicDownloadStorage.stageDestinationIfPublic(destinationPath)
+        service.addDownloadAdvanced(
+            url, fileName, stagingPath, mapPriorityToDto(priority),
+            AdvancedDownloadOptionsDto(proxyUrl = options.proxyUrl, userAgent = options.userAgent),
+        )
+    }
+
+    override suspend fun getWebhookConfig(): WebhookConfig = withContext(Dispatchers.IO) {
+        val dto = service.getWebhookConfig()
+        WebhookConfig(
+            enabled = dto.enabled,
+            url = dto.url,
+            onComplete = dto.onComplete,
+            onFail = dto.onFail,
+            secret = dto.secret,
+        )
+    }
+
+    override suspend fun setWebhookConfig(config: WebhookConfig) = withContext(Dispatchers.IO) {
+        service.setWebhookConfig(
+            BridgeWebhookConfigDto(
+                enabled = config.enabled,
+                url = config.url,
+                onComplete = config.onComplete,
+                onFail = config.onFail,
+                secret = config.secret,
+            )
+        )
+    }
+
+    override suspend fun getTorrentConfig(): TorrentConfig = withContext(Dispatchers.IO) {
+        val dto = service.getTorrentConfig()
+        TorrentConfig(enableUpnp = dto.enableUpnp)
+    }
+
+    override suspend fun setTorrentConfig(config: TorrentConfig) = withContext(Dispatchers.IO) {
+        service.setTorrentConfig(BridgeTorrentConfigDto(enableUpnp = config.enableUpnp))
+    }
 
     override suspend fun addMagnet(
         magnetUri: String,

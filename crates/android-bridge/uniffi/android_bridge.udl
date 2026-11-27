@@ -89,6 +89,43 @@ dictionary TorrentDownloadMetadataDto {
     boolean selection_confirmed;
 };
 
+dictionary WebhookConfigDto {
+    boolean enabled;
+    string url;
+    boolean on_complete;
+    boolean on_fail;
+    string secret;
+};
+
+dictionary HlsVariantDto {
+    string url;
+    string label;
+    u64? bandwidth_bps;
+    string? resolution;
+};
+
+enum HttpAuthTypeDto {
+    "Basic",
+    "Digest",
+    "Ntlm",
+};
+
+dictionary HttpCredentialsDto {
+    HttpAuthTypeDto auth_type;
+    string username;
+    string password;
+    string? domain;
+};
+
+dictionary TorrentConfigDto {
+    boolean enable_upnp;
+};
+
+dictionary AdvancedDownloadOptionsDto {
+    string? proxy_url;
+    string? user_agent;
+};
+
 enum DownloadStatusDto {
     "Queued",
     "Preparing",
@@ -338,6 +375,54 @@ interface DownloadService {
         DownloadPriorityDto priority,
         string? format_id,
         string? audio_format
+    );
+
+    [Throws=MobileApiError]
+    string add_media_download_with_subtitles(
+        string url,
+        string filename,
+        string destination,
+        DownloadPriorityDto priority,
+        string? format_id,
+        string? audio_format,
+        boolean download_subtitles,
+        string subtitle_langs
+    );
+
+    [Throws=MobileApiError]
+    WebhookConfigDto get_webhook_config();
+
+    [Throws=MobileApiError]
+    void set_webhook_config(WebhookConfigDto config);
+
+    [Throws=MobileApiError]
+    sequence<HlsVariantDto> discover_hls_variants(string playlist_url);
+
+    [Throws=MobileApiError]
+    string add_download_with_credentials(
+        string url,
+        string filename,
+        string destination,
+        DownloadPriorityDto priority,
+        HttpCredentialsDto credentials
+    );
+
+    [Throws=MobileApiError]
+    string verify_checksum(string id);
+
+    [Throws=MobileApiError]
+    TorrentConfigDto get_torrent_config();
+
+    [Throws=MobileApiError]
+    void set_torrent_config(TorrentConfigDto config);
+
+    [Throws=MobileApiError]
+    string add_download_advanced(
+        string url,
+        string filename,
+        string destination,
+        DownloadPriorityDto priority,
+        AdvancedDownloadOptionsDto options
     );
 
     [Throws=MobileApiError]

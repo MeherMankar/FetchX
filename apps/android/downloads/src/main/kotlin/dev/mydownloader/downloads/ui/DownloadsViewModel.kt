@@ -15,6 +15,9 @@ import dev.fetchx.core.download.TorrentDownloadMetadata
 import dev.fetchx.core.download.TorrentMetadata
 import dev.fetchx.core.download.TorrentDownloadRepository
 import dev.fetchx.core.download.TorrentTelemetry
+import dev.fetchx.core.download.HlsVariant
+import dev.fetchx.core.download.HttpCredentials
+import dev.fetchx.core.download.AdvancedDownloadOptions
 import dev.fetchx.downloads.settings.FolderCategoriser
 import dev.fetchx.downloads.settings.FolderCategoriesRepository
 import kotlinx.coroutines.CancellationException
@@ -366,6 +369,96 @@ class DownloadsViewModel(
         val duplicateRepository = repository as? DuplicateDownloadRepository
             ?: throw UnsupportedOperationException("Duplicate lookup is unavailable")
         return duplicateRepository.findDuplicateDownload(url)
+    }
+
+    fun addMediaDownloadWithSubtitles(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        formatId: String? = null,
+        audioFormat: String? = null,
+        downloadSubtitles: Boolean = false,
+        subtitleLangs: String = "en",
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            try {
+                repository.addMediaDownloadWithSubtitles(
+                    url, fileName, destinationPath, priority,
+                    formatId, audioFormat, downloadSubtitles, subtitleLangs,
+                )
+                _uiState.update { it.copy(isLoading = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, error = mapAddDownloadError(e)) }
+            }
+        }
+    }
+
+    fun addDownloadWithCredentials(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        credentials: HttpCredentials,
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            try {
+                repository.addDownloadWithCredentials(url, fileName, destinationPath, priority, credentials)
+                _uiState.update { it.copy(isLoading = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, error = mapAddDownloadError(e)) }
+            }
+        }
+    }
+
+    fun addDownloadAdvanced(
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        options: AdvancedDownloadOptions,
+        credentials: HttpCredentials? = null,
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            try {
+                if (credentials != null) {
+                    repository.addDownloadWithCredentials(url, fileName, destinationPath, priority, credentials)
+                } else {
+                    repository.addDownloadAdvanced(url, fileName, destinationPath, priority, options)
+                }
+                _uiState.update { it.copy(isLoading = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, error = mapAddDownloadError(e)) }
+            }
+        }
+    }
+
+    private val _hlsVariants = MutableStateFlow<List<HlsVariant>>(emptyList())
+    val hlsVariants: StateFlow<List<HlsVariant>> = _hlsVariants.asStateFlow()
+
+    suspend fun discoverHlsVariants(url: String): List<HlsVariant> {
+        return try {
+            val variants = repository.discoverHlsVariants(url)
+            _hlsVariants.value = variants
+            variants
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun verifyChecksum(downloadId: String): String {
+        return try {
+            repository.verifyChecksum(downloadId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            "no_checksum"
+        }
     }
 
     /** Clear a pending error message shown in the Snackbar. */

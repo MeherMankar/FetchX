@@ -30,11 +30,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import android.net.Uri
 import android.content.ActivityNotFoundException
+import android.util.Base64
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.fetchx.app.ClipboardMonitor
 import dev.fetchx.app.ui.theme.FetchXTheme
+import dev.fetchx.app.settings.AppPreferences
+import dev.fetchx.app.settings.AppSettingsScreen
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -95,6 +98,9 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
     var pendingUrl by remember { mutableStateOf(if (initialUrl?.startsWith("magnet:") == true) null else initialUrl) }
     // Magnet URI to add as download (from ACTION_VIEW magnet: intent)
     var pendingMagnet by remember { mutableStateOf(if (initialUrl?.startsWith("magnet:") == true) initialUrl else null) }
+    // fetchx://import/<base64> pre-filled URL
+    var pendingFetchxImportUrl by remember { mutableStateOf<String?>(null) }
+    var pendingFetchxImportFileName by remember { mutableStateOf<String?>(null) }
 
     // Observe new intents arriving via onNewIntent (activity already running).
     val newIntentUrl = pendingIntentUrl.value
@@ -123,6 +129,12 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 DEFAULT_BROWSER_THEME_SEED,
             ),
         )
+    }
+    // App-level accent color overrides the browser seed for non-browser screens.
+    val appAccentColor = remember(context) { AppPreferences.getAccentColor(context) }
+    val effectiveSeedColor = remember(appAccentColor, browserThemeSeed) {
+        if (appAccentColor != AppPreferences.ACCENT_DEFAULT) Color(appAccentColor)
+        else Color(browserThemeSeed)
     }
     val seedColor = remember(browserThemeSeed) { Color(browserThemeSeed) }
 
@@ -255,7 +267,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
         snackbarHost = { SnackbarHost(clipboardSnackbarHostState) },
         bottomBar = {
             if (currentRoute != Screen.Browser.route && currentRoute != Screen.Onboarding.route) {
-                FetchXTheme(seedColor = seedColor) {
+                FetchXTheme(seedColor = effectiveSeedColor) {
                     NavigationBar {
                         NavigationBarItem(
                             selected = currentRoute == Screen.Browser.route,
@@ -285,6 +297,16 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                             icon = { Icon(Icons.Default.FileDownload, contentDescription = "History") },
                             label = { Text("History") },
                         )
+                        NavigationBarItem(
+                            selected = currentRoute == Screen.Settings.route,
+                            onClick = {
+                                navController.navigate(Screen.Settings.route) {
+                                    launchSingleTop = true
+                                }
+                            },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                            label = { Text("Settings") },
+                        )
                     }
                 }
             }
@@ -306,7 +328,7 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 )
             }
             composable(Screen.Downloads.route) {
-                FetchXTheme(seedColor = seedColor) {
+                FetchXTheme(seedColor = effectiveSeedColor) {
                     DownloadsScreen(
                         viewModel = viewModel(factory = vmFactory),
                         downloadsDir = downloadsDir,
@@ -429,12 +451,12 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
                 }
             }
             composable(Screen.Storage.route) {
-                FetchXTheme(seedColor = seedColor) {
+                FetchXTheme(seedColor = effectiveSeedColor) {
                     StorageScreen(onBack = { navController.popBackStack() })
                 }
             }
             composable(Screen.History.route) {
-                FetchXTheme(seedColor = seedColor) {
+                FetchXTheme(seedColor = effectiveSeedColor) {
                     HistoryScreen(
                         viewModel = viewModel(factory = vmFactory),
                         onBack = { navController.popBackStack() },
@@ -443,12 +465,17 @@ fun AppNavigation(initialUrl: String? = null, pendingIntentUrl: androidx.compose
             }
             composable(Screen.TorrentDetail.ROUTE_PATTERN) { backStackEntry ->
                 val downloadId = backStackEntry.arguments?.getString("downloadId") ?: ""
-                FetchXTheme(seedColor = seedColor) {
+                FetchXTheme(seedColor = effectiveSeedColor) {
                     TorrentDetailScreen(
                         downloadId = downloadId,
                         viewModel = viewModel(factory = vmFactory),
                         onBack = { navController.popBackStack() },
                     )
+                }
+            }
+            composable(Screen.Settings.route) {
+                FetchXTheme(seedColor = effectiveSeedColor) {
+                    AppSettingsScreen(onBack = { navController.popBackStack() })
                 }
             }
         }

@@ -78,6 +78,8 @@ fun DownloadItemRow(
     onPlayFile: (() -> Unit)? = null,
     onOpenDetail: (() -> Unit)? = null,
     onUpdateUrl: ((String, String) -> Unit)? = null,
+    onVerifyChecksum: (suspend () -> String)? = null,
+    onShare: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var showNativeRestartDialog by remember(item.id) { mutableStateOf(false) }

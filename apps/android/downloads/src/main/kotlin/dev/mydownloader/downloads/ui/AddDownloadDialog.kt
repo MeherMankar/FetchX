@@ -1,5 +1,6 @@
 package dev.fetchx.downloads.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -25,11 +28,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import dev.fetchx.bridge.BridgeInitializer
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.fetchx.core.download.DownloadPriority
 import dev.fetchx.core.download.DownloadBatchItem
 import dev.fetchx.core.download.TorrentMetadata
+import dev.fetchx.core.download.HlsVariant
+import dev.fetchx.core.download.HttpAuthType
+import dev.fetchx.core.download.HttpCredentials
+import dev.fetchx.core.download.AdvancedDownloadOptions
 import dev.fetchx.downloads.storage.StorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -75,6 +83,21 @@ fun AddDownloadDialog(
         priority: DownloadPriority,
         expectedSha256: String?,
     ) -> Unit,
+    onAddAdvanced: (
+        url: String,
+        fileName: String,
+        destinationPath: String,
+        priority: DownloadPriority,
+        credentials: HttpCredentials?,
+        options: AdvancedDownloadOptions,
+        downloadSubtitles: Boolean,
+        subtitleLangs: String,
+    ) -> Unit = { url, fileName, dest, prio, _, _, _, _ ->
+        onAdd(url, fileName, dest, prio, null, null)
+    },
+    onDiscoverHlsVariants: suspend (String) -> List<HlsVariant> = { emptyList() },
+    globalSubtitleEnabled: Boolean = false,
+    globalSubtitleLangs: String = "en",
     onDismiss: () -> Unit,
 ) {
     var url by rememberSaveable { mutableStateOf("") }
@@ -90,6 +113,25 @@ fun AddDownloadDialog(
     var isCheckingDuplicate by remember { mutableStateOf(false) }
     var torrentMetadata by remember { mutableStateOf<TorrentMetadata?>(null) }
     var selectedTorrentFiles by remember { mutableStateOf<Set<Int>>(emptySet()) }
+
+    // ── Subtitle state ────────────────────────────────────────────────────
+    var subtitleEnabled by rememberSaveable { mutableStateOf(globalSubtitleEnabled) }
+    var subtitleLangs by rememberSaveable { mutableStateOf(globalSubtitleLangs) }
+
+    // ── HLS variants ──────────────────────────────────────────────────────
+    var hlsVariants by remember { mutableStateOf<List<HlsVariant>>(emptyList()) }
+    var selectedHlsVariant by remember { mutableStateOf<HlsVariant?>(null) }
+    var isFetchingHls by remember { mutableStateOf(false) }
+    var hlsDropdownExpanded by remember { mutableStateOf(false) }
+
+    // ── Advanced section ──────────────────────────────────────────────────
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    var authType by rememberSaveable { mutableStateOf<HttpAuthType?>(null) }
+    var authUsername by rememberSaveable { mutableStateOf("") }
+    var authPassword by rememberSaveable { mutableStateOf("") }
+    var authDomain by rememberSaveable { mutableStateOf("") }
+    var proxyUrl by rememberSaveable { mutableStateOf("") }
+    var userAgent by rememberSaveable { mutableStateOf("") }
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val torrentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -424,6 +466,152 @@ fun AddDownloadDialog(
                             )
                         }
                 }
+
+                // ── HLS quality picker ────────────────────────────────────
+                val trimmedUrl = url.trim()
+                if (trimmedUrl.endsWith(".m3u8", ignoreCase = true)) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("HLS stream", style = MaterialTheme.typography.labelMedium)
+                    if (hlsVariants.isEmpty()) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isFetchingHls = true
+                                    try {
+                                        val variants = onDiscoverHlsVariants(trimmedUrl)
+                                        hlsVariants = variants
+                                        selectedHlsVariant = variants.firstOrNull()
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        urlError = "Could not fetch HLS qualities"
+                                    } finally {
+                                        isFetchingHls = false
+                                    }
+                                }
+                            },
+                            enabled = !isFetchingHls,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (isFetchingHls) "Fetching…" else "Fetch qualities")
+                        }
+                    } else {
+                        TextButton(
+                            onClick = { hlsDropdownExpanded = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(selectedHlsVariant?.label ?: "Select quality")
+                        }
+                        DropdownMenu(
+                            expanded = hlsDropdownExpanded,
+                            onDismissRequest = { hlsDropdownExpanded = false },
+                        ) {
+                            hlsVariants.forEach { variant ->
+                                DropdownMenuItem(
+                                    text = { Text(variant.label) },
+                                    onClick = {
+                                        selectedHlsVariant = variant
+                                        hlsDropdownExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ── Subtitle section (shown for media/yt-dlp URLs) ────────
+                val isMediaLike = isMediaLikeUrl(trimmedUrl)
+                if (isMediaLike) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+                    ) {
+                        Text("Download subtitles", style = MaterialTheme.typography.labelMedium)
+                        Switch(
+                            checked = subtitleEnabled,
+                            onCheckedChange = { subtitleEnabled = it },
+                        )
+                    }
+                    if (subtitleEnabled) {
+                        OutlinedTextField(
+                            value = subtitleLangs,
+                            onValueChange = { subtitleLangs = it },
+                            label = { Text("Languages") },
+                            placeholder = { Text("en") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+
+                // ── Advanced section ──────────────────────────────────────
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(
+                    onClick = { showAdvanced = !showAdvanced },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (showAdvanced) "▲ Advanced" else "▼ Advanced")
+                }
+                AnimatedVisibility(visible = showAdvanced) {
+                    Column {
+                        // Auth type selector
+                        Text("Authentication", style = MaterialTheme.typography.labelMedium)
+                        Row {
+                            listOf(null, HttpAuthType.BASIC, HttpAuthType.DIGEST, HttpAuthType.NTLM)
+                                .forEach { type ->
+                                    FilterChip(
+                                        selected = authType == type,
+                                        onClick = { authType = type },
+                                        label = { Text(type?.name?.lowercase()?.replaceFirstChar { it.uppercase() } ?: "None") },
+                                        modifier = Modifier.padding(end = 4.dp),
+                                    )
+                                }
+                        }
+                        if (authType != null) {
+                            OutlinedTextField(
+                                value = authUsername,
+                                onValueChange = { authUsername = it },
+                                label = { Text("Username") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = authPassword,
+                                onValueChange = { authPassword = it },
+                                label = { Text("Password") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (authType == HttpAuthType.NTLM) {
+                            OutlinedTextField(
+                                value = authDomain,
+                                onValueChange = { authDomain = it },
+                                label = { Text("Domain") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = proxyUrl,
+                            onValueChange = { proxyUrl = it },
+                            label = { Text("Proxy URL (optional)") },
+                            placeholder = { Text("http://proxy:8080") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = userAgent,
+                            onValueChange = { userAgent = it },
+                            label = { Text("User-Agent (optional)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
@@ -509,18 +697,41 @@ fun AddDownloadDialog(
                                 onAddBatch(batchItems, selectedPriority, checksum)
                             } else {
                                 val packageFolder = packageFolderName(packageName)
-                                onAdd(
-                                    url.trim(),
-                                    resolvedFileName,
-                                    if (packageFolder == null) {
-                                        destinationPath
-                                    } else {
-                                        "$downloadsDir/$packageFolder/$resolvedFileName"
-                                    },
-                                    selectedPriority,
-                                    selected,
-                                    checksum,
-                                )
+                                val finalDest = if (packageFolder == null) {
+                                    destinationPath
+                                } else {
+                                    "$downloadsDir/$packageFolder/$resolvedFileName"
+                                }
+                                // Use the selected HLS variant URL if available
+                                val finalUrl = selectedHlsVariant?.url ?: url.trim()
+                                val hasAdvanced = authType != null || proxyUrl.isNotBlank() || userAgent.isNotBlank()
+                                val hasSubtitles = isMediaLikeUrl(finalUrl) && subtitleEnabled
+                                if (hasAdvanced || hasSubtitles) {
+                                    val credentials = if (authType != null) {
+                                        HttpCredentials(
+                                            authType = authType!!,
+                                            username = authUsername,
+                                            password = authPassword,
+                                            domain = authDomain.takeIf { it.isNotBlank() },
+                                        )
+                                    } else null
+                                    onAddAdvanced(
+                                        finalUrl,
+                                        resolvedFileName,
+                                        finalDest,
+                                        selectedPriority,
+                                        credentials,
+                                        AdvancedDownloadOptions(
+                                            proxyUrl = proxyUrl.takeIf { it.isNotBlank() },
+                                            userAgent = userAgent.takeIf { it.isNotBlank() },
+                                        ),
+                                        hasSubtitles,
+                                        subtitleLangs,
+                                    )
+                                } else {
+                                    val selected = torrentMetadata?.let { selectedTorrentFiles.sorted() }
+                                    onAdd(finalUrl, resolvedFileName, finalDest, selectedPriority, selected, checksum)
+                                }
                             }
                             onDismiss()
                         }
@@ -577,4 +788,19 @@ internal fun packageFolderName(name: String): String? {
         .trim('.', ' ')
         .ifBlank { "FetchX Downloads" }
     return sanitized.takeIf { it != "." && it != ".." }
+}
+
+internal fun isMediaLikeUrl(url: String): Boolean {
+    val lower = url.lowercase()
+    return lower.contains("youtube.com") ||
+        lower.contains("youtu.be") ||
+        lower.contains("vimeo.com") ||
+        lower.contains("twitch.tv") ||
+        lower.endsWith(".mp4") ||
+        lower.endsWith(".mkv") ||
+        lower.endsWith(".webm") ||
+        lower.endsWith(".m4v") ||
+        lower.endsWith(".avi") ||
+        lower.endsWith(".mov") ||
+        lower.endsWith(".m3u8")
 }

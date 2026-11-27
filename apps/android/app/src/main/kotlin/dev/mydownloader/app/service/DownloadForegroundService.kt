@@ -145,6 +145,24 @@ class DownloadForegroundService : Service() {
                 reconcileNetworkPolicy(items)
 
                 if (runningCount == 0) {
+                    // Post-queue action
+                    try {
+                        val action = dev.fetchx.app.settings.AppPreferences
+                            .getPostQueueAction(applicationContext)
+                        if (action == dev.fetchx.app.settings.AppPreferences.POST_QUEUE_SCREEN_OFF) {
+                            val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE)
+                                as android.app.admin.DevicePolicyManager
+                            val adminComponent = android.content.ComponentName(
+                                applicationContext,
+                                FetchXDeviceAdminReceiver::class.java,
+                            )
+                            if (dpm.isAdminActive(adminComponent)) {
+                                dpm.lockNow()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Post-queue action failed: ${e.message}")
+                    }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         stopForeground(STOP_FOREGROUND_DETACH)
                     } else {

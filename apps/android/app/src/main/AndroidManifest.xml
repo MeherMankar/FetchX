@@ -59,12 +59,32 @@
                 <action android:name="dev.fetchx.app.OPEN_DOWNLOAD" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!-- fetchx://import/<base64> share link deep-link -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fetchx" android:host="import" />
+            </intent-filter>
         </activity>
 
         <service
             android:name="dev.fetchx.app.service.DownloadForegroundService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <!-- Device admin receiver for screen-off post-queue action -->
+        <receiver
+            android:name="dev.fetchx.app.service.FetchXDeviceAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
