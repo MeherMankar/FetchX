@@ -92,13 +92,13 @@ fn batch_error_code(error: &BatchDownloadError) -> BatchDownloadErrorCodeDto {
 }
 
 use crate::dto::{
-    BatchDownloadAudioFormatDto, BatchDownloadEngineDto, BatchDownloadErrorCodeDto,
-    BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig, DownloadInfoDto,
-    DownloadPriorityDto, DownloadRuntimeStatusDto, TorrentDownloadMetadataDto, TorrentFileDto,
-    TorrentMetadataDto, TorrentTelemetryDto, YoutubePlayerClientDto, YoutubePoTokenContextDto,
-    YoutubePoTokenDto, YtDlpFormatDto, duplicate_match_to_dto, event_to_dto, item_to_dto,
-    priority_from_dto, runtime_status_to_dto,
-    WebhookConfigDto, HlsVariantDto, HttpCredentialsDto, TorrentConfigDto, AdvancedDownloadOptionsDto,
+    AdvancedDownloadOptionsDto, BatchDownloadAudioFormatDto, BatchDownloadEngineDto,
+    BatchDownloadErrorCodeDto, BatchDownloadOutcomeDto, BatchDownloadRequestDto, CoreConfig,
+    DownloadInfoDto, DownloadPriorityDto, DownloadRuntimeStatusDto, HlsVariantDto,
+    HttpCredentialsDto, TorrentConfigDto, TorrentDownloadMetadataDto, TorrentFileDto,
+    TorrentMetadataDto, TorrentTelemetryDto, WebhookConfigDto, YoutubePlayerClientDto,
+    YoutubePoTokenContextDto, YoutubePoTokenDto, YtDlpFormatDto, duplicate_match_to_dto,
+    event_to_dto, item_to_dto, priority_from_dto, runtime_status_to_dto,
 };
 use crate::error::MobileApiError;
 use crate::{DownloadEventListener, YtDlpRuntime};
@@ -1004,7 +1004,14 @@ impl DownloadService {
     ) -> Result<String, MobileApiError> {
         // Delegate to the existing add_media_download; subtitle injection via
         // yt-dlp is a bridge concern when the core provides extra-arg support.
-        self.add_media_download(url, filename, destination, priority, format_id, audio_format)
+        self.add_media_download(
+            url,
+            filename,
+            destination,
+            priority,
+            format_id,
+            audio_format,
+        )
     }
 
     /// Returns a stub webhook config (persistence is on the Kotlin side via AppPreferences).
@@ -1029,7 +1036,9 @@ impl DownloadService {
         playlist_url: String,
     ) -> Result<Vec<HlsVariantDto>, MobileApiError> {
         if playlist_url.trim().is_empty() {
-            return Err(MobileApiError::Validation("URL must not be empty".to_owned()));
+            return Err(MobileApiError::Validation(
+                "URL must not be empty".to_owned(),
+            ));
         }
         self.with_inner(|inner| {
             let body = inner.runtime.block_on(async {
@@ -1062,7 +1071,8 @@ impl DownloadService {
                         }
                     }
                 } else if !line.is_empty() && !line.starts_with('#') {
-                    let variant_url = if line.starts_with("http://") || line.starts_with("https://") {
+                    let variant_url = if line.starts_with("http://") || line.starts_with("https://")
+                    {
                         line.to_owned()
                     } else {
                         // Resolve relative URL against the playlist base URL
@@ -1143,8 +1153,8 @@ impl DownloadService {
                 return Ok("no_checksum".to_owned());
             }
 
-            let file_bytes = std::fs::read(&destination)
-                .map_err(|e| MobileApiError::Storage(e.to_string()))?;
+            let file_bytes =
+                std::fs::read(&destination).map_err(|e| MobileApiError::Storage(e.to_string()))?;
 
             use sha2::Digest;
             let mut hasher = sha2::Sha256::new();

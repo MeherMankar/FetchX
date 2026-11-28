@@ -291,6 +291,7 @@ async fn dispatch(request: BrowserRequest, app_state: &AppState) -> BrowserRespo
                 proxy_url: None,
                 download_subtitles: None,
                 subtitle_langs: None,
+                hls_variant_url: None,
             };
 
             match app_state.add_from_browser(add_request).await {

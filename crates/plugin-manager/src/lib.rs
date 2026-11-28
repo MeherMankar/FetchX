@@ -27,7 +27,12 @@ pub mod js_runtime;
 pub mod lifecycle;
 pub mod registry;
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use fetchx_models::{
     DiagnosticComponent, DiagnosticCounter, DiagnosticEvent, DiagnosticLevel, global_diagnostics,
@@ -178,8 +183,6 @@ struct ManagerInner {
     plugin_dir: PathBuf,
     sandbox_config: PluginSandboxConfig,
     publisher_store: PluginPublisherStore,
-    /// Paths to discovered `plugin.js` scripts (JS-only plugins with no binary manifest).
-    js_plugins: Vec<PathBuf>,
 }
 
 impl PluginManager {
@@ -289,7 +292,6 @@ impl PluginManager {
                 plugin_dir,
                 sandbox_config: PluginSandboxConfig::default(),
                 publisher_store,
-                js_plugins: Vec::new(),
             }),
         })
     }
@@ -463,7 +465,7 @@ impl PluginManager {
     /// A synthetic manifest ID is derived from the script directory name.
     /// The entry is marked with `js_script` so callers can run it via
     /// [`JsPluginRunner`].
-    async fn register_js_plugin(&self, js_path: &PathBuf) -> Result<String, PluginManagerError> {
+    async fn register_js_plugin(&self, js_path: &Path) -> Result<String, PluginManagerError> {
         let dir = js_path.parent().ok_or_else(|| {
             PluginManagerError::InvalidManifest("JS script has no parent directory".to_owned())
         })?;
@@ -495,7 +497,7 @@ impl PluginManager {
             },
             publisher: String::new(),
             description: format!("JavaScript plugin: {dir_name}"),
-            executable: js_path.clone(),
+            executable: js_path.to_path_buf(),
             permissions: vec![],
             capabilities: vec![],
             platforms: vec![],
@@ -506,7 +508,7 @@ impl PluginManager {
             .map_err(|e| PluginManagerError::Policy(e.to_string()))?;
 
         let mut entry = PluginEntry::new(manifest, None);
-        entry.js_script = Some(js_path.clone());
+        entry.js_script = Some(js_path.to_path_buf());
 
         inner.entries.insert(id.clone(), entry);
         inner.trust_contexts.insert(id.clone(), trust_context);

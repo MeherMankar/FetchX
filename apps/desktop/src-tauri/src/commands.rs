@@ -2429,7 +2429,7 @@ pub async fn provide_download_credentials(
     download_id: String,
     username: String,
     password: String,
-    /// Optional Windows domain for NTLM authentication.
+    // Optional Windows domain for NTLM authentication.
     domain: Option<String>,
 ) -> Result<DownloadDto, IpcError> {
     let id = DownloadId::parse(&download_id).map_err(|_| IpcError::invalid_request())?;
