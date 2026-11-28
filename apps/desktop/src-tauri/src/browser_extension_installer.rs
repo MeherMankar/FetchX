@@ -723,7 +723,7 @@ fn is_browser_detected(_target: &BrowserTarget) -> bool {
 fn extension_settings_url(target: &BrowserTarget) -> &'static str {
     match target.display_name {
         "Mozilla Firefox" | "LibreWolf" | "Waterfox" | "Floorp" => {
-            "https://addons.mozilla.org/firefox/addon/fetchx/"
+            "about:debugging#/runtime/this-firefox"
         }
         "Microsoft Edge"
         | "Microsoft Edge Beta"

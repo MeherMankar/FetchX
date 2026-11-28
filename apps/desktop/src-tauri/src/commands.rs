@@ -1262,6 +1262,10 @@ pub async fn add_torrent_download(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri command parameters are the existing desktop IPC contract."
+)]
 pub async fn add_media_download(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1507,7 +1511,7 @@ pub async fn discover_hls_variants(url: String) -> Result<Vec<HlsVariantDto>, St
     let mut variants = fetch_hls_variants(&url).await.map_err(|e| e.to_string())?;
 
     // Sort best-first by bandwidth descending.
-    variants.sort_by(|a, b| b.bandwidth.cmp(&a.bandwidth));
+    variants.sort_by_key(|variant| std::cmp::Reverse(variant.bandwidth));
 
     let dtos = variants
         .into_iter()

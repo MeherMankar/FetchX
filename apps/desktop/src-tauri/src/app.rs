@@ -745,7 +745,7 @@ pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
@@ -1072,10 +1072,8 @@ fn extract_archive_blocking(path: &std::path::Path, delete_after: bool) -> Resul
             .map_err(|e| format!("tar extraction failed: {e}"))?;
     }
 
-    if delete_after {
-        if let Err(e) = std::fs::remove_file(path) {
-            tracing::warn!(path = %path.display(), error = %e, "post-download: could not delete archive after extraction");
-        }
+    if delete_after && let Err(e) = std::fs::remove_file(path) {
+        tracing::warn!(path = %path.display(), error = %e, "post-download: could not delete archive after extraction");
     }
 
     Ok(())

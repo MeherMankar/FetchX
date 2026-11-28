@@ -81,10 +81,8 @@ pub fn expand_info_hash(input: &str) -> Option<String> {
         trimmed
     } else if let Some(rest) = trimmed.strip_prefix_ignore_ascii_case("btih:") {
         rest
-    } else if let Some(rest) = trimmed.strip_prefix_ignore_ascii_case("urn:btih:") {
-        rest
     } else {
-        return None;
+        trimmed.strip_prefix_ignore_ascii_case("urn:btih:")?
     };
     if hash.len() == 40 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         Some(format!("magnet:?xt=urn:btih:{}", hash.to_ascii_lowercase()))

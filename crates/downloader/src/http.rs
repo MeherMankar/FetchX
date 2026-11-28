@@ -1675,56 +1675,47 @@ where
                             neg_req.send().await.map_err(DownloadEngineError::Request)?;
 
                         // Step 2: extract Type 2 (Challenge) from the 401 response.
-                        if neg_resp.status() == StatusCode::UNAUTHORIZED {
-                            if let Some(type2_token) = neg_resp
+                        if neg_resp.status() == StatusCode::UNAUTHORIZED
+                            && let Some(type2_token) = neg_resp
                                 .headers()
                                 .get("www-authenticate")
                                 .and_then(|v| v.to_str().ok())
                                 .and_then(parse_www_authenticate)
                                 .and_then(|ch| ch.ntlm_token)
-                            {
-                                if let Some((server_challenge, _target_name)) =
-                                    parse_ntlm_challenge(&type2_token)
-                                {
-                                    // Step 3: send Type 3 (Authenticate) with NTLMv2 response.
-                                    let domain = credentials.domain.as_deref().unwrap_or("");
-                                    // A fixed client challenge is acceptable here; IIS/NTLMv2
-                                    // only requires it to be 8 non-zero bytes.
-                                    let client_challenge =
-                                        [0x38, 0xd7, 0x5a, 0x2b, 0xf9, 0x1e, 0xc4, 0x11];
-                                    let auth_val = ntlm_authenticate_header(
-                                        &credentials.username,
-                                        &credentials.password,
-                                        domain,
-                                        server_challenge,
-                                        client_challenge,
-                                    );
-                                    let client3 = self.client_for_url(&url, al2).await?;
-                                    let mut auth_req = client3
-                                        .get(url.clone())
-                                        .header(reqwest::header::ACCEPT_ENCODING, "identity");
-                                    if let Some(start) = range_start {
-                                        let end =
-                                            range_end.map_or_else(String::new, |e| e.to_string());
-                                        auth_req =
-                                            auth_req.header(RANGE, format!("bytes={start}-{end}"));
-                                        if let Some(validator) = if_range {
-                                            auth_req = auth_req.header(IF_RANGE, validator);
-                                        }
-                                    }
-                                    if let Ok(hv) =
-                                        reqwest::header::HeaderValue::from_str(&auth_val)
-                                    {
-                                        auth_req =
-                                            auth_req.header(reqwest::header::AUTHORIZATION, hv);
-                                    }
-                                    let auth_resp = auth_req
-                                        .send()
-                                        .await
-                                        .map_err(DownloadEngineError::Request)?;
-                                    return Ok(auth_resp);
+                            && let Some((server_challenge, _target_name)) =
+                                parse_ntlm_challenge(&type2_token)
+                        {
+                            // Step 3: send Type 3 (Authenticate) with NTLMv2 response.
+                            let domain = credentials.domain.as_deref().unwrap_or("");
+                            // A fixed client challenge is acceptable here; IIS/NTLMv2
+                            // only requires it to be 8 non-zero bytes.
+                            let client_challenge = [0x38, 0xd7, 0x5a, 0x2b, 0xf9, 0x1e, 0xc4, 0x11];
+                            let auth_val = ntlm_authenticate_header(
+                                &credentials.username,
+                                &credentials.password,
+                                domain,
+                                server_challenge,
+                                client_challenge,
+                            );
+                            let client3 = self.client_for_url(&url, al2).await?;
+                            let mut auth_req = client3
+                                .get(url.clone())
+                                .header(reqwest::header::ACCEPT_ENCODING, "identity");
+                            if let Some(start) = range_start {
+                                let end = range_end.map_or_else(String::new, |e| e.to_string());
+                                auth_req = auth_req.header(RANGE, format!("bytes={start}-{end}"));
+                                if let Some(validator) = if_range {
+                                    auth_req = auth_req.header(IF_RANGE, validator);
                                 }
                             }
+                            if let Ok(hv) = reqwest::header::HeaderValue::from_str(&auth_val) {
+                                auth_req = auth_req.header(reqwest::header::AUTHORIZATION, hv);
+                            }
+                            let auth_resp = auth_req
+                                .send()
+                                .await
+                                .map_err(DownloadEngineError::Request)?;
+                            return Ok(auth_resp);
                         }
                         // Type 2 not received or parse failed; return whatever we got.
                         return Ok(neg_resp);

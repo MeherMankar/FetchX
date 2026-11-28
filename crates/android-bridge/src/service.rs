@@ -991,6 +991,10 @@ impl DownloadService {
     /// Add a media download, optionally writing subtitles.
     /// Subtitle flags are stored as metadata; yt-dlp args are injected via
     /// the extra-args mechanism if the core supports it, otherwise silently ignored.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "This UniFFI method mirrors the existing Android bridge contract."
+    )]
     pub fn add_media_download_with_subtitles(
         &self,
         url: String,
@@ -1059,8 +1063,7 @@ impl DownloadService {
 
             for line in body.lines() {
                 let line = line.trim();
-                if line.starts_with("#EXT-X-STREAM-INF:") {
-                    let attrs = &line["#EXT-X-STREAM-INF:".len()..];
+                if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
                     current_bandwidth = None;
                     current_resolution = None;
                     for part in attrs.split(',') {

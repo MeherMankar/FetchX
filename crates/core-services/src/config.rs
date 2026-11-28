@@ -448,9 +448,11 @@ mod tests {
             .expect("in-memory database should initialize");
         let repo = database.config();
         let service = ConfigService::new(repo.clone());
-        let mut legacy_config = super::EngineConfig::default();
-        legacy_config.os_notifications_enabled = false;
-        legacy_config.metalink.enabled = false;
+        let legacy_config = super::EngineConfig {
+            os_notifications_enabled: false,
+            metalink: super::MetalinkConfig { enabled: false },
+            ..Default::default()
+        };
         let json = serde_json::to_string(&legacy_config).expect("legacy config should serialize");
         repo.set(super::CONFIG_KEY, &json)
             .await
