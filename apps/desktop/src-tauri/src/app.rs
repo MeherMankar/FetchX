@@ -673,19 +673,24 @@ async fn execute_post_queue_action(action: fetchx_models::PostQueueAction) {
 
 fn update_tray(app: &tauri::AppHandle, active_count: u32, speed_bps: u64) {
     if let Some(tray) = app.tray_by_id("fetchx-tray") {
-        let speed_str = if speed_bps > 1024 * 1024 {
-            format!("{:.1} MB/s", speed_bps as f64 / 1_048_576.0)
-        } else if speed_bps > 1024 {
-            format!("{:.0} KB/s", speed_bps as f64 / 1024.0)
-        } else {
-            "0 KB/s".to_owned()
-        };
-        let tooltip = if active_count > 0 {
-            format!("FetchX â {active_count} active Â· {speed_str}")
-        } else {
-            "FetchX â idle".to_owned()
-        };
+        let tooltip = tray_tooltip(active_count, speed_bps);
         let _ = tray.set_tooltip(Some(&tooltip));
+    }
+}
+
+fn tray_tooltip(active_count: u32, speed_bps: u64) -> String {
+    let speed_str = if speed_bps > 1024 * 1024 {
+        format!("{:.1} MB/s", speed_bps as f64 / 1_048_576.0)
+    } else if speed_bps > 1024 {
+        format!("{:.0} KB/s", speed_bps as f64 / 1024.0)
+    } else {
+        "0 KB/s".to_owned()
+    };
+
+    if active_count > 0 {
+        format!("FetchX - {active_count} active - {speed_str}")
+    } else {
+        "FetchX - idle".to_owned()
     }
 }
 
@@ -1323,8 +1328,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .separator()
                     .item(&MenuItemBuilder::with_id("quit", "Quit").build(app)?)
                     .build()?;
+                let tray_icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/icon_32.png"))?;
                 let _tray = TrayIconBuilder::with_id("fetchx-tray")
-                    .tooltip("FetchX â idle")
+                    .icon(tray_icon)
+                    .tooltip("FetchX - idle")
                     .menu(&menu)
                     .on_menu_event(|app, event| match event.id().as_ref() {
                         "open" => {
@@ -1494,6 +1502,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::AppState;
+
+    #[test]
+    fn tray_tooltip_is_readable_for_idle_and_active_downloads() {
+        let active = super::tray_tooltip(1, 960 * 1024);
+        assert_eq!(active, "FetchX - 1 active - 960 KB/s");
+        assert!(active.is_ascii());
+        assert_eq!(super::tray_tooltip(0, 0), "FetchX - idle");
+    }
 
     #[test]
     fn fallback_paths_resolve_without_panicking() {
