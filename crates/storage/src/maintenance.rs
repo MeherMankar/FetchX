@@ -15,7 +15,7 @@ use sqlx::{Row, SqlitePool, migrate::Migration};
 use crate::{Database, StorageError, database::MIGRATOR};
 
 pub const MIN_SUPPORTED_SCHEMA_VERSION: i64 = 1;
-pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub const CURRENT_SCHEMA_VERSION: i64 = 15;
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const REQUIRED_TABLES: &[&str] = &[
@@ -1110,7 +1110,8 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("future.db");
         let database = Database::connect_path(&path).await?;
-        sqlx::query("UPDATE _sqlx_migrations SET version = 99 WHERE version = 12")
+        sqlx::query("UPDATE _sqlx_migrations SET version = 99 WHERE version = ?")
+            .bind(CURRENT_SCHEMA_VERSION)
             .execute(&database.pool)
             .await?;
         database.pool.close().await;

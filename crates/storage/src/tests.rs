@@ -73,6 +73,11 @@ async fn connect_runs_migrations_and_migrate_is_idempotent() -> Result<(), Box<d
             .fetch_one(database.pool())
             .await?;
     assert_eq!(migration_count, Database::migration_count() as i64);
+    let latest_migration: i64 =
+        sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations WHERE success = 1")
+            .fetch_one(database.pool())
+            .await?;
+    assert_eq!(latest_migration, crate::CURRENT_SCHEMA_VERSION);
 
     Ok(())
 }
