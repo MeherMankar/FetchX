@@ -189,10 +189,10 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .nav-item:hover { background: var(--color-sidebar-hover); color: var(--text); }
 
-/* A quiet surface step marks the active category */
+/* Use the selected accent to distinguish the active category. */
 .nav-item--active {
-  background: var(--color-sidebar-active);
-  color: var(--text);
+  background: var(--accent-subtle);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -212,7 +212,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
   letter-spacing: 0;
 }
 
-.nav-item--active .nav-count { color: var(--text-2); }
+.nav-item--active .nav-count { color: var(--accent); }
 
 .sidebar-footer-nav { border-top: 1px solid var(--border); padding: 4px 8px; }
 .nav-item-settings  { color: var(--color-sidebar-text); }
@@ -450,17 +450,15 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .button:active:not(:disabled) { transform: scale(0.97); }
 .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* Pass 2: primary is off-white with dark text — deliberate on dark theme */
+/* Primary actions share the selected accent without sacrificing text contrast. */
 .button-primary {
-  color: #0b0d14;
-  background: #d6dce8;
-  border-color: transparent;
-  /* Pass 7: subtle top highlight for depth */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  color: var(--accent);
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
 }
 
 .button-primary:not(:disabled):hover {
-  background: #e4eaf4;
+  background: var(--accent-border-muted);
 }
 
 .button-secondary {
@@ -965,6 +963,7 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 .snapshot-item  { display: flex; gap: 4px; white-space: nowrap; }
 .snapshot-label { color: var(--text-3); }
 .snapshot-value { color: var(--text-2); font-weight: 500; font-variant-numeric: tabular-nums; }
+.snapshot-item:first-child .snapshot-value { color: var(--accent); }
 .snapshot-sep   { color: var(--border); }
 
 /* ============================================================
@@ -1103,6 +1102,8 @@ button:disabled, select:disabled, input:disabled { cursor: not-allowed; opacity:
 
 .settings-nav-item--active {
   border-left-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
 .settings-nav-item:focus-visible {

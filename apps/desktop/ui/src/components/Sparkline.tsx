@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { getAccentColorWithAlpha } from "../lib/color";
 
 interface SparklineProps {
   data: number[];
@@ -37,8 +38,7 @@ export function Sparkline({ data, width = 80, height = 24, color }: SparklinePro
       const h = cssHeight;
       const step = w / (data.length - 1);
 
-      const strokeColor =
-        color ?? "rgba(126,200,227,0.7)";
+      const strokeColor = color ?? getAccentColorWithAlpha(0.7);
 
       // Smooth curve using quadratic bezier
       ctx.beginPath();
@@ -58,8 +58,8 @@ export function Sparkline({ data, width = 80, height = 24, color }: SparklinePro
 
       // Gradient fill
       const gradient = ctx.createLinearGradient(0, 0, 0, h);
-      gradient.addColorStop(0, "rgba(126,200,227,0.18)");
-      gradient.addColorStop(1, "rgba(126,200,227,0.02)");
+      gradient.addColorStop(0, getAccentColorWithAlpha(0.18));
+      gradient.addColorStop(1, getAccentColorWithAlpha(0.02));
 
       const lastX = (data.length - 1) * step;
       ctx.lineTo(lastX, h);
@@ -100,6 +100,21 @@ export function Sparkline({ data, width = 80, height = 24, color }: SparklinePro
       const container = containerRef.current;
       if (container) draw(container.clientWidth);
     }
+  }, [draw, width]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      if (width > 0) {
+        draw(width);
+      } else if (containerRef.current) {
+        draw(containerRef.current.clientWidth);
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-accent", "data-theme"],
+    });
+    return () => observer.disconnect();
   }, [draw, width]);
 
   // ResizeObserver when width is 0 (auto-fit container)

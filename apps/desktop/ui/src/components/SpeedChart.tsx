@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { DownloadProgress, QueueStatsEvent } from "../api/types";
 import { formatEta, formatSpeed } from "../lib/format";
+import { getAccentColorWithAlpha } from "../lib/color";
 
 const HISTORY_SIZE = 60;
 
@@ -110,8 +111,8 @@ export function SpeedChart({
 
     // Gradient fill
     const gradient = ctx.createLinearGradient(0, 0, 0, h);
-    gradient.addColorStop(0, "rgba(126,200,227,0.18)");
-    gradient.addColorStop(1, "rgba(126,200,227,0.02)");
+    gradient.addColorStop(0, getAccentColorWithAlpha(0.18));
+    gradient.addColorStop(1, getAccentColorWithAlpha(0.02));
 
     // Close path for fill
     const lastX = (chartHistory.length - 1) * step;
@@ -136,7 +137,7 @@ export function SpeedChart({
         if (i === chartHistory.length - 1) ctx.lineTo(x, y);
       }
     });
-    ctx.strokeStyle = "rgba(126,200,227,0.7)";
+    ctx.strokeStyle = getAccentColorWithAlpha(0.7);
     ctx.lineWidth = 1.5;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
@@ -146,6 +147,15 @@ export function SpeedChart({
   // Redraw when history changes
   useEffect(() => {
     draw();
+  }, [draw]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(draw);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-accent", "data-theme"],
+    });
+    return () => observer.disconnect();
   }, [draw]);
 
   // Redraw on resize
